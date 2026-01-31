@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Assign Team Members</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      height: 100%;
+    }
+    body {
+      background: url('account-background.jpg') no-repeat center center fixed;
+      background-size: cover;
+      position: relative;
+      min-height: 100%;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(255,255,255,0.6);
+      z-index: 0;
+    }
+    .container {
+      position: relative;
+      z-index: 1;
+      background: #fff;
+      padding: 30px 40px;
+      border-radius: 12px;
+      max-width: 700px;
+      margin: 8vh auto;
+      box-shadow: 0 0 12px rgba(0,0,0,0.2);
+    }
+    h2 {
+      color: #007BFF;
+      font-size: 24px;
+      text-align: center;
+      margin-bottom: 10px;
+    }
+    .project-header {
+      font-size: 16px;
+      font-weight: bold;
+      color: #333;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    h3 {
+      margin-top: 24px;
+      color: #333;
+      font-size: 18px;
+    }
+    input {
+      display: block;
+      width: 100%;
+      margin: 10px 0;
+      padding: 12px;
+      font-size: 15px;
+      border-radius: 5px;
+      border: 1px solid #ccc;
+    }
+    button {
+      background-color: #007BFF;
+      color: white;
+      border: none;
+      padding: 12px 18px;
+      margin: 10px 5px;
+      cursor: pointer;
+      border-radius: 5px;
+      font-size: 15px;
+    }
+    button:hover { background-color: #0056b3; }
+    ul { list-style: none; padding: 0; }
+    li {
+      margin: 8px 0;
+      padding: 8px;
+      background: #f4f4f4;
+      border-radius: 5px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .remove-btn {
+      background-color: #cc0000;
+      padding: 6px 12px;
+      font-size: 14px;
+      border: none;
+      border-radius: 5px;
+      color: white;
+      cursor: pointer;
+    }
+    .remove-btn:hover { background-color: #990000; }
+    #message { color: #cc0000; font-size: 14px; min-height: 18px; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Assign Team Members</h2>
+    <p class="project-header" id="projectContext"></p>
+
+    <form id="teamForm" onsubmit="addMember(event)">
+      <input type="text" id="memberName" placeholder="Team Member Name" required />
+      <input type="text" id="memberPosition" placeholder="Position" required />
+      <input type="text" id="memberTask" placeholder="Task Assigned" required />
+      <input type="email" id="memberEmail" placeholder="Team Member Email" required />
+      <button type="submit">Add Member</button>
+      <p id="message"></p>
+    </form>
+
+    <h3>Assigned Members</h3>
+    <ul id="memberList"></ul>
+
+    <div>
+      <button onclick="saveMembers()">Save</button>
+      <button onclick="goNext()">Next</button>
+    </div>
+  </div>
+
+  <script>
+    // Read project data from localStorage
+    const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
+    const projectId = projectDetails.projectId || null;
+
+    // Initialize members array inside projectDetails
+    if (!projectDetails.teamMembers) {
+      projectDetails.teamMembers = [];
+    }
+    let teamMembers = projectDetails.teamMembers;
+
+    // Show project context
+    const projectContextEl = document.getElementById("projectContext");
+    if (projectDetails.projectData) {
+      projectContextEl.textContent = `Project: ${projectDetails.projectData.projectName} — Location: ${projectDetails.projectData.projectLocation}`;
+    } else {
+      projectContextEl.textContent = "No project context found.";
+    }
+
+    function renderMembers() {
+      const list = document.getElementById("memberList");
+      list.innerHTML = "";
+      teamMembers.forEach((member, index) => {
+        const li = document.createElement("li");
+        li.textContent = `${member.name} - ${member.position} (Task: ${member.task})`;
+        const removeBtn = document.createElement("button");
+        removeBtn.textContent = "Remove";
+        removeBtn.className = "remove-btn";
+        removeBtn.onclick = () => removeMember(index);
+        li.appendChild(removeBtn);
+        list.appendChild(li);
+      });
+    }
+
+    async function addMember(e) {
+      e.preventDefault();
+      const messageEl = document.getElementById("message");
+
+      const member = {
+        name: document.getElementById("memberName").value.trim(),
+        position: document.getElementById("memberPosition").value.trim(),
+        task: document.getElementById("memberTask").value.trim(),
+        email: document.getElementById("memberEmail").value.trim().toLowerCase()
+      };
+
+      if (!member.name || !member.position || !member.task || !member.email) {
+        messageEl.textContent = "Please fill all fields.";
+        return;
+      }
+
+      teamMembers.push(member);
+      projectDetails.teamMembers = teamMembers; // keep inside projectDetails
+      localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
+
+      renderMembers();
+      document.getElementById("teamForm").reset();
+      messageEl.textContent = "";
+
+      // Backend call (optional, when server ready)
+      if (projectId) {
+        try {
+          const res = await fetch("http://localhost:3000/create-user", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: member.name,
+              email: member.email,
+              role_id: 4, // Team Member
+              project_id: projectId,
+              assigned_by: projectDetails.clientUserId || null
+            })
+          });
+          const data = await res.json();
+          if (!data.success) {
+            messageEl.textContent = data.message || "Failed to add team member.";
+          }
+        } catch (err) {
+          messageEl.textContent = "Server error while saving member.";
+        }
+      }
+    }
+
+    function removeMember(index) {
+      teamMembers.splice(index, 1);
+      projectDetails.teamMembers = teamMembers;
+      localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
+      renderMembers();
+    }
+
+    function saveMembers() {
+      projectDetails.teamMembers = teamMembers;
+      localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
+      alert("Team members saved for this project.");
+    }
+
+    function goNext() {
+      projectDetails.teamMembers = teamMembers;
+      localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
+      window.location.href = "finalize-account.html";
+    }
+
+    renderMembers();
+  </script>
+</body>
+</html>

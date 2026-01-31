@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>First Login - Create Password</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      height: 100%;
+    }
+    body {
+      background: url('home-background.jpg') no-repeat center center fixed;
+      background-size: cover;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      position: relative;
+      min-height: 100%;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(255,255,255,0.6);
+      z-index: 0;
+    }
+    .container {
+      position: relative;
+      z-index: 1;
+      background: #fff;
+      padding: 30px;
+      border-radius: 10px;
+      max-width: 420px;
+      width: 100%;
+      box-shadow: 0 0 12px rgba(0,0,0,0.2);
+      text-align: center;
+    }
+    h2 { color: #007BFF; margin-bottom: 20px; }
+    p { font-size: 14px; color: #333; margin-bottom: 20px; }
+    input {
+      display: block;
+      width: 90%;
+      margin: 10px auto;
+      padding: 12px;
+      font-size: 15px;
+      border-radius: 5px;
+      border: 1px solid #ccc;
+    }
+    button {
+      background-color: #007BFF;
+      color: white;
+      border: none;
+      padding: 12px;
+      width: 90%;
+      cursor: pointer;
+      border-radius: 5px;
+      font-size: 16px;
+      margin-top: 20px;
+    }
+    button:hover { background-color: #0056b3; }
+    #message {
+      margin-top: 10px;
+      color: #cc0000;
+      font-size: 14px;
+      min-height: 18px;
+    }
+    .back-link {
+      display: inline-block;
+      margin-top: 20px;
+      font-size: 14px;
+      color: #6c757d;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .back-link:hover { color: #5a6268; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Welcome! Create Your Password</h2>
+    <p id="infoText">Loading your account...</p>
+    <input type="password" id="newPassword" placeholder="Create Password" required />
+    <input type="password" id="confirmPassword" placeholder="Confirm Password" required />
+    <button onclick="setPassword()">Set Password</button>
+    <p id="message"></p>
+
+    <div>
+      <span class="back-link" onclick="goBack()">&#8592; Back</span>
+    </div>
+  </div>
+
+  <script>
+    const email = localStorage.getItem("pendingEmail");
+    const role = localStorage.getItem("pendingRole");
+
+    if (!email || !role) {
+      alert("Missing first-login context. Please log in again.");
+      window.location.href = "home.html";
+    }
+
+    document.getElementById("infoText").textContent = `First login for ${role} account: ${email}`;
+
+    function isValidPassword(password) {
+      const regex = /^(?=.*[A-Za-z])(?=.*\\d)[A-Za-z\\d\\S]{6,}$/;
+      return regex.test(password);
+    }
+
+    async function setPassword() {
+      const pass1 = document.getElementById("newPassword").value.trim();
+      const pass2 = document.getElementById("confirmPassword").value.trim();
+      const messageEl = document.getElementById("message");
+
+      if (!pass1 || !pass2) {
+        messageEl.textContent = "Please fill in both password fields.";
+        return;
+      }
+      if (pass1 !== pass2) {
+        messageEl.textContent = "Passwords do not match.";
+        return;
+      }
+      if (!isValidPassword(pass1)) {
+        messageEl.textContent = "Password must be at least 6 characters and include both letters and numbers.";
+        return;
+      }
+
+      try {
+        // ✅ Send verification email before saving password
+        const res = await fetch("http://localhost:3000/send-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, role, password: pass1 })
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+          messageEl.textContent = data.message || "Failed to send verification email.";
+          return;
+        }
+
+        messageEl.textContent = "Verification email sent. Please check your inbox to confirm.";
+
+        // After user clicks verification link, backend will finalize password setup
+        // and redirect them to their role dashboard.
+
+      } catch (err) {
+        messageEl.textContent = "Server error. Please try again.";
+      }
+    }
+
+    function goBack() {
+      window.location.href = "home.html";
+    }
+  </script>
+</body>
+</html>

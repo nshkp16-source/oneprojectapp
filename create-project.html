@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Create Project</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 40px;
+      font-family: Arial, sans-serif;
+      background: url('account-background.jpg') no-repeat center center fixed;
+      background-size: cover;
+      min-height: 100%;
+      position: relative;
+    }
+    html { height: 100%; }
+    body::before {
+      content: "";
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(255,255,255,0.6);
+      z-index: 0;
+    }
+    .container {
+      position: relative;
+      z-index: 1;
+      background: #fff;
+      padding: 30px 40px;
+      border-radius: 12px;
+      max-width: 700px;
+      margin: auto;
+      box-shadow: 0 0 12px rgba(0,0,0,0.2);
+    }
+    h2 { color: #007BFF; font-size: 24px; text-align: center; }
+    h3 { margin-top: 30px; color: #333; font-size: 18px; }
+    input {
+      display: block; width: 100%; margin: 10px 0;
+      padding: 12px; font-size: 15px;
+      border-radius: 5px; border: 1px solid #ccc;
+    }
+    button {
+      background-color: #007BFF; color: white;
+      border: none; padding: 14px; width: 100%;
+      cursor: pointer; border-radius: 5px;
+      font-size: 16px; margin-top: 20px;
+    }
+    button:hover { background-color: #0056b3; }
+    .back-link {
+      display: inline-block; margin-top: 20px;
+      font-size: 14px; color: #6c757d;
+      cursor: pointer; text-decoration: none;
+    }
+    .back-link:hover { color: #5a6268; }
+    #message { margin-top: 10px; color: #cc0000; font-size: 14px; min-height: 18px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Create Project</h2>
+
+    <form id="projectForm" onsubmit="handleProjectCreation(event)">
+      <!-- Project Information -->
+      <h3>Project Information</h3>
+      <input type="text" id="projectName" placeholder="Project Name" required />
+      <input type="text" id="projectLocation" placeholder="Project Location" required />
+      <input type="text" id="contractReference" placeholder="Contract Reference" required />
+
+      <!-- Contractor Information -->
+      <h3>Contractor Information</h3>
+      <input type="text" id="contractorCompany" placeholder="Contractor Company Name" required />
+      <input type="email" id="contractorEmail" placeholder="Contractor Email" required />
+      <input type="tel" id="contractorTel" placeholder="Contractor Telephone Number" required />
+      <input type="text" id="contractorRepName" placeholder="Contractor Representative Name" required />
+      <input type="text" id="contractorRepTitle" placeholder="Contractor Representative Title" required />
+
+      <!-- Consultant Information -->
+      <h3>Consultant Information</h3>
+      <input type="text" id="consultantCompany" placeholder="Consultant Company Name" required />
+      <input type="email" id="consultantEmail" placeholder="Consultant Email" required />
+      <input type="tel" id="consultantTel" placeholder="Consultant Telephone Number" required />
+      <input type="text" id="consultantRepName" placeholder="Consultant Representative Name" required />
+      <input type="text" id="consultantRepTitle" placeholder="Consultant Representative Title" required />
+
+      <button type="submit">Save Project</button>
+      <p id="message"></p>
+    </form>
+
+    <span class="back-link" onclick="goBack()">&#8592; Back</span>
+  </div>
+
+  <script>
+    async function handleProjectCreation(e) {
+      e.preventDefault();
+      const messageEl = document.getElementById("message");
+
+      const projectData = {
+        projectName: document.getElementById("projectName").value.trim(),
+        projectLocation: document.getElementById("projectLocation").value.trim(),
+        contractReference: document.getElementById("contractReference").value.trim()
+      };
+
+      const contractor = {
+        company: document.getElementById("contractorCompany").value.trim(),
+        email: document.getElementById("contractorEmail").value.trim().toLowerCase(),
+        tel: document.getElementById("contractorTel").value.trim(),
+        repName: document.getElementById("contractorRepName").value.trim(),
+        repTitle: document.getElementById("contractorRepTitle").value.trim()
+      };
+
+      const consultant = {
+        company: document.getElementById("consultantCompany").value.trim(),
+        email: document.getElementById("consultantEmail").value.trim().toLowerCase(),
+        tel: document.getElementById("consultantTel").value.trim(),
+        repName: document.getElementById("consultantRepName").value.trim(),
+        repTitle: document.getElementById("consultantRepTitle").value.trim()
+      };
+
+      const clientUserId = parseInt(localStorage.getItem("client_id") || "0", 10);
+
+      try {
+        // Step 1: Create project in backend (with duplicate check)
+        const projectRes = await fetch("http://localhost:3000/create-project", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...projectData,
+            client_id: clientUserId
+          })
+        });
+        const projectJson = await projectRes.json();
+
+        if (!projectJson.success) {
+          // ✅ Handle duplicate project case
+          messageEl.textContent = projectJson.message || "This project already exists under your account.";
+          return;
+        }
+
+        const projectId = projectJson.project_id;
+
+        // Step 2: Merge into account creation details
+        let accountDetails = JSON.parse(localStorage.getItem("projectAccount") || "{}");
+        accountDetails.project = {
+          projectId,
+          projectData,
+          contractor,
+          consultant
+        };
+        localStorage.setItem("projectAccount", JSON.stringify(accountDetails));
+
+        // Step 3: Save projectId separately for quick reference
+        localStorage.setItem("created_project_id", projectId);
+
+        // Step 4: Add contractor
+        const contractorRes = await fetch("http://localhost:3000/create-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: contractor.repName || contractor.company,
+            email: contractor.email,
+            role_id: 2, // Contractor
+            project_id: projectId,
+            assigned_by: clientUserId
+          })
+        });
+        const contractorData = await contractorRes.json();
+        if (!contractorData.success) {
+          messageEl.textContent = contractorData.message || "Failed to add contractor.";
+          return;
+        }
+
+        // Step 5: Add consultant
+        const consultantRes = await fetch("http://localhost:3000/create-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: consultant.repName || consultant.company,
+            email: consultant.email,
+            role_id: 3, // Consultant
+            project_id: projectId,
+            assigned_by: clientUserId
+          })
+        });
+        const consultantData = await consultantRes.json();
+        if (!consultantData.success) {
+          messageEl.textContent = consultantData.message || "Failed to add consultant.";
+          return;
+        }
+
+        alert("Project created successfully! Contractor and consultant added. Redirecting to team assignment...");
+        window.location.href = "assign-team.html";
+      } catch (err) {
+        messageEl.textContent = "Server error. Please try again.";
+      }
+    }
+
+    function goBack() {
+      window.location.href = "create-project-account.html";
+    }
+  </script>
+</body>
+</html>
