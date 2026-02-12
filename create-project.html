@@ -95,9 +95,10 @@
       const messageEl = document.getElementById("message");
 
       const projectData = {
-        projectName: document.getElementById("projectName").value.trim(),
-        projectLocation: document.getElementById("projectLocation").value.trim(),
-        contractReference: document.getElementById("contractReference").value.trim()
+        name: document.getElementById("projectName").value.trim(),
+        location: document.getElementById("projectLocation").value.trim(),
+        contract_reference: document.getElementById("contractReference").value.trim(),
+        client_email: JSON.parse(localStorage.getItem("projectAccount")).companyEmail
       };
 
       const contractor = {
@@ -116,80 +117,33 @@
         repTitle: document.getElementById("consultantRepTitle").value.trim()
       };
 
-      const clientUserId = parseInt(localStorage.getItem("client_id") || "0", 10);
-
       try {
-        // Step 1: Create project in backend (with duplicate check)
-        const projectRes = await fetch("http://localhost:3000/create-project", {
+        // 🔹 Step 1: Create project in backend
+        const projectRes = await fetch("https://oneprojectapp-backend.onrender.com/create-project", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...projectData,
-            client_id: clientUserId
-          })
+          body: JSON.stringify(projectData)
         });
         const projectJson = await projectRes.json();
 
         if (!projectJson.success) {
-          // ✅ Handle duplicate project case
-          messageEl.textContent = projectJson.message || "This project already exists under your account.";
+          messageEl.textContent = projectJson.error || "This project already exists under your account.";
           return;
         }
 
-        const projectId = projectJson.project_id;
-
-        // Step 2: Merge into account creation details
+        // 🔹 Step 2: Save project info locally
         let accountDetails = JSON.parse(localStorage.getItem("projectAccount") || "{}");
         accountDetails.project = {
-          projectId,
           projectData,
           contractor,
           consultant
         };
         localStorage.setItem("projectAccount", JSON.stringify(accountDetails));
 
-        // Step 3: Save projectId separately for quick reference
-        localStorage.setItem("created_project_id", projectId);
-
-        // Step 4: Add contractor
-        const contractorRes = await fetch("http://localhost:3000/create-user", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: contractor.repName || contractor.company,
-            email: contractor.email,
-            role_id: 2, // Contractor
-            project_id: projectId,
-            assigned_by: clientUserId
-          })
-        });
-        const contractorData = await contractorRes.json();
-        if (!contractorData.success) {
-          messageEl.textContent = contractorData.message || "Failed to add contractor.";
-          return;
-        }
-
-        // Step 5: Add consultant
-        const consultantRes = await fetch("http://localhost:3000/create-user", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: consultant.repName || consultant.company,
-            email: consultant.email,
-            role_id: 3, // Consultant
-            project_id: projectId,
-            assigned_by: clientUserId
-          })
-        });
-        const consultantData = await consultantRes.json();
-        if (!consultantData.success) {
-          messageEl.textContent = consultantData.message || "Failed to add consultant.";
-          return;
-        }
-
-        alert("Project created successfully! Contractor and consultant added. Redirecting to team assignment...");
+        alert("Project created successfully! Redirecting to team assignment...");
         window.location.href = "assign-team.html";
       } catch (err) {
+        console.error(err);
         messageEl.textContent = "Server error. Please try again.";
       }
     }

@@ -255,9 +255,9 @@
 
       // Project
       const project = accountDetails.project || {};
-      document.getElementById("projectName").textContent = project.projectData?.projectName || "Not found";
-      document.getElementById("projectLocation").textContent = project.projectData?.projectLocation || "Not found";
-      document.getElementById("projectRef").textContent = project.projectData?.contractReference || "Not found";
+      document.getElementById("projectName").textContent = project.projectData?.name || "Not found";
+      document.getElementById("projectLocation").textContent = project.projectData?.location || "Not found";
+      document.getElementById("projectRef").textContent = project.projectData?.contract_reference || "Not found";
 
       // Contractor
       document.getElementById("contractorCompany").textContent = project.contractor?.company || "Not found";
@@ -274,8 +274,8 @@
       // Team Members
       const list = document.getElementById("teamList");
       list.innerHTML = "";
-      if (project.teamMembers && project.teamMembers.length > 0) {
-        project.teamMembers.forEach(m => {
+      if (accountDetails.teamMembers && accountDetails.teamMembers.length > 0) {
+        accountDetails.teamMembers.forEach(m => {
           const li = document.createElement("li");
           li.innerHTML = `<span class="label">Name:</span> ${m.name} 
                           <span class="label">Position:</span> ${m.position} 
@@ -307,7 +307,7 @@
     async function finalize() {
       const messageEl = document.getElementById("message");
 
-      if (!accountDetails.client_id || !accountDetails.project?.projectId) {
+      if (!accountDetails.companyEmail || !accountDetails.project?.projectData) {
         messageEl.textContent = "Missing client or project context. Please restart from Create Account.";
         return;
       }
@@ -315,16 +315,20 @@
       showLoading();
 
       try {
-        const res = await fetch("http://localhost:3000/finalize-account", {
+        const res = await fetch("https://oneprojectapp-backend.onrender.com/finalize-account", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(accountDetails)
+          body: JSON.stringify({
+            client_email: accountDetails.companyEmail,
+            project_id: localStorage.getItem("created_project_id"),
+            team_members: accountDetails.teamMembers || []
+          })
         });
         const data = await res.json();
 
         if (!data.success) {
           hideLoading();
-          messageEl.textContent = data.message || "Failed to finalize account.";
+          messageEl.textContent = data.error || "Failed to finalize account.";
           return;
         }
 
@@ -335,6 +339,7 @@
         window.location.href = "client-dashboard.html";
       } catch (err) {
         hideLoading();
+        console.error(err);
         messageEl.textContent = "Server error. Please try again.";
       }
     }

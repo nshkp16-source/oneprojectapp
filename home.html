@@ -197,15 +197,11 @@
     }
 
     function isValidEmail(email) {
-      const regex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
+      const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       return regex.test(email);
     }
 
-    function userKey(role, email) {
-      return `user:${role}:${email.toLowerCase()}`;
-    }
-
-    function validateLogin() {
+    async function validateLogin() {
       const email = document.getElementById("email").value.trim();
       const password = document.getElementById("password").value;
 
@@ -218,36 +214,32 @@
         return;
       }
 
-      const key = userKey(selectedRole, email);
-      const stored = localStorage.getItem(key);
+      // 🔹 Backend login check
+      try {
+        const response = await fetch('https://oneprojectapp-backend.onrender.com/verify-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: selectedRole, email, password })
+        });
 
-      if (!stored) {
-        document.getElementById("message").textContent =
-          "This email is not registered. Please create an account first.";
-        return;
-      }
+        const data = await response.json();
 
-      const { passwordHash } = JSON.parse(stored);
-
-      if (!passwordHash) {
-        localStorage.setItem("pendingEmail", email);
-        localStorage.setItem("pendingRole", selectedRole);
-        window.location.href = "first-login.html";
-        return;
-      }
-
-      if (password === passwordHash) {
-        switch (selectedRole) {
-          case "client": window.location.href = "client-dashboard.html"; break;
-          case "consultant": window.location.href = "consultant-dashboard.html"; break;
-          case "consultant-pm": window.location.href = "consultant-project-manager.html"; break;
-          case "contractor": window.location.href = "contractor-dashboard.html"; break;
-          case "contractor-pm": window.location.href = "contractor-project-manager.html"; break;
-          case "team-member": window.location.href = "sub-contractor-dashboard.html"; break;
-          default: document.getElementById("message").textContent = "Unknown role.";
+        if (data.success) {
+          switch (selectedRole) {
+            case "client": window.location.href = "client-dashboard.html"; break;
+            case "consultant": window.location.href = "consultant-dashboard.html"; break;
+            case "consultant-pm": window.location.href = "consultant-project-manager.html"; break;
+            case "contractor": window.location.href = "contractor-dashboard.html"; break;
+            case "contractor-pm": window.location.href = "contractor-project-manager.html"; break;
+            case "team-member": window.location.href = "sub-contractor-dashboard.html"; break;
+            default: document.getElementById("message").textContent = "Unknown role.";
+          }
+        } else {
+          document.getElementById("message").textContent = data.error || "Login failed.";
         }
-      } else {
-        document.getElementById("message").textContent = "Incorrect password.";
+      } catch (err) {
+        console.error(err);
+        document.getElementById("message").textContent = "Server error. Please try again.";
       }
     }
   </script>

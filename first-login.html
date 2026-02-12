@@ -92,67 +92,62 @@
     </div>
   </div>
 
-  <script>
-    const email = localStorage.getItem("pendingEmail");
-    const role = localStorage.getItem("pendingRole");
+<script>
+  const email = localStorage.getItem("pendingEmail");
+  const role = localStorage.getItem("pendingRole");
 
-    if (!email || !role) {
-      alert("Missing first-login context. Please log in again.");
-      window.location.href = "home.html";
+  if (!email || !role) {
+    alert("Missing first-login context. Please log in again.");
+    window.location.href = "home.html";
+  }
+
+  document.getElementById("infoText").textContent = `First login for ${role} account: ${email}`;
+
+  function isValidPassword(password) {
+    const regex = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d\S]{6,}$/;
+    return regex.test(password);
+  }
+
+  async function setPassword() {
+    const pass1 = document.getElementById("newPassword").value.trim();
+    const pass2 = document.getElementById("confirmPassword").value.trim();
+    const messageEl = document.getElementById("message");
+
+    if (!pass1 || !pass2) {
+      messageEl.textContent = "Please fill in both password fields.";
+      return;
+    }
+    if (pass1 !== pass2) {
+      messageEl.textContent = "Passwords do not match.";
+      return;
+    }
+    if (!isValidPassword(pass1)) {
+      messageEl.textContent = "Password must be at least 6 characters and include both letters and numbers.";
+      return;
     }
 
-    document.getElementById("infoText").textContent = `First login for ${role} account: ${email}`;
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/send-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, role, password: pass1 })
+      });
+      const data = await res.json();
 
-    function isValidPassword(password) {
-      const regex = /^(?=.*[A-Za-z])(?=.*\\d)[A-Za-z\\d\\S]{6,}$/;
-      return regex.test(password);
-    }
-
-    async function setPassword() {
-      const pass1 = document.getElementById("newPassword").value.trim();
-      const pass2 = document.getElementById("confirmPassword").value.trim();
-      const messageEl = document.getElementById("message");
-
-      if (!pass1 || !pass2) {
-        messageEl.textContent = "Please fill in both password fields.";
+      if (!data.success) {
+        messageEl.textContent = data.error || "Failed to send verification email.";
         return;
       }
-      if (pass1 !== pass2) {
-        messageEl.textContent = "Passwords do not match.";
-        return;
-      }
-      if (!isValidPassword(pass1)) {
-        messageEl.textContent = "Password must be at least 6 characters and include both letters and numbers.";
-        return;
-      }
 
-      try {
-        // ✅ Send verification email before saving password
-        const res = await fetch("http://localhost:3000/send-verification", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, role, password: pass1 })
-        });
-        const data = await res.json();
-
-        if (!data.success) {
-          messageEl.textContent = data.message || "Failed to send verification email.";
-          return;
-        }
-
-        messageEl.textContent = "Verification email sent. Please check your inbox to confirm.";
-
-        // After user clicks verification link, backend will finalize password setup
-        // and redirect them to their role dashboard.
-
-      } catch (err) {
-        messageEl.textContent = "Server error. Please try again.";
-      }
+      messageEl.textContent = "Verification email sent. Please check your inbox to confirm.";
+    } catch (err) {
+      messageEl.textContent = "Server error. Please try again.";
     }
+  }
 
-    function goBack() {
-      window.location.href = "home.html";
-    }
-  </script>
+  function goBack() {
+    window.location.href = "home.html";
+  }
+</script>
 </body>
 </html>
