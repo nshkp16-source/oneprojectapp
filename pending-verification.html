@@ -92,6 +92,9 @@
       }
     }, 1000);
 
+    // Track resend attempts
+    let resendCount = parseInt(localStorage.getItem("resendCount") || "0");
+
     // Resend link function
     async function resendLink() {
       const account = JSON.parse(localStorage.getItem("projectAccount"));
@@ -101,15 +104,24 @@
       }
 
       try {
-        const res = await fetch("https://oneprojectapp-backend.onrender.com/send-verification", {
+        const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ company_email: account.company_email })
+          body: JSON.stringify({ email: account.company_email, resendCount })
         });
         const data = await res.json();
+
+        if (!data.success && data.redirect) {
+          // Redirect to verify-failed.html after 2 resends
+          window.location.href = data.redirect;
+          return;
+        }
+
         if (data.success) {
           alert("Verification link resent! Please check your email.");
           timeLeft = 60; // reset timer
+          resendCount++;
+          localStorage.setItem("resendCount", resendCount);
         } else {
           alert(data.error || "Failed to resend link. Try again.");
         }

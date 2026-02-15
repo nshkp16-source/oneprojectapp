@@ -67,6 +67,11 @@
       font-size: 14px;
       min-height: 18px;
     }
+    #timer {
+      margin-top: 10px;
+      font-size: 14px;
+      color: #cc0000;
+    }
     .back-link {
       display: inline-block;
       margin-top: 20px;
@@ -86,6 +91,8 @@
     <input type="password" id="confirmPassword" placeholder="Confirm Password" required />
     <button onclick="setPassword()">Set Password</button>
     <p id="message"></p>
+    <p id="timer"></p>
+    <button id="resendBtn" style="display:none;" onclick="resendLink()">Resend Verification Link</button>
 
     <div>
       <span class="back-link" onclick="goBack()">&#8592; Back</span>
@@ -102,6 +109,8 @@
   }
 
   document.getElementById("infoText").textContent = `First login for ${role} account: ${email}`;
+
+  let resendCount = parseInt(localStorage.getItem("resendCount") || "0");
 
   function isValidPassword(password) {
     const regex = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d\S]{6,}$/;
@@ -127,26 +136,67 @@
     }
 
     try {
-      // 🔹 Step 1: Send verification email
       const res = await fetch("https://oneprojectapp-backend.onrender.com/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, role })
+        body: JSON.stringify({ email, role, password: pass1 })
       });
       const data = await res.json();
 
       if (!data.success) {
-        messageEl.textContent = data.error || "Failed to send verification email.";
+        messageEl.textContent = data.error || "Verification failed. Please resend.";
+        startCountdown();
         return;
       }
 
-      // 🔹 Step 2: Temporarily store password until verification succeeds
       localStorage.setItem("pendingPassword", pass1);
-
       alert("Verification email sent. Please check your inbox.");
-      window.location.href = "pending-verification.html";
+      startCountdown();
     } catch (err) {
       messageEl.textContent = "Server error. Please try again.";
+    }
+  }
+
+  function startCountdown() {
+    let timeLeft = 60;
+    const timerEl = document.getElementById("timer");
+    document.getElementById("resendBtn").style.display = "block";
+    const countdown = setInterval(() => {
+      timeLeft--;
+      timerEl.textContent = `You can resend in ${timeLeft} seconds`;
+      if (timeLeft <= 0) {
+        clearInterval(countdown);
+        timerEl.textContent = "You may now resend the verification link.";
+      }
+    }, 1000);
+  }
+
+  async function resendLink() {
+    if (resendCount >= 2) {
+      alert("Maximum resend attempts reached. Please restart account creation.");
+      window.location.href = "create-project-account.html";
+      return;
+    }
+
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, resendCount })
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        alert("Verification link resent! Please check your email.");
+        resendCount++;
+        localStorage.setItem("resendCount", resendCount);
+        startCountdown();
+      } else {
+        alert(data.error || "Failed to resend link.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Server error. Please try again.");
     }
   }
 
