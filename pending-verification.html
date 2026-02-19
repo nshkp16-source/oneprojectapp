@@ -52,6 +52,16 @@
       font-size: 14px;
       color: #cc0000;
     }
+    .back-link {
+      display: block;
+      margin-top: 15px;
+      font-size: 14px;
+      color: #007BFF;
+      text-decoration: none;
+    }
+    .back-link:hover {
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
@@ -62,7 +72,7 @@
 
     <button onclick="resendLink()">Resend Verification Link</button>
     <p id="timer">Link expires in 60 seconds</p>
-    <button onclick="goBack()">← Back to Account Creation</button>
+    <a href="create-project-account.html" class="back-link">← Back to Account Creation</a>
   </div>
 
   <script>
@@ -101,8 +111,11 @@
           alert("Verification link resent! Please check your email.");
           timeLeft = 60;
           startCountdown();
+          if (data.sessionId) {
+            account.sessionId = data.sessionId;
+            localStorage.setItem("projectAccount", JSON.stringify(account));
+          }
         } else if (data.redirect) {
-          alert("Maximum resend attempts reached.");
           window.location.href = data.redirect;
         } else {
           alert(data.error || "Failed to resend link. Try again.");
@@ -113,20 +126,16 @@
       }
     }
 
-    function goBack() {
-      window.location.href = "create-project-account.html";
-    }
-
     // 🔹 Poll backend every 5 seconds to check verification status
     async function checkVerification() {
       const account = JSON.parse(localStorage.getItem("projectAccount") || "{}");
-      if (!account.company_email) return;
+      if (!account.company_email || !account.sessionId) return;
 
       try {
         const res = await fetch("https://oneprojectapp-backend.onrender.com/check-verification", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: account.company_email })
+          body: JSON.stringify({ email: account.company_email, sessionId: account.sessionId })
         });
         const data = await res.json();
 
@@ -135,7 +144,6 @@
         } else if (data.verified === "failed") {
           window.location.href = "https://oneprojectapp.netlify.app/verify-failed.html";
         }
-        // if data.verified === false → stay on pending
       } catch (err) {
         console.error("Check verification error:", err);
       }
@@ -143,7 +151,7 @@
 
     window.onload = () => {
       startCountdown();
-      setInterval(checkVerification, 5000); // poll every 5 seconds
+      setInterval(checkVerification, 5000);
     };
   </script>
 </body>
