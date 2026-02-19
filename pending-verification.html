@@ -76,83 +76,84 @@
   </div>
 
   <script>
-    let timeLeft = 60;
-    let countdown;
-    const timerEl = document.getElementById("timer");
+  let timeLeft = 60;
+  let countdown;
+  const timerEl = document.getElementById("timer");
 
-    function startCountdown() {
-      clearInterval(countdown);
-      countdown = setInterval(() => {
-        timeLeft--;
-        timerEl.textContent = `Link expires in ${timeLeft} seconds`;
-        if (timeLeft <= 0) {
-          clearInterval(countdown);
-          timerEl.textContent = "Link expired. Please resend.";
-        }
-      }, 1000);
+  function startCountdown() {
+    clearInterval(countdown);
+    countdown = setInterval(() => {
+      timeLeft--;
+      timerEl.textContent = `Link expires in ${timeLeft} seconds`;
+      if (timeLeft <= 0) {
+        clearInterval(countdown);
+        timerEl.textContent = "Link expired. Please resend.";
+      }
+    }, 1000);
+  }
+
+  async function resendLink() {
+    const account = JSON.parse(localStorage.getItem("projectAccount"));
+    if (!account || !account.company_email) {
+      alert("No account email found. Please go back and create an account.");
+      return;
     }
 
-    async function resendLink() {
-      const account = JSON.parse(localStorage.getItem("projectAccount"));
-      if (!account || !account.company_email) {
-        alert("No account email found. Please go back and create an account.");
-        return;
-      }
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: account.company_email })
+      });
+      const data = await res.json();
 
-      try {
-        const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: account.company_email })
-        });
-        const data = await res.json();
-
-        if (data.success) {
-          alert("Verification link resent! Please check your email.");
-          timeLeft = 60;
-          startCountdown();
-          if (data.sessionId) {
-            account.sessionId = data.sessionId;
-            localStorage.setItem("projectAccount", JSON.stringify(account));
-          }
-        } else if (data.redirect) {
-          window.location.href = data.redirect;
-        } else {
-          alert(data.error || "Failed to resend link. Try again.");
+      if (data.success) {
+        alert("Verification link resent! Please check your email.");
+        timeLeft = 60;
+        startCountdown();
+        // ✅ Save new sessionId if backend returns it
+        if (data.sessionId) {
+          account.sessionId = data.sessionId;
+          localStorage.setItem("projectAccount", JSON.stringify(account));
         }
-      } catch (err) {
-        console.error(err);
-        alert("Server error. Please try again.");
+      } else if (data.redirect) {
+        window.location.href = data.redirect;
+      } else {
+        alert(data.error || "Failed to resend link. Try again.");
       }
+    } catch (err) {
+      console.error(err);
+      alert("Server error. Please try again.");
     }
+  }
 
-    // 🔹 Poll backend every 5 seconds to check verification status
-    async function checkVerification() {
-      const account = JSON.parse(localStorage.getItem("projectAccount") || "{}");
-      if (!account.company_email || !account.sessionId) return;
+  // 🔹 Poll backend every 5 seconds to check verification status
+  async function checkVerification() {
+    const account = JSON.parse(localStorage.getItem("projectAccount") || "{}");
+    if (!account.company_email || !account.sessionId) return;
 
-      try {
-        const res = await fetch("https://oneprojectapp-backend.onrender.com/check-verification", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: account.company_email, sessionId: account.sessionId })
-        });
-        const data = await res.json();
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/check-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: account.company_email, sessionId: account.sessionId })
+      });
+      const data = await res.json();
 
-        if (data.verified === true) {
-          window.location.href = "https://oneprojectapp.netlify.app/verify-success.html";
-        } else if (data.verified === "failed") {
-          window.location.href = "https://oneprojectapp.netlify.app/verify-failed.html";
-        }
-      } catch (err) {
-        console.error("Check verification error:", err);
+      if (data.verified === true) {
+        window.location.href = "verify-success.html";
+      } else if (data.verified === "failed") {
+        window.location.href = "verify-failed.html";
       }
+    } catch (err) {
+      console.error("Check verification error:", err);
     }
+  }
 
-    window.onload = () => {
-      startCountdown();
-      setInterval(checkVerification, 5000);
-    };
-  </script>
+  window.onload = () => {
+    startCountdown();
+    setInterval(checkVerification, 5000);
+  };
+</script>
 </body>
 </html>
