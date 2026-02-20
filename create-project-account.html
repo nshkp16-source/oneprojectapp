@@ -15,6 +15,16 @@
       justify-content: flex-start;
       align-items: flex-start;
     }
+    /* Loading bar at top */
+    #loadingBar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 4px;
+      width: 0;
+      background-color: #007BFF;
+      transition: width 1.5s ease-in-out;
+    }
     .container {
       background: #fff;
       padding: 30px 40px;
@@ -80,6 +90,9 @@
   </style>
 </head>
 <body>
+  <!-- Loading bar -->
+  <div id="loadingBar"></div>
+
   <div class="container">
     <h2>Create Project Account</h2>
     <p class="note">N.B: Only the Client can create a project account.</p>
@@ -105,6 +118,14 @@
       return regex.test(password);
     }
 
+    function showLoading() {
+      document.getElementById("loadingBar").style.width = "100%";
+    }
+
+    function resetLoading() {
+      document.getElementById("loadingBar").style.width = "0";
+    }
+
     async function handleProjectAccount(e) {
       e.preventDefault();
       const messageEl = document.getElementById("message");
@@ -126,17 +147,26 @@
         return;
       }
 
+      showLoading();
+
       try {
-        // 🔹 Call backend ONLY to send verification email
+        // 🔹 Call backend to create client and send verification CODE
         const res = await fetch("https://oneprojectapp-backend.onrender.com/create-client", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ company_email: companyEmail })
+          body: JSON.stringify({
+            company_name: companyName,
+            company_email: companyEmail,
+            representative_name: representativeName,
+            phone_number: companyTel,
+            password_hash: password
+          })
         });
 
         const data = await res.json();
         if (!data.success) {
-          messageEl.textContent = data.error || "Failed to send verification email.";
+          resetLoading();
+          messageEl.textContent = data.error || "Failed to send verification code.";
           return;
         }
 
@@ -149,15 +179,17 @@
           phone_number: companyTel,
           password_hash: password,
           verified: false,
+          sessionId: data.sessionId || null,
           created_at: new Date().toISOString()
         };
 
         localStorage.setItem("projectAccount", JSON.stringify(clientInfo));
 
-        alert("Account created! Please check your email to verify before continuing.");
+        alert("Account created! A verification code has been sent to your email.");
         window.location.href = "pending-verification.html";
       } catch (err) {
         console.error(err);
+        resetLoading();
         messageEl.textContent = "Server error. Please try again.";
       }
     }
@@ -165,6 +197,6 @@
     function goBack() {
       window.location.href = "home.html";
     }
-</script>
+  </script>
 </body>
 </html>

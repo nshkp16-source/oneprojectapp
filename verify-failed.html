@@ -15,6 +15,16 @@
       justify-content: center;
       align-items: center;
     }
+    /* Loading bar at top */
+    #loadingBar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 4px;
+      width: 0;
+      background-color: #007BFF;
+      transition: width 1.5s ease-in-out;
+    }
     .container {
       background: #fff;
       padding: 40px;
@@ -47,24 +57,102 @@
     button:hover {
       background-color: #0056b3;
     }
+    button:disabled {
+      background-color: #999;
+      cursor: not-allowed;
+    }
+    .back-link {
+      display: block;
+      margin-top: 15px;
+      font-size: 14px;
+      color: #007BFF;
+      text-decoration: none;
+    }
+    .back-link:hover {
+      text-decoration: underline;
+    }
+    #expired-msg {
+      margin-top: 15px;
+      font-size: 14px;
+      color: #cc0000;
+    }
   </style>
 </head>
 <body>
+  <!-- Loading bar -->
+  <div id="loadingBar"></div>
+
   <div class="container">
     <h2>Verification Failed</h2>
-    <p>Sorry, your verification link is invalid or has expired.</p>
-    <p>Please go back and request a new link to continue.</p>
+    <p>Your verification link or code was invalid or expired.</p>
+    <p>You may resend the verification code up to 2 times.</p>
 
-    <!-- Retry button -->
-    <button onclick="goBack()">Back to Create Project Account</button>
+    <button id="resendBtn" onclick="resendLink()">Resend Verification Code</button>
+    <p id="expired-msg"></p>
+    <a href="create-project-account.html" class="back-link">← Back to Account Creation</a>
   </div>
 
   <script>
-    function goBack() {
-      // Clear any stale verification state completely
-      localStorage.removeItem("projectAccount");
-      window.location.href = "create-project-account.html";
+    let account = JSON.parse(localStorage.getItem("projectAccount") || "{}");
+    let resendAttempts = parseInt(localStorage.getItem("resendAttempts") || "0");
+    const resendBtn = document.getElementById("resendBtn");
+    const expiredMsg = document.getElementById("expired-msg");
+    const loadingBar = document.getElementById("loadingBar");
+
+    function updateResendState() {
+      if (resendAttempts >= 2) {
+        resendBtn.disabled = true;
+        expiredMsg.textContent = "Resend attempts have expired. Please go back and create a new account.";
+      }
     }
+
+    function showLoading() {
+      loadingBar.style.width = "100%";
+    }
+
+    async function resendLink() {
+      if (!account || !account.company_email) {
+        alert("No account email found. Please go back and create an account.");
+        return;
+      }
+
+      showLoading();
+
+      try {
+        const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: account.company_email })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          resendAttempts++;
+          localStorage.setItem("resendAttempts", resendAttempts.toString());
+
+          if (data.sessionId) {
+            account.sessionId = data.sessionId;
+            localStorage.setItem("projectAccount", JSON.stringify(account));
+          }
+
+          if (resendAttempts <= 2) {
+            alert("Verification code resent! Redirecting to pending page...");
+            window.location.href = "pending-verification.html"; // fresh 2:59 countdown
+          } else {
+            updateResendState();
+          }
+        } else {
+          alert(data.error || "Failed to resend code. Try again.");
+          loadingBar.style.width = "0";
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Server error. Please try again.");
+        loadingBar.style.width = "0";
+      }
+    }
+
+    window.onload = updateResendState;
   </script>
 </body>
 </html>
