@@ -246,101 +246,82 @@
   </div>
 
 <script>
-  const accountDetails = JSON.parse(localStorage.getItem("projectAccount") || "{}");
+  const details = JSON.parse(localStorage.getItem("projectDetails") || "{}");
 
   function fillSummary() {
-    // Client
-    document.getElementById("clientName").textContent = accountDetails.company_name || "Not found";
-    document.getElementById("clientEmail").textContent = accountDetails.company_email || "Not found";
-    document.getElementById("clientTel").textContent = accountDetails.phone_number || "Not found";
-    document.getElementById("clientRep").textContent = accountDetails.representative_name || "Not found";
-
-    // Project
-    const project = accountDetails.project || {};
-    document.getElementById("projectName").textContent = project.projectData?.name || "Not found";
-    document.getElementById("projectLocation").textContent = project.projectData?.location || "Not found";
-    document.getElementById("projectRef").textContent = project.projectData?.contract_reference || "Not found";
-
-    // Contractor
-    document.getElementById("contractorCompany").textContent = project.contractor?.company || "Not found";
-    document.getElementById("contractorEmail").textContent = project.contractor?.email || "Not found";
-    document.getElementById("contractorTel").textContent = project.contractor?.tel || "Not found";
-    document.getElementById("contractorRep").textContent = project.contractor?.repName || "Not found";
-    document.getElementById("contractorTitle").textContent = project.contractor?.repTitle || "Not found";
-
-    // Consultant
-    document.getElementById("consultantCompany").textContent = project.consultant?.company || "Not found";
-    document.getElementById("consultantEmail").textContent = project.consultant?.email || "Not found";
-    document.getElementById("consultantTel").textContent = project.consultant?.tel || "Not found";
-    document.getElementById("consultantRep").textContent = project.consultant?.repName || "Not found";
-    document.getElementById("consultantTitle").textContent = project.consultant?.repTitle || "Not found";
-
-    // Team Members
-    const list = document.getElementById("teamList");
-    list.innerHTML = "";
-    if (accountDetails.teamMembers && accountDetails.teamMembers.length > 0) {
-      accountDetails.teamMembers.forEach((m, idx) => {
-        const li = document.createElement("li");
-        li.innerHTML = `
-          <span class="label">Name:</span> <span class="value editable" data-path="teamMembers.${idx}.name">${m.name}</span>
-          <span class="label">Position:</span> <span class="value editable" data-path="teamMembers.${idx}.position">${m.position}</span>
-          <span class="label">Task:</span> <span class="value editable" data-path="teamMembers.${idx}.task">${m.task}</span>
-          <span class="label">Email:</span> ${m.email}`;
-        list.appendChild(li);
-      });
-    } else {
-      list.innerHTML = "<li>No team members assigned.</li>";
-    }
-
-    bindEditable();
-  }
-
-  function bindEditable() {
-    document.querySelectorAll(".editable").forEach(el => {
-      el.onclick = () => {
-        const currentValue = el.textContent;
+    // Helper: make editable except email
+    function makeEditable(id, object, key) {
+      const el = document.getElementById(id);
+      el.textContent = object?.[key] || "Not found";
+      el.addEventListener("click", () => {
+        const current = el.textContent === "Not found" ? "" : el.textContent;
         const input = document.createElement("input");
         input.type = "text";
-        input.value = currentValue === "Not found" ? "" : currentValue;
+        input.value = current;
         input.className = "edit-input";
         el.replaceWith(input);
         input.focus();
-
-        input.onblur = () => {
-          const newValue = input.value.trim();
-          updateAccountDetails(el.id || el.dataset.path, newValue);
-          const span = document.createElement("span");
-          span.className = "value editable";
-          if (el.id) span.id = el.id;
-          if (el.dataset.path) span.dataset.path = el.dataset.path;
-          span.textContent = newValue || "Not found";
-          input.replaceWith(span);
-          bindEditable();
-        };
-      };
-    });
-  }
-
-  function updateAccountDetails(path, value) {
-    const keys = path.split(".");
-    let obj = accountDetails;
-    for (let i = 0; i < keys.length - 1; i++) {
-      obj = obj[keys[i]] || {};
+        input.addEventListener("blur", () => {
+          object[key] = input.value.trim();
+          input.replaceWith(el);
+          el.textContent = object[key] || "Not found";
+        });
+      });
     }
-    obj[keys[keys.length - 1]] = value;
-    localStorage.setItem("projectAccount", JSON.stringify(accountDetails));
-  }
 
-  fillSummary();
+    // Client
+    makeEditable("clientName", details.client, "company_name");
+    document.getElementById("clientEmail").textContent = details.client?.company_email || "Not found"; // not editable
+    makeEditable("clientTel", details.client, "phone_number");
+    makeEditable("clientRep", details.client, "representative_name");
 
-  function showLoading() {
-    document.getElementById("summaryBox").style.display = "none";
-    document.getElementById("loadingOverlay").style.display = "block";
-  }
+    // Project
+    makeEditable("projectName", details.project, "name");
+    makeEditable("projectLocation", details.project, "location");
+    makeEditable("projectRef", details.project, "contract_reference");
 
-  function hideLoading() {
-    document.getElementById("loadingOverlay").style.display = "none";
-    document.getElementById("summaryBox").style.display = "block";
+    // Contractor
+    makeEditable("contractorCompany", details.contractor, "company");
+    document.getElementById("contractorEmail").textContent = details.contractor?.email || "Not found"; // not editable
+    makeEditable("contractorTel", details.contractor, "tel");
+    makeEditable("contractorRep", details.contractor, "repName");
+    makeEditable("contractorTitle", details.contractor, "repTitle");
+
+    // Consultant
+    makeEditable("consultantCompany", details.consultant, "company");
+    document.getElementById("consultantEmail").textContent = details.consultant?.email || "Not found"; // not editable
+    makeEditable("consultantTel", details.consultant, "tel");
+    makeEditable("consultantRep", details.consultant, "repName");
+    makeEditable("consultantTitle", details.consultant, "repTitle");
+
+    // Team Members
+    const teamList = document.getElementById("teamList");
+    teamList.innerHTML = "";
+    if (Array.isArray(details.team_members) && details.team_members.length > 0) {
+      details.team_members.forEach((m, idx) => {
+        const li = document.createElement("li");
+        li.textContent = `${m.name} - ${m.position} (${m.email})`;
+        // allow editing name/position but not email
+        li.addEventListener("click", () => {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.value = `${m.name} - ${m.position}`;
+          input.className = "edit-input";
+          li.replaceWith(input);
+          input.focus();
+          input.addEventListener("blur", () => {
+            const parts = input.value.split("-");
+            m.name = parts[0]?.trim() || m.name;
+            m.position = parts[1]?.trim() || m.position;
+            input.replaceWith(li);
+            li.textContent = `${m.name} - ${m.position} (${m.email})`;
+          });
+        });
+        teamList.appendChild(li);
+      });
+    } else {
+      teamList.innerHTML = "<li>No team members assigned.</li>";
+    }
   }
 
   function goBack() {
@@ -348,57 +329,36 @@
   }
 
   async function finalize() {
+    const overlay = document.getElementById("loadingOverlay");
     const messageEl = document.getElementById("message");
-
-    if (!accountDetails.company_email || !accountDetails.project?.projectData) {
-      messageEl.textContent = "Missing client or project context. Please restart from Create Account.";
-      return;
-    }
-
-    if (!accountDetails.verified) {
-      messageEl.textContent = "Account not verified. Please verify your email before finalizing.";
-      return;
-    }
-
-    showLoading();
+    overlay.style.display = "block";
 
     try {
       const res = await fetch("https://oneprojectapp-backend.onrender.com/finalize-account", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          client: {
-            company_name: accountDetails.company_name,
-            company_email: accountDetails.company_email,
-            representative_name: accountDetails.representative_name,
-            title: "Client",
-            phone_number: accountDetails.phone_number
-          },
-          project: accountDetails.project?.projectData || {},
-          contractor: accountDetails.project?.contractor || {},
-          consultant: accountDetails.project?.consultant || {},
-          team_members: accountDetails.teamMembers || []
-        })
+        body: JSON.stringify(details)
       });
+
       const data = await res.json();
+      overlay.style.display = "none";
 
-      if (!data.success) {
-        hideLoading();
+      if (data.success) {
+        alert("Account finalized successfully!");
+        localStorage.removeItem("projectDetails");
+        localStorage.removeItem("projectAccount");
+        window.location.href = "client-dashboard.html";
+      } else {
         messageEl.textContent = data.error || "Failed to finalize account.";
-        return;
       }
-
-      localStorage.setItem("client_finalized", "true");
-      localStorage.removeItem("projectAccount");
-
-      alert("Account and project finalized successfully!");
-      window.location.href = "client-dashboard.html";
     } catch (err) {
-      hideLoading();
-      console.error(err);
+      console.error("Finalize error:", err);
+      overlay.style.display = "none";
       messageEl.textContent = "Server error. Please try again.";
     }
   }
+
+  window.onload = fillSummary;
 </script>
 </body>
 </html>
