@@ -76,95 +76,96 @@
   </div>
 
   <script>
-  function isValidPassword(password) {
-    const regex = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d\S]{6,}$/;
-    return regex.test(password);
+  let timeLeft = 179; // 2:59 countdown
+  const timerEl = document.getElementById("timer");
+  const loadingBar = document.getElementById("loadingBar");
+  const errorMsg = document.getElementById("errorMsg");
+  const progressFill = document.getElementById("progressFill");
+
+  function startCountdown() {
+    const countdown = setInterval(() => {
+      let minutes = Math.floor(timeLeft / 60);
+      let seconds = timeLeft % 60;
+      timerEl.textContent = `${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
+      progressFill.style.width = `${(timeLeft / 179) * 100}%`;
+      timeLeft--;
+      if (timeLeft < 0) {
+        clearInterval(countdown);
+        window.location.href = "verify-failed.html";
+      }
+    }, 1000);
   }
 
-  function showLoading() {
-    document.getElementById("loadingBar").style.width = "100%";
-  }
-
-  function resetLoading() {
-    document.getElementById("loadingBar").style.width = "0";
-  }
-
-  async function handleProjectAccount(e) {
-    e.preventDefault();
-    const messageEl = document.getElementById("message");
-
-    const companyName = document.getElementById("companyName").value.trim();
-    const companyEmail = document.getElementById("companyEmail").value.trim().toLowerCase();
-    const representativeName = document.getElementById("representativeName").value.trim();
-    const companyTel = document.getElementById("companyTel").value.trim();
-    const password = document.getElementById("companyPassword").value.trim();
-    const confirmPassword = document.getElementById("confirmPassword").value.trim();
-
-    if (password !== confirmPassword) {
-      messageEl.textContent = "Passwords do not match. Please try again.";
-      return;
+  function autoTab(current, nextId) {
+    if (current.value.length === 1 && nextId) {
+      document.getElementById(nextId).focus();
     }
+    checkCodeComplete();
+  }
 
-    if (!isValidPassword(password)) {
-      messageEl.textContent = "Password must be at least 6 characters and include both letters and numbers.";
-      return;
+  function checkCodeComplete() {
+    const code = [
+      document.getElementById("code1").value,
+      document.getElementById("code2").value,
+      document.getElementById("code3").value,
+      document.getElementById("code4").value,
+      document.getElementById("code5").value,
+      document.getElementById("code6").value
+    ].join("");
+    if (code.length === 6) {
+      showLoading();
+      submitCode(code);
     }
+  }
 
-    showLoading();
+  function showLoading() { loadingBar.style.width = "100%"; }
+  function resetLoading() { loadingBar.style.width = "0"; }
 
+  async function submitCode(code) {
+    const account = JSON.parse(localStorage.getItem("projectAccount") || "{}");
     try {
-      const res = await fetch("https://oneprojectapp-backend.onrender.com/create-client", {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/verify-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          company_name: companyName,
-          company_email: companyEmail,
-          representative_name: representativeName,
-          phone_number: companyTel,
-          password_hash: password
+          email: account.company_email,
+          sessionId: account.sessionId,
+          code
         })
       });
-
       const data = await res.json();
-      if (!data.success) {
-        resetLoading();
-        messageEl.textContent = data.error || "Failed to send verification code.";
-        return;
+      if (data.verified === true) {
+        window.location.href = "verify-success.html";
+      } else {
+        if (timeLeft > 0) {
+          errorMsg.textContent = "Incorrect code. Please try again.";
+          resetInputs(); resetLoading();
+        } else {
+          window.location.href = "verify-failed.html";
+        }
       }
-
-      // 🔹 Save into unified projectDetails object with sessionId
-      let projectDetails = JSON.parse(localStorage.getItem("projectDetails")) || {};
-      projectDetails.client = {
-        company_name: companyName,
-        company_email: companyEmail,
-        representative_name: representativeName,
-        title: "Client",
-        phone_number: companyTel,
-        password_hash: password,
-        verified: false,
-        sessionId: data.sessionId || null, // store sessionId here
-        created_at: new Date().toISOString()
-      };
-      localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
-
-      // 🔹 Also store a lightweight projectAccount for pending-verification.html
-      localStorage.setItem("projectAccount", JSON.stringify({
-        company_email: companyEmail,
-        sessionId: data.sessionId || null
-      }));
-
-      alert("Account created! A verification code has been sent to your email.");
-      window.location.href = "pending-verification.html";
     } catch (err) {
-      console.error(err);
-      resetLoading();
-      messageEl.textContent = "Server error. Please try again.";
+      console.error("Code verification error:", err);
+      errorMsg.textContent = "Server error. Please try again.";
+      resetInputs(); resetLoading();
     }
   }
 
-  function goBack() {
-    window.location.href = "home.html";
+  function resetInputs() {
+    const inputs = document.querySelectorAll(".code-inputs input");
+    inputs.forEach(input => input.value = "");
+    document.getElementById("code1").focus();
   }
+
+  window.onload = () => {
+    startCountdown();
+    const inputs = document.querySelectorAll(".code-inputs input");
+    inputs.forEach((input, idx) => {
+      input.addEventListener("input", () => {
+        autoTab(input, idx < inputs.length - 1 ? `code${idx+2}` : null);
+      });
+    });
+  };
 </script>
 </body>
 </html>
