@@ -15,7 +15,6 @@
       justify-content: center;
       align-items: center;
     }
-    /* Loading bar at top */
     #loadingBar {
       position: fixed;
       top: 0;
@@ -79,7 +78,6 @@
   </style>
 </head>
 <body>
-  <!-- Loading bar -->
   <div id="loadingBar"></div>
 
   <div class="container">
@@ -89,76 +87,72 @@
 
     <button id="resendBtn" onclick="resendLink()">Resend Verification Code</button>
     <p id="expired-msg"></p>
-    <a href="create-project-account.html" class="back-link">← Back to Account Creation</a>
+    <a href="pending-verification.html" class="back-link">← Back to Pending Verification</a>
   </div>
 
   <script>
-  let account = JSON.parse(localStorage.getItem("projectAccount") || "{}");
-  let resendAttempts = parseInt(localStorage.getItem("resendAttempts") || "0");
-  const resendBtn = document.getElementById("resendBtn");
-  const expiredMsg = document.getElementById("expired-msg");
-  const loadingBar = document.getElementById("loadingBar");
+    let projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
+    let clientEmail = projectDetails.client?.company_email;
+    let resendAttempts = parseInt(localStorage.getItem("resendAttempts") || "0");
+    const resendBtn = document.getElementById("resendBtn");
+    const expiredMsg = document.getElementById("expired-msg");
+    const loadingBar = document.getElementById("loadingBar");
 
-  function updateResendState() {
-    if (resendAttempts >= 2) {
-      resendBtn.disabled = true;
-      expiredMsg.textContent = "Resend attempts have expired. Please go back and create a new account.";
-    }
-  }
-
-  function showLoading() {
-    loadingBar.style.width = "100%";
-  }
-
-  async function resendLink() {
-    if (!account || !account.company_email) {
-      alert("No account email found. Please go back and create an account.");
-      return;
+    function updateResendState() {
+      if (resendAttempts >= 2) {
+        resendBtn.disabled = true;
+        expiredMsg.textContent = "Resend attempts have expired. Please finalize again to restart verification.";
+      }
     }
 
-    if (resendAttempts >= 2) {
-      updateResendState();
-      return;
+    function showLoading() {
+      loadingBar.style.width = "100%";
     }
 
-    showLoading();
+    async function resendLink() {
+      if (!clientEmail) {
+        alert("No client email found. Please finalize account again.");
+        return;
+      }
 
-    try {
-      const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: account.company_email })
-      });
-      const data = await res.json();
+      if (resendAttempts >= 2) {
+        updateResendState();
+        return;
+      }
 
-      if (data.success) {
-        resendAttempts++;
-        localStorage.setItem("resendAttempts", resendAttempts.toString());
+      showLoading();
 
-        if (data.sessionId) {
-          account.sessionId = data.sessionId;
-          localStorage.setItem("projectAccount", JSON.stringify(account));
-        }
+      try {
+        const res = await fetch("https://oneprojectapp-backend.onrender.com/send-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: clientEmail })
+        });
+        const data = await res.json();
 
-        if (resendAttempts <= 2) {
-          alert("Verification code resent! Redirecting to pending page...");
-          loadingBar.style.width = "0"; // reset before redirect
-          window.location.href = "pending-verification.html";
+        if (data.success) {
+          resendAttempts++;
+          localStorage.setItem("resendAttempts", resendAttempts.toString());
+
+          if (resendAttempts <= 2) {
+            alert("Verification code resent! Redirecting to pending page...");
+            loadingBar.style.width = "0"; 
+            window.location.href = "pending-verification.html";
+          } else {
+            updateResendState();
+          }
         } else {
-          updateResendState();
+          alert(data.error || "Failed to resend code. Try again.");
+          loadingBar.style.width = "0";
         }
-      } else {
-        alert(data.error || "Failed to resend code. Try again.");
+      } catch (err) {
+        console.error(err);
+        alert("Server error. Please try again.");
         loadingBar.style.width = "0";
       }
-    } catch (err) {
-      console.error(err);
-      alert("Server error. Please try again.");
-      loadingBar.style.width = "0";
     }
-  }
 
-  window.onload = updateResendState;
-</script>
+    window.onload = updateResendState;
+  </script>
 </body>
 </html>
