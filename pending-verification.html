@@ -5,30 +5,22 @@
   <title>Email Verification Pending</title>
   <style>
     body {
-      margin: 0;
-      padding: 0;
+      margin: 0; padding: 0;
       font-family: Arial, sans-serif;
       background: url('account-background.jpg') no-repeat center center fixed;
       background-size: cover;
-      height: 100vh;
-      display: flex;
-      justify-content: center;
-      align-items: center;
+      height: 100vh; display: flex;
+      justify-content: center; align-items: center;
     }
     #loadingBar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      height: 4px;
-      width: 0;
+      position: fixed; top: 0; left: 0;
+      height: 4px; width: 0;
       background-color: #007BFF;
       transition: width 1.5s ease-in-out;
     }
     .container {
-      background: #fff;
-      padding: 40px;
-      border-radius: 12px;
-      width: 400px;
+      background: #fff; padding: 40px;
+      border-radius: 12px; width: 400px;
       text-align: center;
       box-shadow: 0 0 12px rgba(0,0,0,0.2);
       position: relative;
@@ -53,16 +45,6 @@
     #errorMsg { margin-top: 15px; font-size: 14px; color: #cc0000; }
     .back-link { display: block; margin-top: 15px; font-size: 14px; color: #007BFF; text-decoration: none; }
     .back-link:hover { text-decoration: underline; }
-    .resend-btn {
-      margin-top: 15px;
-      background-color: #007BFF;
-      color: white;
-      border: none;
-      padding: 10px 20px;
-      border-radius: 5px;
-      cursor: pointer;
-    }
-    .resend-btn:hover { background-color: #0056b3; }
   </style>
 </head>
 <body>
@@ -70,7 +52,7 @@
   <div class="container">
     <div id="progressBar"><div id="progressFill"></div></div>
     <h2>Verify Your Email</h2>
-    <p>We’ve sent a verification link and a 6‑digit code to your email address.</p>
+    <p>We’ve sent a 6‑digit verification code to your email address.</p>
     <p>Enter the code below. It will expire in 3 minutes.</p>
     <p id="timer">2:59</p>
     <div class="code-inputs">
@@ -82,116 +64,98 @@
       <input type="text" maxlength="1" id="code6">
     </div>
     <p id="errorMsg"></p>
-    <button class="resend-btn" onclick="resendVerification()">Resend Email</button>
     <a href="finalize-account.html" class="back-link">← Back to Finalize</a>
   </div>
 
   <script>
-    let timeLeft = 179; // 2:59 countdown
-    const timerEl = document.getElementById("timer");
-    const loadingBar = document.getElementById("loadingBar");
-    const errorMsg = document.getElementById("errorMsg");
-    const progressFill = document.getElementById("progressFill");
+  let timeLeft = 179; // 2:59 countdown
+  const timerEl = document.getElementById("timer");
+  const loadingBar = document.getElementById("loadingBar");
+  const errorMsg = document.getElementById("errorMsg");
+  const progressFill = document.getElementById("progressFill");
 
-    function startCountdown() {
-      const countdown = setInterval(() => {
-        let minutes = Math.floor(timeLeft / 60);
-        let seconds = timeLeft % 60;
-        timerEl.textContent = `${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
-        progressFill.style.width = `${(timeLeft / 179) * 100}%`;
-        timeLeft--;
-        if (timeLeft < 0) {
-          clearInterval(countdown);
+  function startCountdown() {
+    const countdown = setInterval(() => {
+      let minutes = Math.floor(timeLeft / 60);
+      let seconds = timeLeft % 60;
+      timerEl.textContent = `${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
+      progressFill.style.width = `${(timeLeft / 179) * 100}%`;
+      timeLeft--;
+      if (timeLeft < 0) {
+        clearInterval(countdown);
+        window.location.href = "verify-failed.html";
+      }
+    }, 1000);
+  }
+
+  function autoTab(current, nextId) {
+    if (current.value.length === 1 && nextId) {
+      document.getElementById(nextId).focus();
+    }
+    checkCodeComplete();
+  }
+
+  function checkCodeComplete() {
+    const code = [
+      document.getElementById("code1").value,
+      document.getElementById("code2").value,
+      document.getElementById("code3").value,
+      document.getElementById("code4").value,
+      document.getElementById("code5").value,
+      document.getElementById("code6").value
+    ].join("");
+    if (code.length === 6) {
+      showLoading();
+      submitCode(code);
+    }
+  }
+
+  function showLoading() { loadingBar.style.width = "100%"; }
+  function resetLoading() { loadingBar.style.width = "0"; }
+
+  async function submitCode(code) {
+    const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
+    const clientEmail = projectDetails.client?.company_email;
+
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/verify-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: clientEmail, code })
+      });
+      const data = await res.json();
+      if (data.verified === true) {
+        window.location.href = "verify-success.html";
+      } else {
+        if (timeLeft > 0) {
+          errorMsg.textContent = "Incorrect code. Please try again.";
+          resetInputs(); resetLoading();
+        } else {
           window.location.href = "verify-failed.html";
         }
-      }, 1000);
-    }
-
-    function autoTab(current, nextId) {
-      if (current.value.length === 1 && nextId) {
-        document.getElementById(nextId).focus();
       }
-      checkCodeComplete();
+    } catch (err) {
+      console.error("Code verification error:", err);
+      errorMsg.textContent = "Server error. Please try again.";
+      resetInputs(); resetLoading();
     }
+  }
 
-    function checkCodeComplete() {
-      const code = [
-        document.getElementById("code1").value,
-        document.getElementById("code2").value,
-        document.getElementById("code3").value,
-        document.getElementById("code4").value,
-        document.getElementById("code5").value,
-        document.getElementById("code6").value
-      ].join("");
-      if (code.length === 6) {
-        showLoading();
-        submitCode(code);
-      }
-    }
+  function resetInputs() {
+    const inputs = document.querySelectorAll(".code-inputs input");
+    inputs.forEach(input => input.value = "");
+    document.getElementById("code1").focus();
+  }
 
-    function showLoading() { loadingBar.style.width = "100%"; }
-    function resetLoading() { loadingBar.style.width = "0"; }
-
-    async function submitCode(code) {
-      const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
-      const clientEmail = projectDetails.client?.company_email;
-
-      try {
-        const res = await fetch("https://oneprojectapp-backend.onrender.com/verify-code", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: clientEmail, code })
-        });
-        const data = await res.json();
-        if (data.verified === true) {
-          window.location.href = "verify-success.html";
-        } else {
-          if (timeLeft > 0) {
-            errorMsg.textContent = "Incorrect code. Please try again.";
-            resetInputs(); resetLoading();
-          } else {
-            window.location.href = "verify-failed.html";
-          }
-        }
-      } catch (err) {
-        console.error("Code verification error:", err);
-        errorMsg.textContent = "Server error. Please try again.";
-        resetInputs(); resetLoading();
-      }
-    }
-
-    async function resendVerification() {
-      const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
-      const clientEmail = projectDetails.client?.company_email;
-
-      try {
-        await fetch("https://oneprojectapp-backend.onrender.com/send-verification", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: clientEmail })
-        });
-        alert("Verification email resent!");
-      } catch (err) {
-        console.error("Resend error:", err);
-        alert("Failed to resend verification email.");
-      }
-    }
-
-    function resetInputs() {
-      const inputs = document.querySelectorAll(".code-inputs input");
-      inputs.forEach(input => input.value = "");
-      document.getElementById("code1").focus();
-    }
-
-    window.onload = () => {
-      startCountdown();
-      const inputs = document.querySelectorAll(".code-inputs input");
-      inputs.forEach((input, idx) => {
-        input.addEventListener("input", () => {
-          autoTab(input, idx < inputs.length - 1 ? `code${idx+2}` : null);
-        });
+  window.onload = () => {
+    startCountdown();
+    const inputs = document.querySelectorAll(".code-inputs input");
+    inputs.forEach((input, idx) => {
+      input.addEventListener("input", () => {
+        autoTab(input, idx < inputs.length - 1 ? `code${idx+2}` : null);
       });
-    };
-  </script>
+    });
+  };
+</script>
 </body>
 </html>
