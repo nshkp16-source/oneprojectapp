@@ -57,78 +57,82 @@
   </div>
 
   <script>
-    let projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
-    let clientEmail = projectDetails.client?.company_email;
-    let resendAttempts = parseInt(localStorage.getItem("resendAttempts") || "0");
-    const resendBtn = document.getElementById("resendBtn");
-    const expiredMsg = document.getElementById("expired-msg");
-    const backLink = document.getElementById("backLink");
-    const loadingBar = document.getElementById("loadingBar");
+  let projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
+  let clientEmail = projectDetails.client?.company_email;
+  let resendAttempts = parseInt(localStorage.getItem("resendAttempts") || "0");
+  const resendBtn = document.getElementById("resendBtn");
+  const expiredMsg = document.getElementById("expired-msg");
+  const backLink = document.getElementById("backLink");
+  const loadingBar = document.getElementById("loadingBar");
 
-    function cleanupStorage() {
-      localStorage.removeItem("projectDetails");
-      localStorage.removeItem("projectAccount");
-      localStorage.removeItem("resendAttempts");
+  function cleanupStorage() {
+    localStorage.removeItem("projectDetails");
+    localStorage.removeItem("projectAccount");
+    localStorage.removeItem("resendAttempts");
+    localStorage.removeItem("sessionId");
+  }
+
+  function showLoading() {
+    loadingBar.style.transition = "width 1.5s ease-in-out";
+    loadingBar.style.width = "100%";
+  }
+
+  function resetLoading() {
+    loadingBar.style.transition = "width 0.8s ease-in-out";
+    loadingBar.style.width = "0";
+  }
+
+  async function resendCode() {
+    if (!clientEmail) {
+      alert("No client email found. Please create account again.");
+      cleanupStorage();
+      window.location.href = "create-project-account.html";
+      return;
     }
 
-    function showLoading() { loadingBar.style.width = "100%"; }
-
-    async function resendCode() {
-      if (!clientEmail) {
-        alert("No client email found. Please create account again.");
-        cleanupStorage();
-        window.location.href = "create-project-account.html";
-        return;
-      }
-
-      if (resendAttempts >= 2) {
-        resendBtn.disabled = true;
-        expiredMsg.textContent = "Resend attempts have expired. Please start fresh.";
-        backLink.style.display = "block"; // show back link
-        return;
-      }
-
-      showLoading();
-
-      try {
-        const res = await fetch("https://oneprojectapp-backend.onrender.com/send-verification", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: clientEmail })
-        });
-        const data = await res.json();
-
-        if (data.success) {
-          resendAttempts++;
-          localStorage.setItem("resendAttempts", resendAttempts.toString());
-
-          if (resendAttempts <= 2) {
-            alert("Verification code resent! Redirecting to pending page...");
-            loadingBar.style.width = "0"; 
-            window.location.href = "pending-verification.html";
-          } else {
-            resendBtn.disabled = true;
-            expiredMsg.textContent = "Resend attempts have expired. Please start fresh.";
-            backLink.style.display = "block";
-          }
-        } else {
-          alert(data.error || "Failed to resend code. Try again.");
-          loadingBar.style.width = "0";
-        }
-      } catch (err) {
-        console.error(err);
-        alert("Server error. Please try again.");
-        loadingBar.style.width = "0";
-      }
+    if (resendAttempts >= 2) {
+      resendBtn.disabled = true;
+      expiredMsg.textContent = "Resend attempts have expired. Please start fresh.";
+      backLink.style.display = "block"; // show back link
+      return;
     }
 
-    window.onload = () => {
-      if (resendAttempts >= 2) {
-        resendBtn.disabled = true;
-        expiredMsg.textContent = "Resend attempts have expired. Please start fresh.";
-        backLink.style.display = "block";
+    showLoading();
+
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: clientEmail })
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        resendAttempts++;
+        localStorage.setItem("resendAttempts", resendAttempts.toString());
+        if (data.sessionId) localStorage.setItem("sessionId", data.sessionId);
+
+        alert("Verification code resent! Redirecting to pending page...");
+        resetLoading();
+        window.location.href = "pending-verification.html";
+      } else {
+        alert(data.error || "Failed to resend code. Try again.");
+        resetLoading();
       }
-    };
-  </script>
+    } catch (err) {
+      console.error(err);
+      alert("Server error. Please try again.");
+      resetLoading();
+    }
+  }
+
+  window.onload = () => {
+    if (resendAttempts >= 2) {
+      resendBtn.disabled = true;
+      expiredMsg.textContent = "Resend attempts have expired. Please start fresh.";
+      backLink.style.display = "block";
+    }
+  };
+</script>
 </body>
 </html>
