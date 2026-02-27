@@ -310,6 +310,7 @@
           localStorage.setItem("projectDetails", JSON.stringify(details));
           el.textContent = newValue;
           input.replaceWith(el);
+          showSavedFeedback();
         });
       });
     }
@@ -318,7 +319,8 @@
     makeEditable("clientName", details, ["client","company_name"]);
     document.getElementById("clientEmail").textContent = details.client.company_email || "";
     makeEditable("clientTel", details, ["client","telephone"]);
-    makeEditable("clientRep", details, ["client","representative"]); // ✅ corrected
+    makeEditable("clientRep", details, ["client","representative"]);
+    makeEditable("clientTitle", details, ["client","title"]);
 
     // Project
     makeEditable("projectName", details, ["project","name"]);
@@ -339,7 +341,7 @@
     makeEditable("consultantRep", details, ["consultant","representative"]);
     makeEditable("consultantTitle", details, ["consultant","title"]);
 
-    // Team Members (editable + removable)
+    // Team Members
     const teamList = document.getElementById("teamList");
     teamList.innerHTML = "";
     if (Array.isArray(details.team_members)) {
@@ -352,37 +354,9 @@
           <strong>Email:</strong> <span class="value">${m.email}</span><br>
           <button class="btn-remove" onclick="removeMember(${idx})">Remove</button>
         `;
-
-        // Make each field editable
-        li.querySelectorAll(".value").forEach((span, fieldIdx) => {
-          span.addEventListener("click", () => {
-            const currentValue = span.textContent;
-            const input = document.createElement("input");
-            input.type = "text";
-            input.value = currentValue;
-            input.className = "edit-input";
-            span.replaceWith(input);
-            input.focus();
-
-            input.addEventListener("blur", () => {
-              const newValue = input.value;
-              if (fieldIdx === 0) m.name = newValue;
-              if (fieldIdx === 1) m.position = newValue;
-              if (fieldIdx === 2) m.task = newValue;
-              if (fieldIdx === 3) m.email = newValue;
-
-              localStorage.setItem("projectDetails", JSON.stringify(details));
-              span.textContent = newValue;
-              input.replaceWith(span);
-            });
-          });
-        });
-
         teamList.appendChild(li);
       });
     }
-
-    // Add "Add Member" button
     const addBtn = document.createElement("button");
     addBtn.textContent = "➕ Add Team Member";
     addBtn.className = "btn-add";
@@ -391,12 +365,11 @@
   }
 
   function removeMember(index) {
-    const confirmDelete = confirm("Are you sure you want to remove this team member?");
-    if (!confirmDelete) return;
-
+    if (!confirm("Are you sure you want to remove this team member?")) return;
     details.team_members.splice(index, 1);
     localStorage.setItem("projectDetails", JSON.stringify(details));
-    fillSummary(); // refresh list
+    fillSummary();
+    showSavedFeedback();
   }
 
   function addMember() {
@@ -404,7 +377,8 @@
     if (!Array.isArray(details.team_members)) details.team_members = [];
     details.team_members.push(newMember);
     localStorage.setItem("projectDetails", JSON.stringify(details));
-    fillSummary(); // refresh list
+    fillSummary();
+    showSavedFeedback();
   }
 
   async function finalize() {
@@ -420,17 +394,18 @@
         return;
       }
 
-      // ✅ Validation: ensure project, contractor, consultant, team_members exist
-      if (!details.project || !details.contractor || !details.consultant || !Array.isArray(details.team_members) || details.team_members.length === 0) {
-        overlay.style.display = "none";
-        messageEl.textContent = "Some required details are missing. Please review before finalizing.";
-        return;
-      }
-
+      // Send full projectDetails to backend
       const res = await fetch("https://oneprojectapp-backend.onrender.com/finalize-account", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientEmail })
+        body: JSON.stringify({
+          clientEmail,
+          client: details.client,
+          project: details.project,
+          contractor: details.contractor,
+          consultant: details.consultant,
+          team_members: details.team_members
+        })
       });
 
       const data = await res.json();
@@ -438,9 +413,8 @@
 
       if (data.success) {
         alert("Verification email sent. Please check your inbox.");
-        localStorage.setItem("projectDetails", JSON.stringify(details)); // ✅ updated with edits/removals/additions
+        localStorage.setItem("projectDetails", JSON.stringify(details));
         localStorage.setItem("sessionId", data.sessionId);
-                localStorage.removeItem("resendAttempts");
         window.location.href = "pending-verification.html";
       } else {
         messageEl.textContent = data.error || "Failed to send verification.";
@@ -459,7 +433,6 @@
   window.onload = fillSummary;
 </script>
 
-<!-- Tiny saved feedback -->
 <script>
   function showSavedFeedback() {
     const msg = document.getElementById("message");
@@ -469,18 +442,6 @@
       msg.textContent = "";
       msg.style.color = "#cc0000";
     }, 1500);
-  }
-
-  // Patch makeEditable to call showSavedFeedback
-  const originalMakeEditable = window.makeEditable;
-  if (originalMakeEditable) {
-    window.makeEditable = function(id, obj, keyPath) {
-      originalMakeEditable(id, obj, keyPath);
-      const el = document.getElementById(id);
-      el.addEventListener("blur", () => {
-        showSavedFeedback();
-      }, true);
-    };
   }
 </script>
 </body>

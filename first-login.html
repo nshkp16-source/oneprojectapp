@@ -4,80 +4,44 @@
   <meta charset="UTF-8">
   <title>First Login - Create Password</title>
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      font-family: Arial, sans-serif;
-      height: 100%;
-    }
     body {
+      margin: 0; padding: 0;
+      font-family: Arial, sans-serif;
       background: url('home-background.jpg') no-repeat center center fixed;
       background-size: cover;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      position: relative;
-      min-height: 100%;
+      display: flex; justify-content: center; align-items: center;
+      min-height: 100vh; position: relative;
     }
     body::before {
-      content: "";
-      position: fixed;
-      top: 0; left: 0;
+      content: ""; position: fixed; top: 0; left: 0;
       width: 100%; height: 100%;
-      background: rgba(255,255,255,0.6);
-      z-index: 0;
+      background: rgba(255,255,255,0.6); z-index: 0;
     }
     .container {
-      position: relative;
-      z-index: 1;
-      background: #fff;
-      padding: 30px;
-      border-radius: 10px;
-      max-width: 420px;
-      width: 100%;
+      position: relative; z-index: 1;
+      background: #fff; padding: 30px; border-radius: 10px;
+      max-width: 420px; width: 100%;
       box-shadow: 0 0 12px rgba(0,0,0,0.2);
       text-align: center;
     }
     h2 { color: #007BFF; margin-bottom: 20px; }
-    p { font-size: 14px; color: #333; margin-bottom: 20px; }
     input {
-      display: block;
-      width: 90%;
-      margin: 10px auto;
-      padding: 12px;
-      font-size: 15px;
-      border-radius: 5px;
-      border: 1px solid #ccc;
+      display: block; width: 90%; margin: 10px auto;
+      padding: 12px; font-size: 15px;
+      border-radius: 5px; border: 1px solid #ccc;
     }
     button {
-      background-color: #007BFF;
-      color: white;
-      border: none;
-      padding: 12px;
-      width: 90%;
-      cursor: pointer;
-      border-radius: 5px;
-      font-size: 16px;
-      margin-top: 20px;
+      background-color: #007BFF; color: white;
+      border: none; padding: 12px; width: 90%;
+      cursor: pointer; border-radius: 5px;
+      font-size: 16px; margin-top: 20px;
     }
     button:hover { background-color: #0056b3; }
-    #message {
-      margin-top: 10px;
-      color: #cc0000;
-      font-size: 14px;
-      min-height: 18px;
-    }
-    #timer {
-      margin-top: 10px;
-      font-size: 14px;
-      color: #cc0000;
-    }
+    #message { margin-top: 10px; color: #cc0000; font-size: 14px; min-height: 18px; }
+    #timer { margin-top: 10px; font-size: 14px; color: #cc0000; }
     .back-link {
-      display: inline-block;
-      margin-top: 20px;
-      font-size: 14px;
-      color: #6c757d;
-      cursor: pointer;
+      display: inline-block; margin-top: 20px;
+      font-size: 14px; color: #6c757d; cursor: pointer;
       text-decoration: none;
     }
     .back-link:hover { color: #5a6268; }
@@ -86,45 +50,42 @@
 <body>
   <div class="container">
     <h2>Welcome! Create Your Password</h2>
-    <p id="infoText">Loading your account...</p>
+    <p id="infoText"></p>
     <input type="password" id="newPassword" placeholder="Create Password" required />
     <input type="password" id="confirmPassword" placeholder="Confirm Password" required />
-    <button onclick="setPassword()">Set Password</button>
+    <input type="text" id="verificationCode" placeholder="Enter verification code" required />
+    <button onclick="setPassword()">Verify & Save Password</button>
     <p id="message"></p>
     <p id="timer"></p>
-    <button id="resendBtn" style="display:none;" onclick="resendLink()">Resend Verification Link</button>
-
-    <div>
-      <span class="back-link" onclick="goBack()">&#8592; Back</span>
-    </div>
+    <button id="resendBtn" style="display:none;" onclick="resendCode()">Resend Code</button>
+    <div><span class="back-link" onclick="goBack()">&#8592; Back</span></div>
   </div>
 
 <script>
   const email = localStorage.getItem("pendingEmail");
   const role = localStorage.getItem("pendingRole");
-
   if (!email || !role) {
     alert("Missing first-login context. Please log in again.");
     window.location.href = "home.html";
   }
-
   document.getElementById("infoText").textContent = `First login for ${role} account: ${email}`;
 
-  let resendCount = parseInt(localStorage.getItem("resendCount") || "0");
+  let resendCount = 0;
   let countdown;
 
   function isValidPassword(password) {
-    const regex = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d\S]{6,}$/;
+    const regex = /^(?=.*[A-Za-z])(?=.*\\d)[A-Za-z\\d\\S]{6,}$/;
     return regex.test(password);
   }
 
   async function setPassword() {
     const pass1 = document.getElementById("newPassword").value.trim();
     const pass2 = document.getElementById("confirmPassword").value.trim();
+    const code = document.getElementById("verificationCode").value.trim();
     const messageEl = document.getElementById("message");
 
-    if (!pass1 || !pass2) {
-      messageEl.textContent = "Please fill in both password fields.";
+    if (!pass1 || !pass2 || !code) {
+      messageEl.textContent = "Please fill in all fields.";
       return;
     }
     if (pass1 !== pass2) {
@@ -139,48 +100,59 @@
     startCountdown();
 
     try {
-      const res = await fetch("https://oneprojectapp-backend.onrender.com/send-verification", {
+      // Step 1: send verification code with pending password
+      await fetch("https://oneprojectapp-backend.onrender.com/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, role, password: pass1 })
+        body: JSON.stringify({ email, password: pass1 })
+      });
+
+      // Step 2: verify code automatically
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/verify-password-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, token: code })
       });
       const data = await res.json();
 
       if (!data.success) {
-        messageEl.textContent = data.error || "Verification failed. Please resend.";
+        messageEl.textContent = data.error || "Invalid code. Try again before time expires.";
+        document.getElementById("resendBtn").style.display = "block";
         return;
       }
 
-      localStorage.setItem("pendingPassword", pass1);
-      alert("Verification email sent. Please check your inbox.");
+      clearInterval(countdown);
+      alert("Password set successfully!");
+      localStorage.removeItem("pendingEmail");
+      localStorage.removeItem("pendingRole");
+      redirectToDashboard(role);
     } catch (err) {
       messageEl.textContent = "Server error. Please try again.";
     }
   }
 
   function startCountdown() {
-    let timeLeft = 60;
+    let timeLeft = 179; // 2:59 minutes
     const timerEl = document.getElementById("timer");
-    document.getElementById("resendBtn").style.display = "block";
-
     countdown = setInterval(() => {
+      const minutes = Math.floor(timeLeft / 60);
+      const seconds = timeLeft % 60;
+      timerEl.textContent = `Code expires in ${minutes}:${seconds.toString().padStart(2,"0")}`;
       timeLeft--;
-      timerEl.textContent = `Click the verification link within ${timeLeft} seconds`;
-      if (timeLeft <= 0) {
+      if (timeLeft < 0) {
         clearInterval(countdown);
-        timerEl.textContent = "Verification failed. Please try again.";
-        document.getElementById("message").textContent = "Link expired. Enter details again.";
+        timerEl.textContent = "Code expired.";
+        document.getElementById("resendBtn").style.display = "block";
       }
     }, 1000);
   }
 
-  async function resendLink() {
+  async function resendCode() {
     if (resendCount >= 2) {
-      alert("Maximum resend attempts reached. Returning to Home.");
-      window.location.href = "home.html";
+      document.getElementById("message").textContent = "All attempts failed. Please return to Home.";
+      document.getElementById("resendBtn").style.display = "none";
       return;
     }
-
     try {
       const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
         method: "POST",
@@ -188,41 +160,26 @@
         body: JSON.stringify({ email })
       });
       const data = await res.json();
-
       if (data.success) {
-        alert("Verification link resent! Please check your email.");
+        alert("New code sent! Check your email.");
         resendCount++;
-        localStorage.setItem("resendCount", resendCount);
         startCountdown();
       } else {
-        alert(data.error || "Failed to resend link.");
+        alert(data.error || "Failed to resend code.");
       }
     } catch (err) {
-      console.error(err);
       alert("Server error. Please try again.");
     }
   }
 
-  function verificationSuccess() {
-    clearInterval(countdown);
-    alert("Password saved successfully!");
-    localStorage.removeItem("pendingEmail");
-    localStorage.removeItem("pendingRole");
-    localStorage.removeItem("resendCount");
-    localStorage.removeItem("pendingPassword");
-
-    redirectToDashboard(role);
-  }
-
   function redirectToDashboard(role) {
     switch (role) {
-      case "client": window.location.href = "create-project.html"; break;
       case "consultant": window.location.href = "consultant-dashboard.html"; break;
       case "consultant_pm": window.location.href = "consultant-project-manager.html"; break;
       case "contractor": window.location.href = "contractor-dashboard.html"; break;
       case "contractor_pm": window.location.href = "contractor-project-manager.html"; break;
       case "team_member": window.location.href = "sub-contractor-dashboard.html"; break;
-      default: alert("Unrecognized role. Redirecting to home."); window.location.href = "home.html";
+      default: window.location.href = "home.html";
     }
   }
 
