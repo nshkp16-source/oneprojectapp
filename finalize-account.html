@@ -282,10 +282,20 @@
 
 <script>
   // Load details from localStorage
-  let details = JSON.parse(localStorage.getItem("projectDetails") || "{}");
+  let projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
+  let projectAccount = JSON.parse(localStorage.getItem("projectAccount") || "{}");
+
+  // Merge client info into projectDetails for convenience
+  projectDetails.client = {
+    company_name: projectAccount.companyName || "",
+    company_email: projectAccount.companyEmail || "",
+    telephone: projectAccount.telephoneNumber || "",
+    representative: projectAccount.representativeName || "",
+    title: projectAccount.title || ""
+  };
 
   function fillSummary() {
-    if (!details || !details.client) return;
+    if (!projectDetails.client.company_email) return;
 
     // Helper for editable fields
     function makeEditable(id, obj, keyPath) {
@@ -307,7 +317,7 @@
             target = target[keyPath[i]];
           }
           target[keyPath[keyPath.length - 1]] = newValue;
-          localStorage.setItem("projectDetails", JSON.stringify(details));
+          localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
           el.textContent = newValue;
           input.replaceWith(el);
           showSavedFeedback();
@@ -316,36 +326,36 @@
     }
 
     // Client
-    makeEditable("clientName", details, ["client","company_name"]);
-    document.getElementById("clientEmail").textContent = details.client.company_email || "";
-    makeEditable("clientTel", details, ["client","telephone"]);
-    makeEditable("clientRep", details, ["client","representative"]);
-    makeEditable("clientTitle", details, ["client","title"]);
+    makeEditable("clientName", projectDetails, ["client","company_name"]);
+    document.getElementById("clientEmail").textContent = projectDetails.client.company_email || "";
+    makeEditable("clientTel", projectDetails, ["client","telephone"]);
+    makeEditable("clientRep", projectDetails, ["client","representative"]);
+    makeEditable("clientTitle", projectDetails, ["client","title"]);
 
     // Project
-    makeEditable("projectName", details, ["project","name"]);
-    makeEditable("projectLocation", details, ["project","location"]);
-    makeEditable("projectRef", details, ["project","contract_reference"]);
+    makeEditable("projectName", projectDetails, ["project","name"]);
+    makeEditable("projectLocation", projectDetails, ["project","location"]);
+    makeEditable("projectRef", projectDetails, ["project","contract_reference"]);
 
     // Contractor
-    makeEditable("contractorCompany", details, ["contractor","company"]);
-    document.getElementById("contractorEmail").textContent = details.contractor?.email || "";
-    makeEditable("contractorTel", details, ["contractor","telephone"]);
-    makeEditable("contractorRep", details, ["contractor","representative"]);
-    makeEditable("contractorTitle", details, ["contractor","title"]);
+    makeEditable("contractorCompany", projectDetails, ["contractor","company"]);
+    document.getElementById("contractorEmail").textContent = projectDetails.contractor?.email || "";
+    makeEditable("contractorTel", projectDetails, ["contractor","telephone"]);
+    makeEditable("contractorRep", projectDetails, ["contractor","representative"]);
+    makeEditable("contractorTitle", projectDetails, ["contractor","title"]);
 
     // Consultant
-    makeEditable("consultantCompany", details, ["consultant","company"]);
-    document.getElementById("consultantEmail").textContent = details.consultant?.email || "";
-    makeEditable("consultantTel", details, ["consultant","telephone"]);
-    makeEditable("consultantRep", details, ["consultant","representative"]);
-    makeEditable("consultantTitle", details, ["consultant","title"]);
+    makeEditable("consultantCompany", projectDetails, ["consultant","company"]);
+    document.getElementById("consultantEmail").textContent = projectDetails.consultant?.email || "";
+    makeEditable("consultantTel", projectDetails, ["consultant","telephone"]);
+    makeEditable("consultantRep", projectDetails, ["consultant","representative"]);
+    makeEditable("consultantTitle", projectDetails, ["consultant","title"]);
 
     // Team Members
     const teamList = document.getElementById("teamList");
     teamList.innerHTML = "";
-    if (Array.isArray(details.team_members)) {
-      details.team_members.forEach((m, idx) => {
+    if (Array.isArray(projectDetails.team_members)) {
+      projectDetails.team_members.forEach((m, idx) => {
         const li = document.createElement("li");
         li.innerHTML = `
           <strong>Name:</strong> <span class="value">${m.name}</span><br>
@@ -366,17 +376,17 @@
 
   function removeMember(index) {
     if (!confirm("Are you sure you want to remove this team member?")) return;
-    details.team_members.splice(index, 1);
-    localStorage.setItem("projectDetails", JSON.stringify(details));
+    projectDetails.team_members.splice(index, 1);
+    localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
     fillSummary();
     showSavedFeedback();
   }
 
   function addMember() {
     const newMember = { name: "New Member", position: "Position", task: "Task", email: "email@example.com" };
-    if (!Array.isArray(details.team_members)) details.team_members = [];
-    details.team_members.push(newMember);
-    localStorage.setItem("projectDetails", JSON.stringify(details));
+    if (!Array.isArray(projectDetails.team_members)) projectDetails.team_members = [];
+    projectDetails.team_members.push(newMember);
+    localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
     fillSummary();
     showSavedFeedback();
   }
@@ -387,24 +397,24 @@
     overlay.style.display = "block";
 
     try {
-      const clientEmail = details.client?.company_email;
+      const clientEmail = projectDetails.client?.company_email;
       if (!clientEmail) {
         overlay.style.display = "none";
         messageEl.textContent = "Client email is missing.";
         return;
       }
 
-      // Send full projectDetails to backend
+      // Send merged details to backend
       const res = await fetch("https://oneprojectapp-backend.onrender.com/finalize-account", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           clientEmail,
-          client: details.client,
-          project: details.project,
-          contractor: details.contractor,
-          consultant: details.consultant,
-          team_members: details.team_members
+          client: projectDetails.client,
+          project: projectDetails.project,
+          contractor: projectDetails.contractor,
+          consultant: projectDetails.consultant,
+          team_members: projectDetails.team_members
         })
       });
 
@@ -413,7 +423,7 @@
 
       if (data.success) {
         alert("Verification email sent. Please check your inbox.");
-        localStorage.setItem("projectDetails", JSON.stringify(details));
+        localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
         localStorage.setItem("sessionId", data.sessionId);
         window.location.href = "pending-verification.html";
       } else {
