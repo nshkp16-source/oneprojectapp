@@ -154,125 +154,121 @@
     <p id="message"></p>
   </div>
 
-      <!-- Full-screen loading overlay -->
-    <div class="loading-overlay" id="loadingOverlay">
-      <div class="loading-center">
-        <div class="spinner"></div>
-        <div class="loading-text">Finalizing your account and project...</div>
-      </div>
+   <!-- Full-screen loading overlay -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-center">
+      <div class="spinner"></div>
+      <div class="loading-text">Finalizing your account and project...</div>
     </div>
+  </div>
 
-<script>
-  function fillSummary() {
-    if (!projectDetails.client.company_email) return;
+  <script>
+    let projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
 
-    function makeEditable(id, obj, keyPath) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.textContent = keyPath.reduce((acc, k) => acc?.[k], obj) || "";
-      el.addEventListener("click", () => {
-        const currentValue = el.textContent;
-        const input = document.createElement("input");
-        input.type = "text";
-        input.value = currentValue;
-        input.className = "edit-input";
-        el.replaceWith(input);
-        input.focus();
+    function fillSummary() {
+      if (!projectDetails.client?.company_email) return;
 
-        input.addEventListener("blur", () => {
-          const newValue = input.value;
-          let target = obj;
-          for (let i = 0; i < keyPath.length - 1; i++) {
-            target = target[keyPath[i]];
-          }
-          target[keyPath[keyPath.length - 1]] = newValue;
-          localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
-          el.textContent = newValue;
-          input.replaceWith(el);
-          showSavedFeedback();
+      function makeEditable(id, obj, keyPath) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = keyPath.reduce((acc, k) => acc?.[k], obj) || "";
+        el.addEventListener("click", () => {
+          const currentValue = el.textContent;
+          const input = document.createElement("input");
+          input.type = "text";
+          input.value = currentValue;
+          input.className = "edit-input";
+          el.replaceWith(input);
+          input.focus();
+
+          input.addEventListener("blur", () => {
+            const newValue = input.value;
+            let target = obj;
+            for (let i = 0; i < keyPath.length - 1; i++) {
+              target = target[keyPath[i]];
+            }
+            target[keyPath[keyPath.length - 1]] = newValue;
+            localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
+            el.textContent = newValue;
+            input.replaceWith(el);
+            showSavedFeedback();
+          });
         });
-      });
+      }
+
+      // Client
+      makeEditable("clientName", projectDetails, ["client","company_name"]);
+      document.getElementById("clientEmail").textContent = projectDetails.client.company_email || "";
+      makeEditable("clientTel", projectDetails, ["client","telephone"]);
+      makeEditable("clientRep", projectDetails, ["client","representative"]);
+
+      // Project
+      makeEditable("projectName", projectDetails, ["project","name"]);
+      makeEditable("projectLocation", projectDetails, ["project","location"]);
+      makeEditable("projectRef", projectDetails, ["project","contract_reference"]);
+
+      // Contractor
+      makeEditable("contractorCompany", projectDetails, ["contractor","company"]);
+      document.getElementById("contractorEmail").textContent = projectDetails.contractor?.email || "";
+      makeEditable("contractorTel", projectDetails, ["contractor","telephone"]);
+      makeEditable("contractorRep", projectDetails, ["contractor","representative"]);
+      makeEditable("contractorTitle", projectDetails, ["contractor","title"]);
+
+      // Consultant
+      makeEditable("consultantCompany", projectDetails, ["consultant","company"]);
+      document.getElementById("consultantEmail").textContent = projectDetails.consultant?.email || "";
+      makeEditable("consultantTel", projectDetails, ["consultant","telephone"]);
+      makeEditable("consultantRep", projectDetails, ["consultant","representative"]);
+      makeEditable("consultantTitle", projectDetails, ["consultant","title"]);
     }
 
-    // Client
-    makeEditable("clientName", projectDetails, ["client","company_name"]);
-    document.getElementById("clientEmail").textContent = projectDetails.client.company_email || "";
-    makeEditable("clientTel", projectDetails, ["client","telephone"]);
-    makeEditable("clientRep", projectDetails, ["client","representative"]);
+    async function finalize() {
+      const overlay = document.getElementById("loadingOverlay");
+      const messageEl = document.getElementById("message");
+      overlay.style.display = "block";
 
-    // Project
-    makeEditable("projectName", projectDetails, ["project","name"]);
-    makeEditable("projectLocation", projectDetails, ["project","location"]);
-    makeEditable("projectRef", projectDetails, ["project","contract_reference"]);
+      try {
+        const clientEmail = projectDetails.client?.company_email;
+        if (!clientEmail) {
+          overlay.style.display = "none";
+          messageEl.textContent = "Client email is missing.";
+          return;
+        }
 
-    // Contractor
-    makeEditable("contractorCompany", projectDetails, ["contractor","company"]);
-    document.getElementById("contractorEmail").textContent = projectDetails.contractor?.email || "";
-    makeEditable("contractorTel", projectDetails, ["contractor","telephone"]);
-    makeEditable("contractorRep", projectDetails, ["contractor","representative"]);
-    makeEditable("contractorTitle", projectDetails, ["contractor","title"]);
+        // ✅ Only send clientEmail to backend
+        const res = await fetch("https://oneprojectapp-backend.onrender.com/finalize-account", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientEmail })
+        });
 
-    // Consultant
-    makeEditable("consultantCompany", projectDetails, ["consultant","company"]);
-    document.getElementById("consultantEmail").textContent = projectDetails.consultant?.email || "";
-    makeEditable("consultantTel", projectDetails, ["consultant","telephone"]);
-    makeEditable("consultantRep", projectDetails, ["consultant","representative"]);
-    makeEditable("consultantTitle", projectDetails, ["consultant","title"]);
-  }
-
-  async function finalize() {
-    const overlay = document.getElementById("loadingOverlay");
-    const messageEl = document.getElementById("message");
-    overlay.style.display = "block";
-
-    try {
-      const clientEmail = projectDetails.client?.company_email;
-      if (!clientEmail) {
+        const data = await res.json();
         overlay.style.display = "none";
-        messageEl.textContent = "Client email is missing.";
-        return;
+
+        if (res.ok) {
+          alert("Finalization successful! Verification email has been sent.");
+          window.location.href = "pending-verification.html";
+        } else {
+          messageEl.textContent = data.error || "Finalization failed. Please try again.";
+        }
+      } catch (err) {
+        console.error(err);
+        overlay.style.display = "none";
+        messageEl.textContent = "Unexpected error occurred. Please retry.";
       }
-
-      // ✅ Only send clientEmail to backend
-      const res = await fetch("https://oneprojectapp-backend.onrender.com/finalize-account", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientEmail })
-      });
-
-      const data = await res.json();
-      overlay.style.display = "none";
-
-      if (data.success) {
-        alert("Verification email sent. Please check your inbox.");
-        localStorage.setItem("sessionId", data.sessionId);
-        window.location.href = "pending-verification.html";
-      } else {
-        messageEl.textContent = data.error || "Failed to send verification.";
-      }
-    } catch (err) {
-      console.error("Finalize error:", err);
-      overlay.style.display = "none";
-      messageEl.textContent = "Server error. Please try again.";
     }
-  }
 
-  function goBack() {
-    window.location.href = "create-project.html"; // ✅ back to project creation
-  }
+    function goBack() {
+      window.location.href = "create-project.html";
+    }
 
-  window.onload = fillSummary;
+    function showSavedFeedback() {
+      const msg = document.getElementById("message");
+      msg.textContent = "Changes saved locally.";
+      setTimeout(() => { msg.textContent = ""; }, 2000);
+    }
 
-  function showSavedFeedback() {
-    const msg = document.getElementById("message");
-    msg.style.color = "#00a488";
-    msg.textContent = "✓ Saved";
-    setTimeout(() => {
-      msg.textContent = "";
-      msg.style.color = "#cc0000";
-    }, 1500);
-  }
-</script>
+    window.onload = fillSummary;
+  </script>
 </body>
 </html>
-                                                                 
