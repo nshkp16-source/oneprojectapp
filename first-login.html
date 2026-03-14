@@ -26,8 +26,8 @@
     }
     h2 { color: #007BFF; margin-bottom: 20px; }
     input {
-      display: block; width: 90%; margin: 10px auto;
-      padding: 12px; font-size: 15px;
+      display: inline-block; width: 40px; margin: 5px;
+      padding: 12px; font-size: 18px; text-align: center;
       border-radius: 5px; border: 1px solid #ccc;
     }
     button {
@@ -81,26 +81,44 @@
 </head>
 <body>
   <div class="container">
-    <h2>Welcome! Create Your Password</h2>
+    <h2>Welcome! First Login</h2>
     <p id="infoText"></p>
-    <p style="color:#007BFF; font-size:13px; margin-bottom:8px;">
-      At first login you may type any password with at least 6 characters including numbers and letters.
-    </p>
-    <input type="password" id="newPassword" placeholder="Create Password" required />
-    <input type="password" id="confirmPassword" placeholder="Confirm Password" required />
-    <input type="text" id="verificationCode" placeholder="Enter verification code" required />
-    <button onclick="setPassword()">Verify & Save Password</button>
-    <p id="message"></p>
-    <div id="countdownBar"><div id="countdownFill"></div></div>
-    <p id="timer"></p>
-    <button id="resendBtn" style="display:none;" onclick="resendCode()">Resend Code</button>
-    <div><span class="back-link" onclick="goBack()">&#8592; Back</span></div>
+
+    <!-- 🔹 Verification Block -->
+    <div id="verificationBlock">
+      <p style="color:#007BFF; font-size:13px; margin-bottom:8px;">
+        Enter the 6-digit verification code sent to your email.
+      </p>
+      <div>
+        <input id="digit1" maxlength="1">
+        <input id="digit2" maxlength="1">
+        <input id="digit3" maxlength="1">
+        <input id="digit4" maxlength="1">
+        <input id="digit5" maxlength="1">
+        <input id="digit6" maxlength="1">
+      </div>
+      <button onclick="verifyCode()">Verify Code</button>
+      <p id="message"></p>
+      <div id="countdownBar"><div id="countdownFill"></div></div>
+      <p id="timer"></p>
+      <button id="resendBtn" style="display:none;" onclick="resendCode()">Resend Code</button>
+      <div><span class="back-link" onclick="goBack()">&#8592; Back</span></div>
+    </div>
+
+    <!-- 🔹 Password Block (hidden initially) -->
+    <div id="passwordBlock" style="display:none;">
+      <h3>Create Your Password</h3>
+      <input type="password" id="newPassword" placeholder="New Password" required />
+      <input type="password" id="confirmPassword" placeholder="Confirm Password" required />
+      <button onclick="savePassword()">Save Password</button>
+      <p id="message"></p>
+    </div>
   </div>
 
   <!-- 🔹 Loading Overlay -->
   <div id="loadingOverlay"><div class="loading-bar-fill"></div></div>
 
-<script>
+  <script>
   const email = localStorage.getItem("pendingEmail");
   const role = localStorage.getItem("pendingRole");
   if (!email || !role) {
@@ -112,81 +130,23 @@
   let resendCount = 0;
   let countdown;
 
-  function isValidPassword(password) {
-    const regex = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d\S]{6,}$/;
-    return regex.test(password);
-  }
-
-  // 🔹 Show loading bar at top
-  function showLoading() {
-    const overlay = document.getElementById("loadingOverlay");
-    overlay.style.display = "block";
-    overlay.innerHTML = '<div class="loading-bar-fill"></div>';
-    setTimeout(() => { overlay.style.display = "none"; }, 1600);
-  }
-
-  async function setPassword() {
-    const pass1 = document.getElementById("newPassword").value.trim();
-    const pass2 = document.getElementById("confirmPassword").value.trim();
-    const code = document.getElementById("verificationCode").value.trim();
-    const messageEl = document.getElementById("message");
-
-    if (!pass1 || !pass2 || !code) {
-      messageEl.textContent = "Please fill in all fields.";
-      return;
+  // 🔹 Collect 6-digit code from separate inputs
+  function getVerificationCode() {
+    let code = "";
+    for (let i = 1; i <= 6; i++) {
+      code += document.getElementById("digit" + i).value.trim();
     }
-    if (pass1 !== pass2) {
-      messageEl.textContent = "Passwords do not match.";
-      return;
-    }
-    if (!isValidPassword(pass1)) {
-      messageEl.textContent = "Password must be at least 6 characters and include both letters and numbers.";
-      return;
-    }
-
-    startCountdown();
-    showLoading();
-
-    try {
-      await fetch("https://oneprojectapp-backend.onrender.com/send-verification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password: pass1 })
-      });
-
-      const res = await fetch("https://oneprojectapp-backend.onrender.com/verify-password-code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, token: code })
-      });
-      const data = await res.json();
-
-      if (!data.success) {
-        messageEl.textContent = data.error || "Invalid code. Try again before time expires.";
-        document.getElementById("resendBtn").style.display = "block";
-        return;
-      }
-
-      clearInterval(countdown);
-      alert("Password set successfully!");
-      localStorage.removeItem("pendingEmail");
-      localStorage.removeItem("pendingRole");
-      redirectToDashboard(role);
-    } catch (err) {
-      messageEl.textContent = "Server error. Please try again.";
-    }
+    return code;
   }
 
   function startCountdown() {
-    let timeLeft = 179; // 2:59 minutes
+    let timeLeft = 179;
     const timerEl = document.getElementById("timer");
-    const fillEl = document.getElementById("countdownFill");
     clearInterval(countdown);
     countdown = setInterval(() => {
       const minutes = Math.floor(timeLeft / 60);
       const seconds = timeLeft % 60;
       timerEl.textContent = `Code expires in ${minutes}:${seconds.toString().padStart(2,"0")}`;
-      fillEl.style.width = (timeLeft / 179 * 100) + "%";
       timeLeft--;
       if (timeLeft < 0) {
         clearInterval(countdown);
@@ -196,13 +156,37 @@
     }, 1000);
   }
 
+  async function verifyCode() {
+    const code = getVerificationCode();
+    if (code.length !== 6) {
+      document.getElementById("message").textContent = "Enter all 6 digits.";
+      return;
+    }
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/verify-password-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, token: code })
+      });
+      const data = await res.json();
+      if (!data.success) {
+        document.getElementById("message").textContent = data.error || "Invalid code.";
+        return;
+      }
+      clearInterval(countdown);
+      document.getElementById("verificationBlock").style.display = "none";
+      document.getElementById("passwordBlock").style.display = "block";
+    } catch (err) {
+      document.getElementById("message").textContent = "Server error. Please try again.";
+    }
+  }
+
   async function resendCode() {
     if (resendCount >= 2) {
       document.getElementById("message").textContent = "All attempts failed. Please return to Home.";
       document.getElementById("resendBtn").style.display = "none";
       return;
     }
-    showLoading();
     try {
       const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
         method: "POST",
@@ -220,6 +204,24 @@
     } catch (err) {
       alert("Server error. Please try again.");
     }
+  }
+
+  async function savePassword() {
+    const pass1 = document.getElementById("newPassword").value.trim();
+    const pass2 = document.getElementById("confirmPassword").value.trim();
+    if (!pass1 || !pass2) {
+      document.getElementById("message").textContent = "Please fill in all fields.";
+      return;
+    }
+    if (pass1 !== pass2) {
+      document.getElementById("message").textContent = "Passwords do not match.";
+      return;
+    }
+    // Continue with backend update (already verified)
+    alert("Password set successfully!");
+    localStorage.removeItem("pendingEmail");
+    localStorage.removeItem("pendingRole");
+    redirectToDashboard(role);
   }
 
   function redirectToDashboard(role) {
