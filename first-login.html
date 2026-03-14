@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>First Login - Create Password</title>
+  <title>First Login - Verification</title>
   <style>
     body {
       margin: 0; padding: 0;
@@ -25,9 +25,14 @@
       text-align: center;
     }
     h2 { color: #007BFF; margin-bottom: 20px; }
-    input {
+    input.code {
       display: inline-block; width: 40px; margin: 5px;
       padding: 12px; font-size: 18px; text-align: center;
+      border-radius: 5px; border: 1px solid #ccc;
+    }
+    input.password {
+      display: block; width: 90%; margin: 10px auto;
+      padding: 12px; font-size: 15px;
       border-radius: 5px; border: 1px solid #ccc;
     }
     button {
@@ -46,7 +51,7 @@
     }
     .back-link:hover { color: #5a6268; }
 
-    /* 🔹 Loading bar at very top */
+    /* Loading bar at very top */
     #loadingOverlay {
       display: none;
       position: fixed;
@@ -65,7 +70,7 @@
       to { width: 100%; }
     }
 
-    /* 🔹 Countdown progress bar */
+    /* Countdown progress bar */
     #countdownBar {
       width: 90%; height: 8px;
       background: #ddd; border-radius: 4px;
@@ -84,18 +89,18 @@
     <h2>Welcome! First Login</h2>
     <p id="infoText"></p>
 
-    <!-- 🔹 Verification Block -->
+    <!-- Verification Block -->
     <div id="verificationBlock">
       <p style="color:#007BFF; font-size:13px; margin-bottom:8px;">
         Enter the 6-digit verification code sent to your email.
       </p>
       <div>
-        <input id="digit1" maxlength="1">
-        <input id="digit2" maxlength="1">
-        <input id="digit3" maxlength="1">
-        <input id="digit4" maxlength="1">
-        <input id="digit5" maxlength="1">
-        <input id="digit6" maxlength="1">
+        <input id="digit1" maxlength="1" class="code">
+        <input id="digit2" maxlength="1" class="code">
+        <input id="digit3" maxlength="1" class="code">
+        <input id="digit4" maxlength="1" class="code">
+        <input id="digit5" maxlength="1" class="code">
+        <input id="digit6" maxlength="1" class="code">
       </div>
       <button onclick="verifyCode()">Verify Code</button>
       <p id="message"></p>
@@ -105,20 +110,20 @@
       <div><span class="back-link" onclick="goBack()">&#8592; Back</span></div>
     </div>
 
-    <!-- 🔹 Password Block (hidden initially) -->
+    <!-- Password Block -->
     <div id="passwordBlock" style="display:none;">
       <h3>Create Your Password</h3>
-      <input type="password" id="newPassword" placeholder="New Password" required />
-      <input type="password" id="confirmPassword" placeholder="Confirm Password" required />
+      <input type="password" id="newPassword" class="password" placeholder="New Password" required />
+      <input type="password" id="confirmPassword" class="password" placeholder="Confirm Password" required />
       <button onclick="savePassword()">Save Password</button>
       <p id="message"></p>
     </div>
   </div>
 
-  <!-- 🔹 Loading Overlay -->
+  <!-- Loading Overlay -->
   <div id="loadingOverlay"><div class="loading-bar-fill"></div></div>
 
-  <script>
+<script>
   const email = localStorage.getItem("pendingEmail");
   const role = localStorage.getItem("pendingRole");
   if (!email || !role) {
@@ -130,7 +135,17 @@
   let resendCount = 0;
   let countdown;
 
-  // 🔹 Collect 6-digit code from separate inputs
+  // 🔹 Send code immediately on page load
+  window.onload = async () => {
+    showLoading();
+    await fetch("https://oneprojectapp-backend.onrender.com/send-verification", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password: "pending" }) // password staged later
+    });
+    startCountdown();
+  };
+
   function getVerificationCode() {
     let code = "";
     for (let i = 1; i <= 6; i++) {
@@ -139,14 +154,23 @@
     return code;
   }
 
+  function showLoading() {
+    const overlay = document.getElementById("loadingOverlay");
+    overlay.style.display = "block";
+    overlay.innerHTML = '<div class="loading-bar-fill"></div>';
+    setTimeout(() => { overlay.style.display = "none"; }, 1600);
+  }
+
   function startCountdown() {
     let timeLeft = 179;
     const timerEl = document.getElementById("timer");
+    const fillEl = document.getElementById("countdownFill");
     clearInterval(countdown);
     countdown = setInterval(() => {
       const minutes = Math.floor(timeLeft / 60);
       const seconds = timeLeft % 60;
       timerEl.textContent = `Code expires in ${minutes}:${seconds.toString().padStart(2,"0")}`;
+      fillEl.style.width = (timeLeft / 179 * 100) + "%";
       timeLeft--;
       if (timeLeft < 0) {
         clearInterval(countdown);
@@ -162,6 +186,7 @@
       document.getElementById("message").textContent = "Enter all 6 digits.";
       return;
     }
+    showLoading();
     try {
       const res = await fetch("https://oneprojectapp-backend.onrender.com/verify-password-code", {
         method: "POST",
@@ -187,6 +212,7 @@
       document.getElementById("resendBtn").style.display = "none";
       return;
     }
+    showLoading();
     try {
       const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
         method: "POST",
@@ -217,11 +243,21 @@
       document.getElementById("message").textContent = "Passwords do not match.";
       return;
     }
-    // Continue with backend update (already verified)
-    alert("Password set successfully!");
-    localStorage.removeItem("pendingEmail");
-    localStorage.removeItem("pendingRole");
-    redirectToDashboard(role);
+    showLoading();
+    try {
+      // Password is staged in DB during send-verification, now finalize
+      await fetch("https://oneprojectapp-backend.onrender.com/send-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password: pass1 })
+      });
+      alert("Password set successfully!");
+      localStorage.removeItem("pendingEmail");
+      localStorage.removeItem("pendingRole");
+      redirectToDashboard(role);
+    } catch (err) {
+      document.getElementById("message").textContent = "Server error. Please try again.";
+    }
   }
 
   function redirectToDashboard(role) {
