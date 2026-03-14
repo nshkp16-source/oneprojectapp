@@ -45,21 +45,60 @@
       text-decoration: none;
     }
     .back-link:hover { color: #5a6268; }
+
+    /* 🔹 Loading bar at very top */
+    #loadingOverlay {
+      display: none;
+      position: fixed;
+      z-index: 20;
+      top: 0; left: 0;
+      width: 100%; height: 6px;
+      background: transparent;
+    }
+    .loading-bar-fill {
+      width: 0%; height: 100%;
+      background: #007BFF;
+      animation: fillBar 1.5s forwards;
+    }
+    @keyframes fillBar {
+      from { width: 0%; }
+      to { width: 100%; }
+    }
+
+    /* 🔹 Countdown progress bar */
+    #countdownBar {
+      width: 90%; height: 8px;
+      background: #ddd; border-radius: 4px;
+      margin: 10px auto;
+      overflow: hidden;
+    }
+    #countdownFill {
+      width: 100%; height: 100%;
+      background: #28a745;
+      transition: width 1s linear;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h2>Welcome! Create Your Password</h2>
     <p id="infoText"></p>
+    <p style="color:#007BFF; font-size:13px; margin-bottom:8px;">
+      At first login you may type any password with at least 6 characters including numbers and letters.
+    </p>
     <input type="password" id="newPassword" placeholder="Create Password" required />
     <input type="password" id="confirmPassword" placeholder="Confirm Password" required />
     <input type="text" id="verificationCode" placeholder="Enter verification code" required />
     <button onclick="setPassword()">Verify & Save Password</button>
     <p id="message"></p>
+    <div id="countdownBar"><div id="countdownFill"></div></div>
     <p id="timer"></p>
     <button id="resendBtn" style="display:none;" onclick="resendCode()">Resend Code</button>
     <div><span class="back-link" onclick="goBack()">&#8592; Back</span></div>
   </div>
+
+  <!-- 🔹 Loading Overlay -->
+  <div id="loadingOverlay"><div class="loading-bar-fill"></div></div>
 
 <script>
   const email = localStorage.getItem("pendingEmail");
@@ -74,8 +113,16 @@
   let countdown;
 
   function isValidPassword(password) {
-    const regex = /^(?=.*[A-Za-z])(?=.*\\d)[A-Za-z\\d\\S]{6,}$/;
+    const regex = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d\S]{6,}$/;
     return regex.test(password);
+  }
+
+  // 🔹 Show loading bar at top
+  function showLoading() {
+    const overlay = document.getElementById("loadingOverlay");
+    overlay.style.display = "block";
+    overlay.innerHTML = '<div class="loading-bar-fill"></div>';
+    setTimeout(() => { overlay.style.display = "none"; }, 1600);
   }
 
   async function setPassword() {
@@ -98,16 +145,15 @@
     }
 
     startCountdown();
+    showLoading();
 
     try {
-      // Step 1: send verification code with pending password
       await fetch("https://oneprojectapp-backend.onrender.com/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password: pass1 })
       });
 
-      // Step 2: verify code automatically
       const res = await fetch("https://oneprojectapp-backend.onrender.com/verify-password-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -134,10 +180,13 @@
   function startCountdown() {
     let timeLeft = 179; // 2:59 minutes
     const timerEl = document.getElementById("timer");
+    const fillEl = document.getElementById("countdownFill");
+    clearInterval(countdown);
     countdown = setInterval(() => {
       const minutes = Math.floor(timeLeft / 60);
       const seconds = timeLeft % 60;
       timerEl.textContent = `Code expires in ${minutes}:${seconds.toString().padStart(2,"0")}`;
+      fillEl.style.width = (timeLeft / 179 * 100) + "%";
       timeLeft--;
       if (timeLeft < 0) {
         clearInterval(countdown);
@@ -153,6 +202,7 @@
       document.getElementById("resendBtn").style.display = "none";
       return;
     }
+    showLoading();
     try {
       const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
         method: "POST",
@@ -174,11 +224,11 @@
 
   function redirectToDashboard(role) {
     switch (role) {
-      case "consultant": window.location.href = "consultant-dashboard.html"; break;
-      case "consultant_pm": window.location.href = "consultant-project-manager.html"; break;
-      case "contractor": window.location.href = "contractor-dashboard.html"; break;
-      case "contractor_pm": window.location.href = "contractor-project-manager.html"; break;
-      case "team_member": window.location.href = "sub-contractor-dashboard.html"; break;
+      case "Consultant": window.location.href = "consultant-dashboard.html"; break;
+      case "Consultant Project Manager": window.location.href = "consultant-project-manager.html"; break;
+      case "Contractor": window.location.href = "contractor-dashboard.html"; break;
+      case "Contractor Project Manager": window.location.href = "contractor-project-manager.html"; break;
+      case "Team Member": window.location.href = "team.html"; break;
       default: window.location.href = "home.html";
     }
   }
