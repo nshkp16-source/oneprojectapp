@@ -26,7 +26,6 @@
     }
     h2 { color: #007BFF; margin-bottom: 20px; }
 
-    /* 🔹 Verification code inputs in one line */
     .code {
       width: 32px; height: 32px;
       margin: 3px;
@@ -50,7 +49,7 @@
     }
     button:hover { background-color: #0056b3; }
 
-    #message { margin-top: 10px; color: #cc0000; font-size: 14px; min-height: 18px; }
+    #message { margin-top: 10px; font-size: 14px; min-height: 18px; }
     #timer { margin-top: 10px; font-size: 14px; color: #cc0000; }
     .back-link {
       display: inline-block; margin-top: 20px;
@@ -59,7 +58,6 @@
     }
     .back-link:hover { color: #5a6268; }
 
-    /* Loading bar at very top */
     #loadingOverlay {
       display: none;
       position: fixed;
@@ -78,7 +76,6 @@
       to { width: 100%; }
     }
 
-    /* Countdown progress bar */
     #countdownBar {
       width: 90%; height: 8px;
       background: #ddd; border-radius: 4px;
@@ -89,6 +86,17 @@
       width: 100%; height: 100%;
       background: #28a745;
       transition: width 1s linear;
+    }
+
+    /* 🔹 Alert banner style */
+    .alert-box {
+      background-color: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+      border-radius: 5px;
+      padding: 12px;
+      margin-top: 15px;
+      font-size: 14px;
     }
   </style>
 </head>
@@ -145,7 +153,7 @@
   // 🔹 Send code immediately on page load
   window.onload = async () => {
     showLoading();
-    await fetch("https://oneprojectapp-backend.onrender.com/send-verification", {
+    await fetch("https://oneprojectapp-backend.onrender.com/firstlogin-send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email })
@@ -158,12 +166,8 @@
     const inputs = document.querySelectorAll(".code");
     inputs.forEach((input, idx) => {
       input.addEventListener("input", () => {
-        if (input.value.length === 1 && idx < 5) {
-          inputs[idx + 1].focus();
-        }
-        if (getVerificationCode().length === 6) {
-          verifyCode();
-        }
+        if (input.value.length === 1 && idx < 5) inputs[idx + 1].focus();
+        if (getVerificationCode().length === 6) verifyCode();
       });
     });
   }
@@ -214,40 +218,40 @@
       });
       const data = await res.json();
       if (!data.success) {
-        document.getElementById("message").textContent = "Incorrect code.";
+        showAlert(data.error || "Incorrect code.", "error");
         return;
       }
       clearInterval(countdown);
       document.getElementById("verificationBlock").style.display = "none";
       document.getElementById("passwordBlock").style.display = "block";
     } catch (err) {
-      document.getElementById("message").textContent = "Server error. Please try again.";
+      showAlert("Server error. Please try again.", "error");
     }
   }
 
   async function resendCode() {
     if (resendCount >= 2) {
-      document.getElementById("message").textContent = "All attempts failed. Please return to Home.";
+      showAlert("All attempts failed. Please return to Home.", "error");
       document.getElementById("resendBtn").style.display = "none";
       return;
     }
     showLoading();
     try {
-      const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/firstlogin-resend", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email })
       });
       const data = await res.json();
       if (data.success) {
-        alert("New code sent! Check your email.");
+        showAlert("New code sent! Check your email.", "success");
         resendCount++;
         startCountdown();
       } else {
-        alert(data.error || "Failed to resend code.");
+        showAlert(data.error || "Failed to resend code.", "error");
       }
     } catch (err) {
-      alert("Server error. Please try again.");
+      showAlert("Server error. Please try again.", "error");
     }
   }
 
@@ -255,11 +259,11 @@
     const pass1 = document.getElementById("newPassword").value.trim();
     const pass2 = document.getElementById("confirmPassword").value.trim();
     if (!pass1 || !pass2) {
-      document.getElementById("message").textContent = "Please fill in all fields.";
+      showAlert("Please fill in all fields.", "error");
       return;
     }
     if (pass1 !== pass2) {
-      document.getElementById("message").textContent = "Passwords do not match.";
+      showAlert("Passwords do not match.", "error");
       return;
     }
     showLoading();
@@ -269,17 +273,18 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password: pass1 })
       });
-      alert("Password set successfully!");
+      showAlert("Password set successfully!", "success");
       localStorage.removeItem("pendingEmail");
       localStorage.removeItem("pendingRole");
-      redirectToDashboard(role);
+      setTimeout(() => redirectToDashboard(role), 1500);
     } catch (err) {
-      document.getElementById("message").textContent = "Server error. Please try again.";
+      showAlert("Server error. Please try again.", "error");
     }
   }
 
   function redirectToDashboard(role) {
     switch (role) {
+      case "Client": window.location.href = "client-dashboard.html"; break;
       case "Consultant": window.location.href = "consultant-dashboard.html"; break;
       case "Consultant Project Manager": window.location.href = "consultant-project-manager.html"; break;
       case "Contractor": window.location.href = "contractor-dashboard.html"; break;
@@ -291,6 +296,27 @@
 
   function goBack() {
     window.location.href = "home.html";
+  }
+
+  // 🔹 Helper to show alert banners
+  function showAlert(message, type) {
+    const container = document.querySelector(".container");
+    let alertBox = document.querySelector(".alert-box");
+    if (!alertBox) {
+      alertBox = document.createElement("div");
+      alertBox.className = "alert-box";
+      container.insertBefore(alertBox, container.firstChild.nextSibling);
+    }
+    alertBox.textContent = message;
+    if (type === "success") {
+      alertBox.style.backgroundColor = "#d4edda";
+      alertBox.style.color = "#155724";
+      alertBox.style.border = "1px solid #c3e6cb";
+    } else {
+      alertBox.style.backgroundColor = "#f8d7da";
+      alertBox.style.color = "#721c24";
+      alertBox.style.border = "1px solid #f5c6cb";
+    }
   }
 </script>
 </body>
