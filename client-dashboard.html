@@ -695,7 +695,7 @@
   });
 
 // ============= CLIENT PROFILE + PROJECT SELECTOR LOGIC =============
-// BACKEND (Neon via oneprojectapp-backend): Handle client profile info, picture upload/delete, and projects
+// BACKEND (Cockroach via oneprojectapp-backend): Handle client profile info, picture upload/delete, and projects
 
 const loggedInEmail = localStorage.getItem("clientEmail");
 
@@ -762,14 +762,75 @@ document.addEventListener("DOMContentLoaded", async () => {
       activeProject.textContent = project.name;
       localStorage.setItem("activeProjectId", project.id);
       localStorage.setItem("activeProjectName", project.name);
+      // ❌ Removed reload loop, just show project directly
+    }
 
-      // Refresh immediately so dashboard loads default project
-      window.location.reload();
+    // ✅ On page load, check if activeProjectId exists in localStorage
+    const storedProjectId = localStorage.getItem("activeProjectId");
+    const storedProjectName = localStorage.getItem("activeProjectName");
+
+    if (storedProjectId && storedProjectName) {
+      activeProject.textContent = storedProjectName;
+      fetchProjectDetails(storedProjectId); // 🔹 NEW: load client + project details
+    } else if (client.defaultProject) {
+      activeProject.textContent = client.defaultProject.name;
+      localStorage.setItem("activeProjectId", client.defaultProject.id);
+      localStorage.setItem("activeProjectName", client.defaultProject.name);
+      fetchProjectDetails(client.defaultProject.id); // 🔹 load default project
+    } else {
+      activeProject.textContent = "No projects assigned";
     }
   } catch (err) {
     console.error("Client profile fetch error:", err);
   }
 });
+
+// Helper function to fetch client + project details
+async function fetchProjectDetails(projectId) {
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/client/project-details", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: loggedInEmail, projectId })
+    });
+
+    if (!res.ok) throw new Error("Failed to fetch project details");
+    const data = await res.json();
+
+    // ✅ Update client info again (ensures consistency)
+    profileEmail.textContent = data.client.email;
+    profileRole.textContent = `Role: ${data.client.role}`;
+
+    if (data.client.profile_picture) {
+      profileIcon.style.backgroundImage = `url(${data.client.profile_picture})`;
+      profileIcon.style.backgroundSize = "cover";
+      profileIcon.textContent = "";
+      profileIconLarge.style.backgroundImage = `url(${data.client.profile_picture})`;
+      profileIconLarge.style.backgroundSize = "cover";
+      profileIconLarge.textContent = "";
+    } else {
+      const emailChar = data.client.email.charAt(0).toUpperCase();
+      profileIcon.style.backgroundImage = "";
+      profileIcon.textContent = emailChar;
+      profileIconLarge.style.backgroundImage = "";
+      profileIconLarge.textContent = emailChar;
+    }
+
+    // ✅ Show project details
+    activeProject.textContent = data.project.name;
+    const projectDetailsContainer = document.getElementById("projectDetailsContainer");
+    if (projectDetailsContainer) {
+      projectDetailsContainer.innerHTML = `
+        <p><strong>Project Name:</strong> ${data.project.name}</p>
+        <p><strong>Location:</strong> ${data.project.location}</p>
+        <p><strong>Contract Ref:</strong> ${data.project.contract_reference}</p>
+        <p><strong>Created At:</strong> ${new Date(data.project.created_at).toLocaleDateString()}</p>
+      `;
+    }
+  } catch (err) {
+    console.error("Project details fetch error:", err);
+  }
+}
 
 // Toggle profile dialog
 profileIcon.addEventListener("click", (e) => {
