@@ -694,76 +694,110 @@
     expandGrayPart(html);
   });
 
-  // ============= INITIAL PROFILE FETCH =============
-// BACKEND (Neon via oneprojectapp-backend): Fetch logged-in user details
+// ============= CLIENT PROFILE LOGIC =============
+// BACKEND (Neon via oneprojectapp-backend): Handle client profile info, picture upload/delete
 
 document.addEventListener("DOMContentLoaded", async () => {
   try {
-    // Fetch user profile from Neon auth service
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/account/profile", {
+    // Fetch client profile from Neon auth service
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/client/profile", {
       method: "GET",
       credentials: "include"
     });
-    if (!res.ok) throw new Error("Failed to fetch profile");
-    const user = await res.json();
+    if (!res.ok) throw new Error("Failed to fetch client profile");
+    const client = await res.json();
 
     // Update email + role
-    profileEmail.textContent = user.email;
-    profileRole.textContent = `Role: ${user.role}`;
+    profileEmail.textContent = client.email;
+    profileRole.textContent = `Role: ${client.role}`;
 
     // Update profile picture or fallback initials
-    if (user.profile_picture) {
-      profileIcon.style.backgroundImage = `url(${user.profile_picture})`;
+    if (client.profile_picture) {
+      profileIcon.style.backgroundImage = `url(${client.profile_picture})`;
       profileIcon.style.backgroundSize = "cover";
       profileIcon.textContent = "";
-      profileIconLarge.style.backgroundImage = `url(${user.profile_picture})`;
+      profileIconLarge.style.backgroundImage = `url(${client.profile_picture})`;
       profileIconLarge.style.backgroundSize = "cover";
       profileIconLarge.textContent = "";
     } else {
-      const emailChar = user.email.charAt(0).toUpperCase();
+      const emailChar = client.email.charAt(0).toUpperCase();
       profileIcon.style.backgroundImage = "";
       profileIcon.textContent = emailChar;
       profileIconLarge.style.backgroundImage = "";
       profileIconLarge.textContent = emailChar;
     }
-
-    // Fetch projects tied to this user from Neon
-    const projectRes = await fetch("https://oneprojectapp-backend.onrender.com/account/projects", {
-      method: "GET",
-      credentials: "include"
-    });
-    if (projectRes.ok) {
-      const projects = await projectRes.json();
-      const projectDialog = document.getElementById("projectDialog");
-      projectDialog.innerHTML = ""; // clear old items
-      projects.forEach(p => {
-        const item = document.createElement("div");
-        item.className = "project-item";
-        item.dataset.project = p.name;
-        item.textContent = p.name;
-        projectDialog.appendChild(item);
-      });
-      // Set active project
-      if (projects.length > 0) {
-        document.getElementById("activeProject").textContent = projects[0].name;
-      }
-    }
-
-    // Later: Fetch workflow summary from Cockroach service
-    const workflowRes = await fetch("https://oneprojectapp-backend-workflow-service.onrender.com/workflow/summary", {
-      method: "GET",
-      credentials: "include"
-    });
-    if (workflowRes.ok) {
-      const summary = await workflowRes.json();
-      document.getElementById("summaryDate").textContent = summary.date;
-      document.getElementById("summaryProgress").textContent = summary.progress + "%";
-      document.getElementById("summaryLastItem").textContent = summary.lastCompleted;
-      document.getElementById("summaryWeatherWord").textContent = summary.weather;
-    }
-
   } catch (err) {
-    console.error("Profile fetch error:", err);
+    console.error("Client profile fetch error:", err);
+  }
+});
+
+// Toggle profile dialog
+profileIcon.addEventListener("click", (e) => {
+  e.stopPropagation();
+  profileDialog.style.display = profileDialog.style.display === "block" ? "none" : "block";
+});
+
+// Toggle edit options
+editProfileBtn.addEventListener("click", () => {
+  editProfileOptions.style.display = editProfileOptions.style.display === "block" ? "none" : "block";
+});
+
+// Upload picture with 1MB limit
+changePictureBtn.addEventListener("click", () => { profileUpload.click(); });
+profileUpload.addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  // Validate file type
+  if (!file.type.startsWith("image/")) {
+    alert("Only image files are allowed.");
+    return;
+  }
+
+  // Validate file size (≤ 1MB)
+  if (file.size > 1024 * 1024) {
+    alert("Profile picture must not exceed 1MB.");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("profile_picture", file);
+
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
+      method: "POST",
+      body: formData,
+      credentials: "include"
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      profileIcon.style.backgroundImage = `url(${data.url})`;
+      profileIconLarge.style.backgroundImage = `url(${data.url})`;
+      profileIcon.textContent = "";
+      profileIconLarge.textContent = "";
+    } else {
+      alert("Failed to upload profile picture.");
+    }
+  } catch (err) {
+    console.error("Upload error:", err);
+    alert("Error uploading profile picture.");
+  }
+});
+
+// Delete picture
+deletePictureBtn.addEventListener("click", async () => {
+  const res = await fetch("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
+    method: "DELETE",
+    credentials: "include"
+  });
+
+  if (res.ok) {
+    const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
+    profileIcon.style.backgroundImage = "";
+    profileIcon.textContent = emailChar;
+    profileIconLarge.style.backgroundImage = "";
+    profileIconLarge.textContent = emailChar;
   }
 });
 
