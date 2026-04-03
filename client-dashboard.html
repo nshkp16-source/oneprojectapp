@@ -716,13 +716,48 @@ document.addEventListener("DOMContentLoaded", async () => {
     profileRole.textContent = `Role: ${client.role}`;
 
     // Update profile picture or fallback initials
-    if (client.profile_picture) {
-      profileIcon.style.backgroundImage = `url(${client.profile_picture})`;
+    if (client.profile_picture && client.profile_picture.trim() !== "") {
+      // Small circular icon
+      profileIcon.style.backgroundImage = `url("${client.profile_picture}")`;
       profileIcon.style.backgroundSize = "cover";
+      profileIcon.style.backgroundPosition = "center";
       profileIcon.textContent = "";
-      profileIconLarge.style.backgroundImage = `url(${client.profile_picture})`;
+
+      // Dialog circular icon
+      profileIconLarge.style.backgroundImage = `url("${client.profile_picture}")`;
       profileIconLarge.style.backgroundSize = "cover";
+      profileIconLarge.style.backgroundPosition = "center";
       profileIconLarge.textContent = "";
+
+      // 🔹 Add click handler to show rectangular preview inside dialog
+      profileIconLarge.addEventListener("click", () => {
+        let preview = document.getElementById("passportPreview");
+        if (!preview) {
+          preview = document.createElement("div");
+          preview.id = "passportPreview";
+          preview.style.width = "120px";
+          preview.style.height = "160px";
+          preview.style.margin = "10px auto";
+          preview.style.border = "1px solid #ccc";
+          preview.style.borderRadius = "4px";
+          preview.style.backgroundImage = `url("${client.profile_picture}")`;
+          preview.style.backgroundSize = "contain";
+          preview.style.backgroundRepeat = "no-repeat";
+          preview.style.backgroundPosition = "center";
+
+          // Close button
+          const closeBtn = document.createElement("button");
+          closeBtn.textContent = "Close Preview";
+          closeBtn.style.display = "block";
+          closeBtn.style.margin = "5px auto";
+          closeBtn.addEventListener("click", () => {
+            preview.remove();
+          });
+
+          profileDialog.appendChild(preview);
+          profileDialog.appendChild(closeBtn);
+        }
+      });
     } else {
       const emailChar = client.email.charAt(0).toUpperCase();
       profileIcon.style.backgroundImage = "";
@@ -771,7 +806,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (storedProjectId && storedProjectName) {
       activeProject.textContent = storedProjectName;
-      fetchProjectDetails(storedProjectId); // 🔹 NEW: load client + project details
+      fetchProjectDetails(storedProjectId); // 🔹 load client + project details
     } else if (client.defaultProject) {
       activeProject.textContent = client.defaultProject.name;
       localStorage.setItem("activeProjectId", client.defaultProject.id);
@@ -801,12 +836,15 @@ async function fetchProjectDetails(projectId) {
     profileEmail.textContent = data.client.email;
     profileRole.textContent = `Role: ${data.client.role}`;
 
-    if (data.client.profile_picture) {
-      profileIcon.style.backgroundImage = `url(${data.client.profile_picture})`;
+    if (data.client.profile_picture && data.client.profile_picture.trim() !== "") {
+      profileIcon.style.backgroundImage = `url("${data.client.profile_picture}")`;
       profileIcon.style.backgroundSize = "cover";
+      profileIcon.style.backgroundPosition = "center";
       profileIcon.textContent = "";
-      profileIconLarge.style.backgroundImage = `url(${data.client.profile_picture})`;
+
+      profileIconLarge.style.backgroundImage = `url("${data.client.profile_picture}")`;
       profileIconLarge.style.backgroundSize = "cover";
+      profileIconLarge.style.backgroundPosition = "center";
       profileIconLarge.textContent = "";
     } else {
       const emailChar = data.client.email.charAt(0).toUpperCase();
@@ -831,79 +869,6 @@ async function fetchProjectDetails(projectId) {
     console.error("Project details fetch error:", err);
   }
 }
-
-// Toggle profile dialog
-profileIcon.addEventListener("click", (e) => {
-  e.stopPropagation();
-  profileDialog.style.display = profileDialog.style.display === "block" ? "none" : "block";
-});
-
-// Toggle edit options
-editProfileBtn.addEventListener("click", () => {
-  editProfileOptions.style.display = editProfileOptions.style.display === "block" ? "none" : "block";
-});
-
-// Upload picture with 1MB limit
-changePictureBtn.addEventListener("click", () => { profileUpload.click(); });
-profileUpload.addEventListener("change", async (event) => {
-  const file = event.target.files[0];
-  if (!file) return;
-
-  // Validate file type
-  if (!file.type.startsWith("image/")) {
-    alert("Only image files are allowed.");
-    return;
-  }
-
-  // Validate file size (≤ 1MB)
-  if (file.size > 1024 * 1024) {
-    alert("Profile picture must not exceed 1MB.");
-    return;
-  }
-
-  const formData = new FormData();
-  formData.append("profile_picture", file);
-  formData.append("email", loggedInEmail); // 🔹 include email
-
-  try {
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
-      method: "POST",
-      body: formData
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      profileIcon.style.backgroundImage = `url(${data.url})`;
-      profileIconLarge.style.backgroundImage = `url(${data.url})`;
-      profileIcon.textContent = "";
-      profileIconLarge.textContent = "";
-    } else {
-      alert("Failed to upload profile picture.");
-    }
-  } catch (err) {
-    console.error("Upload error:", err);
-    alert("Error uploading profile picture.");
-  }
-});
-
-// Delete picture
-deletePictureBtn.addEventListener("click", async () => {
-  const res = await fetch("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: loggedInEmail })
-  });
-
-  if (res.ok) {
-    const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
-    profileIcon.style.backgroundImage = "";
-    profileIcon.textContent = emailChar;
-    profileIconLarge.style.backgroundImage = "";
-    profileIconLarge.textContent = emailChar;
-  } else {
-    alert("Failed to delete profile picture.");
-  }
-});
 
 // ============= PROJECT SELECTOR TOGGLE =============
 const projectSelector = document.getElementById("projectSelector");
