@@ -695,13 +695,13 @@
   });
 
 // ============= CONTRACTOR PROFILE + PROJECT SELECTOR LOGIC =============
-// BACKEND (Neon users table via oneprojectapp-backend): Handle contractor profile info, picture upload/delete, and projects
+// BACKEND (Neon via oneprojectapp-backend): Handle contractor profile info, picture upload/delete, and projects
 
 const loggedInEmail = localStorage.getItem("contractorEmail");
 
 document.addEventListener("DOMContentLoaded", async () => {
   try {
-    // Fetch contractor profile + projects from backend (users table)
+    // Fetch contractor profile + projects from backend
     const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/profile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -711,122 +711,161 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!res.ok) throw new Error("Failed to fetch contractor profile");
     const contractor = await res.json();
 
-    // Update email + role
-    profileEmail.textContent = contractor.email;
-    profileRole.textContent = `Role: ${contractor.role}`;
+// Update email + role
+profileEmail.textContent = contractor.email;
+profileRole.textContent = `Role: ${contractor.role}`;
 
-    // Update profile picture or fallback initials
-    if (contractor.profile_picture && contractor.profile_picture.trim() !== "") {
-      profileIcon.style.backgroundImage = `url("${contractor.profile_picture}")`;
+// Update profile picture or fallback initials
+if (contractor.profile_picture && contractor.profile_picture.trim() !== "") {
+  profileIcon.style.backgroundImage = `url("${contractor.profile_picture}")`;
+  profileIcon.style.backgroundSize = "cover";
+  profileIcon.style.backgroundPosition = "center";
+  profileIcon.textContent = "";
+
+  profileIconLarge.style.backgroundImage = `url("${contractor.profile_picture}")`;
+  profileIconLarge.style.backgroundSize = "cover";
+  profileIconLarge.style.backgroundPosition = "center";
+  profileIconLarge.textContent = "";
+
+  profileIconLarge.addEventListener("click", () => {
+    const pictureUrl = profileIconLarge.style.backgroundImage
+      .replace(/^url\(["']?/, "")
+      .replace(/["']?\)$/, "");
+
+    if (!pictureUrl) return;
+
+    let preview = document.getElementById("passportPreview");
+    if (!preview) {
+      preview = document.createElement("div");
+      preview.id = "passportPreview";
+      preview.style.width = "120px";
+      preview.style.height = "160px";
+      preview.style.margin = "10px auto";
+      preview.style.border = "1px solid #ccc";
+      preview.style.borderRadius = "4px";
+      preview.style.backgroundImage = `url("${pictureUrl}")`;
+      preview.style.backgroundSize = "contain";
+      preview.style.backgroundRepeat = "no-repeat";
+      preview.style.backgroundPosition = "center";
+      preview.style.position = "relative";
+
+      const closeIcon = document.createElement("span");
+      closeIcon.textContent = "✖";
+      closeIcon.style.position = "absolute";
+      closeIcon.style.top = "2px";
+      closeIcon.style.right = "6px";
+      closeIcon.style.cursor = "pointer";
+      closeIcon.style.color = "#333";
+      closeIcon.style.fontWeight = "bold";
+
+      closeIcon.addEventListener("click", () => {
+        preview.remove();
+      });
+
+      preview.appendChild(closeIcon);
+      profileDialog.appendChild(preview);
+    }
+  });
+} else {
+  const emailChar = contractor.email.charAt(0).toUpperCase();
+  profileIcon.style.backgroundImage = "";
+  profileIcon.textContent = emailChar;
+  profileIconLarge.style.backgroundImage = "";
+  profileIconLarge.textContent = emailChar;
+}
+
+// Populate project selector dynamically
+const projectDialog = document.getElementById("projectDialog");
+projectDialog.innerHTML = ""; // clear old items
+
+contractor.projects.forEach(project => {
+  const item = document.createElement("div");
+  item.className = "project-item";
+  item.setAttribute("data-project-id", project.id);
+  item.setAttribute("data-project", project.name);
+  item.textContent = `${project.name} (${project.location})`;
+  projectDialog.appendChild(item);
+
+  item.addEventListener("click", () => {
+    activeProject.textContent = project.name;
+    projectDialog.style.display = "none";
+
+    localStorage.setItem("activeProjectId", project.id);
+    localStorage.setItem("activeProjectName", project.name);
+
+    window.location.reload();
+  });
+});
+
+if (contractor.projects.length === 1) {
+  const project = contractor.projects[0];
+  activeProject.textContent = project.name;
+  localStorage.setItem("activeProjectId", project.id);
+  localStorage.setItem("activeProjectName", project.name);
+}
+
+const storedProjectId = localStorage.getItem("activeProjectId");
+const storedProjectName = localStorage.getItem("activeProjectName");
+
+if (storedProjectId && storedProjectName) {
+  activeProject.textContent = storedProjectName;
+  fetchProjectDetails(storedProjectId); // 🔹 load contractor + project details
+} else if (contractor.defaultProject) {
+  activeProject.textContent = contractor.defaultProject.name;
+  localStorage.setItem("activeProjectId", contractor.defaultProject.id);
+  localStorage.setItem("activeProjectName", contractor.defaultProject.name);
+  fetchProjectDetails(contractor.defaultProject.id); // 🔹 load default project
+} else {
+  activeProject.textContent = "No projects assigned";
+}
+
+// Helper function to fetch contractor + project details
+async function fetchProjectDetails(projectId) {
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/project-details", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: loggedInEmail, projectId })
+    });
+
+    if (!res.ok) throw new Error("Failed to fetch project details");
+    const data = await res.json();
+
+    profileEmail.textContent = data.contractor.email;
+    profileRole.textContent = `Role: ${data.contractor.role}`;
+
+    if (data.contractor.profile_picture && data.contractor.profile_picture.trim() !== "") {
+      profileIcon.style.backgroundImage = `url("${data.contractor.profile_picture}")`;
       profileIcon.style.backgroundSize = "cover";
       profileIcon.style.backgroundPosition = "center";
       profileIcon.textContent = "";
 
-      profileIconLarge.style.backgroundImage = `url("${contractor.profile_picture}")`;
+      profileIconLarge.style.backgroundImage = `url("${data.contractor.profile_picture}")`;
       profileIconLarge.style.backgroundSize = "cover";
       profileIconLarge.style.backgroundPosition = "center";
       profileIconLarge.textContent = "";
-
-      // Passport preview with close icon
-      profileIconLarge.addEventListener("click", () => {
-        const pictureUrl = profileIconLarge.style.backgroundImage
-          .replace(/^url\(["']?/, "")
-          .replace(/["']?\)$/, "");
-
-        if (!pictureUrl) return;
-
-        let preview = document.getElementById("passportPreview");
-        if (!preview) {
-          preview = document.createElement("div");
-          preview.id = "passportPreview";
-          preview.style.width = "120px";
-          preview.style.height = "160px";
-          preview.style.margin = "10px auto";
-          preview.style.border = "1px solid #ccc";
-          preview.style.borderRadius = "4px";
-          preview.style.backgroundImage = `url("${pictureUrl}")`;
-          preview.style.backgroundSize = "contain";
-          preview.style.backgroundRepeat = "no-repeat";
-          preview.style.backgroundPosition = "center";
-          preview.style.position = "relative";
-
-          const closeIcon = document.createElement("span");
-          closeIcon.textContent = "✖";
-          closeIcon.style.position = "absolute";
-          closeIcon.style.top = "2px";
-          closeIcon.style.right = "6px";
-          closeIcon.style.cursor = "pointer";
-          closeIcon.style.color = "#333";
-          closeIcon.style.fontWeight = "bold";
-
-          closeIcon.addEventListener("click", () => {
-            preview.remove();
-          });
-
-          preview.appendChild(closeIcon);
-          profileDialog.appendChild(preview);
-        }
-      });
     } else {
-      const emailChar = contractor.email.charAt(0).toUpperCase();
+      const emailChar = data.contractor.email.charAt(0).toUpperCase();
       profileIcon.style.backgroundImage = "";
       profileIcon.textContent = emailChar;
       profileIconLarge.style.backgroundImage = "";
       profileIconLarge.textContent = emailChar;
     }
 
-    // Populate project selector dynamically
-    const projectDialog = document.getElementById("projectDialog");
-    projectDialog.innerHTML = ""; // clear old items
-
-    contractor.projects.forEach(project => {
-      const item = document.createElement("div");
-      item.className = "project-item";
-      item.setAttribute("data-project-id", project.id);
-      item.setAttribute("data-project", project.name);
-      item.textContent = `${project.name} (${project.location})`;
-      projectDialog.appendChild(item);
-
-      item.addEventListener("click", () => {
-        activeProject.textContent = project.name;
-        projectDialog.style.display = "none";
-
-        // Store selected project in localStorage
-        localStorage.setItem("activeProjectId", project.id);
-        localStorage.setItem("activeProjectName", project.name);
-
-        // Refresh page after project switch
-        window.location.reload();
-      });
-    });
-
-    // Auto-select if only one project
-    if (contractor.projects.length === 1) {
-      const project = contractor.projects[0];
-      activeProject.textContent = project.name;
-      localStorage.setItem("activeProjectId", project.id);
-      localStorage.setItem("activeProjectName", project.name);
-    }
-
-    // On page load, check if activeProjectId exists in localStorage
-    const storedProjectId = localStorage.getItem("activeProjectId");
-    const storedProjectName = localStorage.getItem("activeProjectName");
-
-    if (storedProjectId && storedProjectName) {
-      activeProject.textContent = storedProjectName;
-      fetchProjectDetails(storedProjectId); // load contractor + project details
-    } else if (contractor.defaultProject) {
-      activeProject.textContent = contractor.defaultProject.name;
-      localStorage.setItem("activeProjectId", contractor.defaultProject.id);
-      localStorage.setItem("activeProjectName", contractor.defaultProject.name);
-      fetchProjectDetails(contractor.defaultProject.id); // load default project
-    } else {
-      activeProject.textContent = "No projects assigned";
+    activeProject.textContent = data.project.name;
+    const projectDetailsContainer = document.getElementById("projectDetailsContainer");
+    if (projectDetailsContainer) {
+      projectDetailsContainer.innerHTML = `
+        <p><strong>Project Name:</strong> ${data.project.name}</p>
+        <p><strong>Location:</strong> ${data.project.location}</p>
+        <p><strong>Contract Ref:</strong> ${data.project.contract_reference}</p>
+        <p><strong>Created At:</strong> ${new Date(data.project.created_at).toLocaleDateString()}</p>
+      `;
     }
   } catch (err) {
-    console.error("Contractor profile fetch error:", err);
+    console.error("Contractor project details fetch error:", err);
   }
-});
+}
 
 // ============= PROJECT SELECTOR TOGGLE =============
 const projectSelector = document.getElementById("projectSelector");
@@ -861,7 +900,7 @@ editProfileBtn.addEventListener('click', () => {
   editProfileOptions.style.display = editProfileOptions.style.display === 'block' ? 'none' : 'block';
 });
 
-// Upload picture with backend (Neon users table)
+// Upload picture with backend
 changePictureBtn.addEventListener('click', () => { profileUpload.click(); });
 profileUpload.addEventListener('change', async (event) => {
   const file = event.target.files[0];
@@ -902,7 +941,7 @@ profileUpload.addEventListener('change', async (event) => {
   }
 });
 
-// Delete picture with backend (Neon users table)
+// Delete picture with backend
 deletePictureBtn.addEventListener('click', async () => {
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/delete-picture", {
