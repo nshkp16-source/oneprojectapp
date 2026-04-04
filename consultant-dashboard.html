@@ -745,7 +745,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       profileIconLarge.style.backgroundPosition = "center";
       profileIconLarge.textContent = "";
     } else {
-      const emailChar = consultant.email.charAt(0).toUpperCase();
+      const emailChar = (consultant.email || "?").charAt(0).toUpperCase();
       profileIcon.style.backgroundImage = "";
       profileIcon.textContent = emailChar;
       profileIconLarge.style.backgroundImage = "";
@@ -753,26 +753,32 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     // Populate project selector dynamically
-    projectDialog.innerHTML = ""; // clear old items
-    consultant.projects.forEach(project => {
-      const item = document.createElement("div");
-      item.className = "project-item";
-      item.setAttribute("data-project-id", project.id);
-      item.setAttribute("data-project", project.name);
-      item.textContent = `${project.name} (${project.location})`;
-      projectDialog.appendChild(item);
+projectDialog.innerHTML = ""; // clear old items
 
-      item.addEventListener("click", () => {
-        activeProject.textContent = project.name;
-        projectDialog.style.display = "none";
+if (!consultant.projects || consultant.projects.length === 0) {
+  activeProject.textContent = "No projects assigned";
+  return;
+}
 
-        localStorage.setItem("activeProjectId", project.id);
-        localStorage.setItem("activeProjectName", project.name);
+consultant.projects.forEach(project => {
+  const item = document.createElement("div");
+  item.className = "project-item";
+  item.setAttribute("data-project-id", project.id);
+  item.setAttribute("data-project", project.name);
+  item.textContent = `${project.name} (${project.location})`;
+  projectDialog.appendChild(item);
 
-        // ✅ Refresh details directly instead of reload
-        fetchProjectDetails(project.id);
-      });
-    });
+  item.addEventListener("click", () => {
+    activeProject.textContent = project.name;
+    projectDialog.style.display = "none";
+
+    localStorage.setItem("activeProjectId", project.id);
+    localStorage.setItem("activeProjectName", project.name);
+
+    // ✅ Refresh details directly instead of reload
+    fetchProjectDetails(project.id);
+  });
+});
 
     // Auto-select if only one project
     if (consultant.projects.length === 1) {
@@ -814,9 +820,11 @@ async function fetchProjectDetails(projectId) {
     if (!res.ok) throw new Error("Failed to fetch project details");
     const data = await res.json();
 
+    // Update email + role
     profileEmail.textContent = data.consultant.email;
     profileRole.textContent = `Role: ${data.consultant.role}`;
 
+    // Update profile picture or fallback initials
     if (data.consultant.profile_picture && data.consultant.profile_picture.trim() !== "") {
       profileIcon.style.backgroundImage = `url("${data.consultant.profile_picture}")`;
       profileIcon.style.backgroundSize = "cover";
@@ -828,14 +836,17 @@ async function fetchProjectDetails(projectId) {
       profileIconLarge.style.backgroundPosition = "center";
       profileIconLarge.textContent = "";
     } else {
-      const emailChar = data.consultant.email.charAt(0).toUpperCase();
+      const emailChar = (data.consultant.email || "?").charAt(0).toUpperCase();
       profileIcon.style.backgroundImage = "";
       profileIcon.textContent = emailChar;
       profileIconLarge.style.backgroundImage = "";
       profileIconLarge.textContent = emailChar;
     }
 
+    // Update active project name
     activeProject.textContent = data.project.name;
+
+    // Populate project details container
     const projectDetailsContainer = document.getElementById("projectDetailsContainer");
     if (projectDetailsContainer) {
       projectDetailsContainer.innerHTML = `
