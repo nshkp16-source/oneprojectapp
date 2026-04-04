@@ -701,6 +701,7 @@ const loggedInEmail = localStorage.getItem("clientEmail");
 
 document.addEventListener("DOMContentLoaded", async () => {
   try {
+    // Fetch client profile + projects from backend
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/profile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -710,19 +711,53 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!res.ok) throw new Error("Failed to fetch client profile");
     const client = await res.json();
 
+    // Update email + role
     profileEmail.textContent = client.email;
     profileRole.textContent = `Role: ${client.role}`;
 
+    // Update profile picture or fallback initials
     if (client.profile_picture && client.profile_picture.trim() !== "") {
+      // Small circular icon
       profileIcon.style.backgroundImage = `url("${client.profile_picture}")`;
       profileIcon.style.backgroundSize = "cover";
       profileIcon.style.backgroundPosition = "center";
       profileIcon.textContent = "";
 
+      // Dialog circular icon
       profileIconLarge.style.backgroundImage = `url("${client.profile_picture}")`;
       profileIconLarge.style.backgroundSize = "cover";
       profileIconLarge.style.backgroundPosition = "center";
       profileIconLarge.textContent = "";
+
+      // 🔹 Add click handler to show rectangular preview inside dialog
+      profileIconLarge.addEventListener("click", () => {
+        let preview = document.getElementById("passportPreview");
+        if (!preview) {
+          preview = document.createElement("div");
+          preview.id = "passportPreview";
+          preview.style.width = "120px";
+          preview.style.height = "160px";
+          preview.style.margin = "10px auto";
+          preview.style.border = "1px solid #ccc";
+          preview.style.borderRadius = "4px";
+          preview.style.backgroundImage = `url("${client.profile_picture}")`;
+          preview.style.backgroundSize = "contain";
+          preview.style.backgroundRepeat = "no-repeat";
+          preview.style.backgroundPosition = "center";
+
+          // Close button
+          const closeBtn = document.createElement("button");
+          closeBtn.textContent = "Close Preview";
+          closeBtn.style.display = "block";
+          closeBtn.style.margin = "5px auto";
+          closeBtn.addEventListener("click", () => {
+            preview.remove();
+          });
+
+          profileDialog.appendChild(preview);
+          profileDialog.appendChild(closeBtn);
+        }
+      });
     } else {
       const emailChar = client.email.charAt(0).toUpperCase();
       profileIcon.style.backgroundImage = "";
@@ -731,8 +766,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       profileIconLarge.textContent = emailChar;
     }
 
+    // Populate project selector dynamically
     const projectDialog = document.getElementById("projectDialog");
-    projectDialog.innerHTML = "";
+    projectDialog.innerHTML = ""; // clear old items
 
     client.projects.forEach(project => {
       const item = document.createElement("div");
@@ -745,30 +781,37 @@ document.addEventListener("DOMContentLoaded", async () => {
       item.addEventListener("click", () => {
         activeProject.textContent = project.name;
         projectDialog.style.display = "none";
+
+        // Store selected project in localStorage
         localStorage.setItem("activeProjectId", project.id);
         localStorage.setItem("activeProjectName", project.name);
+
+        // ✅ Refresh page after project switch
         window.location.reload();
       });
     });
 
+    // ✅ Auto-select if only one project
     if (client.projects.length === 1) {
       const project = client.projects[0];
       activeProject.textContent = project.name;
       localStorage.setItem("activeProjectId", project.id);
       localStorage.setItem("activeProjectName", project.name);
+      // ❌ Removed reload loop, just show project directly
     }
 
+    // ✅ On page load, check if activeProjectId exists in localStorage
     const storedProjectId = localStorage.getItem("activeProjectId");
     const storedProjectName = localStorage.getItem("activeProjectName");
 
     if (storedProjectId && storedProjectName) {
       activeProject.textContent = storedProjectName;
-      fetchProjectDetails(storedProjectId);
+      fetchProjectDetails(storedProjectId); // 🔹 load client + project details
     } else if (client.defaultProject) {
       activeProject.textContent = client.defaultProject.name;
       localStorage.setItem("activeProjectId", client.defaultProject.id);
       localStorage.setItem("activeProjectName", client.defaultProject.name);
-      fetchProjectDetails(client.defaultProject.id);
+      fetchProjectDetails(client.defaultProject.id); // 🔹 load default project
     } else {
       activeProject.textContent = "No projects assigned";
     }
@@ -777,6 +820,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 });
 
+// Helper function to fetch client + project details
 async function fetchProjectDetails(projectId) {
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/project-details", {
@@ -788,6 +832,7 @@ async function fetchProjectDetails(projectId) {
     if (!res.ok) throw new Error("Failed to fetch project details");
     const data = await res.json();
 
+    // ✅ Update client info again (ensures consistency)
     profileEmail.textContent = data.client.email;
     profileRole.textContent = `Role: ${data.client.role}`;
 
@@ -809,6 +854,7 @@ async function fetchProjectDetails(projectId) {
       profileIconLarge.textContent = emailChar;
     }
 
+    // ✅ Show project details
     activeProject.textContent = data.project.name;
     const projectDetailsContainer = document.getElementById("projectDetailsContainer");
     if (projectDetailsContainer) {
@@ -824,77 +870,6 @@ async function fetchProjectDetails(projectId) {
   }
 }
 
-// Toggle profile dialog
-profileIcon.addEventListener("click", (e) => {
-  e.stopPropagation();
-  profileDialog.style.display = profileDialog.style.display === "block" ? "none" : "block";
-});
-
-// Toggle edit options
-editProfileBtn.addEventListener("click", () => {
-  editProfileOptions.style.display = editProfileOptions.style.display === "block" ? "none" : "block";
-});
-
-// Upload picture with 1MB limit
-changePictureBtn.addEventListener("click", () => { profileUpload.click(); });
-profileUpload.addEventListener("change", async (event) => {
-  const file = event.target.files[0];
-  if (!file) return;
-
-  if (!file.type.startsWith("image/")) {
-    alert("Only image files are allowed.");
-    return;
-  }
-
-  if (file.size > 1024 * 1024) {
-    alert("Profile picture must not exceed 1MB.");
-    return;
-  }
-
-  const formData = new FormData();
-  formData.append("profile_picture", file);
-  formData.append("email", loggedInEmail);
-
-  try {
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
-      method: "POST",
-      body: formData
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      profileIcon.style.backgroundImage = `url("${data.url}")`;
-      profileIconLarge.style.backgroundImage = `url("${data.url}")`;
-      profileIcon.textContent = "";
-      profileIconLarge.textContent = "";
-    } else {
-      alert("Failed to upload profile picture.");
-    }
-  } catch (err) {
-    console.error("Upload error:", err);
-    alert("Error uploading profile picture.");
-  }
-});
-
-// Delete picture
-deletePictureBtn.addEventListener("click", async () => {
-  const res = await fetch("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: loggedInEmail })
-  });
-
-  if (res.ok) {
-    const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
-    profileIcon.style.backgroundImage = "";
-    profileIcon.textContent = emailChar;
-    profileIconLarge.style.backgroundImage = "";
-    profileIconLarge.textContent = emailChar;
-  } else {
-    alert("Failed to delete profile picture.");
-  }
-});
-
 // ============= PROJECT SELECTOR TOGGLE =============
 const projectSelector = document.getElementById("projectSelector");
 const projectDialog = document.getElementById("projectDialog");
@@ -909,252 +884,7 @@ projectSelector.addEventListener("click", (e) => {
 });
 
 // ============= PASSPORT PREVIEW TOGGLE =============
-// Always attach click handler for dialog circular icon
-profileIconLarge.addEventListener("click", () => {
-  const pictureUrl = profileIconLarge.style.backgroundImage
-    .replace(/^url\(["']?/, "")
-    .replace(/["']?\)$/, "");
-
-  if (!pictureUrl) return;
-
-  let preview = document.getElementById("passportPreview");
-  let closeBtn = document.getElementById("closePassportPreview");
-
-  if (!preview) {
-    preview = document.createElement("div");
-    preview.id = "passportPreview";
-    preview.style.width = "120px";
-    preview.style.height = "160px";
-    preview.style.margin = "10px auto";
-    preview.style.border = "1px solid #ccc";
-    preview.style.borderRadius = "4px";
-    preview.style.backgroundImage = `url("${pictureUrl}")`;
-    preview.style.backgroundSize = "contain";
-    preview.style.backgroundRepeat = "no-repeat";
-    preview.style.backgroundPosition = "center";
-
-    closeBtn = document.createElement("button");
-   Here’s the **finished full script** with the passport‑style preview feature integrated correctly. The important fix is that the **click handler for the dialog’s circular icon (`profileIconLarge`) is always attached**, and when clicked it shows a rectangular preview with a close button inside the dialog.
-
----
-
-```js
-// ============= CLIENT PROFILE + PROJECT SELECTOR LOGIC =============
-
-const loggedInEmail = localStorage.getItem("clientEmail");
-
-document.addEventListener("DOMContentLoaded", async () => {
-  try {
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/client/profile", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loggedInEmail })
-    });
-
-    if (!res.ok) throw new Error("Failed to fetch client profile");
-    const client = await res.json();
-
-    profileEmail.textContent = client.email;
-    profileRole.textContent = `Role: ${client.role}`;
-
-    if (client.profile_picture && client.profile_picture.trim() !== "") {
-      profileIcon.style.backgroundImage = `url("${client.profile_picture}")`;
-      profileIcon.style.backgroundSize = "cover";
-      profileIcon.style.backgroundPosition = "center";
-      profileIcon.textContent = "";
-
-      profileIconLarge.style.backgroundImage = `url("${client.profile_picture}")`;
-      profileIconLarge.style.backgroundSize = "cover";
-      profileIconLarge.style.backgroundPosition = "center";
-      profileIconLarge.textContent = "";
-    } else {
-      const emailChar = client.email.charAt(0).toUpperCase();
-      profileIcon.style.backgroundImage = "";
-      profileIcon.textContent = emailChar;
-      profileIconLarge.style.backgroundImage = "";
-      profileIconLarge.textContent = emailChar;
-    }
-
-    // Populate project selector
-    const projectDialog = document.getElementById("projectDialog");
-    projectDialog.innerHTML = "";
-
-    client.projects.forEach(project => {
-      const item = document.createElement("div");
-      item.className = "project-item";
-      item.setAttribute("data-project-id", project.id);
-      item.textContent = `${project.name} (${project.location})`;
-      projectDialog.appendChild(item);
-
-      item.addEventListener("click", () => {
-        activeProject.textContent = project.name;
-        projectDialog.style.display = "none";
-        localStorage.setItem("activeProjectId", project.id);
-        localStorage.setItem("activeProjectName", project.name);
-        window.location.reload();
-      });
-    });
-
-    if (client.projects.length === 1) {
-      const project = client.projects[0];
-      activeProject.textContent = project.name;
-      localStorage.setItem("activeProjectId", project.id);
-      localStorage.setItem("activeProjectName", project.name);
-    }
-
-    const storedProjectId = localStorage.getItem("activeProjectId");
-    const storedProjectName = localStorage.getItem("activeProjectName");
-
-    if (storedProjectId && storedProjectName) {
-      activeProject.textContent = storedProjectName;
-      fetchProjectDetails(storedProjectId);
-    } else if (client.defaultProject) {
-      activeProject.textContent = client.defaultProject.name;
-      localStorage.setItem("activeProjectId", client.defaultProject.id);
-      localStorage.setItem("activeProjectName", client.defaultProject.name);
-      fetchProjectDetails(client.defaultProject.id);
-    } else {
-      activeProject.textContent = "No projects assigned";
-    }
-  } catch (err) {
-    console.error("Client profile fetch error:", err);
-  }
-});
-
-// Helper function
-async function fetchProjectDetails(projectId) {
-  try {
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/client/project-details", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loggedInEmail, projectId })
-    });
-
-    if (!res.ok) throw new Error("Failed to fetch project details");
-    const data = await res.json();
-
-    profileEmail.textContent = data.client.email;
-    profileRole.textContent = `Role: ${data.client.role}`;
-
-    if (data.client.profile_picture && data.client.profile_picture.trim() !== "") {
-      profileIcon.style.backgroundImage = `url("${data.client.profile_picture}")`;
-      profileIcon.style.backgroundSize = "cover";
-      profileIcon.style.backgroundPosition = "center";
-      profileIcon.textContent = "";
-
-      profileIconLarge.style.backgroundImage = `url("${data.client.profile_picture}")`;
-      profileIconLarge.style.backgroundSize = "cover";
-      profileIconLarge.style.backgroundPosition = "center";
-      profileIconLarge.textContent = "";
-    } else {
-      const emailChar = data.client.email.charAt(0).toUpperCase();
-      profileIcon.style.backgroundImage = "";
-      profileIcon.textContent = emailChar;
-      profileIconLarge.style.backgroundImage = "";
-      profileIconLarge.textContent = emailChar;
-    }
-
-    activeProject.textContent = data.project.name;
-    const projectDetailsContainer = document.getElementById("projectDetailsContainer");
-    if (projectDetailsContainer) {
-      projectDetailsContainer.innerHTML = `
-        <p><strong>Project Name:</strong> ${data.project.name}</p>
-        <p><strong>Location:</strong> ${data.project.location}</p>
-        <p><strong>Contract Ref:</strong> ${data.project.contract_reference}</p>
-        <p><strong>Created At:</strong> ${new Date(data.project.created_at).toLocaleDateString()}</p>
-      `;
-    }
-  } catch (err) {
-    console.error("Project details fetch error:", err);
-  }
-}
-
-// Toggle profile dialog
-profileIcon.addEventListener("click", (e) => {
-  e.stopPropagation();
-  profileDialog.style.display = profileDialog.style.display === "block" ? "none" : "block";
-});
-
-// Toggle edit options
-editProfileBtn.addEventListener("click", () => {
-  editProfileOptions.style.display = editProfileOptions.style.display === "block" ? "none" : "block";
-});
-
-// Upload picture
-changePictureBtn.addEventListener("click", () => { profileUpload.click(); });
-profileUpload.addEventListener("change", async (event) => {
-  const file = event.target.files[0];
-  if (!file) return;
-
-  if (!file.type.startsWith("image/")) {
-    alert("Only image files are allowed.");
-    return;
-  }
-
-  if (file.size > 1024 * 1024) {
-    alert("Profile picture must not exceed 1MB.");
-    return;
-  }
-
-  const formData = new FormData();
-  formData.append("profile_picture", file);
-  formData.append("email", loggedInEmail);
-
-  try {
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
-      method: "POST",
-      body: formData
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      profileIcon.style.backgroundImage = `url("${data.url}")`;
-      profileIconLarge.style.backgroundImage = `url("${data.url}")`;
-      profileIcon.textContent = "";
-      profileIconLarge.textContent = "";
-    } else {
-      alert("Failed to upload profile picture.");
-    }
-  } catch (err) {
-    console.error("Upload error:", err);
-    alert("Error uploading profile picture.");
-  }
-});
-
-// Delete picture
-deletePictureBtn.addEventListener("click", async () => {
-  const res = await fetch("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: loggedInEmail })
-  });
-
-  if (res.ok) {
-    const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
-    profileIcon.style.backgroundImage = "";
-    profileIcon.textContent = emailChar;
-    profileIconLarge.style.backgroundImage = "";
-    profileIconLarge.textContent = emailChar;
-  } else {
-    alert("Failed to delete profile picture.");
-  }
-});
-
-// ============= PROJECT SELECTOR TOGGLE =============
-const projectSelector = document.getElementById("projectSelector");
-const projectDialog = document.getElementById("projectDialog");
-const activeProject = document.getElementById("activeProject");
-
-projectSelector.addEventListener("click", (e) => {
-  e.stopPropagation();
-  const rect = projectSelector.getBoundingClientRect();
-  projectDialog.style.display = "block";
-  projectDialog.style.top = rect.bottom + "px";
-  projectDialog.style.left = rect.left + "px";
-});
-
-// ============= PASSPORT PREVIEW TOGGLE =============
-// Always attach click handler for dialog circular icon
+// Attach click handler for dialog circular icon
 profileIconLarge.addEventListener("click", () => {
   const pictureUrl = profileIconLarge.style.backgroundImage
     .replace(/^url\(["']?/, "")
@@ -1194,6 +924,19 @@ profileIconLarge.addEventListener("click", () => {
     profileDialog.appendChild(preview);
     profileDialog.appendChild(closeBtn);
   }
+});
+
+// ============= PROJECT SELECTOR TOGGLE =============
+const projectSelector = document.getElementById("projectSelector");
+const projectDialog = document.getElementById("projectDialog");
+const activeProject = document.getElementById("activeProject");
+
+projectSelector.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const rect = projectSelector.getBoundingClientRect();
+  projectDialog.style.display = "block";
+  projectDialog.style.top = rect.bottom + "px";
+  projectDialog.style.left = rect.left + "px";
 });
 
   // ============= SETTINGS DIALOG =============
