@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>client dashboard</title>
+  <title>contractor dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root {
@@ -51,7 +51,7 @@
       padding: 12px;
       flex-shrink: 0;
     }
-    .client-dashboard-label {
+    .tm-dashboard-label {
       display: inline-block;
       color: #fff;
       font-size: 18px;
@@ -63,7 +63,7 @@
     /* Profile */
     .profile-block { position: relative; margin-bottom: 16px; flex-shrink: 0; }
     .profile-icon {
-      width: 44px; height: 44px; border-radius: 50%;
+      width: 65px; height: 65px; border-radius: 50%;
       background: #fff; color: var(--c-teal);
       display: flex; align-items: center; justify-content: center;
       font-weight: bold; font-size: 16px; cursor: pointer;
@@ -398,7 +398,7 @@
 
       <!-- Dashboard Block -->
       <div class="tm-dashboard-block">
-        <span class="tm-dashboard-label" data-translate="dashboard-label">contractor PM Dashboard</span>
+        <span class="tm-dashboard-label" data-translate="dashboard-label">contractor Dashboard</span>
       </div>
 
       <!-- Profile block -->
@@ -694,74 +694,232 @@
     expandGrayPart(html);
   });
 
-  // ============= PROFILE LOGIC =============
-  const profileIcon = document.getElementById('profileIcon');
-  const profileDialog = document.getElementById('profileDialog');
-  const editProfileBtn = document.getElementById('editProfileBtn');
-  const editProfileOptions = document.getElementById('editProfileOptions');
-  const changePictureBtn = document.getElementById('changePictureBtn');
-  const deletePictureBtn = document.getElementById('deletePictureBtn');
-  const profileUpload = document.getElementById('profileUpload');
-  const profileIconLarge = document.getElementById('profileIconLarge');
-  const profileEmail = document.getElementById('profileEmail');
+// ============= CONTRACTOR PROFILE + PROJECT SELECTOR LOGIC =============
+// BACKEND (Cockroach via oneprojectapp-backend): Handle contractor profile info, picture upload/delete, and projects
 
-  profileIcon.addEventListener('click', (e) => {
-    e.stopPropagation();
-    profileDialog.style.display = profileDialog.style.display === 'block' ? 'none' : 'block';
-  });
+const loggedInEmail = localStorage.getItem("contractorEmail");
 
-  editProfileBtn.addEventListener('click', () => {
-    editProfileOptions.style.display = editProfileOptions.style.display === 'block' ? 'none' : 'block';
-  });
-
-  changePictureBtn.addEventListener('click', () => { profileUpload.click(); });
-  profileUpload.addEventListener('change', (event) => {
-    const file = event.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        profileIcon.style.backgroundImage = `url(${e.target.result})`;
-        profileIcon.style.backgroundSize = 'cover';
-        profileIcon.textContent = '';
-        profileIconLarge.style.backgroundImage = `url(${e.target.result})`;
-        profileIconLarge.style.backgroundSize = 'cover';
-        profileIconLarge.textContent = '';
-      };
-      reader.readAsDataURL(file);
-    }
-  });
-  deletePictureBtn.addEventListener('click', () => {
-    const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
-    profileIcon.style.backgroundImage = '';
-    profileIcon.style.backgroundColor = '#fff';
-    profileIcon.style.color = '#007B8A';
-    profileIcon.textContent = emailChar;
-    profileIconLarge.style.backgroundImage = '';
-    profileIconLarge.style.backgroundColor = '#007B8A';
-    profileIconLarge.style.color = '#fff';
-    profileIconLarge.textContent = emailChar;
-  });
-
-  // ============= PROJECT SELECTOR =============
-  const projectSelector = document.getElementById('projectSelector');
-  const projectDialog = document.getElementById('projectDialog');
-  const activeProject = document.getElementById('activeProject');
-
-  projectSelector.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const rect = projectSelector.getBoundingClientRect();
-    projectDialog.style.display = 'block';
-    projectDialog.style.top = rect.bottom + 'px';
-    projectDialog.style.left = rect.left + 'px';
-  });
-
-  projectDialog.querySelectorAll('.project-item').forEach(item => {
-    item.addEventListener('click', () => {
-      const projectName = item.getAttribute('data-project');
-      activeProject.textContent = projectName;
-      projectDialog.style.display = 'none';
+document.addEventListener("DOMContentLoaded", async () => {
+  try {
+    // Fetch contractor profile + projects from backend
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: loggedInEmail })
     });
-  });
+
+    if (!res.ok) throw new Error("Failed to fetch contractor profile");
+    const contractor = await res.json();
+
+    // Update email + role
+    profileEmail.textContent = contractor.email;
+    profileRole.textContent = `Role: ${contractor.role}`;
+
+    // Update profile picture or fallback initials
+    if (contractor.profile_picture && contractor.profile_picture.trim() !== "") {
+      profileIcon.style.backgroundImage = `url("${contractor.profile_picture}")`;
+      profileIcon.style.backgroundSize = "cover";
+      profileIcon.style.backgroundPosition = "center";
+      profileIcon.textContent = "";
+
+      profileIconLarge.style.backgroundImage = `url("${contractor.profile_picture}")`;
+      profileIconLarge.style.backgroundSize = "cover";
+      profileIconLarge.style.backgroundPosition = "center";
+      profileIconLarge.textContent = "";
+
+      // Passport preview with close icon
+      profileIconLarge.addEventListener("click", () => {
+        const pictureUrl = profileIconLarge.style.backgroundImage
+          .replace(/^url\(["']?/, "")
+          .replace(/["']?\)$/, "");
+
+        if (!pictureUrl) return;
+
+        let preview = document.getElementById("passportPreview");
+        if (!preview) {
+          preview = document.createElement("div");
+          preview.id = "passportPreview";
+          preview.style.width = "120px";
+          preview.style.height = "160px";
+          preview.style.margin = "10px auto";
+          preview.style.border = "1px solid #ccc";
+          preview.style.borderRadius = "4px";
+          preview.style.backgroundImage = `url("${pictureUrl}")`;
+          preview.style.backgroundSize = "contain";
+          preview.style.backgroundRepeat = "no-repeat";
+          preview.style.backgroundPosition = "center";
+          preview.style.position = "relative";
+
+          const closeIcon = document.createElement("span");
+          closeIcon.textContent = "✖";
+          closeIcon.style.position = "absolute";
+          closeIcon.style.top = "2px";
+          closeIcon.style.right = "6px";
+          closeIcon.style.cursor = "pointer";
+          closeIcon.style.color = "#333";
+          closeIcon.style.fontWeight = "bold";
+
+          closeIcon.addEventListener("click", () => {
+            preview.remove();
+          });
+
+          preview.appendChild(closeIcon);
+          profileDialog.appendChild(preview);
+        }
+      });
+    } else {
+      const emailChar = contractor.email.charAt(0).toUpperCase();
+      profileIcon.style.backgroundImage = "";
+      profileIcon.textContent = emailChar;
+      profileIconLarge.style.backgroundImage = "";
+      profileIconLarge.textContent = emailChar;
+    }
+// Helper function to fetch contractor + project details
+async function fetchProjectDetails(projectId) {
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/project-details", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: loggedInEmail, projectId })
+    });
+
+    if (!res.ok) throw new Error("Failed to fetch project details");
+    const data = await res.json();
+
+    // ✅ Update contractor info again (ensures consistency)
+    profileEmail.textContent = data.contractor.email;
+    profileRole.textContent = `Role: ${data.contractor.role}`;
+
+    if (data.contractor.profile_picture && data.contractor.profile_picture.trim() !== "") {
+      profileIcon.style.backgroundImage = `url("${data.contractor.profile_picture}")`;
+      profileIcon.style.backgroundSize = "cover";
+      profileIcon.style.backgroundPosition = "center";
+      profileIcon.textContent = "";
+
+      profileIconLarge.style.backgroundImage = `url("${data.contractor.profile_picture}")`;
+      profileIconLarge.style.backgroundSize = "cover";
+      profileIconLarge.style.backgroundPosition = "center";
+      profileIconLarge.textContent = "";
+    } else {
+      const emailChar = data.contractor.email.charAt(0).toUpperCase();
+      profileIcon.style.backgroundImage = "";
+      profileIcon.textContent = emailChar;
+      profileIconLarge.style.backgroundImage = "";
+      profileIconLarge.textContent = emailChar;
+    }
+
+    // ✅ Show project details
+    activeProject.textContent = data.project.name;
+    const projectDetailsContainer = document.getElementById("projectDetailsContainer");
+    if (projectDetailsContainer) {
+      projectDetailsContainer.innerHTML = `
+        <p><strong>Project Name:</strong> ${data.project.name}</p>
+        <p><strong>Location:</strong> ${data.project.location}</p>
+        <p><strong>Contract Ref:</strong> ${data.project.contract_reference}</p>
+        <p><strong>Created At:</strong> ${new Date(data.project.created_at).toLocaleDateString()}</p>
+      `;
+    }
+  } catch (err) {
+    console.error("Contractor project details fetch error:", err);
+  }
+}
+
+// ============= PROJECT SELECTOR TOGGLE =============
+const projectSelector = document.getElementById("projectSelector");
+const projectDialog = document.getElementById("projectDialog");
+const activeProject = document.getElementById("activeProject");
+
+projectSelector.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const rect = projectSelector.getBoundingClientRect();
+  projectDialog.style.display = "block";
+  projectDialog.style.top = rect.bottom + "px";
+  projectDialog.style.left = rect.left + "px";
+});
+
+// ============= PROFILE LOGIC =============
+const profileIcon = document.getElementById('profileIcon');
+const profileDialog = document.getElementById('profileDialog');
+const editProfileBtn = document.getElementById('editProfileBtn');
+const editProfileOptions = document.getElementById('editProfileOptions');
+const changePictureBtn = document.getElementById('changePictureBtn');
+const deletePictureBtn = document.getElementById('deletePictureBtn');
+const profileUpload = document.getElementById('profileUpload');
+const profileIconLarge = document.getElementById('profileIconLarge');
+const profileEmail = document.getElementById('profileEmail');
+
+profileIcon.addEventListener('click', (e) => {
+  e.stopPropagation();
+  profileDialog.style.display = profileDialog.style.display === 'block' ? 'none' : 'block';
+});
+
+editProfileBtn.addEventListener('click', () => {
+  editProfileOptions.style.display = editProfileOptions.style.display === 'block' ? 'none' : 'block';
+});
+
+// Upload picture with backend
+changePictureBtn.addEventListener('click', () => { profileUpload.click(); });
+profileUpload.addEventListener('change', async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  if (!file.type.startsWith("image/")) {
+    alert("Only image files are allowed.");
+    return;
+  }
+  if (file.size > 1024 * 1024) {
+    alert("Profile picture must not exceed 1MB.");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("profile_picture", file);
+  formData.append("email", loggedInEmail);
+
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/upload-picture", {
+      method: "POST",
+      body: formData
+    });
+    if (res.ok) {
+      const data = await res.json();
+      profileIcon.style.backgroundImage = `url("${data.url}")`;
+      profileIcon.style.backgroundSize = "cover";
+      profileIcon.textContent = "";
+      profileIconLarge.style.backgroundImage = `url("${data.url}")`;
+      profileIconLarge.style.backgroundSize = "cover";
+      profileIconLarge.textContent = "";
+    } else {
+      alert("Failed to upload profile picture.");
+    }
+  } catch (err) {
+    console.error("Upload error:", err);
+    alert("Error uploading profile picture.");
+  }
+});
+
+// Delete picture with backend
+deletePictureBtn.addEventListener('click', async () => {
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/delete-picture", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: loggedInEmail })
+    });
+    if (res.ok) {
+      const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
+      profileIcon.style.backgroundImage = "";
+      profileIcon.textContent = emailChar;
+      profileIconLarge.style.backgroundImage = "";
+      profileIconLarge.textContent = emailChar;
+    } else {
+      alert("Failed to delete profile picture.");
+    }
+  } catch (err) {
+    console.error("Delete error:", err);
+    alert("Error deleting profile picture.");
+  }
+});
 
   // ============= SETTINGS DIALOG =============
   const settingsToggle = document.getElementById('settingsToggle');
