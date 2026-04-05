@@ -80,7 +80,7 @@
     .back-link:hover {
       color: #5a6268;
     }
-    #message {
+    #message, #existingMessage {
       margin-top: 10px;
       color: #cc0000;
       font-size: 14px;
@@ -95,7 +95,14 @@
     <h2>Create Project Account</h2>
     <p class="note">N.B: Only the Client can create a project account.</p>
 
-    <form id="projectAccountForm" onsubmit="handleProjectAccount(event)">
+    <!-- Choice block -->
+    <div id="choiceBlock">
+      <button onclick="showNewUserForm()">New User</button>
+      <button onclick="showExistingForm()">I Have an Existing Account</button>
+    </div>
+
+    <!-- New User Registration Form -->
+    <form id="newUserForm" style="display:none;" onsubmit="handleProjectAccount(event)">
       <input type="text" id="companyName" placeholder="Company / Individual Name" required />
       <input type="email" id="companyEmail" placeholder="Company Email (for sign in)" required />
       <input type="text" id="representativeName" placeholder="Representative / Individual Name" required />
@@ -106,10 +113,18 @@
       <p id="message"></p>
     </form>
 
+    <!-- Existing User Login Form -->
+    <form id="existingUserForm" style="display:none;" onsubmit="handleExistingAccount(event)">
+      <input type="email" id="existingEmail" placeholder="Email" required />
+      <input type="password" id="existingPassword" placeholder="Password" required />
+      <button type="submit">Continue</button>
+      <p id="existingMessage"></p>
+    </form>
+
     <span class="back-link" onclick="goBack()">&#8592; Back</span>
   </div>
 
- <script>
+<script>
   function isValidPassword(password) {
     const regex = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d\S]{6,}$/;
     return regex.test(password);
@@ -123,7 +138,18 @@
     document.getElementById("loadingBar").style.width = "0";
   }
 
-  function handleProjectAccount(e) {
+  function showNewUserForm() {
+    document.getElementById("choiceBlock").style.display = "none";
+    document.getElementById("newUserForm").style.display = "block";
+  }
+
+  function showExistingForm() {
+    document.getElementById("choiceBlock").style.display = "none";
+    document.getElementById("existingUserForm").style.display = "block";
+  }
+
+  // 🔹 New User flow
+  async function handleProjectAccount(e) {
     e.preventDefault();
     const messageEl = document.getElementById("message");
 
@@ -147,7 +173,21 @@
     showLoading();
 
     try {
-      // ✅ Save client info in the structure finalize expects
+      // ✅ Check backend if email already exists
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/client/check-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: companyEmail })
+      });
+      const data = await res.json();
+
+      if (data.exists) {
+        resetLoading();
+        messageEl.textContent = "This email is already registered. Please use 'Existing Account' option.";
+        return;
+      }
+
+      // ✅ Save client info locally
       let projectDetails = JSON.parse(localStorage.getItem("projectDetails")) || {};
       projectDetails.client = {
         company_name: companyName,
@@ -160,6 +200,7 @@
         created_at: new Date().toISOString()
       };
       localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
+      localStorage.setItem("clientEmail", companyEmail);
 
       alert("Account created locally! Continue to project creation.");
       window.location.href = "create-project.html";
@@ -167,6 +208,34 @@
       console.error(err);
       resetLoading();
       messageEl.textContent = "Unexpected error. Please try again.";
+    }
+  }
+
+  // 🔹 Existing User flow
+  async function handleExistingAccount(e) {
+    e.preventDefault();
+    const email = document.getElementById("existingEmail").value.trim().toLowerCase();
+    const password = document.getElementById("existingPassword").value.trim();
+    const messageEl = document.getElementById("existingMessage");
+
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/client/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+
+      if (!res.ok) throw new Error("Invalid credentials");
+      const data = await res.json();
+
+      // ✅ Save client info + email locally for next page
+      localStorage.setItem("projectDetails", JSON.stringify({ client: data.client }));
+      localStorage.setItem("clientEmail", data.client.company_email);
+
+      // ✅ Redirect to verify-add-project.html
+      window.location.href = "verify-add-project.html";
+    } catch (err) {
+      messageEl.textContent = "Login failed. Please check your email and password.";
     }
   }
 
