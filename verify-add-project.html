@@ -132,54 +132,65 @@
   </div>
 
 <script>
-  const projectDetails = JSON.parse(localStorage.getItem("projectDetails")) || {};
-  const email = projectDetails.client ? projectDetails.client.company_email : null;
+  // Always pull stored email directly
+  const email = localStorage.getItem("clientEmail");
   const role = "Client";
-  let resendCount = 0;
-  let countdown;
-  let expiryTime;
 
-  document.addEventListener("DOMContentLoaded", () => {
-    if (projectDetails.client) {
-      document.getElementById("clientName").textContent = projectDetails.client.company_name || "";
-      document.getElementById("clientEmail").textContent = projectDetails.client.company_email || "";
-      if (projectDetails.client.profile_picture) {
-        document.getElementById("profileIcon").style.backgroundImage = `url("${projectDetails.client.profile_picture}")`;
-        document.getElementById("profileIcon").textContent = "";
-      } else {
-        const initial = (projectDetails.client.company_name || "?").charAt(0).toUpperCase();
-        document.getElementById("profileIcon").textContent = initial;
+  // Fetch profile picture immediately after redirect
+  document.addEventListener("DOMContentLoaded", async () => {
+    if (email) {
+      try {
+        const res = await fetch("https://oneprojectapp-backend.onrender.com/client/profile-picture", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email })
+        });
+        const data = await res.json();
+
+        if (data.success && data.profile_picture) {
+          document.getElementById("profileIcon").style.backgroundImage = `url("${data.profile_picture}")`;
+          document.getElementById("profileIcon").textContent = "";
+        } else {
+          document.getElementById("profileIcon").textContent = email.charAt(0).toUpperCase();
+        }
+
+        document.getElementById("clientEmail").textContent = email;
+      } catch (err) {
+        console.error("Profile picture fetch error:", err);
       }
     }
   });
 
   async function handleVerifyProject(e) {
     e.preventDefault();
+
     // Save project info locally
-    projectDetails.project = {
-      name: document.getElementById("projectName").value.trim(),
-      location: document.getElementById("projectLocation").value.trim(),
-      contract_reference: document.getElementById("contractReference").value.trim(),
-      created_at: new Date().toISOString(),
-      verified: false
-    };
-    projectDetails.contractor = {
-      company: document.getElementById("contractorCompany").value.trim(),
-      email: document.getElementById("contractorEmail").value.trim().toLowerCase(),
-      telephone: document.getElementById("contractorTel").value.trim(),
-      representative: document.getElementById("contractorRepName").value.trim(),
-      title: document.getElementById("contractorRepTitle").value.trim(),
-      verified: false,
-      created_at: new Date().toISOString()
-    };
-    projectDetails.consultant = {
-      company: document.getElementById("consultantCompany").value.trim(),
-      email: document.getElementById("consultantEmail").value.trim().toLowerCase(),
-      telephone: document.getElementById("consultantTel").value.trim(),
-      representative: document.getElementById("consultantRepName").value.trim(),
-      title: document.getElementById("consultantRepTitle").value.trim(),
-      verified: false,
-      created_at: new Date().toISOString()
+    const projectDetails = {
+      project: {
+        name: document.getElementById("projectName").value.trim(),
+        location: document.getElementById("projectLocation").value.trim(),
+        contract_reference: document.getElementById("contractReference").value.trim(),
+        created_at: new Date().toISOString(),
+        verified: false
+      },
+      contractor: {
+        company: document.getElementById("contractorCompany").value.trim(),
+        email: document.getElementById("contractorEmail").value.trim().toLowerCase(),
+        telephone: document.getElementById("contractorTel").value.trim(),
+        representative: document.getElementById("contractorRepName").value.trim(),
+        title: document.getElementById("contractorRepTitle").value.trim(),
+        verified: false,
+        created_at: new Date().toISOString()
+      },
+      consultant: {
+        company: document.getElementById("consultantCompany").value.trim(),
+        email: document.getElementById("consultantEmail").value.trim().toLowerCase(),
+        telephone: document.getElementById("consultantTel").value.trim(),
+        representative: document.getElementById("consultantRepName").value.trim(),
+        title: document.getElementById("consultantRepTitle").value.trim(),
+        verified: false,
+        created_at: new Date().toISOString()
+      }
     };
     localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
 
@@ -236,7 +247,7 @@
       const res = await fetch("https://oneprojectapp-backend.onrender.com/project-verify-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, token: code, project: projectDetails.project })
+        body: JSON.stringify({ email, token: code, project: JSON.parse(localStorage.getItem("projectDetails")).project })
       });
       const data = await res.json();
       hideLoading();
@@ -251,7 +262,6 @@
 
       // ✅ Clean up temporary localStorage
       localStorage.removeItem("projectDetails");
-      localStorage.removeItem("clientProject");
 
       // ✅ Save only what dashboard expects
       localStorage.setItem("clientEmail", email);
@@ -336,7 +346,7 @@
     return bar;
   }
 
-  function showLoading() {
+    function showLoading() {
     let overlay = document.getElementById("loadingOverlay");
     if (!overlay) {
       overlay = document.createElement("div");
@@ -358,7 +368,7 @@
       spinner.style.borderRadius = "50%";
       spinner.style.width = "50px";
       spinner.style.height = "50px";
-            spinner.style.animation = "spin 1s linear infinite";
+      spinner.style.animation = "spin 1s linear infinite";
 
       overlay.appendChild(spinner);
       document.body.appendChild(overlay);
