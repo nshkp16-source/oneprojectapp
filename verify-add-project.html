@@ -103,12 +103,43 @@
       </div>
       <p id="message"></p>
     </form>
+
+    <!-- Verification Box -->
+    <div id="verificationBox" style="display:none; text-align:center; margin-top:20px;">
+      <p style="color:#007BFF; font-size:14px; margin-bottom:10px;">
+        We’ve sent a 6-digit verification code to your email.<br>
+        Enter the code below. It will expire in 3 minutes.
+      </p>
+
+      <div style="display:flex; justify-content:center; gap:8px; margin-bottom:10px;">
+        <input id="digit1" maxlength="1" class="code">
+        <input id="digit2" maxlength="1" class="code">
+        <input id="digit3" maxlength="1" class="code">
+        <input id="digit4" maxlength="1" class="code">
+        <input id="digit5" maxlength="1" class="code">
+        <input id="digit6" maxlength="1" class="code">
+      </div>
+
+      <p id="message"></p>
+      <p id="timer" style="margin-top:8px; font-size:13px; color:#333;"></p>
+
+      <div class="button-row" style="margin-top:15px;">
+        <button type="button" onclick="goBack()">&#8592; Back</button>
+        <button type="button" onclick="verifyCode()">Verify Project</button>
+      </div>
+      <button id="resendBtn" style="display:none; margin-top:10px;" onclick="resendCode()">Resend Code</button>
+    </div>
   </div>
 
 <script>
-  // Show client info from login
+  const projectDetails = JSON.parse(localStorage.getItem("projectDetails")) || {};
+  const email = projectDetails.client ? projectDetails.client.company_email : null;
+  const role = "Client";
+  let resendCount = 0;
+  let countdown;
+  let expiryTime;
+
   document.addEventListener("DOMContentLoaded", () => {
-    const projectDetails = JSON.parse(localStorage.getItem("projectDetails")) || {};
     if (projectDetails.client) {
       document.getElementById("clientName").textContent = projectDetails.client.company_name || "";
       document.getElementById("clientEmail").textContent = projectDetails.client.company_email || "";
@@ -122,55 +153,265 @@
     }
   });
 
-  function handleVerifyProject(e) {
+  async function handleVerifyProject(e) {
     e.preventDefault();
-    const messageEl = document.getElementById("message");
-    try {
-      let projectDetails = JSON.parse(localStorage.getItem("projectDetails")) || {};
+    // Save project info locally
+    projectDetails.project = {
+      name: document.getElementById("projectName").value.trim(),
+      location: document.getElementById("projectLocation").value.trim(),
+      contract_reference: document.getElementById("contractReference").value.trim(),
+      created_at: new Date().toISOString(),
+      verified: false
+    };
+    projectDetails.contractor = {
+      company: document.getElementById("contractorCompany").value.trim(),
+      email: document.getElementById("contractorEmail").value.trim().toLowerCase(),
+      telephone: document.getElementById("contractorTel").value.trim(),
+      representative: document.getElementById("contractorRepName").value.trim(),
+      title: document.getElementById("contractorRepTitle").value.trim(),
+      verified: false,
+      created_at: new Date().toISOString()
+    };
+    projectDetails.consultant = {
+      company: document.getElementById("consultantCompany").value.trim(),
+      email: document.getElementById("consultantEmail").value.trim().toLowerCase(),
+      telephone: document.getElementById("consultantTel").value.trim(),
+      representative: document.getElementById("consultantRepName").value.trim(),
+      title: document.getElementById("consultantRepTitle").value.trim(),
+      verified: false,
+      created_at: new Date().toISOString()
+    };
+    localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
 
-      // Save project info
-      projectDetails.project = {
-        name: document.getElementById("projectName").value.trim(),
-        location: document.getElementById("projectLocation").value.trim(),
-        contract_reference: document.getElementById("contractReference").value.trim(),
-        created_at: new Date().toISOString(),
-        verified: false
-      };
-      projectDetails.contractor = {
-        company: document.getElementById("contractorCompany").value.trim(),
-        email: document.getElementById("contractorEmail").value.trim().toLowerCase(),
-        telephone: document.getElementById("contractorTel").value.trim(),
-        representative: document.getElementById("contractorRepName").value.trim(),
-        title: document.getElementById("contractorRepTitle").value.trim(),
-        verified: false,
-        created_at: new Date().toISOString()
-      };
-      projectDetails.consultant = {
-        company: document.getElementById("consultantCompany").value.trim(),
-        email: document.getElementById("consultantEmail").value.trim().toLowerCase(),
-        telephone: document.getElementById("consultantTel").value.trim(),
-        representative: document.getElementById("consultantRepName").value.trim(),
-        title: document.getElementById("consultantRepTitle").value.trim(),
-        verified: false,
-        created_at: new Date().toISOString()
-      };
+    // Hide form, show verification box
+    document.getElementById("verifyProjectForm").style.display = "none";
+    document.getElementById("verificationBox").style.display = "block";
 
-      localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
-
-      // Start verification process
-      localStorage.setItem("pendingEmail", projectDetails.client.company_email);
-      localStorage.setItem("pendingRole", "Client");
-
-      alert("Project saved! Starting verification...");
-      window.location.href = "verify-project-code.html";
-    } catch (err) {
-      console.error(err);
-      messageEl.textContent = "Unexpected error. Please try again.";
+    // Send verification code
+    showLoading();
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/project-send-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, project: projectDetails.project })
+    });
+    const data = await res.json();
+    hideLoading();
+    if (data.success) {
+      expiryTime = new Date(data.expiresAt);
+      startCountdown(expiryTime);
+      attachAutoVerify();
+    } else {
+      showAlert(data.error || "Verification failed.", "error");
     }
   }
 
+  function attachAutoVerify() {
+    const inputs = document.querySelectorAll(".code");
+    inputs.forEach((input, idx) => {
+      input.addEventListener("input", () => {
+        if (input.value.length === 1 && idx < 5) inputs[idx + 1].focus();
+        if (getCode().length === 6) verifyCode();
+      });
+    });
+  }
+
+  function getCode() {
+    let code = "";
+    for (let i = 1; i <= 6; i++) code += document.getElementById("digit" + i).value.trim();
+    return code;
+  }
+
+  async function verifyCode() {
+    const code = getCode();
+    if (code.length !== 6) return;
+
+    if (new Date() > expiryTime) {
+      showAlert("Verification link expired.", "error");
+      document.getElementById("resendBtn").style.display = "block";
+      return;
+    }
+
+    showLoading();
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/project-verify-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, token: code, project: projectDetails.project })
+      });
+      const data = await res.json();
+      hideLoading();
+
+      if (!data.success) {
+        showAlert(data.error || "Invalid code.", "error");
+        document.getElementById("resendBtn").style.display = "block";
+        return;
+      }
+
+      clearInterval(countdown);
+      localStorage.setItem("clientProject", JSON.stringify(projectDetails));
+      showAlert("Project verified successfully! Redirecting…", "success");
+      redirectToDashboard(role);
+
+    } catch (err) {
+      hideLoading();
+      showAlert("Server error. Please try again.", "error");
+    }
+  }
+
+  async function resendCode() {
+    if (resendCount >= 2) {
+      showAlert("Verification failed after multiple attempts. Please return to Home.", "error");
+      document.getElementById("resendBtn").style.display = "none";
+      const backLink = document.querySelector(".back-link");
+      if (backLink) backLink.style.color = "#cc0000";
+      return;
+    }
+
+    showLoading();
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/project-resend-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      hideLoading();
+
+      if (data.success) {
+        showAlert("New code sent! Check your email.", "success");
+        resendCount++;
+        for (let i = 1; i <= 6; i++) document.getElementById("digit" + i).value = "";
+        document.getElementById("message").textContent = "";
+        document.getElementById("timer").textContent = "";
+        document.getElementById("resendBtn").style.display = "none";
+        expiryTime = new Date(data.expiresAt);
+        startCountdown(expiryTime);
+      } else {
+        showAlert(data.error || "Resend failed.", "error");
+      }
+    } catch (err) {
+      hideLoading();
+      showAlert("Server error. Please try again.", "error");
+    }
+  }
+
+  function startCountdown(expiry) {
+    clearInterval(countdown);
+    const progressBar = createProgressBar();
+    countdown = setInterval(() => {
+      const diff = Math.floor((expiry - new Date()) / 1000);
+      if (diff <= 0) {
+        clearInterval(countdown);
+        document.getElementById("timer").textContent = "Code expired.";
+        progressBar.style.width = "0%";
+        document.getElementById("resendBtn").style.display = "block";
+      } else {
+        const minutes = Math.floor(diff / 60);
+        const seconds = diff % 60;
+        document.getElementById("timer").textContent =
+          `Code expires in ${minutes}:${seconds.toString().padStart(2,"0")}`;
+        progressBar.style.width = `${(diff / 180) * 100}%`; // 3 minutes = 180s
+      }
+    }, 1000);
+  }
+
+  function createProgressBar() {
+    let bar = document.getElementById("progressBar");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "progressBar";
+      bar.style.height = "6px";
+      bar.style.backgroundColor = "#007BFF";
+      bar.style.transition = "width 1s linear";
+      bar.style.width = "100%";
+      document.getElementById("verificationBox").insertBefore(bar, document.getElementById("timer"));
+    }
+    return bar;
+  }
+
+  function showLoading() {
+    let overlay = document.getElementById("loadingOverlay");
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.id = "loadingOverlay";
+      overlay.style.position = "fixed";
+      overlay.style.top = "0";
+      overlay.style.left = "0";
+      overlay.style.width = "100%";
+      overlay.style.height = "100%";
+      overlay.style.background = "rgba(255,255,255,0.7)";
+      overlay.style.display = "flex";
+      overlay.style.alignItems = "center";
+      overlay.style.justifyContent = "center";
+      overlay.style.zIndex = "9999";
+
+      const spinner = document.createElement("div");
+      spinner.style.border = "6px solid #f3f3f3";
+      spinner.style.borderTop = "6px solid #007BFF";
+      spinner.style.borderRadius = "50%";
+      spinner.style.width = "50px";
+      spinner.style.height = "50px";
+      spinner.style.animation = "spin 1s linear infinite";
+
+      overlay.appendChild(spinner);
+      document.body.appendChild(overlayHere’s the **full updated script** with all the features you asked for:  
+
+- Backend call to send verification code (user receives email).  
+- Countdown timer (2:59 → 0).  
+- Progress bar shrinking with time.  
+- Loading overlay spinner during backend calls.  
+- Success → immediately saves project and redirects to client dashboard.  
+- Resend limited to 2 attempts → after that, resend button disabled and only Back option remains.  
+      document.body.appendChild(overlay);
+
+      // Add CSS animation
+      const style = document.createElement("style");
+      style.innerHTML = `
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+    overlay.style.display = "flex";
+  }
+
+  function hideLoading() {
+    const overlay = document.getElementById("loadingOverlay");
+    if (overlay) overlay.style.display = "none";
+  }
+
+  function redirectToDashboard(role) {
+    if (role === "Client") window.location.href = "client-dashboard.html";
+    else window.location.href = "home.html";
+  }
+
   function goBack() {
-    window.location.href = "create-project-account.html";
+    window.location.href = "home.html";
+  }
+
+  function showAlert(message, type) {
+    const container = document.querySelector(".container");
+    let alertBox = document.querySelector(".alert-box");
+    if (!alertBox) {
+      alertBox = document.createElement("div");
+      alertBox.className = "alert-box";
+      alertBox.style.padding = "10px";
+      alertBox.style.marginTop = "10px";
+      alertBox.style.borderRadius = "5px";
+      container.insertBefore(alertBox, container.firstChild.nextSibling);
+    }
+    alertBox.textContent = message;
+    if (type === "success") {
+      alertBox.style.backgroundColor = "#d4edda";
+      alertBox.style.color = "#155724";
+      alertBox.style.border = "1px solid #c3e6cb";
+    } else {
+      alertBox.style.backgroundColor = "#f8d7da";
+      alertBox.style.color = "#721c24";
+      alertBox.style.border = "1px solid #f5c6cb";
+    }
   }
 </script>
 </body>
