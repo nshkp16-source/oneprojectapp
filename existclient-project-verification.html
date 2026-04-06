@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Project Verification</title>
+  <style>
+  body {
+    margin: 0;
+    padding: 40px;
+    font-family: Arial, sans-serif;
+    background: url('account-background.jpg') no-repeat center center fixed;
+    background-size: cover;
+    min-height: 100%;
+    position: relative;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(255,255,255,0.6);
+    z-index: 0;
+  }
+  #loadingBar {
+    position: fixed; top: 0; left: 0;
+    height: 4px; width: 0;
+    background-color: #007BFF;
+    transition: width 1.5s ease-in-out;
+    z-index: 2;
+  }
+  .container {
+    position: relative;
+    z-index: 1;
+    background: #fff;
+    padding: 0 40px 30px 40px;
+    border-radius: 12px;
+    max-width: 600px;
+    margin: auto;
+    box-shadow: 0 0 12px rgba(0,0,0,0.2);
+    text-align: center;
+    overflow: hidden;
+  }
+  #progressBar {
+    width: 100%; height: 6px; background-color: #eee;
+    border-radius: 12px 12px 0 0;
+    overflow: hidden; position: absolute; top: 0; left: 0;
+  }
+  #progressFill {
+    height: 100%; width: 100%; background-color: #cc0000;
+    transition: width 1s linear;
+  }
+  h2 { color: #007BFF; font-size: 24px; text-align: center; margin-top:30px; }
+  .code {
+    width: 40px; height: 40px;
+    text-align: center; font-size: 18px;
+    border: 1px solid #ccc; border-radius: 5px;
+  }
+  #verifyMessage {
+    margin-top: 10px; font-size: 14px; color: #cc0000; min-height: 18px;
+  }
+  #timer {
+    margin-top: 8px; font-size: 13px; color: #333;
+  }
+  #resendBtn {
+    background-color: #007BFF; color: #fff;
+    border: none; padding: 10px 16px;
+    border-radius: 5px; font-size: 14px;
+    cursor: pointer; margin-top: 10px;
+  }
+  #resendBtn:hover { background-color: #0056b3; }
+  .profile-icon {
+    width: 60px; height: 60px; border-radius: 50%;
+    background-size: cover; background-position: center;
+    font-size: 24px; display:flex; align-items:center; justify-content:center;
+    background-color:#007BFF; color:#fff;
+  }
+  .back-link {
+    display:block; margin-top:15px; color:#007BFF; text-decoration:none;
+  }
+</style>
+
+<body>
+  <!-- Loading bar for backend requests -->
+  <div id="loadingBar"></div>
+
+  <div class="container">
+    <!-- Shrinkage bar for countdown -->
+    <div id="progressBar"><div id="progressFill"></div></div>
+
+    <h2>Project Verification</h2>
+
+    <!-- Client Info -->
+    <div class="profile-block" style="display:flex;align-items:center;justify-content:center;margin-bottom:20px;">
+      <div id="profileIcon" class="profile-icon"></div>
+      <div class="profile-info" style="margin-left:15px;">
+        <p id="clientName"></p>
+        <p id="clientEmail"></p>
+      </div>
+    </div>
+
+    <p style="color:#007BFF; font-size:14px; margin-bottom:10px;">
+      We’ve sent a 6-digit verification code to your email.<br>
+      Enter the code below. It will expire in 3 minutes.
+    </p>
+
+    <!-- Code inputs -->
+    <div style="display:flex; justify-content:center; gap:8px; margin-bottom:10px;">
+      <input id="digit1" maxlength="1" class="code" type="text" inputmode="numeric">
+      <input id="digit2" maxlength="1" class="code" type="text" inputmode="numeric">
+      <input id="digit3" maxlength="1" class="code" type="text" inputmode="numeric">
+      <input id="digit4" maxlength="1" class="code" type="text" inputmode="numeric">
+      <input id="digit5" maxlength="1" class="code" type="text" inputmode="numeric">
+      <input id="digit6" maxlength="1" class="code" type="text" inputmode="numeric">
+    </div>
+
+    <p id="verifyMessage"></p>
+    <p id="timer"></p>
+
+    <button id="resendBtn" style="display:none;" onclick="resendCode()">Resend Code</button>
+    <a href="create-project-account.html" id="backLink" class="back-link" style="display:none;">&#8592; Back</a>
+  </div>
+</body>
+
+<script>
+  let countdown;
+  let timeLeft = 180; // 3 minutes
+  let resendAttempts = 0;
+
+  const progressFill = document.getElementById("progressFill");
+  const timerEl = document.getElementById("timer");
+  const verifyMessage = document.getElementById("verifyMessage");
+  const resendBtn = document.getElementById("resendBtn");
+  const backLink = document.getElementById("backLink");
+  const loadingBar = document.getElementById("loadingBar");
+
+  document.addEventListener("DOMContentLoaded", async () => {
+    const email = localStorage.getItem("clientEmail");
+    if (email) {
+      try {
+        const res = await fetch("/client/profile-picture", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email })
+        });
+        const data = await res.json();
+        if (data.success) {
+          if (data.profile_picture) {
+            document.getElementById("profileIcon").style.backgroundImage = `url("${data.profile_picture}")`;
+            document.getElementById("profileIcon").textContent = "";
+          } else {
+            document.getElementById("profileIcon").textContent = email.charAt(0).toUpperCase();
+          }
+          document.getElementById("clientName").textContent = data.company_name || "";
+          document.getElementById("clientEmail").textContent = email;
+        }
+      } catch {
+        document.getElementById("clientName").textContent = "Error loading profile";
+      }
+    }
+    sendCode();
+    attachAutoVerify();
+  });
+
+  function getCode() {
+    let code = "";
+    for (let i = 1; i <= 6; i++) {
+      code += document.getElementById("digit" + i).value.trim();
+    }
+    return code;
+  }
+
+  function attachAutoVerify() {
+    const inputs = document.querySelectorAll(".code");
+    inputs.forEach((input, idx) => {
+      input.addEventListener("input", () => {
+        if (input.value.length === 1 && idx < 5) inputs[idx + 1].focus();
+        if (getCode().length === 6) verifyCode();
+      });
+    });
+  }
+
+  function showLoading() { loadingBar.style.width = "100%"; }
+  function resetLoading() { loadingBar.style.width = "0"; }
+
+  async function sendCode() {
+    const email = localStorage.getItem("clientEmail");
+    const projectDetails = JSON.parse(localStorage.getItem("projectDetails"));
+    showLoading();
+    try {
+      const res = await fetch("/project-send-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, project: projectDetails.project })
+      });
+      const data = await res.json();
+      if (data.success) {
+        timeLeft = 180;
+        startCountdown();
+      } else {
+        verifyMessage.textContent = data.error || "Failed to send code.";
+      }
+    } catch {
+      verifyMessage.textContent = "Server error.";
+    } finally {
+      resetLoading();
+    }
+  }
+
+  async function verifyCode() {
+    const code = getCode();
+    if (code.length !== 6) return;
+    const email = localStorage.getItem("clientEmail");
+    const projectDetails = JSON.parse(localStorage.getItem("projectDetails"));
+    showLoading();
+    try {
+      const res = await fetch("/project-verify-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          token: code,
+          project: projectDetails.project,
+          contractor: projectDetails.contractor,
+          consultant: projectDetails.consultant
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        clearInterval(countdown);
+        localStorage.clear();
+        localStorage.setItem("clientEmail", email); // keep only client email
+        verifyMessage.textContent = "Project verified successfully! Redirecting…";
+        setTimeout(() => window.location.href = "client-dashboard.html", 1500);
+      } else {
+        verifyMessage.textContent = data.error || "Invalid code.";
+        if (resendAttempts < 2) {
+          resendBtn.style.display = "block";
+        } else {
+          resendBtn.style.display = "none";
+          backLink.style.display = "block";
+        }
+      }
+    } catch {
+      verifyMessage.textContent = "Server error.";
+    } finally {
+      resetLoading();
+    }
+  }
+
+  async function resendCode() {
+    if (resendAttempts >= 2) {
+      resendBtn.style.display = "none";
+      backLink.style.display = "block";
+      return;
+    }
+    resendAttempts++;
+    const email = localStorage.getItem("clientEmail");
+    showLoading();
+    try {
+      const res = await fetch("/project-resend-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      if (data.success) {
+        verifyMessage.textContent = "New code sent! Check your email.";
+        resendBtn.style.display = "none";
+        timeLeft = 180;
+        startCountdown();
+        for (let i = 1; i <= 6; i++) document.getElementById("digit" + i).value = "";
+      } else {
+        verifyMessage.textContent = data.error || "Resend failed.";
+      }
+    } catch {
+      verifyMessage.textContent = "Server error.";
+    } finally {
+      resetLoading();
+    }
+  }
+
+  function startCountdown() {
+    clearInterval(countdown);
+    countdown = setInterval(() => {
+      if (timeLeft <= 0) {
+        clearInterval(countdown);
+        timerEl.textContent = "Code expired.";
+        if (resendAttempts < 2) {
+          resendBtn.style.display = "block";
+        } else {
+          resendBtn.style.display = "none";
+          backLink.style.display = "block";
+        }
+      } else {
+        let minutes = Math.floor(timeLeft / 60);
+        let seconds = timeLeft % 60;
+        timerEl.textContent = `Expires in ${minutes}:${seconds.toString().padStart(2, "0")}`;
+        progressFill.style.width = `${(timeLeft / 180) * 100}%`;
+        timeLeft--;
+      }
+    }, 1000);
+  }
+</script>
+</body>
+</html>
