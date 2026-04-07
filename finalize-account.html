@@ -224,7 +224,7 @@
     makeEditable("clientRep", projectDetails, ["client","representative"]);
     makeEditable("clientTitle", projectDetails, ["client","title"]);
 
-    // Profile picture
+    // Profile picture (display only from localStorage)
     const picEl = document.getElementById("clientPicture");
     if (projectDetails.client?.profile_picture) {
       picEl.src = projectDetails.client.profile_picture;
@@ -233,29 +233,14 @@
       const input = document.createElement("input");
       input.type = "file";
       input.accept = "image/*";
-      input.onchange = async e => {
+      input.onchange = e => {
         const file = e.target.files[0];
         if (file && file.size <= 500*1024) {
-          const formData = new FormData();
-          formData.append("picture", file);
-          try {
-            const res = await fetch("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
-              method: "POST",
-              body: formData
-            });
-            const data = await res.json();
-            if (res.ok && data.url) {
-              projectDetails.client.profile_picture = data.url;
-              localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
-              picEl.src = data.url;
-              showSavedFeedback();
-            } else {
-              alert(data.error || "Upload failed.");
-            }
-          } catch (err) {
-            console.error(err);
-            alert("Unexpected error during upload.");
-          }
+          const tempUrl = URL.createObjectURL(file);
+          projectDetails.client.profile_picture = tempUrl;
+          localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
+          picEl.src = tempUrl;
+          showSavedFeedback();
         } else {
           alert("Profile picture must not exceed 500KB.");
         }
@@ -296,11 +281,11 @@
         return;
       }
 
-      // ✅ Send full projectDetails to backend
+      // ✅ Only send clientEmail to backend for verification
       const res = await fetch("https://oneprojectapp-backend.onrender.com/finalize-account", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(projectDetails)
+        body: JSON.stringify({ clientEmail })
       });
 
       const data = await res.json();
