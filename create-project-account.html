@@ -178,14 +178,34 @@
       return;
     }
 
-    // ✅ Enforce 500KB limit for profile picture (optional)
+    // ✅ Upload profile picture to backend immediately (only to get permanent URL)
     let profileUrl = null;
     if (profileFile) {
       if (profileFile.size > 500 * 1024) {
         messageEl.textContent = "Profile picture must not exceed 500KB.";
         return;
       }
-      profileUrl = URL.createObjectURL(profileFile); // temporary URL for local save
+      try {
+        const formData = new FormData();
+        formData.append("picture", profileFile);
+
+        const uploadRes = await fetch("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
+          method: "POST",
+          body: formData
+        });
+        const uploadData = await uploadRes.json();
+
+        if (uploadRes.ok && uploadData.url) {
+          profileUrl = uploadData.url; // permanent Render URL
+        } else {
+          messageEl.textContent = uploadData.error || "Upload failed.";
+          return;
+        }
+      } catch (err) {
+        console.error(err);
+        messageEl.textContent = "Unexpected error uploading profile picture.";
+        return;
+      }
     }
 
     showLoading();
@@ -204,20 +224,20 @@
         return;
       }
 
-      // ✅ Build projectDetails with full client info
+      // ✅ Build projectDetails with permanent profile URL
       const projectDetails = {
         client: {
           company_name: companyName,
           company_email: companyEmail,
           telephone: companyTel,
           representative: representativeName,
-          password_hash: password,   // raw password, backend will hash
+          password_hash: password,   // raw password, backend will hash later
           title: title || null,
-          profile_picture: profileUrl // backend expects URL, optional
+          profile_picture: profileUrl // permanent Render URL
         }
       };
 
-      // ✅ Save to localStorage
+      // ✅ Save to localStorage only (not DB yet)
       localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
       localStorage.setItem("clientEmail", companyEmail);
 
