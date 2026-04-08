@@ -113,41 +113,42 @@
   function showLoading() { loadingBar.style.width = "100%"; }
   function resetLoading() { loadingBar.style.width = "0"; }
 
-  // ✅ Corrected submitCode function
   async function submitCode(code) {
     const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
     const clientEmail = projectDetails.client?.company_email;
-    const sessionId = localStorage.getItem("sessionId");
 
     try {
+      // Step 1: Verify token only
       const res = await fetch("https://oneprojectapp-backend.onrender.com/verify-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: clientEmail,
-          sessionId,
-          code,
-          client: projectDetails.client,
-          project: projectDetails.project,
-          contractor: projectDetails.contractor,
-          consultant: projectDetails.consultant,
-          team_members: projectDetails.team_members || []
-        })
+        body: JSON.stringify({ email: clientEmail, code })
       });
 
       const data = await res.json();
       if (data.verified === true) {
-        // ✅ Clear staged data after success
-        localStorage.removeItem("projectDetails");
-        localStorage.removeItem("sessionId");
-        window.location.href = "verify-success.html";
-      } else {
-        if (timeLeft > 0) {
-          errorMsg.textContent = "Incorrect code. Please try again.";
-          resetInputs(); resetLoading();
+        // Step 2: Commit account data
+        const commitRes = await fetch("https://oneprojectapp-backend.onrender.com/commit-account", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(projectDetails)
+        });
+        const commitData = await commitRes.json();
+
+        if (commitRes.ok && commitData.success) {
+          // ✅ Keep client email but clear other staged details
+          const clientEmailOnly = { client: { company_email: clientEmail } };
+          localStorage.setItem("projectDetails", JSON.stringify(clientEmailOnly));
+          localStorage.removeItem("sessionId");
+
+          window.location.href = "verify-success.html";
         } else {
-          window.location.href = "verify-failed.html";
+          errorMsg.textContent = commitData.error || "Failed to save account data.";
+          resetLoading();
         }
+      } else {
+        errorMsg.textContent = "Incorrect or expired code.";
+        resetInputs(); resetLoading();
       }
     } catch (err) {
       console.error("Code verification error:", err);
