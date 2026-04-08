@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Email Verification Pending</title>
+  <title>Email Verification</title>
   <style>
     body {
       margin: 0; padding: 0;
@@ -43,7 +43,15 @@
       border: 1px solid #ccc; border-radius: 5px;
     }
     #errorMsg { margin-top: 15px; font-size: 14px; color: #cc0000; }
-    .back-link { display: block; margin-top: 15px; font-size: 14px; color: #007BFF; text-decoration: none; }
+    #resendBtn {
+      display: none; background-color: #007BFF; color: white;
+      border: none; padding: 12px; width: 100%;
+      cursor: pointer; border-radius: 5px;
+      font-size: 15px; margin-top: 15px;
+    }
+    #resendBtn:hover { background-color: #0056b3; }
+    #resendBtn:disabled { background-color: #999; cursor: not-allowed; }
+    .back-link { display: none; margin-top: 15px; font-size: 14px; color: #007BFF; text-decoration: none; }
     .back-link:hover { text-decoration: underline; }
   </style>
 </head>
@@ -64,7 +72,8 @@
       <input type="text" maxlength="1" id="code6">
     </div>
     <p id="errorMsg"></p>
-    <a href="finalize-account.html" class="back-link">← Back to Finalize</a>
+    <button id="resendBtn">Resend Verification Code</button>
+    <a id="backLink" href="create-project-account.html" class="back-link">← Back to Account Creation</a>
   </div>
 
 <script>
@@ -73,7 +82,12 @@
   const loadingBar = document.getElementById("loadingBar");
   const errorMsg = document.getElementById("errorMsg");
   const progressFill = document.getElementById("progressFill");
-  const resendBtn = document.getElementById("resendBtn"); // button already in HTML
+  const resendBtn = document.getElementById("resendBtn");
+  const backLink = document.getElementById("backLink");
+
+  let resendAttempts = parseInt(localStorage.getItem("resendAttempts") || "0");
+  const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
+  const clientEmail = projectDetails.client?.company_email;
 
   function startCountdown() {
     const countdown = setInterval(() => {
@@ -84,7 +98,8 @@
       timeLeft--;
       if (timeLeft < 0) {
         clearInterval(countdown);
-        window.location.href = "verify-failed.html";
+        errorMsg.textContent = "Code expired.";
+        resendBtn.style.display = "inline-block";
       }
     }, 1000);
   }
@@ -115,11 +130,7 @@
   function resetLoading() { loadingBar.style.width = "0"; }
 
   async function submitCode(code) {
-    const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
-    const clientEmail = projectDetails.client?.company_email;
-
     try {
-      // Step 1: Verify token only
       const res = await fetch("https://oneprojectapp-backend.onrender.com/verify-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -128,7 +139,6 @@
 
       const data = await res.json();
       if (data.verified === true) {
-        // Step 2: Commit account data
         const commitRes = await fetch("https://oneprojectapp-backend.onrender.com/commit-account", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -137,10 +147,8 @@
         const commitData = await commitRes.json();
 
         if (commitRes.ok && commitData.success) {
-          // ✅ Keep client email but clear other staged details
           const clientEmailOnly = { client: { company_email: clientEmail } };
           localStorage.setItem("projectDetails", JSON.stringify(clientEmailOnly));
-
           window.location.href = "verify-success.html";
         } else {
           errorMsg.textContent = commitData.error || "Failed to save account data.";
@@ -149,16 +157,12 @@
       } else {
         errorMsg.textContent = "Incorrect or expired code.";
         resetInputs(); resetLoading();
-
-        // 🔑 Show resend option after first invalid attempt
         resendBtn.style.display = "inline-block";
       }
     } catch (err) {
       console.error("Code verification error:", err);
       errorMsg.textContent = "Server error. Please try again.";
       resetInputs(); resetLoading();
-
-      // 🔑 Show resend option on server error too
       resendBtn.style.display = "inline-block";
     }
   }
@@ -169,25 +173,33 @@
     document.getElementById("code1").focus();
   }
 
-  // 🔑 Resend button handler
   resendBtn.addEventListener("click", async () => {
-    const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
-    const clientEmail = projectDetails.client?.company_email;
+    if (resendAttempts >= 2) {
+      resendBtn.disabled = true;
+      errorMsg.textContent = "Resend attempts expired. Please start fresh.";
+      backLink.style.display = "block";
+      return;
+    }
 
     try {
-      const res = await fetch("https://oneprojectapp-backend.onrender.com/finalize-account", {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientEmail })
+        body: JSON.stringify({ email: clientEmail })
       });
       const data = await res.json();
-      if (res.ok) {
-        alert("A new verification code has been sent.");
-        timeLeft = 179; // reset countdown
+
+      if (data.success) {
+        resendAttempts++;
+        localStorage.setItem("resendAttempts", resendAttempts.toString());
+        if (data.sessionId) localStorage.setItem("sessionId", data.sessionId);
+
+        alert("Verification code resent!");
+        timeLeft = 179;
         startCountdown();
-        resendBtn.style.display = "none"; // hide again until next invalid
+        resendBtn.style.display = "none";
       } else {
-        alert(data.error || "Resend failed.");
+        alert(data.error || "Failed to resend code.");
       }
     } catch (err) {
       console.error("Resend error:", err);
@@ -203,6 +215,12 @@
         autoTab(input, idx < inputs.length - 1 ? `code${idx+2}` : null);
       });
     });
+
+    if (resendAttempts >= 2) {
+      resendBtn.disabled = true;
+      errorMsg.textContent = "Resend attempts expired. Please start fresh.";
+      backLink.style.display = "block";
+    }
   };
 </script>
 </body>
