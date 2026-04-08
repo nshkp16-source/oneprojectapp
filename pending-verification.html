@@ -67,12 +67,13 @@
     <a href="finalize-account.html" class="back-link">← Back to Finalize</a>
   </div>
 
-  <script>
+<script>
   let timeLeft = 179; // 2:59 countdown
   const timerEl = document.getElementById("timer");
   const loadingBar = document.getElementById("loadingBar");
   const errorMsg = document.getElementById("errorMsg");
   const progressFill = document.getElementById("progressFill");
+  const resendBtn = document.getElementById("resendBtn"); // button already in HTML
 
   function startCountdown() {
     const countdown = setInterval(() => {
@@ -139,7 +140,6 @@
           // ✅ Keep client email but clear other staged details
           const clientEmailOnly = { client: { company_email: clientEmail } };
           localStorage.setItem("projectDetails", JSON.stringify(clientEmailOnly));
-          localStorage.removeItem("sessionId");
 
           window.location.href = "verify-success.html";
         } else {
@@ -149,11 +149,17 @@
       } else {
         errorMsg.textContent = "Incorrect or expired code.";
         resetInputs(); resetLoading();
+
+        // 🔑 Show resend option after first invalid attempt
+        resendBtn.style.display = "inline-block";
       }
     } catch (err) {
       console.error("Code verification error:", err);
       errorMsg.textContent = "Server error. Please try again.";
       resetInputs(); resetLoading();
+
+      // 🔑 Show resend option on server error too
+      resendBtn.style.display = "inline-block";
     }
   }
 
@@ -162,6 +168,32 @@
     inputs.forEach(input => input.value = "");
     document.getElementById("code1").focus();
   }
+
+  // 🔑 Resend button handler
+  resendBtn.addEventListener("click", async () => {
+    const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
+    const clientEmail = projectDetails.client?.company_email;
+
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/finalize-account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientEmail })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert("A new verification code has been sent.");
+        timeLeft = 179; // reset countdown
+        startCountdown();
+        resendBtn.style.display = "none"; // hide again until next invalid
+      } else {
+        alert(data.error || "Resend failed.");
+      }
+    } catch (err) {
+      console.error("Resend error:", err);
+      alert("Unexpected error during resend.");
+    }
+  });
 
   window.onload = () => {
     startCountdown();
