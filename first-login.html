@@ -150,7 +150,6 @@
   let resendCount = 0;
   let countdown;
 
-  // Send code immediately on page load
   window.onload = async () => {
     showLoading();
     await fetch("https://oneprojectapp-backend.onrender.com/firstlogin-send", {
@@ -219,6 +218,11 @@
       const data = await res.json();
       if (!data.success) {
         showAlert(data.error || "Incorrect code.", "error");
+
+        // 🔹 Show resend button immediately on invalid attempt
+        document.getElementById("resendBtn").style.display = "block";
+
+        // 🔹 Keep inputs active so user can retry until countdown ends
         return;
       }
       clearInterval(countdown);
@@ -246,6 +250,13 @@
       if (data.success) {
         showAlert("New code sent! Check your email.", "success");
         resendCount++;
+
+        // 🔹 Clear all input boxes for fresh start
+        for (let i = 1; i <= 6; i++) {
+          document.getElementById("digit" + i).value = "";
+        }
+
+        document.getElementById("resendBtn").style.display = "none";
         startCountdown();
       } else {
         showAlert(data.error || "Failed to resend code.", "error");
@@ -256,60 +267,42 @@
   }
 
   async function savePassword() {
-  const pass1 = document.getElementById("newPassword").value.trim();
-  const pass2 = document.getElementById("confirmPassword").value.trim();
-  if (!pass1 || !pass2) {
-    showAlert("Please fill in all fields.", "error");
-    return;
-  }
-  if (pass1 !== pass2) {
-    showAlert("Passwords do not match.", "error");
-    return;
-  }
-  showLoading();
-  try {
-    await fetch("https://oneprojectapp-backend.onrender.com/set-password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password: pass1 })
-    });
-    showAlert("Password set successfully!", "success");
+    const pass1 = document.getElementById("newPassword").value.trim();
+    const pass2 = document.getElementById("confirmPassword").value.trim();
+    if (!pass1 || !pass2) return showAlert("Please fill in all fields.", "error");
+    if (pass1 !== pass2) return showAlert("Passwords do not match.", "error");
 
-    // ✅ Save email + role for NON-CLIENT users only
-    switch (role) {
-      case "Consultant":
-        localStorage.setItem("consultantEmail", email);
-        break;
-      case "Consultant Project Manager":
-        localStorage.setItem("consultantPmEmail", email);
-        break;
-      case "Contractor":
-        localStorage.setItem("contractorEmail", email);
-        break;
-      case "Contractor Project Manager":
-        localStorage.setItem("contractorPmEmail", email);
-        break;
-      case "Team Member":
-        localStorage.setItem("teamMemberEmail", email);
-        break;
+    showLoading();
+    try {
+      await fetch("https://oneprojectapp-backend.onrender.com/set-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password: pass1, role }) // 🔹 role included
+      });
+      showAlert("Password set successfully!", "success");
+
+      // Save role-specific email keys
+      switch (role) {
+        case "Client": localStorage.setItem("clientEmail", email); break;
+        case "Consultant": localStorage.setItem("consultantEmail", email); break;
+        case "Consultant Project Manager": localStorage.setItem("consultantPmEmail", email); break;
+        case "Contractor": localStorage.setItem("contractorEmail", email); break;
+        case "Contractor Project Manager": localStorage.setItem("contractorPmEmail", email); break;
+        case "Team Member": localStorage.setItem("teamMemberEmail", email); break;
+      }
+
+      localStorage.setItem("userEmail", email);
+      localStorage.setItem("userRole", role);
+      localStorage.setItem("user", JSON.stringify({ email, role }));
+
+      localStorage.removeItem("pendingEmail");
+      localStorage.removeItem("pendingRole");
+
+      setTimeout(() => redirectToDashboard(role), 1500);
+    } catch (err) {
+      showAlert("Server error. Please try again.", "error");
     }
-
-    // ✅ Always save generic fallback
-    localStorage.setItem("userEmail", email);
-    localStorage.setItem("userRole", role);
-
-    // ✅ Optional: keep full user object
-    localStorage.setItem("user", JSON.stringify({ email, role }));
-
-    // Clean up pending values
-    localStorage.removeItem("pendingEmail");
-    localStorage.removeItem("pendingRole");
-
-    setTimeout(() => redirectToDashboard(role), 1500);
-  } catch (err) {
-    showAlert("Server error. Please try again.", "error");
   }
-}
 
   function redirectToDashboard(role) {
     switch (role) {
@@ -321,10 +314,6 @@
       case "Team Member": window.location.href = "team.html"; break;
       default: window.location.href = "home.html";
     }
-  }
-
-  function goBack() {
-    window.location.href = "home.html";
   }
 
   function showAlert(message, type) {
