@@ -46,8 +46,7 @@
         </form>
       </div>
       <div id="pmAssignedMessage" style="display:none;">
-        <p>A Project Manager is already assigned. To change, please 
-          <a href="dashboard.html">edit information</a> and remove the current PM first.</p>
+        <p>A Project Manager is already assigned. To change, please edit information in dashboard and remove the current PM first.</p>
       </div>
     </div>
 
@@ -81,6 +80,7 @@
   const activeProjectId = localStorage.getItem("activeProjectId");
 
   let projectDetails = { project: null, team_members: [] };
+  let profileRole = null; // confirmed role from backend
   const projectContextEl = document.getElementById("projectContext");
 
   async function loadProjectContext() {
@@ -96,15 +96,11 @@
       });
       const data = await res.json();
       projectDetails.project = data.project;
+      profileRole = data.client?.role || data.contractor?.role || data.consultant?.role;
       projectContextEl.textContent = `Project: ${data.project.name} — Location: ${data.project.location}`;
 
-      if (["Client","Contractor","Consultant"].includes(role)) {
+      if (["Client","Contractor","Consultant"].includes(profileRole)) {
         document.getElementById("pmSection").style.display = "block";
-        const existingPM = projectDetails.team_members.find(m => m.role === "Project Manager");
-        if (existingPM) {
-          document.getElementById("pmFormContainer").style.display = "none";
-          document.getElementById("pmAssignedMessage").style.display = "block";
-        }
       }
     } catch (err) {
       console.error("Project context error:", err);
@@ -188,7 +184,7 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         email: userEmail,
-        role: role,
+        role: profileRole,
         projectId: projectDetails.project?.id,
         assignments: projectDetails.team_members
       })
@@ -197,7 +193,7 @@
       if (res.ok) {
         alert("Assignments saved successfully.");
         localStorage.removeItem("projectDetails");
-        window.location.href = redirectDashboard();
+        window.location.href = redirectDashboard(profileRole);
       } else {
         alert("Failed to save assignments.");
       }
@@ -209,14 +205,16 @@
   });
 
   function goBack() {
-    localStorage.removeItem("projectDetails");
-    window.location.href = redirectDashboard();
+    window.history.back(); // behaves like undo
   }
 
-  function redirectDashboard() {
+  function redirectDashboard(role) {
     if (role === "Client") return "client-dashboard.html";
-    else if (role === "Contractor") return "contractor-dashboard.html";
-    else if (role === "Consultant") return "consultant-dashboard.html";
+    if (role === "Contractor") return "contractor-dashboard.html";
+    if (role === "Consultant") return "consultant-dashboard.html";
+    if (role === "Contractor Project Manager") return "contractor-project-manager.html";
+    if (role === "Consultant Project Manager") return "consultant-project-manager.html";
+    if (role === "Team Member") return "team.html";
   }
 
   renderMembers();
