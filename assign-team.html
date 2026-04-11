@@ -4,30 +4,13 @@
   <meta charset="UTF-8">
   <title>Assign Team</title>
   <style>
-    body {
-      margin: 0;
-      font-family: Arial, sans-serif;
-      background: url('account-background.jpg') no-repeat center center fixed;
-      background-size: cover;
-    }
-    .overlay { background: rgba(255,255,255,0.6); position: fixed; top:0; left:0; width:100%; height:100%; }
-    .container {
-      position: relative; z-index: 1;
-      background: #fff; padding: 30px 40px;
-      border-radius: 12px; max-width: 700px;
-      margin: 8vh auto; box-shadow: 0 0 12px rgba(0,0,0,0.2);
-    }
+    body { margin:0; font-family:Arial,sans-serif; background:url('account-background.jpg') no-repeat center center fixed; background-size:cover; }
+    .overlay { background:rgba(255,255,255,0.6); position:fixed; top:0; left:0; width:100%; height:100%; }
+    .container { position:relative; z-index:1; background:#fff; padding:30px 40px; border-radius:12px; max-width:700px; margin:8vh auto; box-shadow:0 0 12px rgba(0,0,0,0.2); }
     h2 { text-align:center; color:#007BFF; }
     h3 { margin-top:20px; color:#333; }
-    input {
-      display:block; width:100%; margin:10px 0; padding:12px;
-      border:1px solid #ccc; border-radius:5px;
-    }
-    button {
-      background:#007BFF; color:#fff; border:none;
-      padding:12px 18px; border-radius:5px; cursor:pointer;
-      font-size:15px;
-    }
+    input { display:block; width:100%; margin:10px 0; padding:12px; border:1px solid #ccc; border-radius:5px; }
+    button { background:#007BFF; color:#fff; border:none; padding:12px 18px; border-radius:5px; cursor:pointer; font-size:15px; }
     button:hover { background:#0056b3; }
     .actions { margin-top:20px; text-align:center; }
     .back-link { display:inline-block; margin-top:10px; color:#6c757d; cursor:pointer; }
@@ -35,11 +18,7 @@
     .message { color:#cc0000; font-size:14px; margin-top:6px; }
     ul { list-style:none; padding:0; }
     li { margin:8px 0; padding:8px; background:#f4f4f4; border-radius:5px; display:flex; justify-content:space-between; align-items:center; }
-    .remove-btn {
-      background:#cc0000; color:#fff; border:none;
-      padding:6px 12px; border-radius:5px; cursor:pointer;
-      font-size:14px;
-    }
+    .remove-btn { background:#cc0000; color:#fff; border:none; padding:6px 12px; border-radius:5px; cursor:pointer; font-size:14px; }
     .remove-btn:hover { background:#990000; }
   </style>
 </head>
@@ -47,7 +26,7 @@
   <div class="overlay"></div>
   <div class="container">
     <h2>Assign Team</h2>
-    <p id="projectContext"></p>
+    <p id="projectContext">Loading project...</p>
 
     <!-- Project Manager Section -->
     <div id="pmSection" style="display:none;">
@@ -97,24 +76,39 @@
   </div>
 
 <script>
-  let projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
+  const userEmail = localStorage.getItem("userEmail");
   const role = localStorage.getItem("activeRole");
+  const activeProjectId = localStorage.getItem("activeProjectId");
 
-  if (!Array.isArray(projectDetails.team_members)) projectDetails.team_members = [];
-
+  let projectDetails = { project: null, team_members: [] };
   const projectContextEl = document.getElementById("projectContext");
-  if (projectDetails.project) {
-    projectContextEl.textContent = `Project: ${projectDetails.project.name} — Location: ${projectDetails.project.location}`;
-  } else {
-    projectContextEl.textContent = "No project context found.";
-  }
 
-  if (["Client","Contractor","Consultant"].includes(role)) {
-    document.getElementById("pmSection").style.display = "block";
-    const existingPM = projectDetails.team_members.find(m => m.role === "Project Manager");
-    if (existingPM) {
-      document.getElementById("pmFormContainer").style.display = "none";
-      document.getElementById("pmAssignedMessage").style.display = "block";
+  async function loadProjectContext() {
+    let endpoint = role === "Client" ? "/client/project-details"
+                : role === "Contractor" ? "/contractor/project-details"
+                : "/consultant/project-details";
+
+    try {
+      const res = await fetch(`https://oneprojectapp-backend.onrender.com${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: userEmail, role: role, projectId: activeProjectId })
+      });
+      const data = await res.json();
+      projectDetails.project = data.project;
+      projectContextEl.textContent = `Project: ${data.project.name} — Location: ${data.project.location}`;
+
+      if (["Client","Contractor","Consultant"].includes(role)) {
+        document.getElementById("pmSection").style.display = "block";
+        const existingPM = projectDetails.team_members.find(m => m.role === "Project Manager");
+        if (existingPM) {
+          document.getElementById("pmFormContainer").style.display = "none";
+          document.getElementById("pmAssignedMessage").style.display = "block";
+        }
+      }
+    } catch (err) {
+      console.error("Project context error:", err);
+      projectContextEl.textContent = "Failed to load project context.";
     }
   }
 
@@ -138,7 +132,6 @@
       role: "Project Manager"
     };
     projectDetails.team_members.push(pm);
-    localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
     alert("Project Manager assigned.");
     document.getElementById("pmForm").reset();
     document.getElementById("pmFormContainer").style.display = "none";
@@ -164,7 +157,6 @@
       return;
     }
     projectDetails.team_members.push(member);
-    localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
     renderMembers();
     document.getElementById("teamForm").reset();
     memberMessage.textContent = "";
@@ -187,7 +179,6 @@
 
   function removeMember(index) {
     projectDetails.team_members.splice(index, 1);
-    localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
     renderMembers();
   }
 
@@ -196,15 +187,15 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        projectId: projectDetails.project?.id,
+        email: userEmail,
         role: role,
+        projectId: projectDetails.project?.id,
         assignments: projectDetails.team_members
       })
     })
     .then(res => {
       if (res.ok) {
         alert("Assignments saved successfully.");
-        // clear only this page's local storage data
         localStorage.removeItem("projectDetails");
         window.location.href = redirectDashboard();
       } else {
@@ -218,7 +209,6 @@
   });
 
   function goBack() {
-    // clear only this page's local storage data
     localStorage.removeItem("projectDetails");
     window.location.href = redirectDashboard();
   }
@@ -227,18 +217,11 @@
     if (role === "Client") return "client-dashboard.html";
     else if (role === "Contractor") return "contractor-dashboard.html";
     else if (role === "Consultant") return "consultant-dashboard.html";
-    else if (role === "Project Manager") {
-      if (projectDetails.project?.type === "Contractor") {
-        return "contractor-project-manager.html";
-      } else {
-        return "consultant-project-manager.html";
-      }
-    } else {
-      return "home.html";
-    }
+    else return "home.html";
   }
 
   renderMembers();
+  window.addEventListener("DOMContentLoaded", loadProjectContext);
 </script>
 </body>
 </html>
