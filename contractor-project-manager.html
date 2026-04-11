@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Contractor Project Manager</title>
+  <title>contractor dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root {
@@ -63,7 +63,7 @@
     /* Profile */
     .profile-block { position: relative; margin-bottom: 16px; flex-shrink: 0; }
     .profile-icon {
-      width: 44px; height: 44px; border-radius: 50%;
+      width: 65px; height: 65px; border-radius: 50%;
       background: #fff; color: var(--c-teal);
       display: flex; align-items: center; justify-content: center;
       font-weight: bold; font-size: 16px; cursor: pointer;
@@ -398,7 +398,7 @@
 
       <!-- Dashboard Block -->
       <div class="tm-dashboard-block">
-        <span class="tm-dashboard-label" data-translate="dashboard-label">contractor PM Dashboard</span>
+        <span class="tm-dashboard-label" data-translate="dashboard-label">contractor Dashboard</span>
       </div>
 
       <!-- Profile block -->
@@ -435,8 +435,9 @@
       <div class="nav-item" data-nav="reports">
         <span class="icon">📑</span><span class="label" data-translate="reports">Reports</span>
       </div>
-      <div class="nav-item" data-nav="assign-team-members" onclick="window.location.href='assign-team.html'">
-        <span class="icon">👥</span><span class="label" data-translate="assign-team-members">Assign Team Members</span>
+      <div class="nav-item" data-nav="assign-team-members" onclick="openAssignTeam()">
+        <span class="icon">👥</span>
+        <span class="label" data-translate="assign-team-members">Assign Team Members</span>
       </div>
       <div class="nav-item" data-nav="edit-information" onclick="window.location.href='edit-information.html'">
         <span class="icon">✏️</span><span class="label" data-translate="edit-information">Edit Information</span>
@@ -631,30 +632,6 @@
     </div>
   </div>
 
-  <!-- Add Document Dialog -->
-  <div class="modal-overlay" id="addDocumentDialog">
-    <div class="modal-content" style="max-width: 500px;">
-      <h3>Add New Document</h3>
-      <div class="form-group">
-        <label>Title:</label>
-        <input type="text" id="documentTitle" placeholder="Enter document title" required />
-      </div>
-      <div class="form-group">
-        <label>Description:</label>
-        <textarea id="documentDescription" placeholder="Enter document description..." rows="4" required></textarea>
-      </div>
-      <div class="form-group">
-        <label>Attach File:</label>
-        <input type="file" id="documentFile" accept=".doc,.docx,.pdf,.jpg,.jpeg,.png,.gif" />
-        <small style="color: #666; font-size: 11px;">Accepted formats: DOC, PDF, JPG, PNG, GIF</small>
-      </div>
-      <div class="modal-actions">
-        <button id="cancelAddDocument">Cancel</button>
-        <button class="primary" id="saveDocument">Save Document</button>
-      </div>
-    </div>
-  </div>
-
 <script>
   // Global state
   let expandedGrayPart = false;
@@ -718,74 +695,347 @@
     expandGrayPart(html);
   });
 
-  // ============= PROFILE LOGIC =============
-  const profileIcon = document.getElementById('profileIcon');
-  const profileDialog = document.getElementById('profileDialog');
-  const editProfileBtn = document.getElementById('editProfileBtn');
-  const editProfileOptions = document.getElementById('editProfileOptions');
-  const changePictureBtn = document.getElementById('changePictureBtn');
-  const deletePictureBtn = document.getElementById('deletePictureBtn');
-  const profileUpload = document.getElementById('profileUpload');
-  const profileIconLarge = document.getElementById('profileIconLarge');
-  const profileEmail = document.getElementById('profileEmail');
+// ============= CONTRACTOR PROFILE + PROJECT SELECTOR LOGIC =============
+// Global context object for contractor + project
+let currentContext = {
+  contractor: null,
+  project: null
+};
 
-  profileIcon.addEventListener('click', (e) => {
-    e.stopPropagation();
-    profileDialog.style.display = profileDialog.style.display === 'block' ? 'none' : 'block';
-  });
+// BACKEND (Neon users table via oneprojectapp-backend): Handle contractor profile info, picture upload/delete, and projects
 
-  editProfileBtn.addEventListener('click', () => {
-    editProfileOptions.style.display = editProfileOptions.style.display === 'block' ? 'none' : 'block';
-  });
+// Logged-in email: prefer contractorEmail, fallback to generic userEmail
+const loggedInEmail = localStorage.getItem("contractorEmail") || localStorage.getItem("userEmail");
 
-  changePictureBtn.addEventListener('click', () => { profileUpload.click(); });
-  profileUpload.addEventListener('change', (event) => {
-    const file = event.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        profileIcon.style.backgroundImage = `url(${e.target.result})`;
-        profileIcon.style.backgroundSize = 'cover';
-        profileIcon.textContent = '';
-        profileIconLarge.style.backgroundImage = `url(${e.target.result})`;
-        profileIconLarge.style.backgroundSize = 'cover';
-        profileIconLarge.textContent = '';
-      };
-      reader.readAsDataURL(file);
-    }
-  });
-  deletePictureBtn.addEventListener('click', () => {
-    const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
-    profileIcon.style.backgroundImage = '';
-    profileIcon.style.backgroundColor = '#fff';
-    profileIcon.style.color = '#007B8A';
-    profileIcon.textContent = emailChar;
-    profileIconLarge.style.backgroundImage = '';
-    profileIconLarge.style.backgroundColor = '#007B8A';
-    profileIconLarge.style.color = '#fff';
-    profileIconLarge.textContent = emailChar;
-  });
+// DOM elements (declare once at the top)
+const profileIcon = document.getElementById('profileIcon');
+const profileDialog = document.getElementById('profileDialog');
+const editProfileBtn = document.getElementById('editProfileBtn');
+const editProfileOptions = document.getElementById('editProfileOptions');
+const changePictureBtn = document.getElementById('changePictureBtn');
+const deletePictureBtn = document.getElementById('deletePictureBtn');
+const profileUpload = document.getElementById('profileUpload');
+const profileIconLarge = document.getElementById('profileIconLarge');
+const profileEmail = document.getElementById('profileEmail');
+const profileRole = document.getElementById('profileRole');
 
-  // ============= PROJECT SELECTOR =============
-  const projectSelector = document.getElementById('projectSelector');
-  const projectDialog = document.getElementById('projectDialog');
-  const activeProject = document.getElementById('activeProject');
+const projectSelector = document.getElementById("projectSelector");
+const projectDialog = document.getElementById("projectDialog");
+const activeProject = document.getElementById("activeProject");
 
-  projectSelector.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const rect = projectSelector.getBoundingClientRect();
-    projectDialog.style.display = 'block';
-    projectDialog.style.top = rect.bottom + 'px';
-    projectDialog.style.left = rect.left + 'px';
-  });
-
-  projectDialog.querySelectorAll('.project-item').forEach(item => {
-    item.addEventListener('click', () => {
-      const projectName = item.getAttribute('data-project');
-      activeProject.textContent = projectName;
-      projectDialog.style.display = 'none';
+// ============= MAIN LOAD LOGIC =============
+document.addEventListener("DOMContentLoaded", async () => {
+  try {
+    // Fetch contractor profile + projects from backend
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: loggedInEmail })
     });
+
+    if (!res.ok) throw new Error("Failed to fetch contractor profile");
+    const contractor = await res.json();
+
+    // Update email + role
+    profileEmail.textContent = contractor.email;
+    profileRole.textContent = `Role: ${contractor.role}`;
+
+    // Update profile picture or fallback initials
+    if (contractor.profile_picture && contractor.profile_picture.trim() !== "") {
+      profileIcon.style.backgroundImage = `url("${contractor.profile_picture}")`;
+      profileIcon.style.backgroundSize = "cover";
+      profileIcon.style.backgroundPosition = "center";
+      profileIcon.textContent = "";
+
+      profileIconLarge.style.backgroundImage = `url("${contractor.profile_picture}")`;
+      profileIconLarge.style.backgroundSize = "cover";
+      profileIconLarge.style.backgroundPosition = "center";
+      profileIconLarge.textContent = "";
+    } else {
+      const emailChar = (contractor.email || "?").charAt(0).toUpperCase();
+      profileIcon.style.backgroundImage = "";
+      profileIcon.textContent = emailChar;
+      profileIconLarge.style.backgroundImage = "";
+      profileIconLarge.textContent = emailChar;
+    }
+
+    // Profile picture preview (passport-style)
+    profileIconLarge.addEventListener("click", () => {
+      const pictureUrl = profileIconLarge.style.backgroundImage
+        .replace(/^url\(["']?/, "")
+        .replace(/["']?\)$/, "");
+
+      if (!pictureUrl) return;
+
+      let preview = document.getElementById("passportPreview");
+      if (!preview) {
+        preview = document.createElement("div");
+        preview.id = "passportPreview";
+        preview.style.width = "120px";
+        preview.style.height = "160px";
+        preview.style.margin = "10px auto";
+        preview.style.border = "1px solid #ccc";
+        preview.style.borderRadius = "4px";
+        preview.style.backgroundImage = `url("${pictureUrl}")`;
+        preview.style.backgroundSize = "contain";
+        preview.style.backgroundRepeat = "no-repeat";
+        preview.style.backgroundPosition = "center";
+        preview.style.position = "relative";
+
+        const closeIcon = document.createElement("span");
+        closeIcon.textContent = "✖";
+        closeIcon.style.position = "absolute";
+        closeIcon.style.top = "2px";
+        closeIcon.style.right = "6px";
+        closeIcon.style.cursor = "pointer";
+        closeIcon.style.color = "#333";
+        closeIcon.style.fontWeight = "bold";
+
+        closeIcon.addEventListener("click", () => {
+          preview.remove();
+        });
+
+        preview.appendChild(closeIcon);
+        profileDialog.appendChild(preview);
+      }
+    });
+
+    // Populate project selector dynamically
+    projectDialog.innerHTML = ""; // clear old items
+
+    if (!contractor.projects || contractor.projects.length === 0) {
+      activeProject.textContent = "No projects assigned";
+      return;
+    }
+
+    contractor.projects.forEach(project => {
+      const item = document.createElement("div");
+      item.className = "project-item";
+      item.setAttribute("data-project-id", project.id);
+      item.setAttribute("data-project", project.name);
+      item.textContent = `${project.name} (${project.location})`;
+      projectDialog.appendChild(item);
+
+      item.addEventListener("click", () => {
+        activeProject.textContent = project.name;
+        projectDialog.style.display = "none";
+
+        localStorage.setItem("activeProjectId", project.id);
+        localStorage.setItem("activeProjectName", project.name);
+
+        // ✅ Refresh details directly instead of reload
+        fetchProjectDetails(project.id);
+      });
+    });
+
+    // Auto-select if only one project
+    if (contractor.projects.length === 1) {
+      const project = contractor.projects[0];
+      activeProject.textContent = project.name;
+      localStorage.setItem("activeProjectId", project.id);
+      localStorage.setItem("activeProjectName", project.name);
+    }
+
+    // On page load, check if activeProjectId exists in localStorage
+    const storedProjectId = localStorage.getItem("activeProjectId");
+    const storedProjectName = localStorage.getItem("activeProjectName");
+
+    if (storedProjectId && storedProjectName) {
+      activeProject.textContent = storedProjectName;
+      fetchProjectDetails(storedProjectId); // load contractor + project details
+    } else if (contractor.defaultProject) {
+      activeProject.textContent = contractor.defaultProject.name;
+      localStorage.setItem("activeProjectId", contractor.defaultProject.id);
+      localStorage.setItem("activeProjectName", contractor.defaultProject.name);
+      fetchProjectDetails(contractor.defaultProject.id); // load default project
+    } else {
+      activeProject.textContent = "No projects assigned";
+    }
+  } catch (err) {
+    console.error("Contractor profile fetch error:", err);
+  }
+});
+
+// ============= HELPER FUNCTION =============
+async function fetchProjectDetails(projectId) {
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/project-details", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: loggedInEmail, projectId })
+    });
+
+    if (!res.ok) throw new Error("Failed to fetch project details");
+    const data = await res.json();
+
+    // Save into global context
+    currentContext.contractor = data.contractor;
+    currentContext.project = data.project;
+    console.log("Contractor context updated:", currentContext);
+
+    // Update UI as before
+    profileEmail.textContent = data.contractor.email;
+    profileRole.textContent = `Role: ${data.contractor.role}`;
+    activeProject.textContent = data.project.name;
+
+    const projectDetailsContainer = document.getElementById("projectDetailsContainer");
+    if (projectDetailsContainer) {
+      projectDetailsContainer.innerHTML = `
+        <p><strong>Project Name:</strong> ${data.project.name}</p>
+        <p><strong>Location:</strong> ${data.project.location}</p>
+        <p><strong>Contract Ref:</strong> ${data.project.contract_reference}</p>
+        <p><strong>Created At:</strong> ${new Date(data.project.created_at).toLocaleDateString()}</p>
+      `;
+    }
+  } catch (err) {
+    console.error("Contractor project details fetch error:", err);
+  }
+}
+
+// ============= PROJECT SELECTOR TOGGLE =============
+projectSelector.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const rect = projectSelector.getBoundingClientRect();
+  projectDialog.style.display = "block";
+  projectDialog.style.top = rect.bottom + "px";
+  projectDialog.style.left = rect.left + "px";
+});
+
+// ============= PROFILE LOGIC =============
+profileIcon.addEventListener('click', (e) => {
+  e.stopPropagation();
+  profileDialog.style.display = profileDialog.style.display === 'block' ? 'none' : 'block';
+});
+
+editProfileBtn.addEventListener('click', () => {
+  editProfileOptions.style.display = editProfileOptions.style.display === 'block' ? 'none' : 'block';
+});
+
+// Upload picture with backend
+changePictureBtn.addEventListener('click', () => { profileUpload.click(); });
+profileUpload.addEventListener('change', async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  if (!file.type.startsWith("image/")) {
+    alert("Only image files are allowed.");
+    return;
+  }
+  if (file.size > 512 * 1024) {
+    alert("Profile picture must not exceed 512KB.");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("profile_picture", file);
+  formData.append("email", loggedInEmail);
+
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/upload-picture", {
+      method: "POST",
+      body: formData
+    });
+    if (res.ok) {
+      const data = await res.json();
+      profileIcon.style.backgroundImage = `url("${data.url}")`;
+      profileIcon.style.backgroundSize = "cover";
+      profileIcon.textContent = "";
+      profileIconLarge.style.backgroundImage = `url("${data.url}")`;
+      profileIconLarge.style.backgroundSize = "cover";
+      profileIconLarge.textContent = "";
+    } else {
+      alert("Failed to upload profile picture.");
+    }
+  } catch (err) {
+    console.error("Upload error:", err);
+    alert("Error uploading profile picture.");
+  }
+});
+
+// Delete picture with backend
+deletePictureBtn.addEventListener('click', async () => {
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/delete-picture", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: loggedInEmail })
+    });
+    if (res.ok) {
+      const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
+      profileIcon.style.backgroundImage = "";
+      profileIcon.textContent = emailChar;
+      profileIconLarge.style.backgroundImage = "";
+      profileIconLarge.textContent = emailChar;
+    } else {
+      alert("Failed to delete profile picture.");
+    }
+  } catch (err) {
+    console.error("Delete error:", err);
+    alert("Error deleting profile picture.");
+  }
+});
+
+// Profile picture preview (passport-style)
+profileIconLarge.addEventListener("click", () => {
+  const pictureUrl = profileIconLarge.style.backgroundImage
+    .replace(/^url\(["']?/, "")
+    .replace(/["']?\)$/, "");
+
+  if (!pictureUrl) return;
+
+  let preview = document.getElementById("passportPreview");
+  if (!preview) {
+    preview = document.createElement("div");
+    preview.id = "passportPreview";
+    preview.style.width = "120px";
+    preview.style.height = "160px";
+    preview.style.margin = "10px auto";
+    preview.style.border = "1px solid #ccc";
+    preview.style.borderRadius = "4px";
+    preview.style.backgroundImage = `url("${pictureUrl}")`;
+    preview.style.backgroundSize = "contain";
+    preview.style.backgroundRepeat = "no-repeat";
+    preview.style.backgroundPosition = "center";
+    preview.style.position = "relative";
+
+    // Close icon (✖)
+    const closeIcon = document.createElement("span");
+    closeIcon.textContent = "✖";
+    closeIcon.style.position = "absolute";
+    closeIcon.style.top = "2px";
+    closeIcon.style.right = "6px";
+    closeIcon.style.cursor = "pointer";
+    closeIcon.style.color = "#333";
+    closeIcon.style.fontWeight = "bold";
+
+    closeIcon.addEventListener("click", () => {
+      preview.remove();
+    });
+
+    preview.appendChild(closeIcon);
+    profileDialog.appendChild(preview);
+  }
+});
+
+function openAssignTeam() {
+  const userEmail = localStorage.getItem("userEmail");
+  const activeProjectId = localStorage.getItem("activeProjectId");
+
+  fetch("https://oneprojectapp-backend.onrender.com/contractor/project-details", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: userEmail, role: "Contractor Project Manager", projectId: activeProjectId })
+  })
+  .then(res => res.json())
+  .then(data => {
+    localStorage.setItem("projectDetails", JSON.stringify(data));
+    window.location.href = "assign-team.html";
+  })
+  .catch(err => {
+    console.error("Error fetching contractor PM project details:", err);
+    alert("Could not load project details.");
   });
+}
 
   // ============= SETTINGS DIALOG =============
   const settingsToggle = document.getElementById('settingsToggle');
@@ -1040,58 +1290,6 @@
     window.location.href = 'home.html'; 
   });
 
-  // ============= ADD DOCUMENT FUNCTIONALITY =============
-  const cancelAddDocument = document.getElementById('cancelAddDocument');
-  const saveDocument = document.getElementById('saveDocument');
-  const documentTitle = document.getElementById('documentTitle');
-  const documentDescription = document.getElementById('documentDescription');
-  const documentFile = document.getElementById('documentFile');
-
-  cancelAddDocument.addEventListener('click', () => {
-    document.getElementById('addDocumentDialog').classList.remove('active');
-    // Clear form
-    documentTitle.value = '';
-    documentDescription.value = '';
-    documentFile.value = '';
-  });
-
-  saveDocument.addEventListener('click', () => {
-    const title = documentTitle.value.trim();
-    const description = documentDescription.value.trim();
-    const file = documentFile.files[0];
-
-    if (!title || !description) {
-      alert('Please fill in all required fields (Title and Description).');
-      return;
-    }
-
-    // Create new document object
-    const today = new Date();
-    const dateStr = today.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
-    const newDoc = {
-      title: title,
-      number: 'DOC-' + String(sampleDocs.length + 1).padStart(3, '0'),
-      date: dateStr,
-      uploader: 'Current User',
-      description: description,
-      file: file ? file.name : null
-    };
-
-    // Add to sample data
-    sampleDocs.push(newDoc);
-
-    // Close dialog and clear form
-    document.getElementById('addDocumentDialog').classList.remove('active');
-    documentTitle.value = '';
-    documentDescription.value = '';
-    documentFile.value = '';
-
-    // Refresh the overview tab to show the new document
-    setTabContent('overview');
-
-    alert('Document added successfully!');
-  });
-
   // ============= SIDEBAR NAV =============
   const sidebarItems = document.querySelectorAll('.nav-item[data-nav]');
   sidebarItems.forEach(item => {
@@ -1182,10 +1380,7 @@
   function setTabContent(key) {
     switch (key) {
       case 'overview':
-        let overviewHtml = '<h3>Project Overview</h3>';
-        overviewHtml += '<div style="position:relative; display:flex; flex-direction:column; height:100%;">';
-        overviewHtml += '<div style="flex:1; overflow-y:auto; padding-bottom:56px;">';
-        overviewHtml += '<ul class="doc-list">';
+        let overviewHtml = '<h3>Project Overview</h3><ul class="doc-list">';
         sampleDocs.forEach((doc, idx) => {
           overviewHtml += `
             <li class="doc-item">
@@ -1198,16 +1393,7 @@
           `;
         });
         overviewHtml += '</ul>';
-        overviewHtml += '</div>';
-        overviewHtml += '<div style="position:absolute; bottom:8px; left:8px; right:8px; display:flex; justify-content:flex-end;">';
-        overviewHtml += '<button class="btn primary" id="addDocumentBtn" style="width:auto; min-width:90px; padding:4px 8px; font-size:12px;">➕ Add</button>';
-        overviewHtml += '</div>';
-        overviewHtml += '</div>'; 
         bottomContent.innerHTML = overviewHtml;
-        // Add event listener for add document button
-        document.getElementById('addDocumentBtn').addEventListener('click', () => {
-          document.getElementById('addDocumentDialog').classList.add('active');
-        });
         break;
 
       case 'daily':

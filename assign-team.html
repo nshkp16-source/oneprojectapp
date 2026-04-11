@@ -75,43 +75,25 @@
   </div>
 
 <script>
-  const userEmail = localStorage.getItem("userEmail");
   const role = localStorage.getItem("activeRole");
-  const activeProjectId = localStorage.getItem("activeProjectId");
-
-  let projectDetails = { project: null, team_members: [] };
-  let profileRole = null; // confirmed role from backend
+  const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
   const projectContextEl = document.getElementById("projectContext");
+  let teamMembers = projectDetails.team_members || [];
 
-  async function loadProjectContext() {
-    let endpoint = role === "Client" ? "/client/project-details"
-                : role === "Contractor" ? "/contractor/project-details"
-                : "/consultant/project-details";
-
-    try {
-      const res = await fetch(`https://oneprojectapp-backend.onrender.com${endpoint}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: userEmail, role: role, projectId: activeProjectId })
-      });
-      const data = await res.json();
-      projectDetails.project = data.project;
-      profileRole = data.client?.role || data.contractor?.role || data.consultant?.role;
-      projectContextEl.textContent = `Project: ${data.project.name} — Location: ${data.project.location}`;
-
-      if (["Client","Contractor","Consultant"].includes(profileRole)) {
-        document.getElementById("pmSection").style.display = "block";
-      }
-    } catch (err) {
-      console.error("Project context error:", err);
-      projectContextEl.textContent = "Failed to load project context.";
+  // Show project info from staged data
+  if (projectDetails.project) {
+    projectContextEl.textContent = `Project: ${projectDetails.project.name} — Location: ${projectDetails.project.location}`;
+    if (["Client","Client Project Manager","Contractor","Contractor Project Manager","Consultant","Consultant Project Manager"].includes(role)) {
+      document.getElementById("pmSection").style.display = "block";
     }
+  } else {
+    projectContextEl.textContent = "No project details found.";
   }
 
   function addPM(e) {
     e.preventDefault();
     const pmMessage = document.getElementById("pmMessage");
-    const existingPM = projectDetails.team_members.find(m => m.role === "Project Manager");
+    const existingPM = teamMembers.find(m => m.role === "Project Manager");
     if (existingPM) {
       pmMessage.textContent = "A Project Manager is already assigned.";
       return;
@@ -127,7 +109,7 @@
       representative: document.getElementById("pmRepresentative").value.trim(),
       role: "Project Manager"
     };
-    projectDetails.team_members.push(pm);
+    teamMembers.push(pm);
     alert("Project Manager assigned.");
     document.getElementById("pmForm").reset();
     document.getElementById("pmFormContainer").style.display = "none";
@@ -152,7 +134,7 @@
       memberMessage.textContent = "Please fill all required fields.";
       return;
     }
-    projectDetails.team_members.push(member);
+    teamMembers.push(member);
     renderMembers();
     document.getElementById("teamForm").reset();
     memberMessage.textContent = "";
@@ -161,7 +143,7 @@
   function renderMembers() {
     const list = document.getElementById("memberList");
     list.innerHTML = "";
-    projectDetails.team_members.filter(m => m.role !== "Project Manager").forEach((m, index) => {
+    teamMembers.filter(m => m.role !== "Project Manager").forEach((m, index) => {
       const li = document.createElement("li");
       li.textContent = `${m.name} - ${m.position} (${m.task})`;
       const removeBtn = document.createElement("button");
@@ -174,7 +156,7 @@
   }
 
   function removeMember(index) {
-    projectDetails.team_members.splice(index, 1);
+    teamMembers.splice(index, 1);
     renderMembers();
   }
 
@@ -183,17 +165,17 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        email: userEmail,
-        role: profileRole,
+        email: localStorage.getItem("userEmail"),
+        role: role,
         projectId: projectDetails.project?.id,
-        assignments: projectDetails.team_members
+        assignments: teamMembers
       })
     })
     .then(res => {
       if (res.ok) {
         alert("Assignments saved successfully.");
-        localStorage.removeItem("projectDetails");
-        window.location.href = redirectDashboard(profileRole);
+        localStorage.removeItem("projectDetails"); // clear only this page’s data
+        window.location.href = redirectDashboard(role);
       } else {
         alert("Failed to save assignments.");
       }
@@ -205,20 +187,21 @@
   });
 
   function goBack() {
-    window.history.back(); // behaves like undo
+    localStorage.removeItem("projectDetails"); // clear only this page’s data
+    window.history.back();
   }
 
   function redirectDashboard(role) {
     if (role === "Client") return "client-dashboard.html";
+    if (role === "Client Project Manager") return "client-project-manager.html";
     if (role === "Contractor") return "contractor-dashboard.html";
-    if (role === "Consultant") return "consultant-dashboard.html";
     if (role === "Contractor Project Manager") return "contractor-project-manager.html";
+    if (role === "Consultant") return "consultant-dashboard.html";
     if (role === "Consultant Project Manager") return "consultant-project-manager.html";
     if (role === "Team Member") return "team.html";
   }
 
   renderMembers();
-  window.addEventListener("DOMContentLoaded", loadProjectContext);
 </script>
 </body>
 </html>
