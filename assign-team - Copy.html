@@ -12,7 +12,6 @@
     input { display:block; width:100%; margin:10px 0; padding:12px; border:1px solid #ccc; border-radius:5px; }
     button { background:#007BFF; color:#fff; border:none; padding:12px 18px; border-radius:5px; cursor:pointer; font-size:15px; }
     button:hover { background:#0056b3; }
-    button:disabled { background:#aaa; cursor:not-allowed; }
     .actions { margin-top:20px; text-align:center; }
     .back-link { display:inline-block; margin-top:10px; color:#6c757d; cursor:pointer; }
     .back-link:hover { color:#333; }
@@ -29,12 +28,6 @@
     <h2>Assign Team</h2>
     <p id="projectContext">Loading project...</p>
 
-    <!-- Choice Section -->
-    <div id="choiceSection" style="text-align:center; margin-top:20px;">
-      <button onclick="showForm('pm')">Assign Project Manager</button>
-      <button onclick="showForm('team')">Assign Team Members</button>
-    </div>
-
     <!-- Project Manager Section -->
     <div id="pmSection" style="display:none;">
       <h3>Project Manager</h3>
@@ -48,17 +41,17 @@
           <input type="text" id="pmTelephone" placeholder="Telephone" />
           <input type="text" id="pmTask" placeholder="Task" required />
           <input type="text" id="pmRepresentative" placeholder="Representative" />
-          <button type="submit" id="assignPmBtn">Assign Project Manager</button>
+          <button type="submit">Assign Project Manager</button>
           <p id="pmMessage" class="message"></p>
         </form>
       </div>
       <div id="pmAssignedMessage" style="display:none;">
-        <p>A Project Manager is already assigned. To change, please use Edit Information.</p>
+        <p>A Project Manager is already assigned. To change, please edit information in dashboard and remove the current PM first.</p>
       </div>
     </div>
 
     <!-- Team Members Section -->
-    <div id="teamSection" style="display:none;">
+    <div id="teamSection">
       <h3>Team Members</h3>
       <form id="teamForm" onsubmit="addMember(event)">
         <input type="text" id="memberName" placeholder="Name" required />
@@ -84,48 +77,27 @@
 <script>
   const role = localStorage.getItem("activeRole");
   const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
-  const userEmail = localStorage.getItem("userEmail");
-  const userId = localStorage.getItem("userId");
-  const projectId = projectDetails.project?.id;
+  const projectContextEl = document.getElementById("projectContext");
+  let teamMembers = projectDetails.team_members || [];
 
-  let assignments = projectDetails.team_members || [];
-
-  // Show choice buttons first
-  function showChoice() {
-    document.getElementById("choiceSection").style.display = "block";
-    document.getElementById("pmSection").style.display = "none";
-    document.getElementById("teamSection").style.display = "none";
-  }
-
-  function showForm(type) {
-    document.getElementById("choiceSection").style.display = "none";
-    if (type === "pm") {
+  // Show project info from staged data
+  if (projectDetails.project) {
+    projectContextEl.textContent = `Project: ${projectDetails.project.name} — Location: ${projectDetails.project.location}`;
+    if (["Client","Client Project Manager","Contractor","Contractor Project Manager","Consultant","Consultant Project Manager"].includes(role)) {
       document.getElementById("pmSection").style.display = "block";
-      checkPMAssigned();
-    } else {
-      document.getElementById("teamSection").style.display = "block";
     }
-  }
-
-  // Check if PM already assigned
-  function checkPMAssigned() {
-    const existingPM = assignments.find(m => m.role === "Project Manager");
-    if (existingPM) {
-      document.getElementById("assignPmBtn").disabled = true;
-      document.getElementById("pmMessage").textContent = "A Project Manager is already assigned.";
-      const editLink = document.createElement("a");
-      editLink.href = "edit-information.html";
-      editLink.textContent = "Edit Information";
-      editLink.onclick = () => {
-        localStorage.setItem("editContext", JSON.stringify({ projectId, userId, userEmail }));
-      };
-      document.getElementById("pmAssignedMessage").style.display = "block";
-      document.getElementById("pmAssignedMessage").appendChild(editLink);
-    }
+  } else {
+    projectContextEl.textContent = "No project details found.";
   }
 
   function addPM(e) {
     e.preventDefault();
+    const pmMessage = document.getElementById("pmMessage");
+    const existingPM = teamMembers.find(m => m.role === "Project Manager");
+    if (existingPM) {
+      pmMessage.textContent = "A Project Manager is already assigned.";
+      return;
+    }
     const pm = {
       name: document.getElementById("pmName").value.trim(),
       email: document.getElementById("pmEmail").value.trim().toLowerCase(),
@@ -137,10 +109,11 @@
       representative: document.getElementById("pmRepresentative").value.trim(),
       role: "Project Manager"
     };
-    assignments.push(pm);
+    teamMembers.push(pm);
     alert("Project Manager assigned.");
     document.getElementById("pmForm").reset();
-    checkPMAssigned();
+    document.getElementById("pmFormContainer").style.display = "none";
+    document.getElementById("pmAssignedMessage").style.display = "block";
   }
 
   function addMember(e) {
@@ -161,7 +134,7 @@
       memberMessage.textContent = "Please fill all required fields.";
       return;
     }
-    assignments.push(member);
+    teamMembers.push(member);
     renderMembers();
     document.getElementById("teamForm").reset();
     memberMessage.textContent = "";
@@ -170,7 +143,7 @@
   function renderMembers() {
     const list = document.getElementById("memberList");
     list.innerHTML = "";
-    assignments.filter(m => m.role === "Team Member").forEach((m, index) => {
+    teamMembers.filter(m => m.role !== "Project Manager").forEach((m, index) => {
       const li = document.createElement("li");
       li.textContent = `${m.name} - ${m.position} (${m.task})`;
       const removeBtn = document.createElement("button");
@@ -183,26 +156,25 @@
   }
 
   function removeMember(index) {
-    assignments.splice(index, 1);
+    teamMembers.splice(index, 1);
     renderMembers();
   }
 
   document.getElementById("saveBtn").addEventListener("click", () => {
-    // Send both PM and Team Members
     fetch("https://oneprojectapp-backend.onrender.com/assign-team", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        email: userEmail,
+        email: localStorage.getItem("userEmail"),
         role: role,
-        projectId: projectId,
-        assignments: assignments
+        projectId: projectDetails.project?.id,
+        assignments: teamMembers
       })
     })
     .then(res => {
       if (res.ok) {
         alert("Assignments saved successfully.");
-        localStorage.removeItem("projectDetails");
+        localStorage.removeItem("projectDetails"); // clear only this page’s data
         window.location.href = redirectDashboard(role);
       } else {
         alert("Failed to save assignments.");
@@ -214,20 +186,22 @@
     });
   });
 
-  // Back button should return to choice screen
   function goBack() {
-    showChoice();
+    localStorage.removeItem("projectDetails"); // clear only this page’s data
+    window.history.back();
   }
 
-  // Redirect only for main roles (no PMs, no Team Members)
   function redirectDashboard(role) {
     if (role === "Client") return "client-dashboard.html";
+    if (role === "Client Project Manager") return "client-project-manager.html";
     if (role === "Contractor") return "contractor-dashboard.html";
+    if (role === "Contractor Project Manager") return "contractor-project-manager.html";
     if (role === "Consultant") return "consultant-dashboard.html";
+    if (role === "Consultant Project Manager") return "consultant-project-manager.html";
+    if (role === "Team Member") return "team.html";
   }
 
-  // Start with choice buttons visible
-  showChoice();
+  renderMembers();
 </script>
 </body>
 </html>
