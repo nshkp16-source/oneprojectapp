@@ -632,7 +632,6 @@
     </div>
   </div>
 
-<script>
   // Global state
   let expandedGrayPart = false;
   let verificationCountdown = 60;
@@ -695,7 +694,7 @@
     expandGrayPart(html);
   });
 
-// ============= CLIENT PROFILE + PROJECT SELECTOR LOGIC (JWT-based) =============
+<script>
 let currentContext = { client: null, project: null };
 
 // Get tokens from localStorage
@@ -756,9 +755,9 @@ async function ensureValidToken() {
   return token;
 }
 
-const decoded = parseJwt(token);
+let decoded = parseJwt(token);
 
-// ✅ Enforce JWT presence and role (case-insensitive)
+// ✅ Enforce JWT presence and role (Client only)
 if (!token || !decoded || !decoded.role || decoded.role.toLowerCase() !== "client") {
   alert("Unauthorized access. Please log in again.");
   localStorage.clear();
@@ -801,7 +800,8 @@ async function updateProjectContext(projectId) {
     currentContext.client = data.client;
     currentContext.project = data.project;
 
-    profileEmail.textContent = data.client.email;
+    // ✅ Always use company_email
+    profileEmail.textContent = data.client.company_email;
     profileRole.textContent = `Role: ${data.client.role}`;
     activeProject.textContent = data.project.name;
 
@@ -825,6 +825,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     const validToken = await ensureValidToken();
     if (!validToken) return;
 
+    decoded = parseJwt(validToken); // ✅ re-decode after refresh
+
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/profile", {
       method: "POST",
       headers: { 
@@ -836,25 +838,26 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!res.ok) throw new Error("Failed to fetch client profile");
     const client = await res.json();
 
-    profileEmail.textContent = client.email;
+    // ✅ Always use company_email
+    profileEmail.textContent = client.company_email;
     profileRole.textContent = `Role: ${client.role}`;
 
     if (client.profile_picture && client.profile_picture.trim() !== "") {
       profileIcon.style.backgroundImage = `url("${client.profile_picture}")`;
       profileIconLarge.style.backgroundImage = `url("${client.profile_picture}")`;
     } else {
-      const emailChar = (client.email || "?").charAt(0).toUpperCase();
+      const emailChar = (client.company_email || "?").charAt(0).toUpperCase();
       profileIcon.textContent = emailChar;
       profileIconLarge.textContent = emailChar;
     }
 
-    // Populate project selector
-    projectDialog.innerHTML = "";
+    // ✅ Projects must exist
     if (!client.projects || client.projects.length === 0) {
-      activeProject.textContent = "No projects assigned";
+      alert("Error: Client must have at least one project. Please contact support.");
       return;
     }
 
+    projectDialog.innerHTML = "";
     client.projects.forEach(project => {
       const item = document.createElement("div");
       item.className = "project-item";
@@ -888,8 +891,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       localStorage.setItem("activeProjectId", client.defaultProject.id);
       localStorage.setItem("activeProjectName", client.defaultProject.name);
       updateProjectContext(client.defaultProject.id);
-    } else {
-      activeProject.textContent = "No projects assigned";
     }
   } catch (err) {
     console.error("Client profile fetch error:", err);
@@ -962,7 +963,8 @@ deletePictureBtn.addEventListener('click', async () => {
       }
     });
     if (res.ok) {
-      const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
+      // ✅ Use company_email for fallback initial
+      const emailChar = (profileEmail.textContent || "?").charAt(0).toUpperCase();
       profileIcon.style.backgroundImage = "";
       profileIcon.textContent = emailChar;
       profileIconLarge.style.backgroundImage = "";
