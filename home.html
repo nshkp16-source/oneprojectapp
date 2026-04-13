@@ -264,10 +264,10 @@
     }
 
     async function validateLogin() {
-      const email = document.getElementById("email").value.trim();
+      const emailInput = document.getElementById("email").value.trim();
       const password = document.getElementById("password").value;
 
-      if (!isValidEmail(email)) {
+      if (!isValidEmail(emailInput)) {
         document.getElementById("message").textContent = "Invalid email format.";
         return;
       }
@@ -278,17 +278,22 @@
 
       const backendRole = roleMap[selectedRole];
 
+      // ✅ For Client, use company_email; for others, use email
+      const payload = backendRole === "Client"
+        ? { role: backendRole, company_email: emailInput, password }
+        : { role: backendRole, email: emailInput, password };
+
       try {
         const response = await fetch('https://oneprojectapp-backend.onrender.com/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ role: backendRole, email, password })
+          body: JSON.stringify(payload)
         });
 
         const data = await response.json();
 
         if (!data.success && data.error && data.error.includes("No password set yet")) {
-          localStorage.setItem("pendingEmail", email);
+          localStorage.setItem("pendingEmail", emailInput);
           localStorage.setItem("pendingRole", backendRole);
 
           document.getElementById("message").textContent =
@@ -308,10 +313,14 @@
 
         document.getElementById("loadingOverlay").style.display = "flex";
 
-        if (data.token) {
-          localStorage.setItem("authToken", data.token);
+        if (data.accessToken && data.refreshToken) {
+          // Save access token in localStorage
+          localStorage.setItem("authToken", data.accessToken);
 
-          const decoded = parseJwt(data.token);
+          // Save refresh token in localStorage (for demo; in production use HttpOnly cookie)
+          localStorage.setItem("refreshToken", data.refreshToken);
+
+          const decoded = parseJwt(data.accessToken);
           if (decoded) {
             localStorage.setItem("userEmail", decoded.email);
             localStorage.setItem("userRole", decoded.role);
@@ -353,8 +362,8 @@
     }
 
     async function forgotPassword() {
-      const email = document.getElementById("email").value.trim();
-      if (!isValidEmail(email)) {
+      const emailInput = document.getElementById("email").value.trim();
+      if (!isValidEmail(emailInput)) {
         document.getElementById("message").textContent = "Enter a valid email before resetting.";
         return;
       }
@@ -364,12 +373,15 @@
       }
 
       const backendRole = roleMap[selectedRole];
+      const payload = backendRole === "Client"
+        ? { role: backendRole, company_email: emailInput }
+        : { role: backendRole, email: emailInput };
 
       try {
         const response = await fetch('https://oneprojectapp-backend.onrender.com/check-email', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ role: backendRole, email })
+          body: JSON.stringify(payload)
         });
 
         const data = await response.json();
@@ -381,7 +393,7 @@
 
         document.getElementById("loadingOverlay").style.display = "flex";
 
-        localStorage.setItem("pendingEmail", email);
+        localStorage.setItem("pendingEmail", emailInput);
         localStorage.setItem("pendingRole", backendRole);
         setTimeout(() => window.location.href = "reset-password.html", 1500);
       } catch (err) {
@@ -397,6 +409,6 @@
         window.location.href = url;
       }, 500); // short delay for effect
     }
-  </script>
+</script>
 </body>
 </html>

@@ -698,8 +698,9 @@
 // ============= CLIENT PROFILE + PROJECT SELECTOR LOGIC (JWT-based) =============
 let currentContext = { client: null, project: null };
 
-// Get JWT from localStorage
-const token = localStorage.getItem("authToken");
+// Get tokens from localStorage
+let token = localStorage.getItem("authToken");
+const refreshToken = localStorage.getItem("refreshToken");
 
 // Decode JWT
 function parseJwt(token) {
@@ -711,6 +712,50 @@ function parseJwt(token) {
     return null;
   }
 }
+
+// ✅ Helper: check if token expired
+function isTokenExpired(token) {
+  const decoded = parseJwt(token);
+  if (!decoded || !decoded.exp) return true;
+  const now = Math.floor(Date.now() / 1000);
+  return decoded.exp < now;
+}
+
+// ✅ Helper: refresh token if needed
+async function ensureValidToken() {
+  if (!token || isTokenExpired(token)) {
+    if (!refreshToken) {
+      alert("Session expired. Please log in again.");
+      localStorage.clear();
+      window.location.href = "home.html";
+      return null;
+    }
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken })
+      });
+      if (!res.ok) throw new Error("Refresh failed");
+      const data = await res.json();
+      if (data.success && data.accessToken) {
+        token = data.accessToken;
+        localStorage.setItem("authToken", token);
+        return token;
+      } else {
+        throw new Error("Invalid refresh response");
+      }
+    } catch (err) {
+      console.error("Token refresh error:", err);
+      alert("Session expired. Please log in again.");
+      localStorage.clear();
+      window.location.href = "home.html";
+      return null;
+    }
+  }
+  return token;
+}
+
 const decoded = parseJwt(token);
 
 // ✅ Enforce JWT presence and role (case-insensitive)
@@ -738,11 +783,14 @@ const activeProject = document.getElementById("activeProject");
 // Helper to update context whenever project changes
 async function updateProjectContext(projectId) {
   try {
+    const validToken = await ensureValidToken();
+    if (!validToken) return;
+
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/project-details", {
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`
+        "Authorization": `Bearer ${validToken}`
       },
       body: JSON.stringify({ projectId })
     });
@@ -774,11 +822,14 @@ async function updateProjectContext(projectId) {
 // ============= MAIN LOAD LOGIC =============
 document.addEventListener("DOMContentLoaded", async () => {
   try {
+    const validToken = await ensureValidToken();
+    if (!validToken) return;
+
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/profile", {
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`
+        "Authorization": `Bearer ${validToken}`
       }
     });
 
@@ -796,43 +847,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       profileIcon.textContent = emailChar;
       profileIconLarge.textContent = emailChar;
     }
-
-    // Profile picture preview
-    profileIconLarge.addEventListener("click", () => {
-      const pictureUrl = profileIconLarge.style.backgroundImage
-        .replace(/^url\(["']?/, "")
-        .replace(/["']?\)$/, "");
-      if (!pictureUrl) return;
-
-      let preview = document.getElementById("passportPreview");
-      if (!preview) {
-        preview = document.createElement("div");
-        preview.id = "passportPreview";
-        preview.style.width = "120px";
-        preview.style.height = "160px";
-        preview.style.margin = "10px auto";
-        preview.style.border = "1px solid #ccc";
-        preview.style.borderRadius = "4px";
-        preview.style.backgroundImage = `url("${pictureUrl}")`;
-        preview.style.backgroundSize = "contain";
-        preview.style.backgroundRepeat = "no-repeat";
-        preview.style.backgroundPosition = "center";
-        preview.style.position = "relative";
-
-        const closeIcon = document.createElement("span");
-        closeIcon.textContent = "✖";
-        closeIcon.style.position = "absolute";
-        closeIcon.style.top = "2px";
-        closeIcon.style.right = "6px";
-        closeIcon.style.cursor = "pointer";
-        closeIcon.style.color = "#333";
-        closeIcon.style.fontWeight = "bold";
-        closeIcon.addEventListener("click", () => preview.remove());
-
-        preview.appendChild(closeIcon);
-        profileDialog.appendChild(preview);
-      }
-    });
 
     // Populate project selector
     projectDialog.innerHTML = "";
@@ -891,7 +905,7 @@ projectSelector.addEventListener("click", (e) => {
   projectDialog.style.left = rect.left + "px";
 });
 
-// ============= PROFILE LOGIC =============
+// ============= PROFILE LOGIC (unchanged except token refresh) =============
 profileIcon.addEventListener('click', (e) => {
   e.stopPropagation();
   profileDialog.style.display = profileDialog.style.display === 'block' ? 'none' : 'block';
@@ -913,9 +927,12 @@ profileUpload.addEventListener('change', async (event) => {
   formData.append("profile_picture", file);
 
   try {
+    const validToken = await ensureValidToken();
+    if (!validToken) return;
+
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
       method: "POST",
-      headers: { "Authorization": `Bearer ${token}` },
+      headers: { "Authorization": `Bearer ${validToken}` },
       body: formData
     });
     if (res.ok) {
@@ -934,11 +951,14 @@ profileUpload.addEventListener('change', async (event) => {
 // Delete picture with backend (JWT)
 deletePictureBtn.addEventListener('click', async () => {
   try {
+    const validToken = await ensureValidToken();
+    if (!validToken) return;
+
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`  // ✅ use JWT
+        "Authorization": `Bearer ${validToken}`
       }
     });
     if (res.ok) {
@@ -997,22 +1017,26 @@ profileIconLarge.addEventListener("click", () => {
 function openAssignTeam() {
   const activeProjectId = localStorage.getItem("activeProjectId");
 
-  fetch("https://oneprojectapp-backend.onrender.com/client/project-details", {
-    method: "POST",
-    headers: { 
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${token}`  // ✅ use JWT
-    },
-    body: JSON.stringify({ projectId: activeProjectId })
-  })
-  .then(res => res.json())
-  .then(data => {
-    localStorage.setItem("projectDetails", JSON.stringify(data));
-    window.location.href = "assign-team.html";
-  })
-  .catch(err => {
-    console.error("Error fetching project details:", err);
-    alert("Could not load project details.");
+  ensureValidToken().then(validToken => {
+    if (!validToken) return;
+
+    fetch("https://oneprojectapp-backend.onrender.com/client/project-details", {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${validToken}`
+      },
+      body: JSON.stringify({ projectId: activeProjectId })
+    })
+    .then(res => res.json())
+    .then(data => {
+      localStorage.setItem("projectDetails", JSON.stringify(data));
+      window.location.href = "assign-team.html";
+    })
+    .catch(err => {
+      console.error("Error fetching project details:", err);
+      alert("Could not load project details.");
+    });
   });
 }
 
