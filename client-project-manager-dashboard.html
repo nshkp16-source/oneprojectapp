@@ -695,31 +695,49 @@
     expandGrayPart(html);
   });
 
-// ============= CLIENT PROFILE + PROJECT SELECTOR LOGIC =============
+// ============= CLIENT PROFILE + PROJECT SELECTOR LOGIC (JWT-based) =============
+
 // Global object to hold current project + client details
-let currentContext = {
-  client: null,
-  project: null
-};
+let currentContext = { client: null, project: null };
+
+// Get JWT + claims from localStorage
+const token = localStorage.getItem("authToken");
+const userEmail = localStorage.getItem("userEmail");
+const userRole = localStorage.getItem("userRole");
+
+// DOM elements
+const profileIcon = document.getElementById('profileIcon');
+const profileDialog = document.getElementById('profileDialog');
+const editProfileBtn = document.getElementById('editProfileBtn');
+const editProfileOptions = document.getElementById('editProfileOptions');
+const changePictureBtn = document.getElementById('changePictureBtn');
+const deletePictureBtn = document.getElementById('deletePictureBtn');
+const profileUpload = document.getElementById('profileUpload');
+const profileIconLarge = document.getElementById('profileIconLarge');
+const profileEmail = document.getElementById('profileEmail');
+const profileRole = document.getElementById('profileRole');
+const projectSelector = document.getElementById("projectSelector");
+const projectDialog = document.getElementById("projectDialog");
+const activeProject = document.getElementById("activeProject");
 
 // Helper to update context whenever project changes
 async function updateProjectContext(projectId) {
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/project-details", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loggedInEmail, projectId })
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({ projectId })
     });
 
     if (!res.ok) throw new Error("Failed to fetch project details");
     const data = await res.json();
 
-    // Save into global context
     currentContext.client = data.client;
     currentContext.project = data.project;
-    console.log("Context updated:", currentContext);
 
-    // Update UI
     profileEmail.textContent = data.client.email;
     profileRole.textContent = `Role: ${data.client.role}`;
     activeProject.textContent = data.project.name;
@@ -738,61 +756,35 @@ async function updateProjectContext(projectId) {
   }
 }
 
-// BACKEND (Cockroach via oneprojectapp-backend): Handle client profile info, picture upload/delete, and projects
-const loggedInEmail = localStorage.getItem("clientEmail") || localStorage.getItem("userEmail");
-
-// DOM elements
-const profileIcon = document.getElementById('profileIcon');
-const profileDialog = document.getElementById('profileDialog');
-const editProfileBtn = document.getElementById('editProfileBtn');
-const editProfileOptions = document.getElementById('editProfileOptions');
-const changePictureBtn = document.getElementById('changePictureBtn');
-const deletePictureBtn = document.getElementById('deletePictureBtn');
-const profileUpload = document.getElementById('profileUpload');
-const profileIconLarge = document.getElementById('profileIconLarge');
-const profileEmail = document.getElementById('profileEmail');
-const profileRole = document.getElementById('profileRole');
-
-const projectSelector = document.getElementById("projectSelector");
-const projectDialog = document.getElementById("projectDialog");
-const activeProject = document.getElementById("activeProject");
-
 // ============= MAIN LOAD LOGIC =============
 document.addEventListener("DOMContentLoaded", async () => {
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/profile", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loggedInEmail })
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      }
     });
 
     if (!res.ok) throw new Error("Failed to fetch client profile");
     const client = await res.json();
 
-    // Update email + role
     profileEmail.textContent = client.email;
     profileRole.textContent = `Role: ${client.role}`;
 
-    // Update profile picture or fallback initials
     if (client.profile_picture && client.profile_picture.trim() !== "") {
       profileIcon.style.backgroundImage = `url("${client.profile_picture}")`;
-      profileIcon.style.backgroundSize = "cover";
-      profileIcon.style.backgroundPosition = "center";
-      profileIcon.textContent = "";
-
       profileIconLarge.style.backgroundImage = `url("${client.profile_picture}")`;
-      profileIconLarge.style.backgroundSize = "cover";
-      profileIconLarge.style.backgroundPosition = "center";
+      profileIcon.textContent = "";
       profileIconLarge.textContent = "";
     } else {
       const emailChar = (client.email || "?").charAt(0).toUpperCase();
-      profileIcon.style.backgroundImage = "";
       profileIcon.textContent = emailChar;
-      profileIconLarge.style.backgroundImage = "";
       profileIconLarge.textContent = emailChar;
     }
 
-    // Profile picture preview
+    // Profile picture preview (passport-style)
     profileIconLarge.addEventListener("click", () => {
       const pictureUrl = profileIconLarge.style.backgroundImage
         .replace(/^url\(["']?/, "")
@@ -839,8 +831,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     client.projects.forEach(project => {
       const item = document.createElement("div");
       item.className = "project-item";
-      item.setAttribute("data-project-id", project.id);
-      item.setAttribute("data-project", project.name);
       item.textContent = `${project.name} (${project.location})`;
       projectDialog.appendChild(item);
 
@@ -853,7 +843,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       });
     });
 
-    // Auto-select if only one project
     if (client.projects.length === 1) {
       const project = client.projects[0];
       activeProject.textContent = project.name;
@@ -862,10 +851,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       updateProjectContext(project.id);
     }
 
-    // On page load, check if activeProjectId exists
     const storedProjectId = localStorage.getItem("activeProjectId");
     const storedProjectName = localStorage.getItem("activeProjectName");
-
     if (storedProjectId && storedProjectName) {
       activeProject.textContent = storedProjectName;
       updateProjectContext(storedProjectId);
@@ -874,8 +861,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       localStorage.setItem("activeProjectId", client.defaultProject.id);
       localStorage.setItem("activeProjectName", client.defaultProject.name);
       updateProjectContext(client.defaultProject.id);
-    } else {
-      activeProject.textContent = "No projects assigned";
     }
   } catch (err) {
     console.error("Client profile fetch error:", err);
@@ -892,63 +877,52 @@ projectSelector.addEventListener("click", (e) => {
 });
 
 // ============= PROFILE LOGIC =============
+// Toggle profile dialog
 profileIcon.addEventListener('click', (e) => {
   e.stopPropagation();
   profileDialog.style.display = profileDialog.style.display === 'block' ? 'none' : 'block';
 });
 
+// Toggle edit options
 editProfileBtn.addEventListener('click', () => {
   editProfileOptions.style.display = editProfileOptions.style.display === 'block' ? 'none' : 'block';
 });
 
-// Upload picture with backend
-changePictureBtn.addEventListener('click', () => { profileUpload.click(); });
+// Upload picture
+changePictureBtn.addEventListener('click', () => profileUpload.click());
 profileUpload.addEventListener('change', async (event) => {
   const file = event.target.files[0];
   if (!file) return;
-
-  if (!file.type.startsWith("image/")) {
-    alert("Only image files are allowed.");
-    return;
-  }
-  if (file.size > 512 * 1024) {
-    alert("Profile picture must not exceed 512KB.");
-    return;
-  }
+  if (!file.type.startsWith("image/")) return alert("Only image files allowed.");
+  if (file.size > 512 * 1024) return alert("Profile picture must not exceed 512KB.");
 
   const formData = new FormData();
   formData.append("profile_picture", file);
-  formData.append("email", loggedInEmail);
 
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
       method: "POST",
+      headers: { "Authorization": `Bearer ${token}` },
       body: formData
     });
     if (res.ok) {
       const data = await res.json();
       profileIcon.style.backgroundImage = `url("${data.url}")`;
-      profileIcon.style.backgroundSize = "cover";
-      profileIcon.textContent = "";
       profileIconLarge.style.backgroundImage = `url("${data.url}")`;
-      profileIconLarge.style.backgroundSize = "cover";
-      profileIconLarge.textContent = "";
     } else {
       alert("Failed to upload profile picture.");
     }
   } catch (err) {
     console.error("Upload error:", err);
-    alert("Error uploading profile picture.");
   }
 });
 
-// Delete picture with backend
+// Delete picture with backend (JWT-based)
 deletePictureBtn.addEventListener('click', async () => {
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loggedInEmail })
+      headers: { "Authorization": `Bearer ${token}` }
     });
     if (res.ok) {
       const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
@@ -1006,14 +980,16 @@ profileIconLarge.addEventListener("click", () => {
   }
 });
 
+// Assign Team navigation (JWT-based)
 function openAssignTeam() {
-  const userEmail = localStorage.getItem("userEmail");
   const activeProjectId = localStorage.getItem("activeProjectId");
-
   fetch("https://oneprojectapp-backend.onrender.com/client/project-details", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: userEmail, role: "Client Project Manager", projectId: activeProjectId })
+    headers: { 
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    },
+    body: JSON.stringify({ projectId: activeProjectId })
   })
   .then(res => res.json())
   .then(data => {
@@ -1021,7 +997,7 @@ function openAssignTeam() {
     window.location.href = "assign-team.html";
   })
   .catch(err => {
-    console.error("Error fetching client PM project details:", err);
+    console.error("Error fetching project details:", err);
     alert("Could not load project details.");
   });
 }
