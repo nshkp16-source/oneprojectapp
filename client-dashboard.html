@@ -632,6 +632,7 @@
     </div>
   </div>
 
+<script>
   // Global state
   let expandedGrayPart = false;
   let verificationCountdown = 60;
@@ -694,14 +695,12 @@
     expandGrayPart(html);
   });
 
-<script>
+// ============= CLIENT PROFILE + PROJECT SELECTOR LOGIC (JWT-based) =============
 let currentContext = { client: null, project: null };
 
-// Get tokens from localStorage
 let token = localStorage.getItem("authToken");
 const refreshToken = localStorage.getItem("refreshToken");
 
-// Decode JWT
 function parseJwt(token) {
   try {
     const base64Url = token.split('.')[1];
@@ -712,7 +711,6 @@ function parseJwt(token) {
   }
 }
 
-// ✅ Helper: check if token expired
 function isTokenExpired(token) {
   const decoded = parseJwt(token);
   if (!decoded || !decoded.exp) return true;
@@ -720,7 +718,6 @@ function isTokenExpired(token) {
   return decoded.exp < now;
 }
 
-// ✅ Helper: refresh token if needed
 async function ensureValidToken() {
   if (!token || isTokenExpired(token)) {
     if (!refreshToken) {
@@ -735,7 +732,6 @@ async function ensureValidToken() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refreshToken })
       });
-      if (!res.ok) throw new Error("Refresh failed");
       const data = await res.json();
       if (data.success && data.accessToken) {
         token = data.accessToken;
@@ -755,9 +751,7 @@ async function ensureValidToken() {
   return token;
 }
 
-let decoded = parseJwt(token);
-
-// ✅ Enforce JWT presence and role (Client only)
+const decoded = parseJwt(token);
 if (!token || !decoded || !decoded.role || decoded.role.toLowerCase() !== "client") {
   alert("Unauthorized access. Please log in again.");
   localStorage.clear();
@@ -779,7 +773,7 @@ const projectSelector = document.getElementById("projectSelector");
 const projectDialog = document.getElementById("projectDialog");
 const activeProject = document.getElementById("activeProject");
 
-// Helper to update context whenever project changes
+// ✅ Update context when switching projects
 async function updateProjectContext(projectId) {
   try {
     const validToken = await ensureValidToken();
@@ -794,14 +788,11 @@ async function updateProjectContext(projectId) {
       body: JSON.stringify({ projectId })
     });
 
-    if (!res.ok) throw new Error("Failed to fetch project details");
     const data = await res.json();
-
     currentContext.client = data.client;
     currentContext.project = data.project;
 
-    // ✅ Always use company_email
-    profileEmail.textContent = data.client.company_email;
+    profileEmail.textContent = data.client.company_email; // enforce company_email
     profileRole.textContent = `Role: ${data.client.role}`;
     activeProject.textContent = data.project.name;
 
@@ -821,79 +812,46 @@ async function updateProjectContext(projectId) {
 
 // ============= MAIN LOAD LOGIC =============
 document.addEventListener("DOMContentLoaded", async () => {
-  try {
-    const validToken = await ensureValidToken();
-    if (!validToken) return;
+  const companyEmail = decoded.email; // always company_email for Clients
+  profileEmail.textContent = companyEmail;
+  profileRole.textContent = `Role: ${decoded.role}`;
 
-    decoded = parseJwt(validToken); // ✅ re-decode after refresh
+  // Profile picture: only from token or upload/delete actions
+  if (decoded.profile_picture && decoded.profile_picture.trim() !== "") {
+    profileIcon.style.backgroundImage = `url("${decoded.profile_picture}")`;
+    profileIconLarge.style.backgroundImage = `url("${decoded.profile_picture}")`;
+  } else {
+    const emailChar = (companyEmail || "?").charAt(0).toUpperCase();
+    profileIcon.textContent = emailChar;
+    profileIconLarge.textContent = emailChar;
+  }
 
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/client/profile", {
-      method: "POST",
-      headers: { 
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${validToken}`
-      }
+  // Populate project selector from token project IDs
+  projectDialog.innerHTML = "";
+  if (!decoded.projects || decoded.projects.length === 0) {
+    activeProject.textContent = "No projects assigned";
+    return;
+  }
+
+  decoded.projects.forEach(projectId => {
+    const item = document.createElement("div");
+    item.className = "project-item";
+    item.textContent = `Project #${projectId}`;
+    projectDialog.appendChild(item);
+
+    item.addEventListener("click", () => {
+      activeProject.textContent = `Project #${projectId}`;
+      projectDialog.style.display = "none";
+      localStorage.setItem("activeProjectId", projectId);
+      updateProjectContext(projectId); // fetch details only when switching
     });
+  });
 
-    if (!res.ok) throw new Error("Failed to fetch client profile");
-    const client = await res.json();
-
-    // ✅ Always use company_email
-    profileEmail.textContent = client.company_email;
-    profileRole.textContent = `Role: ${client.role}`;
-
-    if (client.profile_picture && client.profile_picture.trim() !== "") {
-      profileIcon.style.backgroundImage = `url("${client.profile_picture}")`;
-      profileIconLarge.style.backgroundImage = `url("${client.profile_picture}")`;
-    } else {
-      const emailChar = (client.company_email || "?").charAt(0).toUpperCase();
-      profileIcon.textContent = emailChar;
-      profileIconLarge.textContent = emailChar;
-    }
-
-    // ✅ Projects must exist
-    if (!client.projects || client.projects.length === 0) {
-      alert("Error: Client must have at least one project. Please contact support.");
-      return;
-    }
-
-    projectDialog.innerHTML = "";
-    client.projects.forEach(project => {
-      const item = document.createElement("div");
-      item.className = "project-item";
-      item.textContent = `${project.name} (${project.location})`;
-      projectDialog.appendChild(item);
-
-      item.addEventListener("click", () => {
-        activeProject.textContent = project.name;
-        projectDialog.style.display = "none";
-        localStorage.setItem("activeProjectId", project.id);
-        localStorage.setItem("activeProjectName", project.name);
-        updateProjectContext(project.id);
-      });
-    });
-
-    if (client.projects.length === 1) {
-      const project = client.projects[0];
-      activeProject.textContent = project.name;
-      localStorage.setItem("activeProjectId", project.id);
-      localStorage.setItem("activeProjectName", project.name);
-      updateProjectContext(project.id);
-    }
-
-    const storedProjectId = localStorage.getItem("activeProjectId");
-    const storedProjectName = localStorage.getItem("activeProjectName");
-    if (storedProjectId && storedProjectName) {
-      activeProject.textContent = storedProjectName;
-      updateProjectContext(storedProjectId);
-    } else if (client.defaultProject) {
-      activeProject.textContent = client.defaultProject.name;
-      localStorage.setItem("activeProjectId", client.defaultProject.id);
-      localStorage.setItem("activeProjectName", client.defaultProject.name);
-      updateProjectContext(client.defaultProject.id);
-    }
-  } catch (err) {
-    console.error("Client profile fetch error:", err);
+  if (decoded.projects.length === 1) {
+    const projectId = decoded.projects[0];
+    activeProject.textContent = `Project #${projectId}`;
+    localStorage.setItem("activeProjectId", projectId);
+    updateProjectContext(projectId);
   }
 });
 
@@ -906,7 +864,7 @@ projectSelector.addEventListener("click", (e) => {
   projectDialog.style.left = rect.left + "px";
 });
 
-// ============= PROFILE LOGIC (unchanged except token refresh) =============
+// ============= PROFILE LOGIC (unchanged) =============
 profileIcon.addEventListener('click', (e) => {
   e.stopPropagation();
   profileDialog.style.display = profileDialog.style.display === 'block' ? 'none' : 'block';
@@ -916,7 +874,7 @@ editProfileBtn.addEventListener('click', () => {
   editProfileOptions.style.display = editProfileOptions.style.display === 'block' ? 'none' : 'block';
 });
 
-// Upload picture with backend (JWT)
+// Upload picture
 changePictureBtn.addEventListener('click', () => { profileUpload.click(); });
 profileUpload.addEventListener('change', async (event) => {
   const file = event.target.files[0];
@@ -927,54 +885,40 @@ profileUpload.addEventListener('change', async (event) => {
   const formData = new FormData();
   formData.append("profile_picture", file);
 
-  try {
-    const validToken = await ensureValidToken();
-    if (!validToken) return;
+  const validToken = await ensureValidToken();
+  if (!validToken) return;
 
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${validToken}` },
-      body: formData
-    });
-    if (res.ok) {
-      const data = await res.json();
-      profileIcon.style.backgroundImage = `url("${data.url}")`;
-      profileIconLarge.style.backgroundImage = `url("${data.url}")`;
-    } else {
-      alert("Failed to upload profile picture.");
-    }
-  } catch (err) {
-    console.error("Upload error:", err);
-    alert("Error uploading profile picture.");
+  const res = await fetch("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${validToken}` },
+    body: formData
+  });
+  if (res.ok) {
+    const data = await res.json();
+    profileIcon.style.backgroundImage = `url("${data.url}")`;
+    profileIconLarge.style.backgroundImage = `url("${data.url}")`;
+  } else {
+    alert("Failed to upload profile picture.");
   }
 });
 
-// Delete picture with backend (JWT)
+// Delete picture
 deletePictureBtn.addEventListener('click', async () => {
-  try {
-    const validToken = await ensureValidToken();
-    if (!validToken) return;
+  const validToken = await ensureValidToken();
+  if (!validToken) return;
 
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
-      method: "POST",
-      headers: { 
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${validToken}`
-      }
-    });
-    if (res.ok) {
-      // ✅ Use company_email for fallback initial
-      const emailChar = (profileEmail.textContent || "?").charAt(0).toUpperCase();
-      profileIcon.style.backgroundImage = "";
-      profileIcon.textContent = emailChar;
-      profileIconLarge.style.backgroundImage = "";
-      profileIconLarge.textContent = emailChar;
-    } else {
-      alert("Failed to delete profile picture.");
-    }
-  } catch (err) {
-    console.error("Delete error:", err);
-    alert("Error deleting profile picture.");
+  const res = await fetch("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${validToken}` }
+  });
+  if (res.ok) {
+    const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
+    profileIcon.style.backgroundImage = "";
+    profileIcon.textContent = emailChar;
+    profileIconLarge.style.backgroundImage = "";
+    profileIconLarge.textContent = emailChar;
+  } else {
+    alert("Failed to delete profile picture.");
   }
 });
 
