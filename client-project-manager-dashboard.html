@@ -702,8 +702,8 @@ let currentContext = { client: null, project: null };
 
 // Get JWT + claims from localStorage
 const token = localStorage.getItem("authToken");
-const userEmail = localStorage.getItem("userEmail");
-const userRole = localStorage.getItem("userRole");
+const userEmail = localStorage.getItem("userEmail"); // company_email
+const userRole = localStorage.getItem("userRole");   // role
 
 // DOM elements
 const profileIcon = document.getElementById('profileIcon');
@@ -720,7 +720,7 @@ const projectSelector = document.getElementById("projectSelector");
 const projectDialog = document.getElementById("projectDialog");
 const activeProject = document.getElementById("activeProject");
 
-// Helper to update context whenever project changes
+// ✅ Update context when switching projects
 async function updateProjectContext(projectId) {
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/project-details", {
@@ -732,13 +732,11 @@ async function updateProjectContext(projectId) {
       body: JSON.stringify({ projectId })
     });
 
-    if (!res.ok) throw new Error("Failed to fetch project details");
     const data = await res.json();
-
     currentContext.client = data.client;
     currentContext.project = data.project;
 
-    profileEmail.textContent = data.client.email;
+    profileEmail.textContent = data.client.company_email;
     profileRole.textContent = `Role: ${data.client.role}`;
     activeProject.textContent = data.project.name;
 
@@ -758,20 +756,16 @@ async function updateProjectContext(projectId) {
 
 // ============= MAIN LOAD LOGIC =============
 document.addEventListener("DOMContentLoaded", async () => {
+  profileEmail.textContent = userEmail;
+  profileRole.textContent = `Role: ${userRole}`;
+
+  // Fetch profile picture from backend
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/profile", {
       method: "POST",
-      headers: { 
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`
-      }
+      headers: { "Authorization": `Bearer ${token}` }
     });
-
-    if (!res.ok) throw new Error("Failed to fetch client profile");
     const client = await res.json();
-
-    profileEmail.textContent = client.email;
-    profileRole.textContent = `Role: ${client.role}`;
 
     if (client.profile_picture && client.profile_picture.trim() !== "") {
       profileIcon.style.backgroundImage = `url("${client.profile_picture}")`;
@@ -779,56 +773,33 @@ document.addEventListener("DOMContentLoaded", async () => {
       profileIcon.textContent = "";
       profileIconLarge.textContent = "";
     } else {
-      const emailChar = (client.email || "?").charAt(0).toUpperCase();
+      const emailChar = (userEmail || "?").charAt(0).toUpperCase();
       profileIcon.textContent = emailChar;
       profileIconLarge.textContent = emailChar;
     }
+  } catch (err) {
+    console.error("Profile picture fetch error:", err);
+  }
 
-    // Profile picture preview (passport-style)
-    profileIconLarge.addEventListener("click", () => {
-      const pictureUrl = profileIconLarge.style.backgroundImage
-        .replace(/^url\(["']?/, "")
-        .replace(/["']?\)$/, "");
-      if (!pictureUrl) return;
+  // Populate project selector with names fetched from backend
+  projectDialog.innerHTML = "";
+  const userProjects = JSON.parse(localStorage.getItem("userProjects") || "[]");
 
-      let preview = document.getElementById("passportPreview");
-      if (!preview) {
-        preview = document.createElement("div");
-        preview.id = "passportPreview";
-        preview.style.width = "120px";
-        preview.style.height = "160px";
-        preview.style.margin = "10px auto";
-        preview.style.border = "1px solid #ccc";
-        preview.style.borderRadius = "4px";
-        preview.style.backgroundImage = `url("${pictureUrl}")`;
-        preview.style.backgroundSize = "contain";
-        preview.style.backgroundRepeat = "no-repeat";
-        preview.style.backgroundPosition = "center";
-        preview.style.position = "relative";
+  if (!userProjects || userProjects.length === 0) {
+    activeProject.textContent = "No projects assigned";
+    return;
+  }
 
-        const closeIcon = document.createElement("span");
-        closeIcon.textContent = "✖";
-        closeIcon.style.position = "absolute";
-        closeIcon.style.top = "2px";
-        closeIcon.style.right = "6px";
-        closeIcon.style.cursor = "pointer";
-        closeIcon.style.color = "#333";
-        closeIcon.style.fontWeight = "bold";
-        closeIcon.addEventListener("click", () => preview.remove());
+  for (const projectId of userProjects) {
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/client/project-details", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId })
+      });
+      const data = await res.json();
+      const project = data.project;
 
-        preview.appendChild(closeIcon);
-        profileDialog.appendChild(preview);
-      }
-    });
-
-    // Populate project selector
-    projectDialog.innerHTML = "";
-    if (!client.projects || client.projects.length === 0) {
-      activeProject.textContent = "No projects assigned";
-      return;
-    }
-
-    client.projects.forEach(project => {
       const item = document.createElement("div");
       item.className = "project-item";
       item.textContent = `${project.name} (${project.location})`;
@@ -841,29 +812,17 @@ document.addEventListener("DOMContentLoaded", async () => {
         localStorage.setItem("activeProjectName", project.name);
         updateProjectContext(project.id);
       });
-    });
 
-    if (client.projects.length === 1) {
-      const project = client.projects[0];
-      activeProject.textContent = project.name;
-      localStorage.setItem("activeProjectId", project.id);
-      localStorage.setItem("activeProjectName", project.name);
-      updateProjectContext(project.id);
+      // Auto-select first project if only one
+      if (userProjects.length === 1) {
+        activeProject.textContent = project.name;
+        localStorage.setItem("activeProjectId", project.id);
+        localStorage.setItem("activeProjectName", project.name);
+        updateProjectContext(project.id);
+      }
+    } catch (err) {
+      console.error("Error fetching project name:", err);
     }
-
-    const storedProjectId = localStorage.getItem("activeProjectId");
-    const storedProjectName = localStorage.getItem("activeProjectName");
-    if (storedProjectId && storedProjectName) {
-      activeProject.textContent = storedProjectName;
-      updateProjectContext(storedProjectId);
-    } else if (client.defaultProject) {
-      activeProject.textContent = client.defaultProject.name;
-      localStorage.setItem("activeProjectId", client.defaultProject.id);
-      localStorage.setItem("activeProjectName", client.defaultProject.name);
-      updateProjectContext(client.defaultProject.id);
-    }
-  } catch (err) {
-    console.error("Client profile fetch error:", err);
   }
 });
 
@@ -877,13 +836,11 @@ projectSelector.addEventListener("click", (e) => {
 });
 
 // ============= PROFILE LOGIC =============
-// Toggle profile dialog
 profileIcon.addEventListener('click', (e) => {
   e.stopPropagation();
   profileDialog.style.display = profileDialog.style.display === 'block' ? 'none' : 'block';
 });
 
-// Toggle edit options
 editProfileBtn.addEventListener('click', () => {
   editProfileOptions.style.display = editProfileOptions.style.display === 'block' ? 'none' : 'block';
 });
@@ -917,7 +874,7 @@ profileUpload.addEventListener('change', async (event) => {
   }
 });
 
-// Delete picture with backend (JWT-based)
+// Delete picture
 deletePictureBtn.addEventListener('click', async () => {
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
@@ -944,7 +901,6 @@ profileIconLarge.addEventListener("click", () => {
   const pictureUrl = profileIconLarge.style.backgroundImage
     .replace(/^url\(["']?/, "")
     .replace(/["']?\)$/, "");
-
   if (!pictureUrl) return;
 
   let preview = document.getElementById("passportPreview");
@@ -970,10 +926,7 @@ profileIconLarge.addEventListener("click", () => {
     closeIcon.style.cursor = "pointer";
     closeIcon.style.color = "#333";
     closeIcon.style.fontWeight = "bold";
-
-    closeIcon.addEventListener("click", () => {
-      preview.remove();
-    });
+    closeIcon.addEventListener("click", () => preview.remove());
 
     preview.appendChild(closeIcon);
     profileDialog.appendChild(preview);
@@ -983,23 +936,16 @@ profileIconLarge.addEventListener("click", () => {
 // Assign Team navigation (JWT-based)
 function openAssignTeam() {
   const activeProjectId = localStorage.getItem("activeProjectId");
-  fetch("https://oneprojectapp-backend.onrender.com/client/project-details", {
-    method: "POST",
-    headers: { 
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${token}`
-    },
-    body: JSON.stringify({ projectId: activeProjectId })
-  })
-  .then(res => res.json())
-  .then(data => {
-    localStorage.setItem("projectDetails", JSON.stringify(data));
-    window.location.href = "assign-team.html";
-  })
-  .catch(err => {
-    console.error("Error fetching project details:", err);
-    alert("Could not load project details.");
-  });
+  const companyEmail = userEmail;
+  const role = userRole;
+
+  // Store essentials for assign-team.html
+  localStorage.setItem("assignRole", role);
+  localStorage.setItem("assignEmail", companyEmail);
+  localStorage.setItem("assignProjectId", activeProjectId);
+
+  // Redirect to assign-team.html
+  window.location.href = "assign-team.html";
 }
 
   // ============= SETTINGS DIALOG =============
