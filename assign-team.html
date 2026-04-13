@@ -82,13 +82,59 @@
   </div>
 
 <script>
-  const role = localStorage.getItem("activeRole");
   const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
-  const userEmail = localStorage.getItem("userEmail");
-  const userId = localStorage.getItem("userId");
   const projectId = projectDetails.project?.id;
-
   let assignments = projectDetails.team_members || [];
+
+  // JWT helpers
+  function parseJwt(token) {
+    try {
+      const base64Url = token.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      return JSON.parse(atob(base64));
+    } catch (e) { return null; }
+  }
+  function isTokenExpired(token) {
+    const decoded = parseJwt(token);
+    if (!decoded || !decoded.exp) return true;
+    return decoded.exp < Math.floor(Date.now() / 1000);
+  }
+  async function ensureValidToken() {
+    let token = localStorage.getItem("authToken");
+    const refreshToken = localStorage.getItem("refreshToken");
+    if (!token || isTokenExpired(token)) {
+      if (!refreshToken) {
+        alert("Session expired. Please log in again.");
+        localStorage.clear(); window.location.href = "home.html"; return null;
+      }
+      try {
+        const res = await fetch("https://oneprojectapp-backend.onrender.com/refresh", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refreshToken })
+        });
+        const data = await res.json();
+        if (data.success && data.accessToken) {
+          token = data.accessToken;
+          localStorage.setItem("authToken", token);
+          return token;
+        } else { throw new Error("Refresh failed"); }
+      } catch (err) {
+        console.error("Token refresh error:", err);
+        alert("Session expired. Please log in again.");
+        localStorage.clear(); window.location.href = "home.html"; return null;
+      }
+    }
+    return token;
+  }
+
+  // Get role and email directly from JWT
+  function getUserFromToken() {
+    const token = localStorage.getItem("authToken");
+    const decoded = parseJwt(token);
+    if (!decoded) return {};
+    return { role: decoded.role, email: decoded.email, id: decoded.sub };
+  }
+  const { role, email, id } = getUserFromToken();
 
   // Show choice buttons first
   function showChoice() {
@@ -96,75 +142,49 @@
     document.getElementById("pmSection").style.display = "none";
     document.getElementById("teamSection").style.display = "none";
   }
-
   function showForm(type) {
     document.getElementById("choiceSection").style.display = "none";
-    if (type === "pm") {
-      document.getElementById("pmSection").style.display = "block";
-      checkPMAssigned();
-    } else {
-      document.getElementById("teamSection").style.display = "block";
-    }
+    if (type === "pm") { document.getElementById("pmSection").style.display = "block"; checkPMAssigned(); }
+    else { document.getElementById("teamSection").style.display = "block"; }
   }
 
-  // Check if PM already assigned
   function checkPMAssigned() {
     const existingPM = assignments.find(m => m.role === "Project Manager");
     if (existingPM) {
       document.getElementById("assignPmBtn").disabled = true;
       document.getElementById("pmMessage").textContent = "A Project Manager is already assigned.";
-      const editLink = document.createElement("a");
-      editLink.href = "edit-information.html";
-      editLink.textContent = "Edit Information";
-      editLink.onclick = () => {
-        localStorage.setItem("editContext", JSON.stringify({ projectId, userId, userEmail }));
-      };
       document.getElementById("pmAssignedMessage").style.display = "block";
-      document.getElementById("pmAssignedMessage").appendChild(editLink);
     }
   }
 
   function addPM(e) {
     e.preventDefault();
     const pm = {
-      name: document.getElementById("pmName").value.trim(),
-      email: document.getElementById("pmEmail").value.trim().toLowerCase(),
-      company_name: document.getElementById("pmCompany").value.trim(),
-      title: document.getElementById("pmTitle").value.trim(),
-      position: document.getElementById("pmPosition").value.trim(),
-      telephone: document.getElementById("pmTelephone").value.trim(),
-      task: document.getElementById("pmTask").value.trim(),
-      representative: document.getElementById("pmRepresentative").value.trim(),
+      name: pmName.value.trim(), email: pmEmail.value.trim().toLowerCase(),
+      company_name: pmCompany.value.trim(), title: pmTitle.value.trim(),
+      position: pmPosition.value.trim(), telephone: pmTelephone.value.trim(),
+      task: pmTask.value.trim(), representative: pmRepresentative.value.trim(),
       role: "Project Manager"
     };
     assignments.push(pm);
-    alert("Project Manager assigned.");
-    document.getElementById("pmForm").reset();
-    checkPMAssigned();
+    alert("Project Manager assigned."); pmForm.reset(); checkPMAssigned();
   }
 
   function addMember(e) {
     e.preventDefault();
     const memberMessage = document.getElementById("memberMessage");
     const member = {
-      name: document.getElementById("memberName").value.trim(),
-      email: document.getElementById("memberEmail").value.trim().toLowerCase(),
-      company_name: document.getElementById("memberCompany").value.trim(),
-      title: document.getElementById("memberTitle").value.trim(),
-      position: document.getElementById("memberPosition").value.trim(),
-      telephone: document.getElementById("memberTelephone").value.trim(),
-      task: document.getElementById("memberTask").value.trim(),
-      representative: document.getElementById("memberRepresentative").value.trim(),
+      name: memberName.value.trim(), email: memberEmail.value.trim().toLowerCase(),
+      company_name: memberCompany.value.trim(), title: memberTitle.value.trim(),
+      position: memberPosition.value.trim(), telephone: memberTelephone.value.trim(),
+      task: memberTask.value.trim(), representative: memberRepresentative.value.trim(),
       role: "Team Member"
     };
     if (!member.name || !member.email || !member.position || !member.task) {
-      memberMessage.textContent = "Please fill all required fields.";
-      return;
+      memberMessage.textContent = "Please fill all required fields."; return;
     }
     assignments.push(member);
-    renderMembers();
-    document.getElementById("teamForm").reset();
-    memberMessage.textContent = "";
+    renderMembers(); teamForm.reset(); memberMessage.textContent = "";
   }
 
   function renderMembers() {
@@ -174,59 +194,37 @@
       const li = document.createElement("li");
       li.textContent = `${m.name} - ${m.position} (${m.task})`;
       const removeBtn = document.createElement("button");
-      removeBtn.textContent = "Remove";
-      removeBtn.className = "remove-btn";
+      removeBtn.textContent = "Remove"; removeBtn.className = "remove-btn";
       removeBtn.onclick = () => removeMember(index);
-      li.appendChild(removeBtn);
-      list.appendChild(li);
+      li.appendChild(removeBtn); list.appendChild(li);
     });
   }
+  function removeMember(index) { assignments.splice(index, 1); renderMembers(); }
 
-  function removeMember(index) {
-    assignments.splice(index, 1);
-    renderMembers();
-  }
-
-  document.getElementById("saveBtn").addEventListener("click", () => {
-    // Send both PM and Team Members
+  document.getElementById("saveBtn").addEventListener("click", async () => {
+    const validToken = await ensureValidToken(); if (!validToken) return;
     fetch("https://oneprojectapp-backend.onrender.com/assign-team", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: userEmail,
-        role: role,
-        projectId: projectId,
-        assignments: assignments
-      })
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${validToken}` },
+      body: JSON.stringify({ projectId, assignments })
     })
     .then(res => {
       if (res.ok) {
         alert("Assignments saved successfully.");
         localStorage.removeItem("projectDetails");
         window.location.href = redirectDashboard(role);
-      } else {
-        alert("Failed to save assignments.");
-      }
+      } else { alert("Failed to save assignments."); }
     })
-    .catch(err => {
-      console.error("Save error:", err);
-      alert("Error saving assignments.");
-    });
+    .catch(err => { console.error("Save error:", err); alert("Error saving assignments."); });
   });
 
-  // Back button should return to choice screen
-  function goBack() {
-    showChoice();
-  }
-
-  // Redirect only for main roles (no PMs, no Team Members)
+  function goBack() { showChoice(); }
   function redirectDashboard(role) {
     if (role === "Client") return "client-dashboard.html";
     if (role === "Contractor") return "contractor-dashboard.html";
     if (role === "Consultant") return "consultant-dashboard.html";
   }
 
-  // Start with choice buttons visible
   showChoice();
 </script>
 </body>
