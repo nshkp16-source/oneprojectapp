@@ -695,19 +695,25 @@
     expandGrayPart(html);
   });
 
-// ============= CONTRACTOR PROFILE + PROJECT SELECTOR LOGIC =============
-// Global context object for contractor + project
-let currentContext = {
-  contractor: null,
-  project: null
-};
+// ============= CONTRACTOR PROFILE + PROJECT SELECTOR LOGIC (JWT-based) =============
+let currentContext = { contractor: null, project: null };
 
-// BACKEND (Neon users table via oneprojectapp-backend): Handle contractor profile info, picture upload/delete, and projects
+// Get JWT from localStorage
+const token = localStorage.getItem("authToken");
 
-// Logged-in email: prefer contractorEmail, fallback to generic userEmail
-const loggedInEmail = localStorage.getItem("contractorEmail") || localStorage.getItem("userEmail");
+// Decode JWT
+function parseJwt(token) {
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(base64));
+  } catch (e) {
+    return null;
+  }
+}
+const decoded = parseJwt(token);
 
-// DOM elements (declare once at the top)
+// DOM elements
 const profileIcon = document.getElementById('profileIcon');
 const profileDialog = document.getElementById('profileDialog');
 const editProfileBtn = document.getElementById('editProfileBtn');
@@ -718,7 +724,6 @@ const profileUpload = document.getElementById('profileUpload');
 const profileIconLarge = document.getElementById('profileIconLarge');
 const profileEmail = document.getElementById('profileEmail');
 const profileRole = document.getElementById('profileRole');
-
 const projectSelector = document.getElementById("projectSelector");
 const projectDialog = document.getElementById("projectDialog");
 const activeProject = document.getElementById("activeProject");
@@ -726,83 +731,30 @@ const activeProject = document.getElementById("activeProject");
 // ============= MAIN LOAD LOGIC =============
 document.addEventListener("DOMContentLoaded", async () => {
   try {
-    // Fetch contractor profile + projects from backend
     const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/profile", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loggedInEmail })
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      }
     });
 
     if (!res.ok) throw new Error("Failed to fetch contractor profile");
     const contractor = await res.json();
 
-    // Update email + role
     profileEmail.textContent = contractor.email;
     profileRole.textContent = `Role: ${contractor.role}`;
 
-    // Update profile picture or fallback initials
     if (contractor.profile_picture && contractor.profile_picture.trim() !== "") {
       profileIcon.style.backgroundImage = `url("${contractor.profile_picture}")`;
-      profileIcon.style.backgroundSize = "cover";
-      profileIcon.style.backgroundPosition = "center";
-      profileIcon.textContent = "";
-
       profileIconLarge.style.backgroundImage = `url("${contractor.profile_picture}")`;
-      profileIconLarge.style.backgroundSize = "cover";
-      profileIconLarge.style.backgroundPosition = "center";
-      profileIconLarge.textContent = "";
     } else {
       const emailChar = (contractor.email || "?").charAt(0).toUpperCase();
-      profileIcon.style.backgroundImage = "";
       profileIcon.textContent = emailChar;
-      profileIconLarge.style.backgroundImage = "";
       profileIconLarge.textContent = emailChar;
     }
 
-    // Profile picture preview (passport-style)
-    profileIconLarge.addEventListener("click", () => {
-      const pictureUrl = profileIconLarge.style.backgroundImage
-        .replace(/^url\(["']?/, "")
-        .replace(/["']?\)$/, "");
-
-      if (!pictureUrl) return;
-
-      let preview = document.getElementById("passportPreview");
-      if (!preview) {
-        preview = document.createElement("div");
-        preview.id = "passportPreview";
-        preview.style.width = "120px";
-        preview.style.height = "160px";
-        preview.style.margin = "10px auto";
-        preview.style.border = "1px solid #ccc";
-        preview.style.borderRadius = "4px";
-        preview.style.backgroundImage = `url("${pictureUrl}")`;
-        preview.style.backgroundSize = "contain";
-        preview.style.backgroundRepeat = "no-repeat";
-        preview.style.backgroundPosition = "center";
-        preview.style.position = "relative";
-
-        const closeIcon = document.createElement("span");
-        closeIcon.textContent = "✖";
-        closeIcon.style.position = "absolute";
-        closeIcon.style.top = "2px";
-        closeIcon.style.right = "6px";
-        closeIcon.style.cursor = "pointer";
-        closeIcon.style.color = "#333";
-        closeIcon.style.fontWeight = "bold";
-
-        closeIcon.addEventListener("click", () => {
-          preview.remove();
-        });
-
-        preview.appendChild(closeIcon);
-        profileDialog.appendChild(preview);
-      }
-    });
-
-    // Populate project selector dynamically
-    projectDialog.innerHTML = ""; // clear old items
-
+    projectDialog.innerHTML = "";
     if (!contractor.projects || contractor.projects.length === 0) {
       activeProject.textContent = "No projects assigned";
       return;
@@ -811,45 +763,36 @@ document.addEventListener("DOMContentLoaded", async () => {
     contractor.projects.forEach(project => {
       const item = document.createElement("div");
       item.className = "project-item";
-      item.setAttribute("data-project-id", project.id);
-      item.setAttribute("data-project", project.name);
       item.textContent = `${project.name} (${project.location})`;
       projectDialog.appendChild(item);
 
       item.addEventListener("click", () => {
         activeProject.textContent = project.name;
         projectDialog.style.display = "none";
-
         localStorage.setItem("activeProjectId", project.id);
         localStorage.setItem("activeProjectName", project.name);
-
-        // ✅ Refresh details directly instead of reload
         fetchProjectDetails(project.id);
       });
     });
 
-    // Auto-select if only one project
     if (contractor.projects.length === 1) {
       const project = contractor.projects[0];
       activeProject.textContent = project.name;
       localStorage.setItem("activeProjectId", project.id);
       localStorage.setItem("activeProjectName", project.name);
+      fetchProjectDetails(project.id);
     }
 
-    // On page load, check if activeProjectId exists in localStorage
     const storedProjectId = localStorage.getItem("activeProjectId");
     const storedProjectName = localStorage.getItem("activeProjectName");
-
     if (storedProjectId && storedProjectName) {
       activeProject.textContent = storedProjectName;
-      fetchProjectDetails(storedProjectId); // load contractor + project details
+      fetchProjectDetails(storedProjectId);
     } else if (contractor.defaultProject) {
       activeProject.textContent = contractor.defaultProject.name;
       localStorage.setItem("activeProjectId", contractor.defaultProject.id);
       localStorage.setItem("activeProjectName", contractor.defaultProject.name);
-      fetchProjectDetails(contractor.defaultProject.id); // load default project
-    } else {
-      activeProject.textContent = "No projects assigned";
+      fetchProjectDetails(contractor.defaultProject.id);
     }
   } catch (err) {
     console.error("Contractor profile fetch error:", err);
@@ -861,19 +804,19 @@ async function fetchProjectDetails(projectId) {
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/project-details", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loggedInEmail, projectId })
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({ projectId })
     });
 
     if (!res.ok) throw new Error("Failed to fetch project details");
     const data = await res.json();
 
-    // Save into global context
     currentContext.contractor = data.contractor;
     currentContext.project = data.project;
-    console.log("Contractor context updated:", currentContext);
 
-    // Update UI as before
     profileEmail.textContent = data.contractor.email;
     profileRole.textContent = `Role: ${data.contractor.role}`;
     activeProject.textContent = data.project.name;
@@ -911,38 +854,27 @@ editProfileBtn.addEventListener('click', () => {
   editProfileOptions.style.display = editProfileOptions.style.display === 'block' ? 'none' : 'block';
 });
 
-// Upload picture with backend
+// Upload picture with backend (JWT)
 changePictureBtn.addEventListener('click', () => { profileUpload.click(); });
 profileUpload.addEventListener('change', async (event) => {
   const file = event.target.files[0];
   if (!file) return;
-
-  if (!file.type.startsWith("image/")) {
-    alert("Only image files are allowed.");
-    return;
-  }
-  if (file.size > 512 * 1024) {
-    alert("Profile picture must not exceed 512KB.");
-    return;
-  }
+  if (!file.type.startsWith("image/")) { alert("Only image files allowed."); return; }
+  if (file.size > 512 * 1024) { alert("Profile picture must not exceed 512KB."); return; }
 
   const formData = new FormData();
   formData.append("profile_picture", file);
-  formData.append("email", loggedInEmail);
 
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/upload-picture", {
       method: "POST",
+      headers: { "Authorization": `Bearer ${token}` },
       body: formData
     });
     if (res.ok) {
       const data = await res.json();
       profileIcon.style.backgroundImage = `url("${data.url}")`;
-      profileIcon.style.backgroundSize = "cover";
-      profileIcon.textContent = "";
       profileIconLarge.style.backgroundImage = `url("${data.url}")`;
-      profileIconLarge.style.backgroundSize = "cover";
-      profileIconLarge.textContent = "";
     } else {
       alert("Failed to upload profile picture.");
     }
@@ -952,13 +884,15 @@ profileUpload.addEventListener('change', async (event) => {
   }
 });
 
-// Delete picture with backend
+// Delete picture with backend (JWT)
 deletePictureBtn.addEventListener('click', async () => {
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/contractor/delete-picture", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loggedInEmail })
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      }
     });
     if (res.ok) {
       const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
@@ -1017,14 +951,17 @@ profileIconLarge.addEventListener("click", () => {
   }
 });
 
+// Assign Team navigation (JWT)
 function openAssignTeam() {
-  const userEmail = localStorage.getItem("userEmail");
   const activeProjectId = localStorage.getItem("activeProjectId");
 
   fetch("https://oneprojectapp-backend.onrender.com/contractor/project-details", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: userEmail, role: "Contractor", projectId: activeProjectId })
+    headers: { 
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`  // ✅ use JWT
+    },
+    body: JSON.stringify({ projectId: activeProjectId })
   })
   .then(res => res.json())
   .then(data => {

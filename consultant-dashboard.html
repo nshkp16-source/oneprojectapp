@@ -696,19 +696,25 @@
     expandGrayPart(html);
   });
 
-// ============= CONSULTANT PROFILE + PROJECT SELECTOR LOGIC =============
-// Global context object for consultant + project
-let currentContext = {
-  consultant: null,
-  project: null
-};
+// ============= CONSULTANT PROFILE + PROJECT SELECTOR LOGIC (JWT-based) =============
+let currentContext = { consultant: null, project: null };
 
-// BACKEND (Neon users table via oneprojectapp-backend): Handle consultant profile info, picture upload/delete, and projects
+// Get JWT from localStorage
+const token = localStorage.getItem("authToken");
 
-// Logged-in email: prefer consultantEmail, fallback to generic userEmail
-const loggedInEmail = localStorage.getItem("consultantEmail") || localStorage.getItem("userEmail");
+// Decode JWT
+function parseJwt(token) {
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(base64));
+  } catch (e) {
+    return null;
+  }
+}
+const decoded = parseJwt(token);
 
-// DOM elements (declare once at the top)
+// DOM elements
 const profileIcon = document.getElementById('profileIcon');
 const profileDialog = document.getElementById('profileDialog');
 const editProfileBtn = document.getElementById('editProfileBtn');
@@ -719,7 +725,6 @@ const profileUpload = document.getElementById('profileUpload');
 const profileIconLarge = document.getElementById('profileIconLarge');
 const profileEmail = document.getElementById('profileEmail');
 const profileRole = document.getElementById('profileRole');
-
 const projectSelector = document.getElementById("projectSelector");
 const projectDialog = document.getElementById("projectDialog");
 const activeProject = document.getElementById("activeProject");
@@ -727,40 +732,185 @@ const activeProject = document.getElementById("activeProject");
 // ============= MAIN LOAD LOGIC =============
 document.addEventListener("DOMContentLoaded", async () => {
   try {
-    // Fetch consultant profile + projects from backend
     const res = await fetch("https://oneprojectapp-backend.onrender.com/consultant/profile", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loggedInEmail })
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      }
     });
 
     if (!res.ok) throw new Error("Failed to fetch consultant profile");
     const consultant = await res.json();
 
-    // Update email + role
     profileEmail.textContent = consultant.email;
     profileRole.textContent = `Role: ${consultant.role}`;
 
-    // Update profile picture or fallback initials
     if (consultant.profile_picture && consultant.profile_picture.trim() !== "") {
       profileIcon.style.backgroundImage = `url("${consultant.profile_picture}")`;
-      profileIcon.style.backgroundSize = "cover";
-      profileIcon.style.backgroundPosition = "center";
-      profileIcon.textContent = "";
-
       profileIconLarge.style.backgroundImage = `url("${consultant.profile_picture}")`;
-      profileIconLarge.style.backgroundSize = "cover";
-      profileIconLarge.style.backgroundPosition = "center";
-      profileIconLarge.textContent = "";
     } else {
       const emailChar = (consultant.email || "?").charAt(0).toUpperCase();
+      profileIcon.textContent = emailChar;
+      profileIconLarge.textContent = emailChar;
+    }
+
+    projectDialog.innerHTML = "";
+    if (!consultant.projects || consultant.projects.length === 0) {
+      activeProject.textContent = "No projects assigned";
+      return;
+    }
+
+    consultant.projects.forEach(project => {
+      const item = document.createElement("div");
+      item.className = "project-item";
+      item.textContent = `${project.name} (${project.location})`;
+      projectDialog.appendChild(item);
+
+      item.addEventListener("click", () => {
+        activeProject.textContent = project.name;
+        projectDialog.style.display = "none";
+        localStorage.setItem("activeProjectId", project.id);
+        localStorage.setItem("activeProjectName", project.name);
+        fetchProjectDetails(project.id);
+      });
+    });
+
+    if (consultant.projects.length === 1) {
+      const project = consultant.projects[0];
+      activeProject.textContent = project.name;
+      localStorage.setItem("activeProjectId", project.id);
+      localStorage.setItem("activeProjectName", project.name);
+      fetchProjectDetails(project.id);
+    }
+
+    const storedProjectId = localStorage.getItem("activeProjectId");
+    const storedProjectName = localStorage.getItem("activeProjectName");
+    if (storedProjectId && storedProjectName) {
+      activeProject.textContent = storedProjectName;
+      fetchProjectDetails(storedProjectId);
+    } else if (consultant.defaultProject) {
+      activeProject.textContent = consultant.defaultProject.name;
+      localStorage.setItem("activeProjectId", consultant.defaultProject.id);
+      localStorage.setItem("activeProjectName", consultant.defaultProject.name);
+      fetchProjectDetails(consultant.defaultProject.id);
+    }
+  } catch (err) {
+    console.error("Consultant profile fetch error:", err);
+  }
+});
+
+// ============= HELPER FUNCTION =============
+async function fetchProjectDetails(projectId) {
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/consultant/project-details", {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({ projectId })
+    });
+
+    if (!res.ok) throw new Error("Failed to fetch project details");
+    const data = await res.json();
+
+    currentContext.consultant = data.consultant;
+    currentContext.project = data.project;
+
+    profileEmail.textContent = data.consultant.email;
+    profileRole.textContent = `Role: ${data.consultant.role}`;
+    activeProject.textContent = data.project.name;
+
+    const projectDetailsContainer = document.getElementById("projectDetailsContainer");
+    if (projectDetailsContainer) {
+      projectDetailsContainer.innerHTML = `
+        <p><strong>Project Name:</strong> ${data.project.name}</p>
+        <p><strong>Location:</strong> ${data.project.location}</p>
+        <p><strong>Contract Ref:</strong> ${data.project.contract_reference}</p>
+        <p><strong>Created At:</strong> ${new Date(data.project.created_at).toLocaleDateString()}</p>
+      `;
+    }
+  } catch (err) {
+    console.error("Consultant project details fetch error:", err);
+  }
+}
+
+// ============= PROJECT SELECTOR TOGGLE =============
+projectSelector.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const rect = projectSelector.getBoundingClientRect();
+  projectDialog.style.display = "block";
+  projectDialog.style.top = rect.bottom + "px";
+  projectDialog.style.left = rect.left + "px";
+});
+
+// ============= PROFILE LOGIC =============
+profileIcon.addEventListener('click', (e) => {
+  e.stopPropagation();
+  profileDialog.style.display = profileDialog.style.display === 'block' ? 'none' : 'block';
+});
+
+editProfileBtn.addEventListener('click', () => {
+  editProfileOptions.style.display = editProfileOptions.style.display === 'block' ? 'none' : 'block';
+});
+
+// Upload picture with backend (JWT)
+changePictureBtn.addEventListener('click', () => { profileUpload.click(); });
+profileUpload.addEventListener('change', async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (!file.type.startsWith("image/")) { alert("Only image files allowed."); return; }
+  if (file.size > 512 * 1024) { alert("Profile picture must not exceed 512KB."); return; }
+
+  const formData = new FormData();
+  formData.append("profile_picture", file);
+
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/consultant/upload-picture", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${token}` },
+      body: formData
+    });
+    if (res.ok) {
+      const data = await res.json();
+      profileIcon.style.backgroundImage = `url("${data.url}")`;
+      profileIconLarge.style.backgroundImage = `url("${data.url}")`;
+    } else {
+      alert("Failed to upload profile picture.");
+    }
+  } catch (err) {
+    console.error("Upload error:", err);
+    alert("Error uploading profile picture.");
+  }
+});
+
+// Delete picture with backend (JWT)
+deletePictureBtn.addEventListener('click', async () => {
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/consultant/delete-picture", {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      }
+    });
+    if (res.ok) {
+      const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
       profileIcon.style.backgroundImage = "";
       profileIcon.textContent = emailChar;
       profileIconLarge.style.backgroundImage = "";
       profileIconLarge.textContent = emailChar;
+    } else {
+      alert("Failed to delete profile picture.");
     }
-    
-    // Profile picture preview (like client dashboard)
+  } catch (err) {
+    console.error("Delete error:", err);
+    alert("Error deleting profile picture.");
+  }
+});
+
+// Profile picture preview (passport-style)
 profileIconLarge.addEventListener("click", () => {
   const pictureUrl = profileIconLarge.style.backgroundImage
     .replace(/^url\(["']?/, "")
@@ -802,189 +952,17 @@ profileIconLarge.addEventListener("click", () => {
   }
 });
 
-    // Populate project selector dynamically
-projectDialog.innerHTML = ""; // clear old items
-
-if (!consultant.projects || consultant.projects.length === 0) {
-  activeProject.textContent = "No projects assigned";
-  return;
-}
-
-consultant.projects.forEach(project => {
-  const item = document.createElement("div");
-  item.className = "project-item";
-  item.setAttribute("data-project-id", project.id);
-  item.setAttribute("data-project", project.name);
-  item.textContent = `${project.name} (${project.location})`;
-  projectDialog.appendChild(item);
-
-  item.addEventListener("click", () => {
-    activeProject.textContent = project.name;
-    projectDialog.style.display = "none";
-
-    localStorage.setItem("activeProjectId", project.id);
-    localStorage.setItem("activeProjectName", project.name);
-
-    // ✅ Refresh details directly instead of reload
-    fetchProjectDetails(project.id);
-  });
-});
-
-    // Auto-select if only one project
-    if (consultant.projects.length === 1) {
-      const project = consultant.projects[0];
-      activeProject.textContent = project.name;
-      localStorage.setItem("activeProjectId", project.id);
-      localStorage.setItem("activeProjectName", project.name);
-    }
-
-    // On page load, check if activeProjectId exists in localStorage
-    const storedProjectId = localStorage.getItem("activeProjectId");
-    const storedProjectName = localStorage.getItem("activeProjectName");
-
-    if (storedProjectId && storedProjectName) {
-      activeProject.textContent = storedProjectName;
-      fetchProjectDetails(storedProjectId); // load consultant + project details
-    } else if (consultant.defaultProject) {
-      activeProject.textContent = consultant.defaultProject.name;
-      localStorage.setItem("activeProjectId", consultant.defaultProject.id);
-      localStorage.setItem("activeProjectName", consultant.defaultProject.name);
-      fetchProjectDetails(consultant.defaultProject.id); // load default project
-    } else {
-      activeProject.textContent = "No projects assigned";
-    }
-  } catch (err) {
-    console.error("Consultant profile fetch error:", err);
-  }
-});
-
-// ============= HELPER FUNCTION =============
-async function fetchProjectDetails(projectId) {
-  try {
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/consultant/project-details", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loggedInEmail, projectId })
-    });
-
-    if (!res.ok) throw new Error("Failed to fetch project details");
-    const data = await res.json();
-
-    // Save into global context
-    currentContext.consultant = data.consultant;
-    currentContext.project = data.project;
-    console.log("Consultant context updated:", currentContext);
-
-    // Update UI as before
-    profileEmail.textContent = data.consultant.email;
-    profileRole.textContent = `Role: ${data.consultant.role}`;
-    activeProject.textContent = data.project.name;
-
-    const projectDetailsContainer = document.getElementById("projectDetailsContainer");
-    if (projectDetailsContainer) {
-      projectDetailsContainer.innerHTML = `
-        <p><strong>Project Name:</strong> ${data.project.name}</p>
-        <p><strong>Location:</strong> ${data.project.location}</p>
-        <p><strong>Contract Ref:</strong> ${data.project.contract_reference}</p>
-        <p><strong>Created At:</strong> ${new Date(data.project.created_at).toLocaleDateString()}</p>
-      `;
-    }
-  } catch (err) {
-    console.error("Consultant project details fetch error:", err);
-  }
-}
-
-// ============= PROJECT SELECTOR TOGGLE =============
-projectSelector.addEventListener("click", (e) => {
-  e.stopPropagation();
-  const rect = projectSelector.getBoundingClientRect();
-  projectDialog.style.display = "block";
-  projectDialog.style.top = rect.bottom + "px";
-  projectDialog.style.left = rect.left + "px";
-});
-
-// ============= PROFILE LOGIC =============
-profileIcon.addEventListener('click', (e) => {
-  e.stopPropagation();
-  profileDialog.style.display = profileDialog.style.display === 'block' ? 'none' : 'block';
-});
-
-editProfileBtn.addEventListener('click', () => {
-  editProfileOptions.style.display = editProfileOptions.style.display === 'block' ? 'none' : 'block';
-});
-
-// Upload picture with backend
-changePictureBtn.addEventListener('click', () => { profileUpload.click(); });
-profileUpload.addEventListener('change', async (event) => {
-  const file = event.target.files[0];
-  if (!file) return;
-
-  if (!file.type.startsWith("image/")) {
-    alert("Only image files are allowed.");
-    return;
-  }
-  if (file.size > 512 * 1024) {
-    alert("Profile picture must not exceed 512KB.");
-    return;
-  }
-
-  const formData = new FormData();
-  formData.append("profile_picture", file);
-  formData.append("email", loggedInEmail);
-
-  try {
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/consultant/upload-picture", {
-      method: "POST",
-      body: formData
-    });
-    if (res.ok) {
-      const data = await res.json();
-      profileIcon.style.backgroundImage = `url("${data.url}")`;
-      profileIcon.style.backgroundSize = "cover";
-      profileIcon.textContent = "";
-      profileIconLarge.style.backgroundImage = `url("${data.url}")`;
-      profileIconLarge.style.backgroundSize = "cover";
-      profileIconLarge.textContent = "";
-    } else {
-      alert("Failed to upload profile picture.");
-    }
-  } catch (err) {
-    console.error("Upload error:", err);
-    alert("Error uploading profile picture.");
-  }
-});
-
-// Delete picture with backend
-deletePictureBtn.addEventListener('click', async () => {
-  try {
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/consultant/delete-picture", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loggedInEmail })
-    });
-    if (res.ok) {
-      const emailChar = profileEmail.textContent.charAt(0).toUpperCase();
-      profileIcon.style.backgroundImage = "";
-      profileIcon.textContent = emailChar;
-      profileIconLarge.style.backgroundImage = "";
-      profileIconLarge.textContent = emailChar;
-    } else {
-      alert("Failed to delete profile picture.");
-    }
-  } catch (err) {
-    console.error("Delete error:", err);
-    alert("Error deleting profile picture.");
-  }
-});
-
+// Assign Team navigation (JWT)
 function openAssignTeam() {
-  const userEmail = localStorage.getItem("userEmail");
   const activeProjectId = localStorage.getItem("activeProjectId");
 
   fetch("https://oneprojectapp-backend.onrender.com/consultant/project-details", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: userEmail, role: "Consultant", projectId: activeProjectId })
+    headers: { 
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`  // ✅ use JWT
+    },
+    body: JSON.stringify({ projectId: activeProjectId })
   })
   .then(res => res.json())
   .then(data => {
