@@ -778,10 +778,10 @@ function parseJwt(token) {
 const token = localStorage.getItem("authToken");
 const decoded = parseJwt(token);
 
-// Identity from JWT
-const clientId = decoded?.user_id;          // comes from JWT payload
-const clientEmail = decoded?.company_email; // for Client role
-const clientRole = decoded?.role;           // should be "Client"
+// Identity from JWT (must match clients table)
+const clientId = decoded?.user_id;             // maps to clients.id
+const clientEmail = decoded?.company_email;    // maps to clients.company_email
+const clientRole = decoded?.role;              // should be "Client"
 
 // DOM elements
 const profileIcon = document.getElementById('profileIcon');
@@ -792,7 +792,7 @@ const changePictureBtn = document.getElementById('changePictureBtn');
 const deletePictureBtn = document.getElementById('deletePictureBtn');
 const profileUpload = document.getElementById('profileUpload');
 const profileIconLarge = document.getElementById('profileIconLarge');
-const profileEmail = document.getElementById('profileEmail');
+const profileEmail = document.getElementById('profileEmail');   // must exist in HTML
 const profileRole = document.getElementById('profileRole');
 const projectSelector = document.getElementById("projectSelector");
 const projectDialog = document.getElementById("projectDialog");
@@ -801,15 +801,14 @@ const activeProject = document.getElementById("activeProject");
 // ============= MAIN LOAD LOGIC =============
 document.addEventListener("DOMContentLoaded", async () => {
   // Display email + role from JWT
-  profileEmail.textContent = clientEmail;
-  profileRole.textContent = `Role: ${clientRole}`;
+  if (profileEmail) profileEmail.textContent = clientEmail;
+  if (profileRole) profileRole.textContent = `Role: ${clientRole}`;
 
-  // Fetch profile picture from backend using clientId
+  // Fetch profile picture from backend (clients table)
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/profile", {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId })
+      method: "GET",
+      headers: { "Authorization": `Bearer ${token}` }
     });
     const client = await res.json();
 
@@ -827,7 +826,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     console.error("Profile picture fetch error:", err);
   }
 
-  // Fetch all projects for this client
+  // Fetch all projects for this client (projects table)
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/projects", {
       method: "POST",
@@ -838,7 +837,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     const projects = data.projects || [];
 
     if (projects.length > 0) {
-      // Default active project
       activeProject.textContent = projects[0].name;
 
       projects.forEach(project => {
@@ -936,7 +934,6 @@ profileUpload.addEventListener('change', async (event) => {
 
   const formData = new FormData();
   formData.append("profile_picture", file);
-  formData.append("clientId", clientId);
 
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
@@ -963,8 +960,7 @@ deletePictureBtn.addEventListener('click', async () => {
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
       method: "POST",
-      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId })
+      headers: { "Authorization": `Bearer ${token}` }
     });
     if (res.ok) {
       const emailChar = clientEmail.charAt(0).toUpperCase();
