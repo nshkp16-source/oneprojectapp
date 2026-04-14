@@ -215,185 +215,183 @@
   </div>
 
   <script>
-    let selectedRole = "";
+  let selectedRole = "";
 
-    const roleMap = {
-      client: "Client",
-      client_pm: "Client Project Manager",
-      consultant: "Consultant",
-      consultant_pm: "Consultant Project Manager",
-      contractor: "Contractor",
-      contractor_pm: "Contractor Project Manager",
-      team_member: "Team Member"
-    };
+  const roleMap = {
+    client: "Client",
+    client_pm: "Client Project Manager",
+    consultant: "Consultant",
+    consultant_pm: "Consultant Project Manager",
+    contractor: "Contractor",
+    contractor_pm: "Contractor Project Manager",
+    team_member: "Team Member"
+  };
 
-    function openModal() {
-      document.getElementById("loginModal").style.display = "block";
+  function openModal() {
+    document.getElementById("loginModal").style.display = "block";
+  }
+
+  function closeModal() {
+    document.getElementById("loginModal").style.display = "none";
+    document.getElementById("roleSelection").style.display = "block";
+    document.getElementById("loginForm").style.display = "none";
+    document.getElementById("message").textContent = "";
+    document.getElementById("notification").style.display = "none";
+    document.getElementById("modalTitle").textContent = "Select Role";
+    document.getElementById("role").value = "";
+    document.getElementById("email").value = "";
+    document.getElementById("password").value = "";
+  }
+
+  function showLoginForm() {
+    selectedRole = document.getElementById("role").value;
+    if (!selectedRole) {
+      alert("Please select a role.");
+      return;
+    }
+    document.getElementById("roleSelection").style.display = "none";
+    document.getElementById("loginForm").style.display = "block";
+    document.getElementById("modalTitle").textContent =
+      roleMap[selectedRole] + " Login";
+
+    document.getElementById("notification").style.display =
+      selectedRole !== "client" ? "block" : "none";
+  }
+
+  function isValidEmail(email) {
+    const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return regex.test(email);
+  }
+
+  async function validateLogin() {
+    const emailInput = document.getElementById("email").value.trim();
+    const password = document.getElementById("password").value;
+
+    if (!isValidEmail(emailInput)) {
+      document.getElementById("message").textContent = "Invalid email format.";
+      return;
+    }
+    if (!selectedRole) {
+      document.getElementById("message").textContent = "Please select a role.";
+      return;
     }
 
-    function closeModal() {
-      document.getElementById("loginModal").style.display = "none";
-      document.getElementById("roleSelection").style.display = "block";
-      document.getElementById("loginForm").style.display = "none";
-      document.getElementById("message").textContent = "";
-      document.getElementById("notification").style.display = "none";
-      document.getElementById("modalTitle").textContent = "Select Role";
-      document.getElementById("role").value = "";
-      document.getElementById("email").value = "";
-      document.getElementById("password").value = "";
-    }
+    const backendRole = roleMap[selectedRole];
+    // ✅ Always send email
+    const payload = { role: backendRole, email: emailInput, password };
 
-    function showLoginForm() {
-      selectedRole = document.getElementById("role").value;
-      if (!selectedRole) {
-        alert("Please select a role.");
-        return;
-      }
-      document.getElementById("roleSelection").style.display = "none";
-      document.getElementById("loginForm").style.display = "block";
-      document.getElementById("modalTitle").textContent =
-        roleMap[selectedRole] + " Login";
+    try {
+      const response = await fetch('https://oneprojectapp-backend.onrender.com/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
 
-      document.getElementById("notification").style.display =
-        selectedRole !== "client" ? "block" : "none";
-    }
+      const data = await response.json();
 
-    function isValidEmail(email) {
-      const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      return regex.test(email);
-    }
-
-    async function validateLogin() {
-      const emailInput = document.getElementById("email").value.trim();
-      const password = document.getElementById("password").value;
-
-      if (!isValidEmail(emailInput)) {
-        document.getElementById("message").textContent = "Invalid email format.";
-        return;
-      }
-      if (!selectedRole) {
-        document.getElementById("message").textContent = "Please select a role.";
-        return;
-      }
-
-      const backendRole = roleMap[selectedRole];
-      const payload = backendRole === "Client"
-        ? { role: backendRole, company_email: emailInput, password }
-        : { role: backendRole, email: emailInput, password };
-
-      try {
-        const response = await fetch('https://oneprojectapp-backend.onrender.com/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-
-        const data = await response.json();
-
-        if (!data.success && data.error && data.error.includes("No password set yet")) {
-          localStorage.setItem("pendingEmail", emailInput);
-          localStorage.setItem("pendingRole", backendRole);
-          document.getElementById("message").textContent =
-            "No password set yet. Redirecting to first login...";
-          document.getElementById("loadingOverlay").style.display = "flex";
-          setTimeout(() => window.location.href = "first-login.html", 1500);
-          return;
-        }
-
-        if (!data.success) {
-          document.getElementById("message").textContent = data.error || "Login failed.";
-          return;
-        }
-
-        document.getElementById("loadingOverlay").style.display = "flex";
-
-        if (data.accessToken && data.refreshToken) {
-          // ✅ Save only tokens
-          localStorage.setItem("authToken", data.accessToken);
-          localStorage.setItem("refreshToken", data.refreshToken);
-
-          const decoded = parseJwt(data.accessToken);
-
-          setTimeout(() => {
-            switch (decoded.role) {
-              case "Client": window.location.href = "client-dashboard.html"; break;
-              case "Client Project Manager": window.location.href = "client-project-manager.html"; break;
-              case "Consultant": window.location.href = "consultant-dashboard.html"; break;
-              case "Consultant Project Manager": window.location.href = "consultant-project-manager.html"; break;
-              case "Contractor": window.location.href = "contractor-dashboard.html"; break;
-              case "Contractor Project Manager": window.location.href = "contractor-project-manager.html"; break;
-              case "Team Member": window.location.href = "team.html"; break;
-              default:
-                document.getElementById("loadingOverlay").style.display = "none";
-                document.getElementById("message").textContent = "Unknown role.";
-            }
-          }, 1500);
-        }
-      } catch (err) {
-        console.error(err);
-        document.getElementById("loadingOverlay").style.display = "none";
-        document.getElementById("message").textContent = "Server error. Please try again.";
-      }
-    }
-
-    function parseJwt(token) {
-      try {
-        const base64Url = token.split('.')[1];
-        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-        return JSON.parse(atob(base64));
-      } catch (e) {
-        return null;
-      }
-    }
-
-    async function forgotPassword() {
-      const emailInput = document.getElementById("email").value.trim();
-      if (!isValidEmail(emailInput)) {
-        document.getElementById("message").textContent = "Enter a valid email before resetting.";
-        return;
-      }
-      if (!selectedRole) {
-        document.getElementById("message").textContent = "Please select a role.";
-        return;
-      }
-
-      const backendRole = roleMap[selectedRole];
-      const payload = backendRole === "Client"
-        ? { role: backendRole, company_email: emailInput }
-        : { role: backendRole, email: emailInput };
-
-      try {
-        const response = await fetch('https://oneprojectapp-backend.onrender.com/check-email', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-
-        const data = await response.json();
-
-        if (!data.exists) {
-          document.getElementById("message").textContent = "Email not found for this role.";
-          return;
-        }
-
-        document.getElementById("loadingOverlay").style.display = "flex";
-
+      if (!data.success && data.error && data.error.includes("No password set yet")) {
         localStorage.setItem("pendingEmail", emailInput);
         localStorage.setItem("pendingRole", backendRole);
-        setTimeout(() => window.location.href = "reset-password.html", 1500);
-      } catch (err) {
-        console.error(err);
-        document.getElementById("message").textContent = "Server error. Please try again.";
+        document.getElementById("message").textContent =
+          "No password set yet. Redirecting to first login...";
+        document.getElementById("loadingOverlay").style.display = "flex";
+        setTimeout(() => window.location.href = "first-login.html", 1500);
+        return;
       }
+
+      if (!data.success) {
+        document.getElementById("message").textContent = data.error || "Login failed.";
+        return;
+      }
+
+      document.getElementById("loadingOverlay").style.display = "flex";
+
+      if (data.accessToken && data.refreshToken) {
+        // ✅ Save only tokens
+        localStorage.setItem("authToken", data.accessToken);
+        localStorage.setItem("refreshToken", data.refreshToken);
+
+        const decoded = parseJwt(data.accessToken);
+
+        setTimeout(() => {
+          switch (decoded.role) {
+            case "Client": window.location.href = "client-dashboard.html"; break;
+            case "Client Project Manager": window.location.href = "client-project-manager.html"; break;
+            case "Consultant": window.location.href = "consultant-dashboard.html"; break;
+            case "Consultant Project Manager": window.location.href = "consultant-project-manager.html"; break;
+            case "Contractor": window.location.href = "contractor-dashboard.html"; break;
+            case "Contractor Project Manager": window.location.href = "contractor-project-manager.html"; break;
+            case "Team Member": window.location.href = "team.html"; break;
+            default:
+              document.getElementById("loadingOverlay").style.display = "none";
+              document.getElementById("message").textContent = "Unknown role.";
+          }
+        }, 1500);
+      }
+    } catch (err) {
+      console.error(err);
+      document.getElementById("loadingOverlay").style.display = "none";
+      document.getElementById("message").textContent = "Server error. Please try again.";
+    }
+  }
+
+  function parseJwt(token) {
+    try {
+      const base64Url = token.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      return JSON.parse(atob(base64));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function forgotPassword() {
+    const emailInput = document.getElementById("email").value.trim();
+    if (!isValidEmail(emailInput)) {
+      document.getElementById("message").textContent = "Enter a valid email before resetting.";
+      return;
+    }
+    if (!selectedRole) {
+      document.getElementById("message").textContent = "Please select a role.";
+      return;
     }
 
-    // ✅ Function for Create Account button
-    function showLoadingAndRedirect(url) {
+    const backendRole = roleMap[selectedRole];
+    // ✅ Always send email
+    const payload = { role: backendRole, email: emailInput };
+
+    try {
+      const response = await fetch('https://oneprojectapp-backend.onrender.com/check-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await response.json();
+
+      if (!data.exists) {
+        document.getElementById("message").textContent = "Email not found for this role.";
+        return;
+      }
+
       document.getElementById("loadingOverlay").style.display = "flex";
-      setTimeout(() => {
-        window.location.href = url;
-      }, 500); // short delay for effect
+
+      localStorage.setItem("pendingEmail", emailInput);
+      localStorage.setItem("pendingRole", backendRole);
+      setTimeout(() => window.location.href = "reset-password.html", 1500);
+    } catch (err) {
+      console.error(err);
+      document.getElementById("message").textContent = "Server error. Please try again.";
     }
+  }
+
+  // ✅ Function for Create Account button
+  function showLoadingAndRedirect(url) {
+    document.getElementById("loadingOverlay").style.display = "flex";
+    setTimeout(() => {
+      window.location.href = url;
+    }, 500); // short delay for effect
+  }
 </script>
 </body>
 </html>
