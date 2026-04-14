@@ -694,6 +694,71 @@
     const html = `<h3 style='margin-bottom:16px;'>Notifications</h3><p>No new notifications.</p><div style='margin-top:16px;'><button class='btn primary' style='width:100%;' onclick='collapseGrayPart()'>Back</button></div>`;
     expandGrayPart(html);
   });
+// =========================
+// // Decode JWT helper
+// =========================
+function parseJwt(token) {
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(base64));
+  } catch (e) {
+    return null;
+  }
+}
+
+// =========================
+// // API request wrapper with auto-refresh
+// =========================
+async function apiRequest(url, options = {}) {
+  let token = localStorage.getItem("authToken");
+  options.headers = { ...options.headers, Authorization: `Bearer ${token}` };
+
+  let res = await fetch(url, options);
+
+  if (res.status === 401 || res.status === 403) {
+    // Access token expired → try refresh
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      options.headers.Authorization = `Bearer ${localStorage.getItem("authToken")}`;
+      res = await fetch(url, options); // retry original request
+    } else {
+      // Refresh failed → logout
+      localStorage.clear();
+      window.location.href = "home.html";
+      return;
+    }
+  }
+
+  return res.json();
+}
+
+// =========================
+// // Refresh access token using refresh route
+// =========================
+async function refreshAccessToken() {
+  const refreshToken = localStorage.getItem("refreshToken");
+  if (!refreshToken) return false;
+
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken })
+    });
+    const data = await res.json();
+
+    if (data.success && data.accessToken) {
+      localStorage.setItem("authToken", data.accessToken);
+      return true;
+    } else {
+      return false;
+    }
+  } catch (err) {
+    console.error("Refresh token error:", err);
+    return false;
+  }
+}
 
 // ============= CONTRACTOR PROFILE + PROJECT SELECTOR LOGIC (JWT-based) =============
 let currentContext = { contractor: null, project: null };
@@ -1208,24 +1273,45 @@ function openAssignTeam() {
     alert('Project exit cancelled.');
   });
 
-  // ============= LOGOUT DIALOG =============
-  const logoutBtn = document.getElementById('logoutBtn');
-  const logoutDialog = document.getElementById('logoutDialog');
-  const confirmLogout = document.getElementById('confirmLogout');
-  const cancelLogout = document.getElementById('cancelLogout');
+ // ============= LOGOUT DIALOG =============
+const logoutBtn = document.getElementById('logoutBtn');
+const logoutDialog = document.getElementById('logoutDialog');
+const confirmLogout = document.getElementById('confirmLogout');
+const cancelLogout = document.getElementById('cancelLogout');
 
-  logoutBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    logoutDialog.classList.add('active');
-  });
+logoutBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  logoutDialog.classList.add('active');
+});
 
-  cancelLogout.addEventListener('click', () => { 
-    logoutDialog.classList.remove('active'); 
-  });
+cancelLogout.addEventListener('click', () => { 
+  logoutDialog.classList.remove('active'); 
+});
 
-  confirmLogout.addEventListener('click', () => { 
-    window.location.href = 'home.html'; 
-  });
+confirmLogout.addEventListener('click', async () => { 
+  const refreshToken = localStorage.getItem("refreshToken");
+
+  try {
+    if (refreshToken) {
+      await fetch("https://oneprojectapp-backend.onrender.com/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken })
+      });
+    }
+  } catch (err) {
+    console.error("Logout error:", err);
+  }
+
+  // Clear tokens locally
+  localStorage.removeItem("authToken");
+  localStorage.removeItem("refreshToken");
+  localStorage.removeItem("userEmail");
+  localStorage.removeItem("userRole");
+
+  // Redirect to home
+  window.location.href = "home.html"; 
+});
 
   // ============= SIDEBAR NAV =============
   const sidebarItems = document.querySelectorAll('.nav-item[data-nav]');

@@ -695,9 +695,9 @@
     expandGrayPart(html);
   });
 
-// ============= CLIENT PROFILE + PROJECT SELECTOR LOGIC (JWT-based) =============
-
-// Decode JWT
+// =========================
+// // Decode JWT helper
+// =========================
 function parseJwt(token) {
   try {
     const base64Url = token.split('.')[1];
@@ -708,11 +708,80 @@ function parseJwt(token) {
   }
 }
 
+// =========================
+// // API request wrapper with auto-refresh
+// =========================
+async function apiRequest(url, options = {}) {
+  let token = localStorage.getItem("authToken");
+  options.headers = { ...options.headers, Authorization: `Bearer ${token}` };
+
+  let res = await fetch(url, options);
+
+  if (res.status === 401 || res.status === 403) {
+    // Access token expired → try refresh
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      options.headers.Authorization = `Bearer ${localStorage.getItem("authToken")}`;
+      res = await fetch(url, options); // retry original request
+    } else {
+      // Refresh failed → logout
+      localStorage.clear();
+      window.location.href = "home.html";
+      return;
+    }
+  }
+
+  return res.json();
+}
+
+// =========================
+// // Refresh access token using refresh route
+// =========================
+async function refreshAccessToken() {
+  const refreshToken = localStorage.getItem("refreshToken");
+  if (!refreshToken) return false;
+
+  try {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken })
+    });
+    const data = await res.json();
+
+    if (data.success && data.accessToken) {
+      localStorage.setItem("authToken", data.accessToken);
+      return true;
+    } else {
+      return false;
+    }
+  } catch (err) {
+    console.error("Refresh token error:", err);
+    return false;
+  }
+}
+
+// ============= CLIENT PROFILE + PROJECT SELECTOR LOGIC (JWT-based) =============
+
+// Decode JWT helper
+function parseJwt(token) {
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(base64));
+  } catch (e) {
+    console.error("JWT parse error:", e);
+    return null;
+  }
+}
+
 const token = localStorage.getItem("authToken");
 const decoded = parseJwt(token);
-const clientEmail = decoded?.userEmail; // JWT carries userEmail, treat as clientEmail
-const clientRole = decoded?.role;
-const projectId = decoded?.projectId;   // assume JWT carries active projectId
+
+// Identity from JWT
+const clientId = decoded?.user_id;          // comes from JWT payload
+const clientEmail = decoded?.company_email; // for Client role
+const clientRole = decoded?.role;           // should be "Client"
 
 // DOM elements
 const profileIcon = document.getElementById('profileIcon');
@@ -735,11 +804,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   profileEmail.textContent = clientEmail;
   profileRole.textContent = `Role: ${clientRole}`;
 
-  // Fetch profile picture from backend
+  // Fetch profile picture from backend using clientId
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/profile", {
       method: "POST",
-      headers: { "Authorization": `Bearer ${token}` }
+      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId })
     });
     const client = await res.json();
 
@@ -757,50 +827,56 @@ document.addEventListener("DOMContentLoaded", async () => {
     console.error("Profile picture fetch error:", err);
   }
 
-  // Fetch project details from backend (always show name)
+  // Fetch all projects for this client
   try {
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/client/project-details", {
+    const res = await fetch("https://oneprojectapp-backend.onrender.com/client/projects", {
       method: "POST",
       headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId })
+      body: JSON.stringify({ clientId })
     });
     const data = await res.json();
-    const project = data.project;
+    const projects = data.projects || [];
 
-    activeProject.textContent = project.name;
+    if (projects.length > 0) {
+      // Default active project
+      activeProject.textContent = projects[0].name;
 
-    const item = document.createElement("div");
-    item.className = "project-item";
-    item.textContent = `${project.name} (${project.location})`;
-    projectDialog.appendChild(item);
+      projects.forEach(project => {
+        const item = document.createElement("div");
+        item.className = "project-item";
+        item.textContent = `${project.name} (${project.location})`;
+        projectDialog.appendChild(item);
 
-    item.addEventListener("click", () => {
-      activeProject.textContent = project.name;
-      projectDialog.style.display = "none";
-      fetchProjectDetails(project.id);
-    });
+        item.addEventListener("click", () => {
+          activeProject.textContent = project.name;
+          projectDialog.style.display = "none";
+          fetchProjectDetails(project.id);
+        });
+      });
 
-    // Show one-time popup message
-    const popup = document.createElement("div");
-    popup.id = "projectPopup";
-    popup.textContent = "You can switch project";
-    popup.style.position = "absolute";
-    popup.style.top = projectSelector.offsetTop - 30 + "px";
-    popup.style.left = projectSelector.offsetLeft + "px";
-    popup.style.background = "#f0f0f0";
-    popup.style.padding = "6px 12px";
-    popup.style.border = "1px solid #ccc";
-    popup.style.borderRadius = "4px";
-    popup.style.zIndex = "1000";
-    document.body.appendChild(popup);
+      // One-time popup hint
+      const popup = document.createElement("div");
+      popup.id = "projectPopup";
+      popup.textContent = "You can switch project";
+      popup.style.position = "absolute";
+      popup.style.top = projectSelector.offsetTop - 30 + "px";
+      popup.style.left = projectSelector.offsetLeft + "px";
+      popup.style.background = "#f0f0f0";
+      popup.style.padding = "6px 12px";
+      popup.style.border = "1px solid #ccc";
+      popup.style.borderRadius = "4px";
+      popup.style.zIndex = "1000";
+      document.body.appendChild(popup);
 
-    document.addEventListener("click", () => {
-      if (popup) popup.remove();
-    }, { once: true });
-
+      document.addEventListener("click", () => {
+        if (popup) popup.remove();
+      }, { once: true });
+    } else {
+      activeProject.textContent = "No projects assigned";
+    }
   } catch (err) {
-    console.error("Project details fetch error:", err);
-    activeProject.textContent = "No projects assigned";
+    console.error("Projects fetch error:", err);
+    activeProject.textContent = "Error loading projects";
   }
 });
 
@@ -860,6 +936,7 @@ profileUpload.addEventListener('change', async (event) => {
 
   const formData = new FormData();
   formData.append("profile_picture", file);
+  formData.append("clientId", clientId);
 
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
@@ -871,6 +948,8 @@ profileUpload.addEventListener('change', async (event) => {
       const data = await res.json();
       profileIcon.style.backgroundImage = `url("${data.url}")`;
       profileIconLarge.style.backgroundImage = `url("${data.url}")`;
+      profileIcon.textContent = "";
+      profileIconLarge.textContent = "";
     } else {
       alert("Failed to upload profile picture.");
     }
@@ -884,7 +963,8 @@ deletePictureBtn.addEventListener('click', async () => {
   try {
     const res = await fetch("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
       method: "POST",
-      headers: { "Authorization": `Bearer ${token}` }
+      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId })
     });
     if (res.ok) {
       const emailChar = clientEmail.charAt(0).toUpperCase();
@@ -1200,23 +1280,44 @@ function openAssignTeam() {
   });
 
   // ============= LOGOUT DIALOG =============
-  const logoutBtn = document.getElementById('logoutBtn');
-  const logoutDialog = document.getElementById('logoutDialog');
-  const confirmLogout = document.getElementById('confirmLogout');
-  const cancelLogout = document.getElementById('cancelLogout');
+const logoutBtn = document.getElementById('logoutBtn');
+const logoutDialog = document.getElementById('logoutDialog');
+const confirmLogout = document.getElementById('confirmLogout');
+const cancelLogout = document.getElementById('cancelLogout');
 
-  logoutBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    logoutDialog.classList.add('active');
-  });
+logoutBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  logoutDialog.classList.add('active');
+});
 
-  cancelLogout.addEventListener('click', () => { 
-    logoutDialog.classList.remove('active'); 
-  });
+cancelLogout.addEventListener('click', () => { 
+  logoutDialog.classList.remove('active'); 
+});
 
-  confirmLogout.addEventListener('click', () => { 
-    window.location.href = 'home.html'; 
-  });
+confirmLogout.addEventListener('click', async () => { 
+  const refreshToken = localStorage.getItem("refreshToken");
+
+  try {
+    if (refreshToken) {
+      await fetch("https://oneprojectapp-backend.onrender.com/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken })
+      });
+    }
+  } catch (err) {
+    console.error("Logout error:", err);
+  }
+
+  // Clear tokens locally
+  localStorage.removeItem("authToken");
+  localStorage.removeItem("refreshToken");
+  localStorage.removeItem("userEmail");
+  localStorage.removeItem("userRole");
+
+  // Redirect to home
+  window.location.href = "home.html"; 
+});
 
   // ============= SIDEBAR NAV =============
   const sidebarItems = document.querySelectorAll('.nav-item[data-nav]');
