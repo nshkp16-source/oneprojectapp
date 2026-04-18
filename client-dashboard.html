@@ -551,7 +551,8 @@
       <div class="nav-item" data-nav="reports">
         <span class="icon">📑</span><span class="label" data-translate="reports">Reports</span>
       </div>
-      <div class="nav-item" id="assignTeamsToggle" data-nav="assign-team-members">
+      <!-- Assign Teams nav item -->
+      <div class="nav-item" data-nav="assign-team-members" onclick="openAssignTeamsDialog()">
         <span class="icon">👥</span>
         <span class="label" data-translate="assign-team-members">Assign Team Members</span>
       </div>
@@ -752,18 +753,20 @@
 <div class="modal-overlay" id="assignTeamsOverlay">
   <div class="modal-content">
     <h3>Assign Options</h3>
-    <p id="assignMessage"></p>
+
+    <!-- Inline message area -->
+    <p id="assignMessage" style="color:#007B8A; font-weight:bold; margin-bottom:10px;"></p>
+
     <div>
       <button onclick="checkProjectManager()">👤 Project Manager</button>
       <button onclick="redirectAssignTeam()">👥 Other Team Members</button>
     </div>
+
     <div class="modal-actions">
       <button onclick="closeAssignTeamsDialog()">Cancel</button>
     </div>
   </div>
 </div>
-
-
 
 <script>
   // Global state
@@ -1160,62 +1163,78 @@ profileIconLarge.addEventListener("click", () => {
   profilePreview.appendChild(previewBox);
 });
 
-// ============= ASSIGN TEAMS DIALOG =============
-document.addEventListener("DOMContentLoaded", () => {
-  const assignBtn = document.getElementById("assignTeamsToggle"); // nav item
-  const assignOverlay = document.getElementById("assignTeamsOverlay"); // dialog
-  const assignMessage = document.getElementById("assignMessage"); // inline message
+// Open dialog
+function openAssignTeamsDialog() {
+  document.getElementById("assignTeamsOverlay").classList.add("active");
+}
 
-  // Open dialog when nav item clicked
-  if (assignBtn && assignOverlay) {
-    assignBtn.addEventListener("click", () => {
-      assignOverlay.classList.add("active");
+// Close dialog
+function closeAssignTeamsDialog() {
+  document.getElementById("assignTeamsOverlay").classList.remove("active");
+  document.getElementById("assignMessage").textContent = "";
+}
+
+// Project Manager option
+function checkProjectManager() {
+  const activeProjectId = localStorage.getItem("activeProjectId");
+
+  ensureValidToken().then(validToken => {
+    if (!validToken) return;
+
+    fetch("https://oneprojectapp-backend.onrender.com/client/project-manager-status", {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${validToken}`
+      },
+      body: JSON.stringify({ projectId: activeProjectId })
+    })
+    .then(res => res.json())
+    .then(data => {
+      localStorage.setItem("projectDetails", JSON.stringify(data));
+
+      if (data.hasPM) {
+        document.getElementById("assignMessage").textContent =
+          "✅ You have already assigned a Project Manager. Please use Edit Information to change.";
+      } else {
+        window.location.href = "assign-pm.html";
+      }
+    })
+    .catch(err => {
+      console.error("Error checking PM:", err);
+      document.getElementById("assignMessage").textContent =
+        "⚠️ Could not check Project Manager status. Please try again.";
     });
-  }
+  });
+}
 
-  // Close dialog
-  window.closeAssignTeamsDialog = function() {
-    assignOverlay.classList.remove("active");
-    if (assignMessage) assignMessage.textContent = "";
-  };
+// Other Team Members option
+function redirectAssignTeam() {
+  const activeProjectId = localStorage.getItem("activeProjectId");
 
-  // Project Manager option
-  window.checkProjectManager = function() {
-    const activeProjectId = localStorage.getItem("activeProjectId");
+  ensureValidToken().then(validToken => {
+    if (!validToken) return;
 
-    ensureValidToken().then(validToken => {
-      if (!validToken) return;
-
-      fetch("https://oneprojectapp-backend.onrender.com/client/project-manager-status", {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${validToken}`
-        },
-        body: JSON.stringify({ projectId: activeProjectId })
-      })
-      .then(res => res.json())
-      .then(data => {
-        localStorage.setItem("projectDetails", JSON.stringify(data));
-
-        if (data.hasPM) {
-          if (assignMessage) {
-            assignMessage.textContent =
-              "✅ You have already assigned a Project Manager. Please use Edit Information to change.";
-          }
-        } else {
-          window.location.href = "assign-pm.html";
-        }
-      })
-      .catch(err => {
-        console.error("Error checking PM:", err);
-        if (assignMessage) {
-          assignMessage.textContent =
-            "⚠️ Could not check Project Manager status. Please try again.";
-        }
-      });
+    fetch("https://oneprojectapp-backend.onrender.com/client/project-details", {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${validToken}`
+      },
+      body: JSON.stringify({ projectId: activeProjectId })
+    })
+    .then(res => res.json())
+    .then(data => {
+      localStorage.setItem("projectDetails", JSON.stringify(data));
+      window.location.href = "assign-team.html";
+    })
+    .catch(err => {
+      console.error("Error fetching project details:", err);
+      document.getElementById("assignMessage").textContent =
+        "⚠️ Could not load project details. Please try again.";
     });
-  };
+  });
+}
 
   // Other Team Members option
   window.redirectAssignTeam = function() {
