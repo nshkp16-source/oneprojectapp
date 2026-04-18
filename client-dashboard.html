@@ -234,7 +234,6 @@
     }
     .project-item:last-child { border-bottom: none; }
     .project-item:hover { background: #f3f3f3; }
-
     /* Navigation */
     .nav-item {
       display: flex; align-items: center; gap: 8px;
@@ -277,7 +276,7 @@
     .modal-content p {
       margin-bottom: 16px;
       color: #666;
-    }
+    } 
     .modal-actions {
       display: flex; 
       gap: 8px; 
@@ -302,6 +301,35 @@
     }
     .modal-actions button:hover {
       background: #f5f5f5;
+    }
+
+    /* ✅ Assign Teams Dialog (Nav Item 3) */
+    .short-dialog {
+      min-width: 300px;   /* narrower than full modal */
+      min-height: 160px;  /* short baseline height */
+      padding: 16px;
+    }
+
+    .assign-options {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .option-btn {
+      padding: 10px 14px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      background: #f9f9f9;
+      cursor: pointer;
+      font-size: 14px;
+      text-align: left;
+      transition: background 0.2s ease;
+    }
+
+    .option-btn:hover {
+      background: #e6f7f9;
     }
 
     /* Logout */
@@ -551,10 +579,21 @@
       <div class="nav-item" data-nav="reports">
         <span class="icon">📑</span><span class="label" data-translate="reports">Reports</span>
       </div>
-      <div class="nav-item" data-nav="assign-team-members" onclick="openAssignTeam()">
-        <span class="icon">👥</span>
-        <span class="label" data-translate="assign-team-members">Assign Team Members</span>
-      </div>
+      <!-- Assign Teams Dialog -->
+<div class="modal-overlay" id="assignTeamsOverlay">
+  <div class="modal-content short-dialog">
+    <h3>Assign Options</h3>
+
+    <div class="assign-options">
+      <button class="option-btn" onclick="showPMMessage()">👤 Project Manager</button>
+      <button class="option-btn" onclick="redirectAssignTeam()">👥 Other Team Members</button>
+    </div>
+
+    <div class="modal-actions">
+      <button onclick="closeAssignTeamsDialog()">Cancel</button>
+    </div>
+  </div>
+</div>
       <div class="nav-item" data-nav="edit-information" onclick="window.location.href='edit-information.html'">
         <span class="icon">✏️</span><span class="label" data-translate="edit-information">Edit Information</span>
       </div>
@@ -1143,8 +1182,51 @@ profileIconLarge.addEventListener("click", () => {
   profilePreview.appendChild(previewBox);
 });
 
-// Assign Team navigation (JWT) — unchanged
-function openAssignTeam() {
+// ASSIGN TEAMS 
+// Open/close dialog
+function openAssignTeamsDialog() {
+  document.getElementById("assignTeamsOverlay").classList.add("active");
+}
+function closeAssignTeamsDialog() {
+  document.getElementById("assignTeamsOverlay").classList.remove("active");
+}
+
+// Project Manager option
+function checkProjectManager() {
+  const activeProjectId = localStorage.getItem("activeProjectId");
+
+  ensureValidToken().then(validToken => {
+    if (!validToken) return;
+
+    fetch("https://oneprojectapp-backend.onrender.com/client/project-manager-status", {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${validToken}`
+      },
+      body: JSON.stringify({ projectId: activeProjectId })
+    })
+    .then(res => res.json())
+    .then(data => {
+      // Save project info locally for reuse
+      localStorage.setItem("projectDetails", JSON.stringify(data));
+
+      if (data.hasPM) {
+        alert("You have assigned PM. Please click Edit Information for change.");
+      } else {
+        // No PM assigned yet → redirect to PM assignment page
+        window.location.href = "assign-pm.html";
+      }
+    })
+    .catch(err => {
+      console.error("Error checking PM:", err);
+      alert("Could not check Project Manager status.");
+    });
+  });
+}
+
+// Other Team Members option
+function redirectAssignTeam() {
   const activeProjectId = localStorage.getItem("activeProjectId");
 
   ensureValidToken().then(validToken => {
@@ -1160,6 +1242,7 @@ function openAssignTeam() {
     })
     .then(res => res.json())
     .then(data => {
+      // Save project info locally for reuse
       localStorage.setItem("projectDetails", JSON.stringify(data));
       window.location.href = "assign-team.html";
     })
