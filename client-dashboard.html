@@ -1144,7 +1144,72 @@ profileIconLarge.addEventListener("click", () => {
   profilePreview.appendChild(previewBox);
 });
 
+async function openAssignTeam() {
+  try {
+    // 1. Get JWT
+    const token = localStorage.getItem("authToken");
+    if (!token) {
+      alert("No token found. Please log in again.");
+      window.location.href = "home.html";
+      return;
+    }
 
+    // 2. Decode JWT
+    const decoded = parseJwt(token);
+    const userRole = decoded?.role;
+    const clientId = decoded?.sub;
+
+    if (!clientId || !userRole) {
+      alert("Invalid token payload. Please log in again.");
+      return;
+    }
+
+    // ✅ Restrict to Client role only
+    if (userRole !== "Client") {
+      alert("Only Clients can assign team members. Please return to your dashboard.");
+      window.location.href = redirectDashboard(userRole);
+      return;
+    }
+
+    // 3. Get active project ID from selector logic
+    const activeProjectId = sessionStorage.getItem("activeProjectId");
+    if (!activeProjectId) {
+      alert("No active project selected. Please choose a project first.");
+      return;
+    }
+
+    // 4. Fetch project details
+    const projectData = await apiRequest("https://oneprojectapp-backend.onrender.com/client/project-details", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: activeProjectId })
+    });
+
+    if (!projectData || !projectData.project) {
+      alert("Failed to load project details.");
+      return;
+    }
+
+    // 5. Save context for assign-team.html
+    sessionStorage.setItem("projectDetails", JSON.stringify(projectData.project));
+    sessionStorage.setItem("projectRole", userRole);
+    sessionStorage.setItem("projectId", activeProjectId);
+
+    // 6. Redirect
+    window.location.href = "assign-team.html";
+
+  } catch (err) {
+    console.error("Error in openAssignTeam:", err);
+    alert("Something went wrong while switching project.");
+  }
+}
+
+function redirectDashboard(role) {
+  if (role === "Client") return "client-dashboard.html";
+  if (role === "Contractor") return "contractor-dashboard.html";
+  if (role === "Consultant") return "consultant-dashboard.html";
+  return "home.html";
+}
 
   // ============= SETTINGS DIALOG =============
   const settingsToggle = document.getElementById('settingsToggle');
