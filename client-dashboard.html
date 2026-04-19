@@ -351,79 +351,6 @@
       display: block;
     }
     .logout-actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
-     
-    /* Feedback Dialog Styles */
-.feedback-overlay {
-  display: none;
-  position: fixed;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
-  background: rgba(0,0,0,0.6);   /* slightly darker overlay */
-  z-index: 30;                   /* higher than standard modal */
-  justify-content: center;
-  align-items: center;
-}
-
-.feedback-overlay.active {
-  display: flex;
-}
-
-.feedback-content {
-  background: #fff;
-  padding: 28px;
-  border-radius: 12px;
-  min-width: 420px;
-  max-width: 600px;
-  color: #222;
-  box-shadow: 0 12px 36px rgba(0,0,0,0.35);
-}
-
-.feedback-content h3 {
-  margin-bottom: 18px;
-  color: var(--c-teal);
-  font-size: 20px;
-  font-weight: bold;
-}
-
-.feedback-content textarea {
-  width: 100%;
-  min-height: 120px;
-  border: 1px solid #ccc;
-  border-radius: 8px;
-  padding: 10px;
-  font-size: 14px;
-  margin-bottom: 16px;
-  resize: vertical;
-}
-
-.feedback-actions {
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-}
-
-.feedback-actions button {
-  padding: 8px 18px;
-  border-radius: 6px;
-  border: 1px solid #ccc;
-  background: #fff;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.feedback-actions button.primary {
-  background: var(--c-teal);
-  color: #fff;
-  border: none;
-}
-
-.feedback-actions button.primary:hover {
-  background: #005a68;
-}
-
-.feedback-actions button:hover {
-  background: #f5f5f5;
-}
 
     /* Right main part */
     .right-main-part {
@@ -625,9 +552,9 @@
         <span class="icon">📑</span><span class="label" data-translate="reports">Reports</span>
       </div>
       <!-- Assign Teams nav item -->
-      <div class="nav-item dialog-trigger" id="feedbackToggle">
-        <span class="icon">💬</span>
-        <span class="label">Feedback</span>
+      <div class="nav-item" data-nav="assign-team-members" onclick="openAssignTeam()">
+        <span class="icon">👥</span>
+        <span class="label" data-translate="assign-team-members">Assign Team Members</span>
       </div>
       <div class="nav-item" data-nav="edit-information" onclick="window.location.href='edit-information.html'">
         <span class="icon">✏️</span><span class="label" data-translate="edit-information">Edit Information</span>
@@ -821,19 +748,6 @@
     <button class="btn primary" id="confirmLogout">OK</button>
   </div>
 </div>
-
-<!-- Assign Teams Dialog -->
-<div class="feedback-overlay" id="feedbackDialog">
-  <div class="feedback-content">
-    <h3>Submit Feedback</h3>
-    <textarea id="feedbackText" placeholder="Type your feedback here..."></textarea>
-    <div class="feedback-actions">
-      <button onclick="document.getElementById('feedbackDialog').classList.remove('active')">Cancel</button>
-      <button class="primary" onclick="submitFeedback()">Send</button>
-    </div>
-  </div>
-</div>
-
 
 <script>
   // Global state
@@ -1231,26 +1145,56 @@ profileIconLarge.addEventListener("click", () => {
 });
 
 // assign team member
-// Full function to handle Assign Teams dialog
-document.addEventListener("DOMContentLoaded", () => {
-  const feedbackNav = document.getElementById("feedbackToggle");
-  const feedbackDialog = document.getElementById("feedbackDialog");
+async function openAssignTeam() {
+  try {
+    // 1. Get JWT from localStorage
+    const token = localStorage.getItem("authToken");
+    if (!token) {
+      alert("No token found. Please log in again.");
+      window.location.href = "home.html";
+      return;
+    }
 
-  if (feedbackNav && feedbackDialog) {
-    feedbackNav.addEventListener("click", () => {
-      feedbackDialog.classList.add("active");
+    // 2. Decode JWT to extract role and client info
+    const decoded = parseJwt(token);
+    const userRole = decoded?.role;
+    const clientId = decoded?.sub;
+
+    if (!clientId || !userRole) {
+      alert("Invalid token payload. Please log in again.");
+      return;
+    }
+
+    // 3. Determine active project (from selector or backend)
+    const activeProjectId = decoded?.projectId;
+    if (!activeProjectId) {
+      alert("No active project found. Please select a project first.");
+      return;
+    }
+
+    // 4. Call backend to fetch project details
+    const projectData = await apiRequest("https://oneprojectapp-backend.onrender.com/client/project-details", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: activeProjectId })
     });
-  }
-});
 
-function submitFeedback() {
-  const feedback = document.getElementById("feedbackText").value;
-  if (feedback.trim() !== "") {
-    console.log("Feedback submitted:", feedback);
-    alert("Thank you for your feedback!");
-    document.getElementById("feedbackDialog").classList.remove("active");
-  } else {
-    alert("Please enter feedback before sending.");
+    if (!projectData || !projectData.project) {
+      alert("Failed to load project details.");
+      return;
+    }
+
+    // 5. Save project context for assign-team.html
+    sessionStorage.setItem("projectDetails", JSON.stringify(projectData.project));
+    sessionStorage.setItem("projectRole", userRole);
+    sessionStorage.setItem("projectId", activeProjectId);
+
+    // 6. Redirect to assign-team.html
+    window.location.href = "assign-team.html";
+
+  } catch (err) {
+    console.error("Error in openAssignTeam:", err);
+    alert("Something went wrong while switching project.");
   }
 }
 
