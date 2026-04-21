@@ -1,4 +1,4 @@
-so this is how this html should be have first of all the first page to pop up is login but show user email and where to fill pasword and continue (fetch call to verify password using fetch), page two choice at the top user email(if client company email) and project name with role and then these tw option:project manager button (able after to call fetch to see if project have no pm (for example when it is contractor dashbod the they check contractor PM by using project id and assignment) if pm found disable with message to back on dashboard to choose edit information) and other team button:                         <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -8,85 +8,35 @@ so this is how this html should be have first of all the first page to pop up is
     .overlay { background:rgba(255,255,255,0.6); position:fixed; top:0; left:0; width:100%; height:100%; }
     .container { position:relative; z-index:1; background:#fff; padding:30px 40px; border-radius:12px; max-width:700px; margin:8vh auto; box-shadow:0 0 12px rgba(0,0,0,0.2); }
     h2 { text-align:center; color:#007BFF; }
-    h3 { margin-top:20px; color:#333; }
-    input { display:block; width:100%; margin:10px 0; padding:12px; border:1px solid #ccc; border-radius:5px; }
-    button { background:#007BFF; color:#fff; border:none; padding:12px 18px; border-radius:5px; cursor:pointer; font-size:15px; }
+    button { background:#007BFF; color:#fff; border:none; padding:12px 18px; border-radius:5px; cursor:pointer; font-size:15px; margin:10px; }
     button:hover { background:#0056b3; }
     button:disabled { background:#aaa; cursor:not-allowed; }
-    .actions { margin-top:20px; text-align:center; }
-    .back-link { display:inline-block; margin-top:10px; color:#6c757d; cursor:pointer; }
-    .back-link:hover { color:#333; }
     .message { color:#cc0000; font-size:14px; margin-top:6px; }
-    ul { list-style:none; padding:0; }
-    li { margin:8px 0; padding:8px; background:#f4f4f4; border-radius:5px; display:flex; justify-content:space-between; align-items:center; }
-    .remove-btn { background:#cc0000; color:#fff; border:none; padding:6px 12px; border-radius:5px; cursor:pointer; font-size:14px; }
-    .remove-btn:hover { background:#990000; }
   </style>
 </head>
 <body>
   <div class="overlay"></div>
   <div class="container">
     <h2>Assign Team</h2>
-    <p id="projectContext">Loading project...</p>
 
-    <!-- Choice Section -->
-    <div id="choiceSection" style="text-align:center; margin-top:20px;">
-      <button onclick="showForm('pm')">Assign Project Manager</button>
-      <button onclick="showForm('team')">Assign Team Members</button>
+    <!-- Page 1: Login -->
+    <div id="loginPage">
+      <p id="userEmail"></p>
+      <input type="password" id="passwordInput" placeholder="Enter password" />
+      <button id="loginBtn">Continue</button>
     </div>
 
-    <!-- Project Manager Section -->
-    <div id="pmSection" style="display:none;">
-      <h3>Project Manager</h3>
-      <div id="pmFormContainer">
-        <form id="pmForm" onsubmit="addPM(event)">
-          <input type="text" id="pmName" placeholder="Name" required />
-          <input type="email" id="pmEmail" placeholder="Email" required />
-          <input type="text" id="pmCompany" placeholder="Company Name" required />
-          <input type="text" id="pmTitle" placeholder="Title" />
-          <input type="text" id="pmPosition" placeholder="Position" required />
-          <input type="text" id="pmTelephone" placeholder="Telephone" />
-          <input type="text" id="pmTask" placeholder="Task" required />
-          <input type="text" id="pmRepresentative" placeholder="Representative" />
-          <button type="submit" id="assignPmBtn">Assign Project Manager</button>
-          <p id="pmMessage" class="message"></p>
-        </form>
-      </div>
-      <div id="pmAssignedMessage" style="display:none;">
-        <p>A Project Manager is already assigned. To change, please use Edit Information.</p>
-      </div>
-    </div>
-
-    <!-- Team Members Section -->
-    <div id="teamSection" style="display:none;">
-      <h3>Team Members</h3>
-      <form id="teamForm" onsubmit="addMember(event)">
-        <input type="text" id="memberName" placeholder="Name" required />
-        <input type="email" id="memberEmail" placeholder="Email" required />
-        <input type="text" id="memberCompany" placeholder="Company Name" required />
-        <input type="text" id="memberTitle" placeholder="Title" />
-        <input type="text" id="memberPosition" placeholder="Position" required />
-        <input type="text" id="memberTelephone" placeholder="Telephone" />
-        <input type="text" id="memberTask" placeholder="Task" required />
-        <input type="text" id="memberRepresentative" placeholder="Representative" />
-        <button type="submit">Confirm</button>
-        <p id="memberMessage" class="message"></p>
-      </form>
-      <ul id="memberList"></ul>
-    </div>
-
-    <div class="actions">
-      <button id="saveBtn">Save</button>
-      <span class="back-link" onclick="goBack()">&#8592; Back to Dashboard</span>
+    <!-- Page 2: Options -->
+    <div id="assignOptionsPage" style="display:none; text-align:center;">
+      <p id="assignHeader"></p>
+      <button id="pmBtn">Assign Project Manager</button>
+      <button id="teamBtn">Assign Other Team Members</button>
+      <p id="pmMessage" class="message"></p>
     </div>
   </div>
 
 <script>
-  const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
-  const projectId = projectDetails.project?.id;
-  let assignments = projectDetails.team_members || [];
-
-  // JWT helpers
+  // Decode JWT
   function parseJwt(token) {
     try {
       const base64Url = token.split('.')[1];
@@ -94,138 +44,64 @@ so this is how this html should be have first of all the first page to pop up is
       return JSON.parse(atob(base64));
     } catch (e) { return null; }
   }
-  function isTokenExpired(token) {
-    const decoded = parseJwt(token);
-    if (!decoded || !decoded.exp) return true;
-    return decoded.exp < Math.floor(Date.now() / 1000);
-  }
-  async function ensureValidToken() {
-    let token = localStorage.getItem("authToken");
-    const refreshToken = localStorage.getItem("refreshToken");
-    if (!token || isTokenExpired(token)) {
-      if (!refreshToken) {
-        alert("Session expired. Please log in again.");
-        localStorage.clear(); window.location.href = "home.html"; return null;
+
+  const token = localStorage.getItem("authToken");
+  const decoded = parseJwt(token);
+  document.getElementById("userEmail").textContent = `${decoded?.email} | Role: ${decoded?.role}`;
+
+  // Page 1 → Verify password
+  document.getElementById("loginBtn").addEventListener("click", async () => {
+    const password = document.getElementById("passwordInput").value;
+    try {
+      const res = await fetch("/verify-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ email: decoded.email, role: decoded.role, password })
+      });
+      const data = await res.json();
+      if (data.valid) {
+        document.getElementById("loginPage").style.display = "none";
+        document.getElementById("assignOptionsPage").style.display = "block";
+        document.getElementById("assignHeader").textContent =
+          `${decoded.email} | ${ProjectContext.getName()} | Role: ${decoded.role}`;
+      } else {
+        alert("Invalid password");
       }
-      try {
-        const res = await fetch("https://oneprojectapp-backend.onrender.com/refresh", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ refreshToken })
-        });
-        const data = await res.json();
-        if (data.success && data.accessToken) {
-          token = data.accessToken;
-          localStorage.setItem("authToken", token);
-          return token;
-        } else { throw new Error("Refresh failed"); }
-      } catch (err) {
-        console.error("Token refresh error:", err);
-        alert("Session expired. Please log in again.");
-        localStorage.clear(); window.location.href = "home.html"; return null;
-      }
+    } catch (err) {
+      console.error("Password verification error:", err);
     }
-    return token;
-  }
-
-  // Get role and email directly from JWT
-  function getUserFromToken() {
-    const token = localStorage.getItem("authToken");
-    const decoded = parseJwt(token);
-    if (!decoded) return {};
-    return { role: decoded.role, email: decoded.email, id: decoded.sub };
-  }
-  const { role, email, id } = getUserFromToken();
-
-  // Show choice buttons first
-  function showChoice() {
-    document.getElementById("choiceSection").style.display = "block";
-    document.getElementById("pmSection").style.display = "none";
-    document.getElementById("teamSection").style.display = "none";
-  }
-  function showForm(type) {
-    document.getElementById("choiceSection").style.display = "none";
-    if (type === "pm") { document.getElementById("pmSection").style.display = "block"; checkPMAssigned(); }
-    else { document.getElementById("teamSection").style.display = "block"; }
-  }
-
-  function checkPMAssigned() {
-    const existingPM = assignments.find(m => m.role === "Project Manager");
-    if (existingPM) {
-      document.getElementById("assignPmBtn").disabled = true;
-      document.getElementById("pmMessage").textContent = "A Project Manager is already assigned.";
-      document.getElementById("pmAssignedMessage").style.display = "block";
-    }
-  }
-
-  function addPM(e) {
-    e.preventDefault();
-    const pm = {
-      name: pmName.value.trim(), email: pmEmail.value.trim().toLowerCase(),
-      company_name: pmCompany.value.trim(), title: pmTitle.value.trim(),
-      position: pmPosition.value.trim(), telephone: pmTelephone.value.trim(),
-      task: pmTask.value.trim(), representative: pmRepresentative.value.trim(),
-      role: "Project Manager"
-    };
-    assignments.push(pm);
-    alert("Project Manager assigned."); pmForm.reset(); checkPMAssigned();
-  }
-
-  function addMember(e) {
-    e.preventDefault();
-    const memberMessage = document.getElementById("memberMessage");
-    const member = {
-      name: memberName.value.trim(), email: memberEmail.value.trim().toLowerCase(),
-      company_name: memberCompany.value.trim(), title: memberTitle.value.trim(),
-      position: memberPosition.value.trim(), telephone: memberTelephone.value.trim(),
-      task: memberTask.value.trim(), representative: memberRepresentative.value.trim(),
-      role: "Team Member"
-    };
-    if (!member.name || !member.email || !member.position || !member.task) {
-      memberMessage.textContent = "Please fill all required fields."; return;
-    }
-    assignments.push(member);
-    renderMembers(); teamForm.reset(); memberMessage.textContent = "";
-  }
-
-  function renderMembers() {
-    const list = document.getElementById("memberList");
-    list.innerHTML = "";
-    assignments.filter(m => m.role === "Team Member").forEach((m, index) => {
-      const li = document.createElement("li");
-      li.textContent = `${m.name} - ${m.position} (${m.task})`;
-      const removeBtn = document.createElement("button");
-      removeBtn.textContent = "Remove"; removeBtn.className = "remove-btn";
-      removeBtn.onclick = () => removeMember(index);
-      li.appendChild(removeBtn); list.appendChild(li);
-    });
-  }
-  function removeMember(index) { assignments.splice(index, 1); renderMembers(); }
-
-  document.getElementById("saveBtn").addEventListener("click", async () => {
-    const validToken = await ensureValidToken(); if (!validToken) return;
-    fetch("https://oneprojectapp-backend.onrender.com/assign-team", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${validToken}` },
-      body: JSON.stringify({ projectId, assignments })
-    })
-    .then(res => {
-      if (res.ok) {
-        alert("Assignments saved successfully.");
-        localStorage.removeItem("projectDetails");
-        window.location.href = redirectDashboard(role);
-      } else { alert("Failed to save assignments."); }
-    })
-    .catch(err => { console.error("Save error:", err); alert("Error saving assignments."); });
   });
 
-  function goBack() { showChoice(); }
-  function redirectDashboard(role) {
-    if (role === "Client") return "client-dashboard.html";
-    if (role === "Contractor") return "contractor-dashboard.html";
-    if (role === "Consultant") return "consultant-dashboard.html";
-  }
+  // Page 2 → PM button
+  document.getElementById("pmBtn").addEventListener("click", async () => {
+    let endpoint;
+    if (decoded.role === "Contractor") endpoint = "/contractor-project-manager/status";
+    else if (decoded.role === "Consultant") endpoint = "/consultant-project-manager/status";
+    else if (decoded.role === "Client") endpoint = "/client-project-manager/status";
 
-  showChoice();
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ projectId: ProjectContext.getId() })
+      });
+      const data = await res.json();
+      if (data.hasPM) {
+        document.getElementById("pmBtn").disabled = true;
+        document.getElementById("pmMessage").innerHTML =
+          `There is already a ${decoded.role} Project Manager.<br><a href="dashboard.html">Go back to dashboard to edit information.</a>`;
+      } else {
+        window.location.href = "pm-form.html";
+      }
+    } catch (err) {
+      console.error("Error checking PM:", err);
+    }
+  });
+
+  // Page 2 → Team button
+  document.getElementById("teamBtn").addEventListener("click", () => {
+    window.location.href = "team-form.html";
+  });
 </script>
 </body>
 </html>
