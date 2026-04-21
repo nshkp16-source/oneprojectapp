@@ -945,31 +945,69 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const projects = data.projects || [];
 
-    if (projects.length > 0) {
-      activeProject.textContent = projects[0].name;
-      projectDialog.innerHTML = ""; // clear static items
+  if (projects.length > 0) {
+    projectDialog.innerHTML = ""; // clear static items
 
-      projects.forEach(project => {
-        const item = document.createElement("div");
-        item.className = "project-item";
-        item.textContent = `${project.name} (${project.location})`;
-        projectDialog.appendChild(item);
+    // Check if a project was already selected before
+    const savedProjectId = ProjectContext.getId();
+    let activeProjectObj = null;
 
-        // 🔑 This is where you hook in the global manager
-        item.addEventListener("click", () => {
-          ProjectContext.set(project);        // saves globally (ID + name)
-          projectDialog.style.display = "none";
-          fetchProjectDetails(project.id);    // reload dashboard data for the new project
-        });
-      });
-    } else {
-      activeProject.textContent = "No projects assigned";
+    if (savedProjectId) {
+      // Try to find the saved project in the fetched list
+      activeProjectObj = projects.find(p => p.id === savedProjectId);
     }
-  } catch (err) {
-    console.error("Projects fetch error:", err);
-    activeProject.textContent = "Error loading projects";
+
+    if (!activeProjectObj) {
+      // If no saved project, fall back to the first one
+      activeProjectObj = projects[0];
+
+      // Save the first project globally as default
+      ProjectContext.set(activeProjectObj);
+
+      // Show notification message
+      const notification = document.createElement("div");
+      notification.id = "projectNotice";
+      notification.textContent = "Click here to choose your project";
+      notification.style.position = "fixed";
+      notification.style.top = "10px";
+      notification.style.left = "50%";
+      notification.style.transform = "translateX(-50%)";
+      notification.style.background = "#ffc";
+      notification.style.padding = "10px 20px";
+      notification.style.border = "1px solid #ccc";
+      notification.style.borderRadius = "6px";
+      notification.style.zIndex = "9999";
+      document.body.appendChild(notification);
+
+      // Hide notification when user clicks anywhere
+      document.addEventListener("click", () => {
+        if (notification) notification.remove();
+      }, { once: true });
+    }
+
+    // Update UI with active project
+    activeProject.textContent = activeProjectObj.name;
+
+    // Build project selector list
+    projects.forEach(project => {
+      const item = document.createElement("div");
+      item.className = "project-item";
+      item.textContent = `${project.name} (${project.location})`;
+      projectDialog.appendChild(item);
+
+      item.addEventListener("click", () => {
+        ProjectContext.set(project);        // saves globally (ID + name)
+        projectDialog.style.display = "none";
+        fetchProjectDetails(project.id);    // reload dashboard data for the new project
+      });
+    });
+  } else {
+    activeProject.textContent = "No projects assigned";
   }
-});
+} catch (err) {
+  console.error("Projects fetch error:", err);
+  activeProject.textContent = "Error loading projects";
+}
 
 // ✅ Helper to refresh project details with apiRequest
 async function fetchProjectDetails(projectId) {
