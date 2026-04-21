@@ -936,42 +936,55 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // ✅ Fetch projects with apiRequest
-  try {
-    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/client/projects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId })
-    });
-
-    const projects = data.projects || [];
-
-    if (projects.length > 0) {
-      activeProject.textContent = projects[0].name;
-      projectDialog.innerHTML = ""; // clear static items
-
-      // ✅ Set the first project globally on load
-  ProjectContext.set(projects[0]);
-
-  projects.forEach(project => {
-    const item = document.createElement("div");
-    item.className = "project-item";
-    item.textContent = `${project.name} (${project.location})`;
-    projectDialog.appendChild(item);
-
-    item.addEventListener("click", () => {
-      ProjectContext.set(project);        // saves globally (ID + name)
-      projectDialog.style.display = "none";
-      fetchProjectDetails(project.id);    // reload dashboard data for the new project
-    });
+try {
+  const data = await apiRequest("https://oneprojectapp-backend.onrender.com/client/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clientId })
   });
-} else {
-  activeProject.textContent = "No projects assigned";
-}
-  } catch (err) {
-    console.error("Projects fetch error:", err);
-    activeProject.textContent = "Error loading projects";
+
+  const projects = data.projects || [];
+
+  if (projects.length > 0) {
+    projectDialog.innerHTML = ""; // clear static items
+
+    // Try to find the project that matches the last active ID in localStorage
+    const savedProjectId = ProjectContext.getId();
+    let activeProjectObj = projects.find(p => String(p.id) === String(savedProjectId));
+
+    if (!activeProjectObj) {
+      // Fallback to first project if no match
+      activeProjectObj = projects[0];
+      ProjectContext.set(activeProjectObj);
+      console.log("Fallback to first project:", activeProjectObj.id, activeProjectObj.name);
+    } else {
+      console.log("Restored project from fetched list:", activeProjectObj.id, activeProjectObj.name);
+    }
+
+    // Display the matched project from the fetched list
+    activeProject.textContent = activeProjectObj.name;
+
+    // Build project selector list
+    projects.forEach(project => {
+      const item = document.createElement("div");
+      item.className = "project-item";
+      item.textContent = `${project.name} (${project.location})`;
+      projectDialog.appendChild(item);
+
+      item.addEventListener("click", () => {
+        ProjectContext.set(project);        // saves globally (ID + name)
+        activeProject.textContent = project.name; // update UI immediately
+        projectDialog.style.display = "none";
+        fetchProjectDetails(project.id);    // reload dashboard data for the new project
+      });
+    });
+  } else {
+    activeProject.textContent = "No projects assigned";
   }
-});
+} catch (err) {
+  console.error("Projects fetch error:", err);
+  activeProject.textContent = "Error loading projects";
+}
 
 // ✅ Helper to refresh project details with apiRequest
 async function fetchProjectDetails(projectId) {
