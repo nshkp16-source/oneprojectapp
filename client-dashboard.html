@@ -943,7 +943,7 @@ try {
     body: JSON.stringify({ clientId })
   });
 
-  const projects = data.projects || [];
+  const projects = Array.isArray(data.projects) ? data.projects : [];
 
   if (projects.length > 0) {
     projectDialog.innerHTML = ""; // clear static items
@@ -953,7 +953,6 @@ try {
     let activeProjectObj = null;
 
     if (savedProjectId) {
-      // Compare as strings to avoid type mismatch
       activeProjectObj = projects.find(p => String(p.id) === String(savedProjectId));
     }
 
@@ -961,39 +960,37 @@ try {
       // If no saved project, fall back to the first one
       activeProjectObj = projects[0];
 
-      // Save the first project globally as default
-      ProjectContext.set(activeProjectObj);
+      // Only set if project.id exists
+      if (activeProjectObj && activeProjectObj.id) {
+        ProjectContext.set(activeProjectObj);
+      }
 
-      // Show notification message
+      // Show notification message (safe, non‑blocking)
       const notification = document.createElement("div");
       notification.id = "projectNotice";
       notification.textContent = "Click here to choose your project";
-      notification.style.position = "fixed";
-      notification.style.top = "10px";
-      notification.style.left = "50%";
-      notification.style.transform = "translateX(-50%)";
-      notification.style.background = "#ffc";
-      notification.style.padding = "10px 20px";
-      notification.style.border = "1px solid #ccc";
-      notification.style.borderRadius = "6px";
-      notification.style.zIndex = "9999";
+      notification.style.cssText = `
+        position:fixed;top:10px;left:50%;transform:translateX(-50%);
+        background:#ffc;padding:10px 20px;border:1px solid #ccc;
+        border-radius:6px;z-index:9999;
+      `;
       document.body.appendChild(notification);
 
-      // ✅ Remove when the banner itself is clicked
-      notification.addEventListener("click", () => {
-        notification.remove();
-      });
+      // Remove when clicked
+      notification.addEventListener("click", () => notification.remove());
 
-      // ✅ Auto‑fade after 5 seconds
+      // Auto‑fade after 5s
       setTimeout(() => {
-        if (notification && document.body.contains(notification)) {
+        if (document.body.contains(notification)) {
           notification.remove();
         }
       }, 5000);
     }
 
     // Update UI with active project
-    activeProject.textContent = activeProjectObj.name;
+    if (activeProjectObj) {
+      activeProject.textContent = activeProjectObj.name;
+    }
 
     // Build project selector list
     projects.forEach(project => {
@@ -1003,9 +1000,11 @@ try {
       projectDialog.appendChild(item);
 
       item.addEventListener("click", () => {
-        ProjectContext.set(project);        // saves globally (ID + name)
-        projectDialog.style.display = "none";
-        fetchProjectDetails(project.id);    // reload dashboard data for the new project
+        if (project.id) {
+          ProjectContext.set(project);        // saves globally (ID + name)
+          projectDialog.style.display = "none";
+          fetchProjectDetails(project.id);    // reload dashboard data for the new project
+        }
       });
     });
   } else {
