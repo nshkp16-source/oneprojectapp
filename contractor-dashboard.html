@@ -949,16 +949,17 @@ document.addEventListener("DOMContentLoaded", async () => {
       activeProject.textContent = projects[0].name;
       projectDialog.innerHTML = ""; // clear static items
 
-      projects.forEach(project => {
+       projects.forEach(project => {
         const item = document.createElement("div");
         item.className = "project-item";
         item.textContent = `${project.name} (${project.location})`;
         projectDialog.appendChild(item);
 
+        // 🔑 This is where you hook in the global manager
         item.addEventListener("click", () => {
-          activeProject.textContent = project.name;
+          ProjectContext.set(project);        // saves globally (ID + name)
           projectDialog.style.display = "none";
-          fetchProjectDetails(project.id);
+          fetchProjectDetails(project.id);    // reload dashboard data for the new project
         });
       });
     } else {
@@ -1144,9 +1145,42 @@ profileIconLarge.addEventListener("click", () => {
 });
 
 // =========================
+// Global Active Project Manager
+// =========================
+window.ProjectContext = {
+  // Save active project globally
+  set(project) {
+    localStorage.setItem("activeProjectId", project.id);
+    localStorage.setItem("activeProjectName", project.name);
+
+    // Update UI if element exists
+    const activeProjectElement = document.getElementById("activeProject");
+    if (activeProjectElement) {
+      activeProjectElement.textContent = project.name;
+    }
+  },
+
+  // Get active project ID
+  getId() {
+    return localStorage.getItem("activeProjectId");
+  },
+
+  // Get active project name
+  getName() {
+    return localStorage.getItem("activeProjectName");
+  },
+
+  // Clear project context (e.g. on logout)
+  clear() {
+    localStorage.removeItem("activeProjectId");
+    localStorage.removeItem("activeProjectName");
+  }
+};
+
+// =========================
 // Global Assign Team Route (redirect only)
 // =========================
-function openAssignTeam() {
+function openAssignTeam(source) {
   try {
     const token = localStorage.getItem("authToken");
     if (!token) {
@@ -1154,6 +1188,9 @@ function openAssignTeam() {
       window.location.href = "home.html";
       return;
     }
+
+    // ✅ Save the dashboard source in sessionStorage
+    sessionStorage.setItem("redirectSource", source);
 
     // ✅ Just redirect — assign-team.html will handle everything
     window.location.href = "assign-team.html";
