@@ -936,40 +936,61 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // ✅ Fetch projects with apiRequest
-  try {
-    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/client/projects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId })
-    });
+try {
+  const data = await apiRequest("https://oneprojectapp-backend.onrender.com/client/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clientId })
+  });
 
-    const projects = data.projects || [];
+  const projects = Array.isArray(data.projects) ? data.projects : [];
 
-    if (projects.length > 0) {
-      activeProject.textContent = projects[0].name;
-      projectDialog.innerHTML = ""; // clear static items
+  if (projects.length > 0) {
+    projectDialog.innerHTML = ""; // clear static items
 
-      projects.forEach(project => {
-        const item = document.createElement("div");
-        item.className = "project-item";
-        item.textContent = `${project.name} (${project.location})`;
-        projectDialog.appendChild(item);
+    // Try to restore last saved project
+    const savedProjectId = ProjectContext.getId();
+    let activeProjectObj = null;
 
-        // 🔑 This is where you hook in the global manager
-        item.addEventListener("click", () => {
+    if (savedProjectId) {
+      activeProjectObj = projects.find(p => String(p.id) === String(savedProjectId));
+    }
+
+    // If no saved project found, default to first
+    if (!activeProjectObj) {
+      activeProjectObj = projects[0];
+      if (activeProjectObj && activeProjectObj.id) {
+        ProjectContext.set(activeProjectObj);
+      }
+    }
+
+    // Update UI with active project
+    if (activeProjectObj) {
+      activeProject.textContent = activeProjectObj.name;
+    }
+
+    // Build project selector list
+    projects.forEach(project => {
+      const item = document.createElement("div");
+      item.className = "project-item";
+      item.textContent = `${project.name} (${project.location})`;
+      projectDialog.appendChild(item);
+
+      item.addEventListener("click", () => {
+        if (project.id) {
           ProjectContext.set(project);        // saves globally (ID + name)
           projectDialog.style.display = "none";
           fetchProjectDetails(project.id);    // reload dashboard data for the new project
-        });
+        }
       });
-    } else {
-      activeProject.textContent = "No projects assigned";
-    }
-  } catch (err) {
-    console.error("Projects fetch error:", err);
-    activeProject.textContent = "Error loading projects";
+    });
+  } else {
+    activeProject.textContent = "No projects assigned";
   }
-});
+} catch (err) {
+  console.error("Projects fetch error:", err);
+  activeProject.textContent = "Error loading projects";
+}
 
 // ✅ Helper to refresh project details with apiRequest
 async function fetchProjectDetails(projectId) {
