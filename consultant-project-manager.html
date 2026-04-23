@@ -946,27 +946,41 @@ document.addEventListener("DOMContentLoaded", async () => {
     const projects = data.projects || [];
 
     if (projects.length > 0) {
-      activeProject.textContent = projects[0].name;
-      projectDialog.innerHTML = ""; // clear static items
+  projectDialog.innerHTML = ""; // clear static items
 
-       projects.forEach(project => {
-        const item = document.createElement("div");
-        item.className = "project-item";
-        item.textContent = `${project.name} (${project.location})`;
-        projectDialog.appendChild(item);
+  // Check if we already have an active project saved
+  const savedProjectId = ProjectContext.getId();
+  let activeProjectObj = projects.find(p => String(p.id) === String(savedProjectId));
 
-        // 🔑 This is where you hook in the global manager
-        item.addEventListener("click", () => {
-          ProjectContext.set(project);        // saves globally (ID + name)
-          projectDialog.style.display = "none";
-          fetchProjectDetails(project.id);    // reload dashboard data for the new project
-        });
-      });
-    } else {
-      activeProject.textContent = "No projects assigned";
-    }
+  if (!activeProjectObj) {
+    // No saved project → fallback to first
+    activeProjectObj = projects[0];
+    ProjectContext.set(activeProjectObj); // ensures session is set
+  }
+
+  // ✅ Update DOM from the chosen project (saved or first)
+  activeProject.textContent = activeProjectObj.name;
+
+  // Build project selector list
+  projects.forEach(project => {
+    const item = document.createElement("div");
+    item.className = "project-item";
+    item.textContent = `${project.name} (${project.location})`;
+    projectDialog.appendChild(item);
+
+    item.addEventListener("click", () => {
+      ProjectContext.set(project);        // saves globally
+      activeProject.textContent = project.name; // ✅ update DOM immediately
+      projectDialog.style.display = "none";
+      fetchProjectDetails(project.id);    // reload dashboard data
+    });
+  });
+} else {
+  activeProject.textContent = "No projects assigned";
+}
+
   } catch (err) {
-    console.error("Consultant PM projects fetch error:", err);
+    console.error("Projects fetch error:", err);
     activeProject.textContent = "Error loading projects";
   }
 });
