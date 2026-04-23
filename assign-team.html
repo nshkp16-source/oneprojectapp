@@ -14,7 +14,7 @@
       background:#fff;
       border-radius:10px;
       padding:20px;
-      max-width:420px;
+      max-width:440px;
       margin:10vh auto;
       box-shadow:0 0 10px rgba(0,0,0,0.2);
       text-align:center;
@@ -44,22 +44,25 @@
   <div class="box">
     <h2>Assign Team</h2>
 
-    <!-- Page 1: Identity + Password -->
+    <!-- Page 1 -->
     <div id="loginPage">
-      <p id="identity"></p>
+      <div id="identityContainer">
+        <p id="projectInfo"></p>
+        <p id="userInfo"></p>
+      </div>
       <input type="password" id="passwordInput" placeholder="Enter password (min 6 chars, letters & numbers)" />
       <button id="loginBtn">Continue</button>
       <p id="loginMessage" class="message"></p>
-      <a href="dashboard.html" class="back-link" id="backLogin">Back</a>
+      <a href="#" class="back-link" id="backLogin">Back</a>
     </div>
 
-    <!-- Page 2: Assignment Options -->
+    <!-- Page 2 -->
     <div id="optionsPage" style="display:none;">
       <p id="contextHeader"></p>
       <button id="pmBtn">Assign Project Manager</button>
       <button id="teamBtn">Assign Team Members</button>
       <p id="pmMessage" class="message"></p>
-      <a href="dashboard.html" class="back-link" id="backOptions">Back</a>
+      <a href="#" class="back-link" id="backOptions">Back</a>
     </div>
   </div>
 
@@ -73,21 +76,39 @@
     } catch { return null; }
   }
 
+  // API helper
+  async function apiRequest(url, options) {
+    const res = await fetch(url, options);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
   const token = localStorage.getItem("authToken");
   const decoded = parseJwt(token);
   const email = decoded.role === "Client" ? decoded.companyEmail : decoded.email;
+  const redirectSource = sessionStorage.getItem("redirectSource"); // dashboard source
 
-  // Page 1 identity display
-  document.getElementById("identity").textContent =
-    `Project: ${ProjectContext.getName()} (ID: ${ProjectContext.getId()}) 
-     | Role: ${decoded.role} 
-     | Email: ${email}`;
+  // Fetch profile and project info
+  document.addEventListener("DOMContentLoaded", async () => {
+    try {
+      const profile = await apiRequest("https://oneprojectapp-backend.onrender.com/client/profile", {
+        method: "GET",
+        headers: { "Authorization": `Bearer ${token}` }
+      });
 
-  // Verify login
+      document.getElementById("projectInfo").textContent =
+        `Project: ${ProjectContext.getName()} (ID: ${ProjectContext.getId()})`;
+      document.getElementById("userInfo").textContent =
+        `Role: ${decoded.role} | Name: ${profile.representative_name || "Unknown"} | Email: ${email}`;
+    } catch (err) {
+      console.error("Profile fetch error:", err);
+      document.getElementById("userInfo").textContent = "Error loading user data.";
+    }
+  });
+
+  // Password verification
   document.getElementById("loginBtn").addEventListener("click", async () => {
     const password = document.getElementById("passwordInput").value;
-
-    // Password rule: at least 6 chars, letters + numbers
     const validPassword = /^(?=.*[A-Za-z])(?=.*\d).{6,}$/.test(password);
     if (!validPassword) {
       document.getElementById("loginMessage").textContent =
@@ -100,19 +121,18 @@
       : { role: decoded.role, email, password };
 
     try {
-      const response = await fetch("https://oneprojectapp-backend.onrender.com/login", {
+      const response = await apiRequest("https://oneprojectapp-backend.onrender.com/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      const data = await response.json();
 
-      if (!data.success) {
-        document.getElementById("loginMessage").textContent = data.error || "Login failed.";
+      if (!response.success) {
+        document.getElementById("loginMessage").textContent = response.error || "Login failed.";
         return;
       }
 
-      // Save verified identity in localStorage
+      // Save verified identity
       localStorage.setItem("verifiedEmail", email);
       localStorage.setItem("verifiedRole", decoded.role);
       localStorage.setItem("verifiedProjectId", ProjectContext.getId());
@@ -137,16 +157,15 @@
     else if (decoded.role === "Client") endpoint = "/client-project-manager/status";
 
     try {
-      const res = await fetch(endpoint, {
+      const res = await apiRequest(`https://oneprojectapp-backend.onrender.com${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
         body: JSON.stringify({ projectId: ProjectContext.getId() })
       });
-      const data = await res.json();
-      if (data.hasPM) {
+      if (res.hasPM) {
         document.getElementById("pmBtn").disabled = true;
         document.getElementById("pmMessage").innerHTML =
-          `Project Manager already assigned.<br><a href="dashboard.html">Go back to dashboard to edit.</a>`;
+          `Project Manager already assigned.<br><a href="${redirectSource}.html">Go back to dashboard to edit.</a>`;
       } else {
         window.location.href = "pm-form.html";
       }
@@ -160,19 +179,21 @@
     window.location.href = "team-form.html";
   });
 
-  // Back links clear localStorage
-  document.getElementById("backLogin").addEventListener("click", () => {
+  // Back links clear localStorage and redirect correctly
+  function goBack() {
     localStorage.removeItem("verifiedEmail");
     localStorage.removeItem("verifiedRole");
     localStorage.removeItem("verifiedProjectId");
     localStorage.removeItem("verifiedProjectName");
-  });
-  document.getElementById("backOptions").addEventListener("click", () => {
-    localStorage.removeItem("verifiedEmail");
-    localStorage.removeItem("verifiedRole");
-    localStorage.removeItem("verifiedProjectId");
-    localStorage.removeItem("verifiedProjectName");
-  });
+    if (redirectSource) {
+      window.location.href = `${redirectSource}.html`;
+    } else {
+      window.location.href = "home.html";
+    }
+  }
+
+  document.getElementById("backLogin").addEventListener("click", goBack);
+  document.getElementById("backOptions").addEventListener("click", goBack);
 </script>
 </body>
 </html>
