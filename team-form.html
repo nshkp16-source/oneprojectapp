@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Assign Team Members</title>
+  <style>
+    body { margin:0; font-family:Arial,sans-serif; background:url('account-background.jpg') no-repeat center center fixed; background-size:cover; }
+    .overlay { background:rgba(255,255,255,0.6); position:fixed; top:0; left:0; width:100%; height:100%; }
+    .container { position:relative; z-index:1; background:#fff; padding:30px 40px; border-radius:12px; max-width:700px; margin:8vh auto; box-shadow:0 0 12px rgba(0,0,0,0.2); }
+    h2 { text-align:center; color:#007BFF; }
+    input { display:block; width:100%; margin:10px 0; padding:12px; border:1px solid #ccc; border-radius:5px; }
+    button { background:#007BFF; color:#fff; border:none; padding:12px 18px; border-radius:5px; cursor:pointer; font-size:15px; }
+    button:hover { background:#0056b3; }
+    .actions { margin-top:20px; text-align:center; }
+    .back-link { display:inline-block; margin-top:10px; color:#6c757d; cursor:pointer; }
+    .back-link:hover { color:#333; }
+    .message { color:#cc0000; font-size:14px; margin-top:6px; }
+    ul { list-style:none; padding:0; }
+    li { margin:8px 0; padding:8px; background:#f4f4f4; border-radius:5px; display:flex; justify-content:space-between; align-items:center; }
+    .remove-btn { background:#cc0000; color:#fff; border:none; padding:6px 12px; border-radius:5px; cursor:pointer; font-size:14px; }
+    .remove-btn:hover { background:#990000; }
+  </style>
+</head>
+<body>
+  <div class="overlay"></div>
+  <div class="container">
+    <h2>Assign Team Members</h2>
+    <p id="projectContext">Loading project...</p>
+
+    <form id="teamForm" onsubmit="addMember(event)">
+      <input type="text" id="memberName" placeholder="Name" required />
+      <input type="email" id="memberEmail" placeholder="Email" required />
+      <input type="text" id="memberCompany" placeholder="Company Name" required />
+      <input type="text" id="memberTitle" placeholder="Title" />
+      <input type="text" id="memberPosition" placeholder="Position" required />
+      <input type="text" id="memberTelephone" placeholder="Telephone" />
+      <input type="text" id="memberTask" placeholder="Task" required />
+      <input type="text" id="memberRepresentative" placeholder="Representative" />
+      <button type="submit">Add Member</button>
+      <p id="memberMessage" class="message"></p>
+    </form>
+
+    <ul id="memberList"></ul>
+
+    <div class="actions">
+      <button id="saveBtn">Save</button>
+      <span class="back-link" onclick="goBack()">&#8592; Back to Dashboard</span>
+    </div>
+  </div>
+
+  <script>
+    function parseJwt(token) {
+      try {
+        const base64Url = token.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        return JSON.parse(atob(base64));
+      } catch { return null; }
+    }
+
+    const token = localStorage.getItem("authToken");
+    const decoded = parseJwt(token);
+    const role = localStorage.getItem("verifiedRole") || decoded?.role;
+    const projectId = localStorage.getItem("activeProjectId");
+    const projectName = localStorage.getItem("activeProjectName");
+
+    document.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("projectContext").textContent = `${projectName} (ID: ${projectId})`;
+    });
+
+    function addMember(e) {
+      e.preventDefault();
+
+      // Map role to assigned_part automatically
+      let assignedPart;
+      if (role.startsWith("Client")) assignedPart = "Client";
+      else if (role.startsWith("Contractor")) assignedPart = "Contractor";
+      else if (role.startsWith("Consultant")) assignedPart = "Consultant";
+
+      const memberData = {
+        assigned_part: assignedPart,
+        assigned_by: decoded?.sub, // userId from JWT
+        name: document.getElementById("memberName").value,
+        email: document.getElementById("memberEmail").value,
+        company_name: document.getElementById("memberCompany").value,
+        title: document.getElementById("memberTitle").value,
+        position: document.getElementById("memberPosition").value,
+        telephone: document.getElementById("memberTelephone").value,
+        task: document.getElementById("memberTask").value,
+        representative: document.getElementById("memberRepresentative").value
+      };
+
+      const li = document.createElement("li");
+      li.textContent = `${memberData.name} (${memberData.email}) - ${memberData.task} [${memberData.assigned_part}]`;
+      const removeBtn = document.createElement("button");
+      removeBtn.textContent = "Remove";
+      removeBtn.className = "remove-btn";
+      removeBtn.onclick = () => li.remove();
+      li.appendChild(removeBtn);
+      document.getElementById("memberList").appendChild(li);
+      document.getElementById("memberMessage").textContent = "Member added successfully.";
+
+      // Save immediately (or you can batch on Save button)
+      saveAssignment("Team Member", memberData);
+    }
+
+    async function saveAssignment(role, data) {
+      const response = await fetch("https://oneprojectapp-backend.onrender.com/assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ projectId, assignment: { role, ...data } })
+      }).then(res => res.json());
+
+      if (response.success) {
+        sessionStorage.setItem("redirectSource", response.redirectSource);
+        alert(`${role} assigned successfully (ID: ${response.assignedId})`);
+        window.location.href = "assign-team.html";
+      } else {
+        alert(response.error || "Failed to assign");
+      }
+    }
+
+    function goBack() {
+      window.history.back();
+    }
+  </script>
+</body>
+</html>

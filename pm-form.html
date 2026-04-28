@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Assign Project Manager</title>
+  <style>
+    body { margin:0; font-family:Arial,sans-serif; background:url('account-background.jpg') no-repeat center center fixed; background-size:cover; }
+    .overlay { background:rgba(255,255,255,0.6); position:fixed; top:0; left:0; width:100%; height:100%; }
+    .container { position:relative; z-index:1; background:#fff; padding:30px 40px; border-radius:12px; max-width:700px; margin:8vh auto; box-shadow:0 0 12px rgba(0,0,0,0.2); }
+    h2 { text-align:center; color:#007BFF; }
+    input { display:block; width:100%; margin:10px 0; padding:12px; border:1px solid #ccc; border-radius:5px; }
+    button { background:#007BFF; color:#fff; border:none; padding:12px 18px; border-radius:5px; cursor:pointer; font-size:15px; }
+    button:hover { background:#0056b3; }
+    .actions { margin-top:20px; text-align:center; }
+    .back-link { display:inline-block; margin-top:10px; color:#6c757d; cursor:pointer; }
+    .back-link:hover { color:#333; }
+    .message { color:#cc0000; font-size:14px; margin-top:6px; }
+  </style>
+</head>
+<body>
+  <div class="overlay"></div>
+  <div class="container">
+    <h2>Assign Project Manager</h2>
+    <p id="projectContext">Loading project...</p>
+
+    <form id="pmForm" onsubmit="addPM(event)">
+      <!-- Dropdown will be populated automatically -->
+      <select id="pmRole" required disabled></select>
+
+      <input type="text" id="pmName" placeholder="Name" required />
+      <input type="email" id="pmEmail" placeholder="Email" required />
+      <input type="text" id="pmCompany" placeholder="Company Name" required />
+      <input type="text" id="pmTitle" placeholder="Title" />
+      <input type="text" id="pmPosition" placeholder="Position" required />
+      <input type="text" id="pmTelephone" placeholder="Telephone" />
+      <input type="text" id="pmTask" placeholder="Task" required />
+      <input type="text" id="pmRepresentative" placeholder="Representative" />
+      <button type="submit">Assign PM</button>
+      <p id="pmMessage"></p>
+    </form>
+
+    <div class="actions">
+      <span class="back-link" onclick="goBack()">&#8592; Back to Dashboard</span>
+    </div>
+  </div>
+
+  <script>
+  function parseJwt(token) {
+    try {
+      const base64Url = token.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      return JSON.parse(atob(base64));
+    } catch { return null; }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const token = localStorage.getItem("authToken");
+    const decoded = parseJwt(token);
+    const role = localStorage.getItem("verifiedRole") || decoded?.role;
+    const projectName = localStorage.getItem("activeProjectName");
+    const projectId = localStorage.getItem("activeProjectId");
+
+    document.getElementById("projectContext").textContent = `${projectName} (ID: ${projectId})`;
+
+    const pmRoleSelect = document.getElementById("pmRole");
+    if (role === "Client") {
+      pmRoleSelect.innerHTML = '<option value="Client Project Manager" selected>Client PM</option>';
+    } else if (role === "Contractor") {
+      pmRoleSelect.innerHTML = '<option value="Contractor Project Manager" selected>Contractor PM</option>';
+    } else if (role === "Consultant") {
+      pmRoleSelect.innerHTML = '<option value="Consultant Project Manager" selected>Consultant PM</option>';
+    }
+  });
+
+  async function addPM(e) {
+    e.preventDefault();
+
+    const pmData = {
+      name: document.getElementById("pmName").value,
+      email: document.getElementById("pmEmail").value,
+      company_name: document.getElementById("pmCompany").value,
+      title: document.getElementById("pmTitle").value,
+      position: document.getElementById("pmPosition").value,
+      telephone: document.getElementById("pmTelephone").value,
+      task: document.getElementById("pmTask").value,
+      representative: document.getElementById("pmRepresentative").value
+    };
+
+    const role = document.getElementById("pmRole").value;
+    await saveAssignment(role, pmData);
+  }
+
+  async function saveAssignment(role, data) {
+    const token = localStorage.getItem("authToken");
+    const projectId = localStorage.getItem("activeProjectId");
+
+    const response = await fetch("https://oneprojectapp-backend.onrender.com/assign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+      body: JSON.stringify({ projectId, assignment: { role, ...data } })
+    }).then(res => res.json());
+
+    if (response.success) {
+      sessionStorage.setItem("redirectSource", response.redirectSource);
+      document.getElementById("pmMessage").textContent = `${role} assigned successfully.`;
+      window.location.href = "assign-team.html";
+    } else {
+      document.getElementById("pmMessage").textContent = response.error || "Failed to assign.";
+    }
+  }
+
+  function goBack() {
+    window.history.back();
+  }
+  </script>
+</body>
+</html>
