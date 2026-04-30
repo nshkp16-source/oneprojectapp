@@ -93,6 +93,11 @@
     const email = localStorage.getItem("verifiedEmail") || decoded?.companyEmail || decoded?.email;
     const role = localStorage.getItem("verifiedRole") || decoded?.role;
 
+    if (!projectId) {
+      document.getElementById("loginMessage").textContent = "No active project selected.";
+      return;
+    }
+
     document.getElementById("projectInfo").textContent = `${projectName} (ID: ${projectId})`;
     document.getElementById("roleInfo").textContent = role;
     document.getElementById("emailInfo").textContent = email;
@@ -127,7 +132,6 @@
         return;
       }
 
-      // ✅ Branching
       if (role === "Client" || role === "Contractor" || role === "Consultant") {
         document.getElementById("loginPage").style.display = "none";
         document.getElementById("optionsPage").style.display = "block";
@@ -135,27 +139,21 @@
         document.getElementById("contextProject").textContent = localStorage.getItem("activeProjectName");
         document.getElementById("contextRole").textContent = role;
 
-        let endpoint;
-        if (role === "Contractor") endpoint = "/contractor-project-manager/status";
-        else if (role === "Consultant") endpoint = "/consultant-project-manager/status";
-        else if (role === "Client") endpoint = "/client-project-manager/status";
-
-        const res = await fetch(`https://oneprojectapp-backend.onrender.com${endpoint}`, {
+        // ✅ Call /assign-team for PM check
+        const res = await fetch("https://oneprojectapp-backend.onrender.com/assign-team", {
           method: "POST",
           headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
-          body: JSON.stringify({ projectId })
+          body: JSON.stringify({ projectId, assignments: [] })
         }).then(r => r.json());
 
         if (res.hasPM) {
           const pmBtn = document.getElementById("pmBtn");
           pmBtn.disabled = true;
-          pmBtn.style.display = "none"; // hide PM button completely
-          document.getElementById("pmMessage").innerHTML =
-            `Project Manager already assigned. Go back to dashboard to edit information 
-             or <a href="edit-information.html">click here</a>.`;
+          pmBtn.style.display = "none";
+          pmBtn.replaceWith(pmBtn.cloneNode(true));
+          document.getElementById("pmMessage").innerHTML = res.message;
         }
 
-        // ✅ Team button always active
         const teamBtn = document.getElementById("teamBtn");
         teamBtn.disabled = false;
         teamBtn.style.display = "inline-block";
