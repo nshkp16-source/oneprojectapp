@@ -932,67 +932,79 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // ✅ Fetch projects assigned to team member (backend uses JWT sub)
   try {
-    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/team-member/projects", {
-      method: "POST",
-      headers: { 
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`
-      }
+  const data = await apiRequest("https://oneprojectapp-backend.onrender.com/team-member/projects", {
+    method: "POST",
+    headers: { 
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    }
+  });
+
+  const projects = data.projects || [];
+
+  if (projects.length > 0) {
+    projectDialog.innerHTML = ""; // clear static items
+
+    const savedProjectId = ProjectContext.getId();
+    let activeProjectObj = projects.find(p => String(p.id) === String(savedProjectId));
+
+    if (!activeProjectObj) {
+      activeProjectObj = projects[0]; // fallback to first
+    }
+
+    // ✅ Save extended context (part + position)
+    ProjectContext.set(activeProjectObj);
+
+    activeProject.textContent = activeProjectObj.name;
+
+    // Build project selector list
+    projects.forEach(project => {
+      const item = document.createElement("div");
+      item.className = "project-item";
+      item.textContent = `${project.name} (${project.location})`;
+      projectDialog.appendChild(item);
+
+      item.addEventListener("click", () => {
+        ProjectContext.set(project); // saves id, name, part, position
+        activeProject.textContent = project.name;
+        projectDialog.style.display = "none";
+        fetchProjectDetails(project.id); // refresh tasks + role
+      });
     });
 
-    const projects = data.projects || [];
+    // ✅ Display role + tasks for active project
+    if (teamMemberDialog) {
+      teamMemberDialog.innerHTML = "";
 
-    if (projects.length > 0) {
-      projectDialog.innerHTML = ""; // clear static items
+      const roleItem = document.createElement("div");
+      roleItem.className = "team-member-role";
+      roleItem.textContent = `${activeProjectObj.assigned_part} Team Member – ${activeProjectObj.position}`;
+      teamMemberDialog.appendChild(roleItem);
 
-      const savedProjectId = ProjectContext.getId();
-      let activeProjectObj = projects.find(p => String(p.id) === String(savedProjectId));
+      if (activeProjectObj.tasks && activeProjectObj.tasks.length > 0) {
+        const taskHeader = document.createElement("h4");
+        taskHeader.textContent = "Assigned Tasks:";
+        teamMemberDialog.appendChild(taskHeader);
 
-      if (!activeProjectObj) {
-        activeProjectObj = projects[0]; // fallback to first
-        ProjectContext.set(activeProjectObj);
-      }
-
-      activeProject.textContent = activeProjectObj.name;
-
-      // Build project selector list
-      projects.forEach(project => {
-        const item = document.createElement("div");
-        item.className = "project-item";
-        item.textContent = `${project.name} (${project.location})`;
-        projectDialog.appendChild(item);
-
-        item.addEventListener("click", () => {
-          ProjectContext.set(project);
-          activeProject.textContent = project.name;
-          projectDialog.style.display = "none";
-          fetchProjectDetails(project.id);
+        activeProjectObj.tasks.forEach(task => {
+          const taskItem = document.createElement("div");
+          taskItem.className = "task-item";
+          taskItem.textContent = `- ${task.title} (${task.status})`;
+          teamMemberDialog.appendChild(taskItem);
         });
-      });
-
-      // ✅ Display team members with assigned_part prefix
-      if (teamMemberDialog) {
-        teamMemberDialog.innerHTML = "";
-        projects.forEach(project => {
-          if (project.teamMembers && project.teamMembers.length > 0) {
-            project.teamMembers.forEach(member => {
-              const roleDisplay = `${member.assigned_part} ${member.position}`;
-              const item = document.createElement("div");
-              item.className = "team-member-item";
-              item.textContent = `${member.representative} - ${roleDisplay}`;
-              teamMemberDialog.appendChild(item);
-            });
-          }
-        });
+      } else {
+        const noTaskItem = document.createElement("div");
+        noTaskItem.textContent = "No tasks assigned.";
+        teamMemberDialog.appendChild(noTaskItem);
       }
-    } else {
-      activeProject.textContent = "No projects assigned";
     }
-  } catch (err) {
-    console.error("Projects fetch error:", err);
-    activeProject.textContent = "Error loading projects";
+  } else {
+    activeProject.textContent = "No projects assigned";
   }
-});
+} catch (err) {
+  console.error("Projects fetch error:", err);
+  activeProject.textContent = "Error loading projects";
+}
 
 // ✅ Helper to refresh project details
 async function fetchProjectDetails(projectId) {
@@ -1186,19 +1198,24 @@ profileIconLarge.addEventListener("click", () => {
 });
 
 // =========================
-// Global Active Project Manager
+// Global Active Project Manager (Extended for Team Member)
 // =========================
 window.ProjectContext = {
   // Save active project globally
   set(project) {
     localStorage.setItem("activeProjectId", project.id);
     localStorage.setItem("activeProjectName", project.name);
+    localStorage.setItem("activeProjectPart", project.assigned_part);
+    localStorage.setItem("activeProjectPosition", project.position);
 
     // Update UI if element exists
     const activeProjectElement = document.getElementById("activeProject");
     if (activeProjectElement) {
       activeProjectElement.textContent = project.name;
     }
+
+    // ✅ Immediately refresh role + tasks in dialog
+    fetchProjectDetails(project.id);
   },
 
   // Get active project ID
@@ -1211,10 +1228,22 @@ window.ProjectContext = {
     return localStorage.getItem("activeProjectName");
   },
 
+  // Get active project part (Client/Contractor/Consultant)
+  getPart() {
+    return localStorage.getItem("activeProjectPart");
+  },
+
+  // Get active project position (e.g. Site Engineer)
+  getPosition() {
+    return localStorage.getItem("activeProjectPosition");
+  },
+
   // Clear project context (e.g. on logout)
   clear() {
     localStorage.removeItem("activeProjectId");
     localStorage.removeItem("activeProjectName");
+    localStorage.removeItem("activeProjectPart");
+    localStorage.removeItem("activeProjectPosition");
   }
 };
 
