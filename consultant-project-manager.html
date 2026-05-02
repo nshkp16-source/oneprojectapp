@@ -879,7 +879,7 @@ async function refreshAccessToken() {
 }
 
 // =========================
-// Consultant PM Profile + Project Selector Logic
+// Consultant PM Profile + Project Selector Logic (Adjusted Full)
 // =========================
 const token = localStorage.getItem("authToken");
 if (!token) {
@@ -889,7 +889,7 @@ if (!token) {
 const decoded = parseJwt(token);
 console.log("Decoded JWT:", decoded);
 
-// ✅ Identity from JWT (aligned with backend payload)
+// ✅ Use JWT values directly
 const consultantPMId = decoded?.sub;
 const consultantPMEmail = decoded?.email;
 const consultantPMRole = decoded?.role;
@@ -911,14 +911,15 @@ const activeProject = document.getElementById("activeProject");
 
 // MAIN LOAD LOGIC
 document.addEventListener("DOMContentLoaded", async () => {
-  // Display email + role from JWT
+  // ✅ Display email + role exactly as JWT provides
   if (profileEmail) profileEmail.textContent = consultantPMEmail;
   if (profileRole) profileRole.textContent = `Role: ${consultantPMRole}`;
 
-  // ✅ Fetch consultant PM profile
+  // ✅ Fetch consultant PM profile (backend uses JWT)
   try {
     const consultantPM = await apiRequest("https://oneprojectapp-backend.onrender.com/consultant-project-manager/profile", {
-      method: "GET"
+      method: "GET",
+      headers: { "Authorization": `Bearer ${token}` }
     });
 
     if (consultantPM.profile_picture && consultantPM.profile_picture.trim() !== "") {
@@ -935,69 +936,62 @@ document.addEventListener("DOMContentLoaded", async () => {
     console.error("Consultant PM profile fetch error:", err);
   }
 
-  // ✅ Fetch projects assigned to consultant PM (via consultant_pm_assignments)
+  // ✅ Fetch projects assigned to consultant PM (backend uses JWT sub)
   try {
-  const token = localStorage.getItem("authToken");
-  const data = await apiRequest("https://oneprojectapp-backend.onrender.com/consultant-project-manager/projects", {
-    method: "POST",
-    headers: { 
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${token}`   // ✅ send JWT to backend
-    }
-    // ⚠️ No body needed — backend uses JWT
-  });
+    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/consultant-project-manager/projects", {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      }
+    });
 
     const projects = data.projects || [];
 
     if (projects.length > 0) {
-  projectDialog.innerHTML = ""; // clear static items
+      projectDialog.innerHTML = ""; // clear static items
 
-  // Check if we already have an active project saved
-  const savedProjectId = ProjectContext.getId();
-  let activeProjectObj = projects.find(p => String(p.id) === String(savedProjectId));
+      const savedProjectId = ProjectContext.getId();
+      let activeProjectObj = projects.find(p => String(p.id) === String(savedProjectId));
 
-  if (!activeProjectObj) {
-    // No saved project → fallback to first
-    activeProjectObj = projects[0];
-    ProjectContext.set(activeProjectObj); // ensures session is set
-  }
+      if (!activeProjectObj) {
+        activeProjectObj = projects[0]; // fallback to first
+        ProjectContext.set(activeProjectObj);
+      }
 
-  // ✅ Update DOM from the chosen project (saved or first)
-  activeProject.textContent = activeProjectObj.name;
+      activeProject.textContent = activeProjectObj.name;
 
-  // Build project selector list
-  projects.forEach(project => {
-    const item = document.createElement("div");
-    item.className = "project-item";
-    item.textContent = `${project.name} (${project.location})`;
-    projectDialog.appendChild(item);
+      // Build project selector list
+      projects.forEach(project => {
+        const item = document.createElement("div");
+        item.className = "project-item";
+        item.textContent = `${project.name} (${project.location})`;
+        projectDialog.appendChild(item);
 
-    item.addEventListener("click", () => {
-      ProjectContext.set(project);        // saves globally
-      activeProject.textContent = project.name; // ✅ update DOM immediately
-      projectDialog.style.display = "none";
-      fetchProjectDetails(project.id);    // reload dashboard data
-    });
-  });
-} else {
-  activeProject.textContent = "No projects assigned";
-}
-
+        item.addEventListener("click", () => {
+          ProjectContext.set(project);
+          activeProject.textContent = project.name;
+          projectDialog.style.display = "none";
+          fetchProjectDetails(project.id);
+        });
+      });
+    } else {
+      activeProject.textContent = "No projects assigned";
+    }
   } catch (err) {
     console.error("Projects fetch error:", err);
     activeProject.textContent = "Error loading projects";
   }
 });
 
-// ✅ Helper to refresh project details with apiRequest
+// ✅ Helper to refresh project details
 async function fetchProjectDetails(projectId) {
   try {
-    const token = localStorage.getItem("authToken");
     const data = await apiRequest("https://oneprojectapp-backend.onrender.com/consultant-project-manager/project-details", {
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`   // ✅ send JWT to backend
+        "Authorization": `Bearer ${token}`
       },
       body: JSON.stringify({ projectId })
     });
@@ -1020,15 +1014,14 @@ projectSelector.addEventListener("click", (e) => {
 
 // PROFILE LOGIC
 const profileOverlay = document.getElementById('profileOverlay');
-const profileDefault = document.getElementById('profileDefault'); // ✅ new wrapper for default content
-const profilePreview = document.getElementById('profilePreview'); // ✅ new container for preview
+const profileDefault = document.getElementById('profileDefault');
+const profilePreview = document.getElementById('profilePreview');
 
 function openProfileDialog() {
-  profileDialog.style.display = "block"; // ensure visible before animation
+  profileDialog.style.display = "block";
   profileDialog.classList.add("active");
   profileOverlay.classList.add("active");
 
-  // Always start with default view visible
   if (profileDefault) profileDefault.style.display = "block";
   if (profilePreview) {
     profilePreview.style.display = "none";
@@ -1041,15 +1034,14 @@ function closeProfileDialog() {
 
   setTimeout(() => {
     profileDialog.classList.remove("active", "closing");
-    profileDialog.style.display = "none"; // ✅ reset state
+    profileDialog.style.display = "none";
 
-    // Reset to default view
     if (profileDefault) profileDefault.style.display = "block";
     if (profilePreview) {
       profilePreview.style.display = "none";
       profilePreview.innerHTML = "";
     }
-  }, 300); // match CSS transition duration
+  }, 300);
 }
 
 // Toggle dialog on icon click
@@ -1090,7 +1082,8 @@ profileUpload.addEventListener('change', async (event) => {
   try {
     const data = await apiRequest("https://oneprojectapp-backend.onrender.com/consultant-project-manager/upload-picture", {
       method: "POST",
-      body: formData
+      body: formData,
+      headers: { "Authorization": `Bearer ${token}` }
     });
     profileIcon.style.backgroundImage = `url("${data.url}")`;
     profileIconLarge.style.backgroundImage = `url("${data.url}")`;
@@ -1106,7 +1099,8 @@ profileUpload.addEventListener('change', async (event) => {
 deletePictureBtn.addEventListener('click', async () => {
   try {
     await apiRequest("https://oneprojectapp-backend.onrender.com/consultant-project-manager/delete-picture", {
-      method: "POST"
+      method: "POST",
+      headers: { "Authorization": `Bearer ${token}` }
     });
     const emailChar = consultantPMEmail.charAt(0).toUpperCase();
     profileIcon.style.backgroundImage = "";
