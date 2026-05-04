@@ -200,73 +200,40 @@
    }
 
     /* Project selector */
-.project-selector {
-  background: var(--c-peachpuff);
-  color: #000;
-  font-weight: bold;
-  font-size: 15px;
-  padding: 14px 12px;
-  border-radius: 10px;
-  margin-bottom: 20px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  position: relative;
-  flex-shrink: 0;
-}
-
-.project-dialog {
-  position: absolute;   /* ✅ changed from fixed */
-  top: 100%;            /* ✅ dropdown appears below selector */
-  left: 0;
-  display: none;
-  background: #fff;
-  color: #333;
-  border-radius: 10px;
-  box-shadow: 0 6px 16px rgba(0,0,0,0.2);
-  min-width: 220px;
-  z-index: 50;          /* ✅ higher than profile dialog */
-  max-height: 240px;
-  overflow-y: auto;
-}
-
-.project-item {
-  padding: 12px 16px;
-  cursor: pointer;
-  font-size: 14px;
-  border-bottom: 1px solid #eee;
-}
-.project-item:last-child { border-bottom: none; }
-.project-item:hover { background: #f3f3f3; }
-
-/* Role + Tasks styling */
-.team-member-role {
-  font-weight: bold;
-  font-size: 14px;
-  margin-bottom: 6px;
-  color: #333;
-}
-
-.task-header {
-  font-size: 13px;
-  margin: 8px 0 4px;
-  color: #222;
-  font-weight: bold;
-}
-
-.task-item {
-  font-size: 13px;
-  margin-left: 12px;
-  margin-bottom: 4px;
-  color: #555;
-  display: block;
-}
-.task-item::before {
-  content: "• ";
-  color: #888;
-}
+    .project-selector {
+      background: var(--c-peachpuff);
+      color: #000;
+      font-weight: bold;
+      font-size: 15px;
+      padding: 14px 12px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      position: relative;
+      flex-shrink: 0;
+    }
+    .project-dialog {
+      position: fixed;
+      display: none;
+      background: #fff; color: #333;
+      border-radius: 10px;
+      box-shadow: 0 6px 16px rgba(0,0,0,0.2);
+      overflow: hidden;
+      min-width: 280px;
+      z-index: 15;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .project-item {
+      padding: 12px 16px; cursor: pointer; font-size: 14px;
+      border-bottom: 1px solid #eee;
+    }
+    .project-item:last-child { border-bottom: none; }
+    .project-item:hover { background: #f3f3f3; }
     
     /* Navigation */
     .nav-item {
@@ -965,79 +932,67 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // ✅ Fetch projects assigned to team member (backend uses JWT sub)
   try {
-  const data = await apiRequest("https://oneprojectapp-backend.onrender.com/team-member/projects", {
-    method: "POST",
-    headers: { 
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${token}`
-    }
-  });
-
-  const projects = data.projects || [];
-
-  if (projects.length > 0) {
-    projectDialog.innerHTML = ""; // clear static items
-
-    const savedProjectId = ProjectContext.getId();
-    let activeProjectObj = projects.find(p => String(p.id) === String(savedProjectId));
-
-    if (!activeProjectObj) {
-      activeProjectObj = projects[0]; // fallback to first
-    }
-
-    // ✅ Save extended context (part + position)
-    ProjectContext.set(activeProjectObj);
-
-    activeProject.textContent = activeProjectObj.name;
-
-    // Build project selector list
-    projects.forEach(project => {
-      const item = document.createElement("div");
-      item.className = "project-item";
-      item.textContent = `${project.name} (${project.location})`;
-      projectDialog.appendChild(item);
-
-      item.addEventListener("click", () => {
-        ProjectContext.set(project); // saves id, name, part, position
-        activeProject.textContent = project.name;
-        projectDialog.style.display = "none";
-        fetchProjectDetails(project.id); // refresh tasks + role
-      });
+    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/team-member/projects", {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      }
     });
 
-    // ✅ Display role + tasks for active project
-    if (teamMemberDialog) {
-      teamMemberDialog.innerHTML = "";
+    const projects = data.projects || [];
 
-      const roleItem = document.createElement("div");
-      roleItem.className = "team-member-role";
-      roleItem.textContent = `${activeProjectObj.assigned_part} Team Member – ${activeProjectObj.position}`;
-      teamMemberDialog.appendChild(roleItem);
+    if (projects.length > 0) {
+      projectDialog.innerHTML = ""; // clear static items
 
-      if (activeProjectObj.tasks && activeProjectObj.tasks.length > 0) {
-        const taskHeader = document.createElement("h4");
-        taskHeader.textContent = "Assigned Tasks:";
-        teamMemberDialog.appendChild(taskHeader);
+      const savedProjectId = ProjectContext.getId();
+      let activeProjectObj = projects.find(p => String(p.id) === String(savedProjectId));
 
-        activeProjectObj.tasks.forEach(task => {
-          const taskItem = document.createElement("div");
-          taskItem.className = "task-item";
-          taskItem.textContent = `- ${task.title} (${task.status})`;
-          teamMemberDialog.appendChild(taskItem);
-        });
-      } else {
-        const noTaskItem = document.createElement("div");
-        noTaskItem.textContent = "No tasks assigned.";
-        teamMemberDialog.appendChild(noTaskItem);
+      if (!activeProjectObj) {
+        activeProjectObj = projects[0]; // fallback to first
+        ProjectContext.set(activeProjectObj);
       }
+
+      activeProject.textContent = activeProjectObj.name;
+
+      // Build project selector list
+      projects.forEach(project => {
+        const item = document.createElement("div");
+        item.className = "project-item";
+        item.textContent = `${project.name} (${project.location})`;
+        projectDialog.appendChild(item);
+
+        item.addEventListener("click", () => {
+          ProjectContext.set(project);
+          activeProject.textContent = project.name;
+          projectDialog.style.display = "none";
+          fetchProjectDetails(project.id);
+        });
+      });
+
+      // ✅ Display team members with assigned_part prefix
+      if (teamMemberDialog) {
+        teamMemberDialog.innerHTML = "";
+        projects.forEach(project => {
+          if (project.teamMembers && project.teamMembers.length > 0) {
+            project.teamMembers.forEach(member => {
+              const roleDisplay = `${member.assigned_part} ${member.position}`;
+              const item = document.createElement("div");
+              item.className = "team-member-item";
+              item.textContent = `${member.representative} - ${roleDisplay}`;
+              teamMemberDialog.appendChild(item);
+            });
+          }
+        });
+      }
+    } else {
+      activeProject.textContent = "No projects assigned";
     }
-  } else {
-    activeProject.textContent = "No projects assigned";
+  } catch (err) {
+    console.error("Projects fetch error:", err);
+    activeProject.textContent = "Error loading projects";
   }
-} catch (err) {
-  console.error("Projects fetch error:", err);
-  activeProject.textContent = "Error loading projects";
-}
+});
 
 // ✅ Helper to refresh project details
 async function fetchProjectDetails(projectId) {
