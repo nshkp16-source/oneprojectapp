@@ -1755,6 +1755,7 @@ async function setTabContent(key) {
     const bottom = document.getElementById('bottomContent');
     bottom.innerHTML = `
       <ul class="doc-list" id="contractualList">
+        <!-- Top description + Add option -->
         <li class="doc-item" onclick="toggleDoc(this)">
           <div class="doc-info">
             <div class="doc-title">Contractual & Legal</div>
@@ -1808,17 +1809,66 @@ async function loadRecordsFromSQL(tableName, containerId) {
           <div class="doc-meta">Issued: ${doc.issued_date} | By: ${doc.role}</div>
         </div>
       </li>
-      <div class="doc-detail" style="display:none; padding:10px;">
+      <div class="doc-detail" style="display:none; padding:10px;" id="docDetail${doc.id}">
         <p>${doc.description || 'No description provided.'}</p>
         <p>Status: ${doc.status}</p>
-        <button class="btn" onclick="openDocumentDetail('${tableName}', ${doc.id}, this)">View Details</button>
+        <div class="loading">Loading details...</div>
       </div>
     `).join('');
 
     document.getElementById(containerId).innerHTML += html;
+
+    // After rendering, fetch details for each doc
+    data.forEach(doc => loadDocumentDetail(tableName, doc.id));
   } catch (err) {
     document.getElementById(containerId).innerHTML +=
       "<li class='doc-item'><div class='doc-info'><div class='doc-title'>Error loading records.</div></div></li>";
+  }
+}
+
+// ============= DOCUMENT DETAIL AUTO-LOAD =============
+async function loadDocumentDetail(tableName, recordId) {
+  const jwt = JSON.parse(localStorage.getItem('jwtToken'));
+  const activeProject = JSON.parse(localStorage.getItem('activeProject'));
+  const detailEl = document.getElementById(`docDetail${recordId}`);
+
+  try {
+    const res = await fetch(
+      `/api/document-detail?table=${tableName}&record_id=${recordId}&project_id=${activeProject.id}`,
+      { headers: { 'Authorization': `Bearer ${jwt.token}` } }
+    );
+    const detail = await res.json();
+
+    let viewersHtml = detail.viewers?.length
+      ? detail.viewers.map(v => `<li>${v.viewer_role} viewed at ${v.viewed_at}</li>`).join('')
+      : "<li>No viewers yet</li>";
+
+    let reviewsHtml = detail.reviews?.length
+      ? detail.reviews.map(r => `
+        <div class="review-block">
+          <p><strong>${r.reviewer_role}</strong> (${r.action} on ${r.action_date})</p>
+          ${r.short_description ? `<p>${r.short_description}</p>` : ''}
+          ${r.rejection_reason ? `<p style="color:red;">Reason: ${r.rejection_reason}</p>` : ''}
+          ${r.letter_body ? `<p>${r.letter_body}</p>` : ''}
+        </div>
+      `).join('')
+      : "<p>No reviews yet</p>";
+
+    detailEl.innerHTML = `
+      <p>${detail.description || 'No description provided.'}</p>
+      <p>Status: ${detail.status}</p>
+      <h4>Read Receipts</h4>
+      <ul>${viewersHtml}</ul>
+      <h4>Review History</h4>
+      ${reviewsHtml}
+      <div class="add-comment-block">
+        <textarea id="commentText${recordId}" placeholder="Add comment..."></textarea>
+        <button class="btn primary"
+          onclick="submitComment('${tableName}', ${recordId}, 'commentText${recordId}')">Reply</button>
+      </div>
+    `;
+  } catch (err) {
+    detailEl.innerHTML = "<p style='color:red;'>Error loading document details.</p>";
   }
 }
 
