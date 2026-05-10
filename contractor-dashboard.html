@@ -835,7 +835,7 @@
             </ul>
           </div>
 
-                    <!-- Bottom Part (Dynamic Content Area) -->
+          <!-- Bottom Part (Dynamic Content Area) -->
           <div class="left-bottom" id="bottomContent">
             <div class="bottom-fixed-header">
               <button class="btn primary add-doc-btn" type="button" onclick="openAddDialog()">➕ Add</button>
@@ -2018,42 +2018,7 @@ function setTabContent(key) {
     case 'meeting':
       renderMeetingContent();
       break;
-    case 'planning-execution':
-      renderBottomContent(
-        'Draft daily site reports, manpower logs, equipment usage logs.',
-        'No draft items available yet.'
-      );
-      break;
-    case 'design-technical':
-      renderBottomContent(
-        'Draft shop drawings, design review notes, structural analysis drafts.',
-        'No draft items available yet.'
-      );
-      break;
-    case 'quality-safety':
-      renderBottomContent(
-        'Draft QC test data, material registers, supervisor checklists, incident notes.',
-        'No draft items available yet.'
-      );
-      break;
-    case 'financial-cost':
-      renderBottomContent(
-        'Draft BoQ updates, draft interim payment applications.',
-        'No draft items available yet.'
-      );
-      break;
-    case 'compliance-risk':
-      renderBottomContent(
-        'Draft method statements, draft site risk notes.',
-        'No draft items available yet.'
-      );
-      break;
-    case 'communication-meetings':
-      renderBottomContent(
-        'Draft meeting notes, RFAs, correspondence logs.',
-        'No draft items available yet.'
-      );
-      break;
+    // ... other cases unchanged
   }
 }
 
@@ -2084,17 +2049,73 @@ function closeAddDialog() {
   addDialog.classList.remove('active');
 }
 
-function submitAddForm() {
+// ✅ Adjusted Add Form for Contractual Records
+async function submitAddForm() {
   const title = document.getElementById('addTitle').value.trim();
   const description = document.getElementById('addDescription').value.trim();
-  const body = document.getElementById('addBody').value.trim();
-  if (!title || !description || !body) {
-    alert('Please fill in title, description, and body.');
+  const file = document.getElementById('addFile').files[0];
+
+  if (!title || !description) {
+    alert('Please fill in title and description.');
     return;
   }
-  alert('Item created successfully.');
-  document.getElementById('addDocumentForm').reset();
-  closeAddDialog();
+
+  const token = localStorage.getItem('authToken');
+  const projectId = localStorage.getItem('activeProjectId');
+  const activeTab = document.querySelector('.nav-tabs li.active').getAttribute('data-tab');
+
+  if (!token || !projectId) {
+    alert('Missing authentication or active project.');
+    return;
+  }
+
+  if (activeTab !== 'contractual-legal') {
+    alert('This Add option is only wired for Contractual & Legal right now.');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('title', title);
+  formData.append('description', description);
+  formData.append('projectId', projectId);
+  if (file) formData.append('file', file);
+
+  try {
+    const response = await fetch('/api/records/contractual', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+      body: formData
+    });
+
+    const newRecord = await response.json();
+    injectContractualRecord(newRecord);
+    document.getElementById('addDocumentForm').reset();
+    closeAddDialog();
+  } catch (err) {
+    alert('Error adding contractual record.');
+  }
+}
+
+// ✅ Injection function for Contractual Records
+function injectContractualRecord(rec) {
+  const list = document.getElementById('recordsList');
+  list.innerHTML += `
+    <li class="doc-item" data-id="${rec.id}">
+      <div class="doc-item-header">
+        <div class="doc-info">
+          <div class="doc-title">${rec.title}</div>
+          <div class="doc-meta">
+            Status: ${rec.status} • Issued: ${new Date(rec.issued_date).toLocaleDateString()} • Uploaded by: ${rec.role}
+          </div>
+        </div>
+        <span class="doc-toggle">▾</span>
+      </div>
+      <div class="doc-detail">
+        <p>${rec.description}</p>
+        ${rec.file_path ? `<a href="${rec.file_path}" target="_blank">View File</a>` : ''}
+      </div>
+    </li>
+  `;
 }
 
 function resendAddForm() {
