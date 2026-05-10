@@ -996,6 +996,12 @@ confirmLogout.addEventListener('click', async () => {
     if (item) item.classList.toggle('expanded');
   });
 
+  // Make sure the Add button always works even if the DOM is regenerated
+  document.addEventListener('click', (event) => {
+    const button = event.target instanceof Element ? event.target.closest('.add-doc-btn') : null;
+    if (button) openAddDialog();
+  });
+
   function openAddDialog() {
     const addDialog = document.getElementById('addDocumentDialog');
     if (!addDialog) return;
