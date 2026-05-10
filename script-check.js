@@ -216,7 +216,7 @@ async function refreshAccessToken() {
 }
 
 // =========================
-// Profile + Project Selector Logic
+// Contractor Profile + Project Selector Logic
 // =========================
 const token = localStorage.getItem("authToken");
 if (!token) {
@@ -227,9 +227,9 @@ const decoded = parseJwt(token);
 console.log("Decoded JWT:", decoded);
 
 // ✅ Identity from JWT (aligned with backend payload)
-const clientId = decoded?.sub;
-const clientEmail = decoded?.companyEmail || decoded?.email;
-const clientRole = decoded?.role;
+const contractorId = decoded?.sub;
+const contractorEmail = decoded?.email;
+const contractorRole = decoded?.role;
 
 // DOM elements
 const profileIcon = document.getElementById('profileIcon');
@@ -249,35 +249,35 @@ const activeProject = document.getElementById("activeProject");
 // MAIN LOAD LOGIC
 document.addEventListener("DOMContentLoaded", async () => {
   // Display email + role from JWT
-  if (profileEmail) profileEmail.textContent = clientEmail;
-  if (profileRole) profileRole.textContent = `Role: ${clientRole}`;
+  if (profileEmail) profileEmail.textContent = contractorEmail;
+  if (profileRole) profileRole.textContent = `Role: ${contractorRole}`;
 
-  // ✅ Fetch profile with apiRequest
+  // ✅ Fetch contractor profile
   try {
-    const client = await apiRequest("https://oneprojectapp-backend.onrender.com/client/profile", {
+    const contractor = await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/profile", {
       method: "GET"
     });
 
-    if (client.profile_picture && client.profile_picture.trim() !== "") {
-      profileIcon.style.backgroundImage = `url("${client.profile_picture}")`;
-      profileIconLarge.style.backgroundImage = `url("${client.profile_picture}")`;
+    if (contractor.profile_picture && contractor.profile_picture.trim() !== "") {
+      profileIcon.style.backgroundImage = `url("${contractor.profile_picture}")`;
+      profileIconLarge.style.backgroundImage = `url("${contractor.profile_picture}")`;
       profileIcon.textContent = "";
       profileIconLarge.textContent = "";
     } else {
-      const emailChar = (clientEmail || "?").charAt(0).toUpperCase();
+      const emailChar = (contractorEmail || "?").charAt(0).toUpperCase();
       profileIcon.textContent = emailChar;
       profileIconLarge.textContent = emailChar;
     }
   } catch (err) {
-    console.error("Profile picture fetch error:", err);
+    console.error("Contractor profile fetch error:", err);
   }
 
-  // ✅ Fetch projects with apiRequest
+  // ✅ Fetch projects assigned to contractor (via contractor_assignments)
   try {
-    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/client/projects", {
+    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/projects", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId })
+      headers: { "Content-Type": "application/json" }
+      // ⚠️ No body needed — backend uses JWT
     });
 
     const projects = data.projects || [];
@@ -325,7 +325,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 // ✅ Helper to refresh project details with apiRequest
 async function fetchProjectDetails(projectId) {
   try {
-    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/client/project-details", {
+    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/project-details", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ projectId })
@@ -333,7 +333,7 @@ async function fetchProjectDetails(projectId) {
 
     activeProject.textContent = data.project.name;
   } catch (err) {
-    console.error("Project details fetch error:", err);
+    console.error("Contractor project details fetch error:", err);
   }
 }
 
@@ -416,7 +416,7 @@ profileUpload.addEventListener('change', async (event) => {
   formData.append("profile_picture", file);
 
   try {
-    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
+    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/upload-picture", {
       method: "POST",
       body: formData
     });
@@ -433,10 +433,10 @@ profileUpload.addEventListener('change', async (event) => {
 // Delete picture
 deletePictureBtn.addEventListener('click', async () => {
   try {
-    await apiRequest("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
+    await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/delete-picture", {
       method: "POST"
     });
-    const emailChar = clientEmail.charAt(0).toUpperCase();
+    const emailChar = contractorEmail.charAt(0).toUpperCase();
     profileIcon.style.backgroundImage = "";
     profileIcon.textContent = emailChar;
     profileIconLarge.style.backgroundImage = "";
@@ -905,6 +905,164 @@ confirmLogout.addEventListener('click', async () => {
     `;
   }
 
+  function renderMeetingContent(activeView = 'minutes') {
+    bottomContent.innerHTML = `
+      <div class="meeting-options">
+        <button class="meeting-btn ${activeView === 'minutes' ? 'active' : ''}" onclick="switchMeetingView('minutes')">📋 Meeting Minutes</button>
+        <button class="meeting-btn ${activeView === 'scheduled' ? 'active' : ''}" onclick="switchMeetingView('scheduled')">📅 Scheduled Meeting</button>
+        <button class="meeting-btn ${activeView === 'plan' ? 'active' : ''}" onclick="switchMeetingView('plan')">✏️ Plan Meeting</button>
+      </div>
+      <div class="bottom-scroll-area" id="meetingViewContainer"></div>
+    `;
+    
+    setTimeout(() => {
+      updateMeetingView(activeView);
+    }, 0);
+  }
+
+  function switchMeetingView(view) {
+    renderMeetingContent(view);
+  }
+
+  function updateMeetingView(view) {
+    const container = document.getElementById('meetingViewContainer');
+    if (!container) return;
+
+    if (view === 'minutes') {
+      container.innerHTML = `
+        <div style="padding: 16px 0;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #ddd;">
+            <h4 style="margin: 0; color: #333;">Past Meeting Minutes</h4>
+            <button class="btn primary add-doc-btn" onclick="openAddDialog()" style="min-width: 80px;">➕ Add</button>
+          </div>
+          <ul class="doc-list">
+            <li class="doc-item">
+              <div class="doc-item-header">
+                <div class="doc-info">
+                  <div class="doc-title">Site Meeting - January 14, 2026</div>
+                  <div class="doc-meta">10:00 AM - Minutes by John Smith</div>
+                </div>
+                <span class="doc-toggle">▾</span>
+              </div>
+              <div class="doc-detail">
+                <p><strong>Attendees:</strong> Project Manager, Contractor, Consultant</p>
+                <p><strong>Topics:</strong> Progress review, safety updates, schedule changes</p>
+                <p><strong>Action Items:</strong> Follow up on structural drawings by Jan 20</p>
+              </div>
+            </li>
+            <li class="doc-item">
+              <div class="doc-item-header">
+                <div class="doc-info">
+                  <div class="doc-title">Weekly Progress Meeting - January 10, 2026</div>
+                  <div class="doc-meta">2:30 PM - Minutes by Sarah Johnson</div>
+                </div>
+                <span class="doc-toggle">▾</span>
+              </div>
+              <div class="doc-detail">
+                <p><strong>Attendees:</strong> Team leads, Site supervisor</p>
+                <p><strong>Topics:</strong> Weekly milestones, resource planning</p>
+                <p><strong>Action Items:</strong> Procure materials by Jan 15</p>
+              </div>
+            </li>
+          </ul>
+        </div>
+      `;
+    } else if (view === 'scheduled') {
+      container.innerHTML = `
+        <div style="padding: 16px 0;">
+          <h4 style="margin: 0 0 12px 0; color: #333;">Scheduled Meetings</h4>
+          <ul class="doc-list">
+            <li class="doc-item">
+              <div class="doc-item-header">
+                <div class="doc-info">
+                  <div class="doc-title">Design Review Meeting</div>
+                  <div class="doc-meta">📅 May 15, 2026 at 10:00 AM</div>
+                </div>
+                <span class="doc-toggle">▾</span>
+              </div>
+              <div class="doc-detail">
+                <p><strong>Location:</strong> Conference Room A</p>
+                <p><strong>Participants:</strong> Architect, Contractor, Project Manager</p>
+                <p><strong>Agenda:</strong> Review final design drawings and specifications</p>
+              </div>
+            </li>
+            <li class="doc-item">
+              <div class="doc-item-header">
+                <div class="doc-info">
+                  <div class="doc-title">Safety Inspection Meeting</div>
+                  <div class="doc-meta">📅 May 16, 2026 at 2:00 PM</div>
+                </div>
+                <span class="doc-toggle">▾</span>
+              </div>
+              <div class="doc-detail">
+                <p><strong>Location:</strong> Site Office</p>
+                <p><strong>Participants:</strong> Safety Officer, Site Manager, Supervisors</p>
+                <p><strong>Agenda:</strong> Monthly safety review and compliance check</p>
+              </div>
+            </li>
+          </ul>
+        </div>
+      `;
+    } else if (view === 'plan') {
+      container.innerHTML = `
+        <div style="padding: 16px 0;">
+          <h4 style="margin: 0 0 12px 0; color: #333;">Plan New Meeting</h4>
+          <form id="planMeetingForm" onsubmit="event.preventDefault(); submitPlanMeeting();" class="meeting-compose-form">
+            <div>
+              <label for="meetingTitle">Meeting Title *</label>
+              <input type="text" id="meetingTitle" placeholder="e.g., Design Review Meeting" required />
+            </div>
+            <div>
+              <label for="meetingDate">Date & Time *</label>
+              <input type="datetime-local" id="meetingDate" required />
+            </div>
+            <div>
+              <label for="meetingLocation">Location *</label>
+              <input type="text" id="meetingLocation" placeholder="e.g., Conference Room A" required />
+            </div>
+            <div>
+              <label for="meetingParticipants">Participants *</label>
+              <textarea id="meetingParticipants" placeholder="Enter participants (one per line or comma-separated)" required></textarea>
+            </div>
+            <div>
+              <label for="meetingAgenda">Agenda *</label>
+              <textarea id="meetingAgenda" placeholder="Describe meeting agenda and objectives" required></textarea>
+            </div>
+            <div>
+              <label for="meetingDescription">Additional Notes</label>
+              <textarea id="meetingDescription" placeholder="Any additional details or preparation notes"></textarea>
+            </div>
+            <div class="meeting-compose-actions">
+              <button type="button" onclick="resetPlanMeetingForm()">Clear</button>
+              <button type="submit" class="primary">✓ Schedule Meeting</button>
+            </div>
+          </form>
+        </div>
+      `;
+    }
+  }
+
+  function submitPlanMeeting() {
+    const title = document.getElementById('meetingTitle').value.trim();
+    const date = document.getElementById('meetingDate').value;
+    const location = document.getElementById('meetingLocation').value.trim();
+    const participants = document.getElementById('meetingParticipants').value.trim();
+    const agenda = document.getElementById('meetingAgenda').value.trim();
+    
+    if (!title || !date || !location || !participants || !agenda) {
+      alert('Please fill in all required fields.');
+      return;
+    }
+    
+    alert(`Meeting scheduled: ${title} on ${date}`);
+    resetPlanMeetingForm();
+  }
+
+  function resetPlanMeetingForm() {
+    const form = document.getElementById('planMeetingForm');
+    if (form) form.reset();
+  }
+
   function setTabContent(key) {
     switch (key) {
       case 'contractual-legal':
@@ -938,10 +1096,7 @@ confirmLogout.addEventListener('click', async () => {
         );
         break;
       case 'meeting':
-        renderBottomContent(
-          'Meeting agendas, minutes, attendance, and follow-up actions.',
-          'No meeting selected or no meeting data available.'
-        );
+        renderMeetingContent();
         break;
       case 'planning-execution':
         renderBottomContent(
@@ -994,12 +1149,6 @@ confirmLogout.addEventListener('click', async () => {
     if (!header) return;
     const item = header.closest('.doc-item');
     if (item) item.classList.toggle('expanded');
-  });
-
-  // Make sure the Add button always works even if the DOM is regenerated
-  document.addEventListener('click', (event) => {
-    const button = event.target instanceof Element ? event.target.closest('.add-doc-btn') : null;
-    if (button) openAddDialog();
   });
 
   function openAddDialog() {
