@@ -1754,26 +1754,27 @@ async function setTabContent(key) {
   if (key === 'contractual-legal') {
     const bottom = document.getElementById('bottomContent');
     bottom.innerHTML = `
-      <div class="accordion-item">
-        <div class="accordion-header" onclick="toggleAccordion(this)">
-          <h3>Contractual & Legal</h3>
-          <span style="font-size:12px; color:#666;">Click to expand</span>
-        </div>
-        <div class="accordion-body" style="display:none;">
+      <ul class="doc-list" id="contractualList">
+        <li class="doc-item" onclick="toggleDoc(this)">
+          <div class="doc-info">
+            <div class="doc-title">Contractual & Legal</div>
+            <div class="doc-meta">Description & Add Option</div>
+          </div>
+        </li>
+        <div class="doc-detail" style="display:none; padding:10px;">
           <p>Contract agreements, amendments, change orders, permits, insurance, tender docs.</p>
           <button class="btn primary" onclick="openComposeForm('contractual_records')">➕ Add Document</button>
-          <ul class="doc-list" id="contractualList">Loading...</ul>
         </div>
-      </div>
+      </ul>
     `;
     loadRecordsFromSQL('contractual_records', 'contractualList');
   }
 }
 
-// ============= TOGGLE ACCORDION =============
-function toggleAccordion(headerEl) {
-  const body = headerEl.nextElementSibling;
-  body.style.display = body.style.display === 'none' ? 'block' : 'none';
+// ============= TOGGLE DOCUMENT =============
+function toggleDoc(item) {
+  const detail = item.nextElementSibling;
+  detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
 }
 
 // ============= FETCH RECORDS FROM SQL =============
@@ -1782,8 +1783,8 @@ async function loadRecordsFromSQL(tableName, containerId) {
   const jwt = JSON.parse(localStorage.getItem('jwtToken'));
 
   if (!activeProject || !jwt) {
-    document.getElementById(containerId).innerHTML =
-      "<p style='color:red;'>No active project or user session.</p>";
+    document.getElementById(containerId).innerHTML +=
+      "<li class='doc-item'><div class='doc-info'><div class='doc-title'>No active project or user session.</div></div></li>";
     return;
   }
 
@@ -1795,77 +1796,29 @@ async function loadRecordsFromSQL(tableName, containerId) {
     const data = await res.json();
 
     if (!data || data.length === 0) {
-      document.getElementById(containerId).innerHTML =
-        "<p style='color:#666;'>No data within this project.</p>";
+      document.getElementById(containerId).innerHTML +=
+        "<li class='doc-item'><div class='doc-info'><div class='doc-title'>No data within this project.</div></div></li>";
       return;
     }
 
     let html = data.map(doc => `
-      <div class="accordion-item">
-        <div class="accordion-header" onclick="toggleAccordion(this)">
+      <li class="doc-item" onclick="toggleDoc(this)">
+        <div class="doc-info">
           <div class="doc-title">${doc.title}</div>
           <div class="doc-meta">Issued: ${doc.issued_date} | By: ${doc.role}</div>
         </div>
-        <div class="accordion-body" style="display:none;">
-          <p>${doc.description || 'No description provided.'}</p>
-          <p>Status: ${doc.status}</p>
-          <button class="btn" onclick="openDocumentDetail('${tableName}', ${doc.id}, this)">View Details</button>
-        </div>
+      </li>
+      <div class="doc-detail" style="display:none; padding:10px;">
+        <p>${doc.description || 'No description provided.'}</p>
+        <p>Status: ${doc.status}</p>
+        <button class="btn" onclick="openDocumentDetail('${tableName}', ${doc.id}, this)">View Details</button>
       </div>
     `).join('');
 
-    document.getElementById(containerId).innerHTML = html;
+    document.getElementById(containerId).innerHTML += html;
   } catch (err) {
-    document.getElementById(containerId).innerHTML =
-      "<p style='color:red;'>Error loading records.</p>";
-  }
-}
-
-// ============= DOCUMENT DETAIL VIEW =============
-async function openDocumentDetail(tableName, recordId, btnEl) {
-  const jwt = JSON.parse(localStorage.getItem('jwtToken'));
-  const activeProject = JSON.parse(localStorage.getItem('activeProject'));
-  const body = btnEl.parentElement;
-
-  body.innerHTML = `<p>Loading document details...</p>`;
-
-  try {
-    const res = await fetch(
-      `/api/document-detail?table=${tableName}&record_id=${recordId}&project_id=${activeProject.id}`,
-      { headers: { 'Authorization': `Bearer ${jwt.token}` } }
-    );
-    const detail = await res.json();
-
-    let viewersHtml = detail.viewers?.length
-      ? detail.viewers.map(v => `<li>${v.viewer_role} viewed at ${v.viewed_at}</li>`).join('')
-      : "<li>No viewers yet</li>";
-
-    let reviewsHtml = detail.reviews?.length
-      ? detail.reviews.map(r => `
-        <div class="review-block">
-          <p><strong>${r.reviewer_role}</strong> (${r.action} on ${r.action_date})</p>
-          ${r.short_description ? `<p>${r.short_description}</p>` : ''}
-          ${r.rejection_reason ? `<p style="color:red;">Reason: ${r.rejection_reason}</p>` : ''}
-          ${r.letter_body ? `<p>${r.letter_body}</p>` : ''}
-        </div>
-      `).join('')
-      : "<p>No reviews yet</p>";
-
-    body.innerHTML = `
-      <p>${detail.description || 'No description provided.'}</p>
-      <p>Status: ${detail.status}</p>
-      <h4>Read Receipts</h4>
-      <ul>${viewersHtml}</ul>
-      <h4>Review History</h4>
-      ${reviewsHtml}
-      <div class="add-comment-block">
-        <textarea id="commentText${recordId}" placeholder="Add comment..."></textarea>
-        <button class="btn primary"
-          onclick="submitComment('${tableName}', ${recordId}, 'commentText${recordId}')">Reply</button>
-      </div>
-    `;
-  } catch (err) {
-    body.innerHTML = "<p style='color:red;'>Error loading document details.</p>";
+    document.getElementById(containerId).innerHTML +=
+      "<li class='doc-item'><div class='doc-info'><div class='doc-title'>Error loading records.</div></div></li>";
   }
 }
 
