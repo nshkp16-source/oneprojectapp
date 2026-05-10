@@ -1749,18 +1749,118 @@ confirmLogout.addEventListener('click', async () => {
     });
   });
 
-  // ============= SET TAB CONTENT =============
-  function setTabContent(key) {
-    switch (key) {
-      // Project Records Tabs (SQL-driven)
-      case 'contractual-legal':
-        bottomContent.innerHTML = `
-          <h3>Contractual & Legal</h3>
-          <p>Contract agreements, amendments, change orders, permits, insurance, tender docs.</p>
-          <p style="color: #666;">No active project selected or No data within this project.</p>
-          <button class="btn primary" style="margin-top: 10px;">➕ Add Document</button>
-        `;
-        break;
+// ============= SET TAB CONTENT =============
+async function setTabContent(key) {
+  switch (key) {
+    // Contractor Dashboard: Contractual & Legal Records
+    case 'contractual-legal':
+      bottomContent.innerHTML = `
+        <h3>Contractual & Legal</h3>
+        <p>Contract agreements, amendments, change orders, permits, insurance, tender docs.</p>
+        <ul class="doc-list" id="contractualList">Loading...</ul>
+        <div class="add-doc-block">
+          <button class="btn primary" onclick="openComposeForm('contractual_records')">➕ Add Document</button>
+        </div>
+      `;
+      loadRecordsFromSQL('contractual_records', 'contractualList');
+      break;
+  }
+}
+
+// ============= FETCH RECORDS FROM SQL =============
+async function loadRecordsFromSQL(tableName, containerId) {
+  const activeProject = JSON.parse(localStorage.getItem('activeProject'));
+  const jwt = JSON.parse(localStorage.getItem('jwtToken'));
+
+  if (!activeProject || !jwt) {
+    document.getElementById(containerId).innerHTML = "<p style='color:red;'>No active project or user session.</p>";
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/project-records?table=${tableName}&project_id=${activeProject.id}`, {
+      headers: {
+        'Authorization': `Bearer ${jwt.token}`,   // send JWT token
+        'Content-Type': 'application/json'
+      }
+    });
+    const data = await res.json();
+
+    if (!data || data.length === 0) {
+      document.getElementById(containerId).innerHTML = "<p style='color:#666;'>No data within this project.</p>";
+      return;
+    }
+
+    let html = data.map(doc => `
+      <li class="doc-item">
+        <div class="doc-info">
+          <div class="doc-title">${doc.title}</div>
+          <div class="doc-meta">Issued: ${doc.issued_date} | Status: ${doc.status}</div>
+        </div>
+        <button class="doc-action-btn" onclick="openDocumentDetail('${tableName}', ${doc.id})">View</button>
+      </li>
+    `).join('');
+
+    document.getElementById(containerId).innerHTML = html;
+  } catch (err) {
+    document.getElementById(containerId).innerHTML = "<p style='color:red;'>Error loading records.</p>";
+  }
+}
+
+// ============= DOCUMENT DETAIL VIEW =============
+async function openDocumentDetail(tableName, recordId) {
+  bottomContent.innerHTML = `<p>Loading document details...</p>`;
+
+  const jwt = JSON.parse(localStorage.getItem('jwtToken'));
+  const activeProject = JSON.parse(localStorage.getItem('activeProject'));
+
+  if (!activeProject || !jwt) {
+    bottomContent.innerHTML = "<p style='color:red;'>No active project or user session.</p>";
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/document-detail?table=${tableName}&record_id=${recordId}&project_id=${activeProject.id}`, {
+      headers: {
+        'Authorization': `Bearer ${jwt.token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    const detail = await res.json();
+
+    let viewersHtml = detail.viewers && detail.viewers.length > 0
+      ? detail.viewers.map(v => `<li>${v.viewer_role} (ID: ${v.viewer_id}) viewed at ${v.viewed_at}</li>`).join('')
+      : "<li>No viewers yet</li>";
+
+    let reviewsHtml = detail.reviews && detail.reviews.length > 0
+      ? detail.reviews.map(r => `
+        <div class="review-block">
+          <p><strong>${r.reviewer_role}</strong> (${r.action} on ${r.action_date})</p>
+          <p>${r.short_description || ''}</p>
+          ${r.rejection_reason ? `<p style="color:red;">Reason: ${r.rejection_reason}</p>` : ''}
+          ${r.letter_body ? `<p>${r.letter_body}</p>` : ''}
+        </div>
+      `).join('')
+      : "<p>No reviews yet</p>";
+
+    bottomContent.innerHTML = `
+      <h3>${detail.title}</h3>
+      <p>${detail.description || 'No description provided.'}</p>
+      <p>Status: ${detail.status}</p>
+      <h4>Read Receipts</h4>
+      <ul>${viewersHtml}</ul>
+      <h4>Review History</h4>
+      ${reviewsHtml}
+      <div class="add-comment-block">
+        <textarea id="commentText" placeholder="Add comment..."></textarea>
+        <button class="btn primary" onclick="submitComment('${tableName}', ${recordId})">Reply</button>
+      </div>
+    `;
+  } catch (err) {
+    bottomContent.innerHTML = "<p style='color:red;'>Error loading document details.</p>";
+  }
+}
+
       case 'administrative-instructional':
         bottomContent.innerHTML = `
           <h3>Administrative & Instructional</h3>
