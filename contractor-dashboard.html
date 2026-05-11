@@ -2124,8 +2124,7 @@ function openAddMeetingMinutesPanel() {
         </div>
         <div style='margin-bottom:16px;'>
           <label style='display:block; font-weight:bold; color:#007B8A; text-transform:uppercase; font-size:12px; letter-spacing:0.5px; margin-bottom:8px;'>Attached Images</label>
-          <div id='meetingMinuteImageGallery' style='display:flex; gap:10px; overflow-x:auto; padding-bottom:8px; margin-bottom:12px;'></div>
-          <div id='meetingMinuteImageExpanded' style='display:none; margin-bottom:12px; padding:14px; border:1px solid #ddd; border-radius:8px; background:#fff;'></div>
+          <div id='meetingMinuteImageList' style='max-height:240px; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding-bottom:8px; margin-bottom:12px;'></div>
           <div style='display:flex; align-items:center; gap:12px; padding:16px; border:2px dashed #ddd; border-radius:6px; background:rgba(0,123,138,0.02); cursor:pointer; transition:all 0.2s ease;' id='meetingMinutesDropZone'>
             <div style='font-size:24px;'>📝</div>
             <div style='flex:1;'>
@@ -2152,15 +2151,13 @@ function openAddMeetingMinutesPanel() {
   const dropZone = document.getElementById('meetingMinutesDropZone');
   const fileInput = document.getElementById('meetingMinuteAttachment');
   const fileName = document.getElementById('meetingMinuteAttachmentName');
-  const imageGallery = document.getElementById('meetingMinuteImageGallery');
-  const imageExpanded = document.getElementById('meetingMinuteImageExpanded');
+  const imageList = document.getElementById('meetingMinuteImageList');
   let selectedMeetingMinuteFiles = [];
-  let expandedImageIndex = -1;
+  let expandedIndex = -1;
 
   function renderMeetingMinuteFiles() {
-    imageGallery.innerHTML = '';
-    imageExpanded.style.display = 'none';
-    expandedImageIndex = -1;
+    imageList.innerHTML = '';
+    expandedIndex = -1;
 
     if (selectedMeetingMinuteFiles.length === 0) {
       fileName.style.display = 'none';
@@ -2171,45 +2168,102 @@ function openAddMeetingMinutesPanel() {
     fileName.style.display = 'block';
 
     selectedMeetingMinuteFiles.forEach((file, index) => {
-      if (!file.type.startsWith('image/')) return;
-      const thumbUrl = URL.createObjectURL(file);
-      const thumbButton = document.createElement('button');
-      thumbButton.type = 'button';
-      thumbButton.style.border = '1px solid #ccc';
-      thumbButton.style.borderRadius = '8px';
-      thumbButton.style.padding = '0';
-      thumbButton.style.minWidth = '80px';
-      thumbButton.style.minHeight = '80px';
-      thumbButton.style.overflow = 'hidden';
-      thumbButton.style.background = 'white';
-      thumbButton.style.cursor = 'pointer';
-      thumbButton.style.flex = '0 0 auto';
-      thumbButton.innerHTML = `<img src="${thumbUrl}" style="width:80px; height:80px; object-fit:cover; display:block;" alt="${file.name}"/>`;
-      thumbButton.addEventListener('click', () => toggleExpandedImage(index, thumbUrl, file));
-      imageGallery.appendChild(thumbButton);
+      const isImage = file.type.startsWith('image/');
+      const item = document.createElement('div');
+      item.style.border = '1px solid #e0e0e0';
+      item.style.borderRadius = '10px';
+      item.style.background = '#fff';
+      item.style.overflow = 'hidden';
+      item.style.display = 'flex';
+      item.style.flexDirection = 'column';
+      item.style.cursor = 'pointer';
+      item.style.transition = 'all 0.2s ease';
+
+      const header = document.createElement('div');
+      header.style.display = 'flex';
+      header.style.alignItems = 'center';
+      header.style.justifyContent = 'space-between';
+      header.style.gap = '12px';
+      header.style.padding = '10px 12px';
+
+      const meta = document.createElement('div');
+      meta.style.display = 'flex';
+      meta.style.alignItems = 'center';
+      meta.style.gap = '10px';
+
+      const thumb = document.createElement('div');
+      thumb.style.width = '56px';
+      thumb.style.height = '56px';
+      thumb.style.borderRadius = '10px';
+      thumb.style.background = '#f5f5f5';
+      thumb.style.display = 'flex';
+      thumb.style.alignItems = 'center';
+      thumb.style.justifyContent = 'center';
+      thumb.style.overflow = 'hidden';
+
+      if (isImage) {
+        const thumbUrl = URL.createObjectURL(file);
+        const img = document.createElement('img');
+        img.src = thumbUrl;
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'cover';
+        thumb.appendChild(img);
+      } else {
+        thumb.textContent = '📄';
+        thumb.style.fontSize = '22px';
+      }
+
+      const info = document.createElement('div');
+      info.style.flex = '1';
+      info.innerHTML = `<div style='font-weight:700; color:#333; font-size:13px;'>${file.name}</div><div style='font-size:12px; color:#666; margin-top:4px;'>${(file.size / 1024 / 1024).toFixed(2)} MB</div>`;
+
+      const chevron = document.createElement('div');
+      chevron.textContent = '▼';
+      chevron.style.fontSize = '12px';
+      chevron.style.color = '#555';
+
+      meta.appendChild(thumb);
+      meta.appendChild(info);
+      header.appendChild(meta);
+      header.appendChild(chevron);
+      item.appendChild(header);
+
+      const expanded = document.createElement('div');
+      expanded.style.display = 'none';
+      expanded.style.padding = '0 12px 12px 12px';
+
+      if (isImage) {
+        const fullImg = document.createElement('img');
+        fullImg.src = URL.createObjectURL(file);
+        fullImg.style.width = '100%';
+        fullImg.style.maxHeight = '360px';
+        fullImg.style.objectFit = 'contain';
+        fullImg.style.borderRadius = '10px';
+        expanded.appendChild(fullImg);
+      } else {
+        expanded.innerHTML = `<div style='font-size:13px; color:#444;'>No inline preview available for this file type.</div>`;
+      }
+
+      item.appendChild(expanded);
+      item.addEventListener('click', () => {
+        const currentlyExpanded = expandedIndex === index;
+        expandedIndex = currentlyExpanded ? -1 : index;
+        Array.from(imageList.children).forEach((child, childIndex) => {
+          const childExpanded = child.querySelector('div:nth-child(2)');
+          const childChevron = child.querySelector('div:nth-child(1) > div:last-child');
+          if (childIndex === expandedIndex) {
+            childExpanded.style.display = 'block';
+            childChevron.textContent = '▲';
+          } else {
+            childExpanded.style.display = 'none';
+            childChevron.textContent = '▼';
+          }
+        });
+      });
+
+      imageList.appendChild(item);
     });
-
-    if (imageGallery.children.length === 0) {
-      imageGallery.innerHTML = `<div style='color:#666; font-size:12px;'>No image previews available. Selected files may not be image types.</div>`;
-    }
-  }
-
-  function toggleExpandedImage(index, url, file) {
-    if (expandedImageIndex === index) {
-      imageExpanded.style.display = 'none';
-      expandedImageIndex = -1;
-      return;
-    }
-
-    expandedImageIndex = index;
-    imageExpanded.style.display = 'block';
-    imageExpanded.innerHTML = `
-      <div style='display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:10px;'>
-        <div style='font-weight:700; color:#333; font-size:13px;'>${file.name}</div>
-        <button type='button' style='border:none; background:#f5f5f5; padding:6px 10px; border-radius:6px; cursor:pointer; color:#333;' onclick='document.getElementById("meetingMinuteImageExpanded").style.display = "none";'>Collapse</button>
-      </div>
-      <img src='${url}' style='width:100%; max-height:360px; object-fit:contain; border-radius:8px; display:block;' alt='${file.name}' />
-    `;
   }
 
   dropZone.addEventListener('click', () => fileInput.click());
