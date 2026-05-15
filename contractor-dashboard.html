@@ -810,10 +810,6 @@
 .no-data-placeholder.show {
   display: block;
 }
-
-#profileOverlay.active {
-  display: block;
-}
   </style>
 </head>
 <body>
@@ -847,7 +843,6 @@
     <div id="profilePreview" style="display:none;"></div>
   </div>
 </div>
-<div id="profileOverlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.4); z-index:99;"></div>
 
       <!-- Project selector -->
       <div class="project-selector" id="projectSelector">
@@ -2313,9 +2308,11 @@ function openAddRecordPanel() {
   }
 }
 
-// ---------- SUBMIT RECORD FORM (using apiRequest) ------------
-async function submitRecordForm() {
-  const projectId = localStorage.getItem("activeProjectId"); // ✅ active project from local
+// ---------- PART 1: COLLECT RECORD DATA ----------
+function collectRecordData() {
+  const token = localStorage.getItem("authToken");
+  const projectId = localStorage.getItem("activeProjectId");
+
   const category = document.getElementById("recordCategory").value;
   const categoryLabel = document.getElementById("recordCategoryLabel").value;
   const title = document.getElementById("recordTitle").value;
@@ -2328,40 +2325,44 @@ async function submitRecordForm() {
   formData.append("title", title);
   formData.append("description", description);
   formData.append("projectId", projectId);
-  formData.append("recordKind", "new"); // always 'new' for Add Record
+  formData.append("recordKind", "new");
 
   if (fileInput.files.length > 0) {
     formData.append("attachment", fileInput.files[0]);
   }
 
+  return { formData, token, title, categoryLabel, category };
+}
+
+// ---------- PART 2: SEND RECORD TO BACKEND ----------
+async function sendRecordToBackend({ formData, token, title, categoryLabel, category }) {
   try {
-    // ✅ Use apiRequest helper (handles JWT + headers)
     const data = await apiRequest("https://oneprojectapp-backend.onrender.com/records", {
       method: "POST",
       body: formData
     });
-
-    if (data.success) {
-      alert(`✓ Record "${title}" saved successfully in ${categoryLabel}!`);
-
-      // ✅ Refresh the records list for the active tab
-      if (typeof fetchTabRecords === "function" && typeof renderRecords === "function") {
-        fetchTabRecords(category).then(records => renderRecords(records, category));
-      }
-
-      // ✅ Collapse the gray panel back to dashboard
-      collapseGrayPart();
-
-      // ✅ Optionally refresh notification badge
-      if (document.getElementById("notificationBadge")) {
-        document.getElementById("notificationBadge").textContent = data.unreadCount || "1";
-      }
-    } else {
-      alert("Error: " + (data.message || "Failed to save record"));
-    }
+    return { data, title, categoryLabel, category };
   } catch (err) {
-    console.error("Submit record error:", err);
-    alert("Server error saving record: " + err.message);
+    console.error("Send record error:", err);
+    throw new Error(err.message || "Server error while sending record");
+  }
+}
+
+// ---------- PART 3: UPDATE UI AFTER SAVE ----------
+function updateUIAfterSave({ data, title, categoryLabel, category }) {
+  if (data.success) {
+    alert(`✓ Record "${title}" saved successfully in ${categoryLabel}!`);
+
+    // ✅ Refresh the records list for the active tab
+    if (typeof fetchTabRecords === "function" && typeof renderRecords === "function") {
+      fetchTabRecords(category).then(records => renderRecords(records, category));
+    }
+
+    // ✅ Collapse the gray panel back to dashboard
+    collapseGrayPart();
+  } else {
+    // ❌ Show error alert with backend message
+    alert("Error: " + (data.message || "Failed to save record"));
   }
 }
 
@@ -3766,9 +3767,6 @@ setTimeout(() => {
 
   // ============= INITIALIZE ON PAGE LOAD =============
   initializeSummaryPanel();
-profileOverlay.addEventListener("click", () => {
-  closeProfileDialog();
-});
 </script>
 </body>
 </html>
