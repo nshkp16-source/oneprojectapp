@@ -2997,83 +2997,106 @@ setTimeout(() => {
   }
 }, 100);
 
-// ============= DOCUMENT DETAIL =============
-async function openDocumentDetail(docId, category) {
+// ============= DOCUMENTS LIST FOR TAB =============
+async function openDocumentDetail(category) {
   try {
     const token     = localStorage.getItem('authToken');
     const projectId = localStorage.getItem('activeProjectId');
 
-    if (!docId) {
+    if (!projectId) {
       bottomContent.innerHTML = `
-        <h3>⚠️ No Document Data</h3>
-        <p>Unable to load document details. Please try again.</p>
+        <h3>⚠️ No Project Selected</h3>
+        <p>Please select an active project first.</p>
       `;
       return;
     }
 
-    // ✅ Fetch document detail + workflow info
-    const doc = await apiRequest('/api/document-detail', {
+    // ✅ Fetch all records for project + category
+    const records = await apiRequest('/api/fetch-tab-records', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ docId, projectId, category })
+      body: JSON.stringify({ projectId, category })
     });
 
-    // ✅ Build detail view
+    if (!records || records.length === 0) {
+      bottomContent.innerHTML = `
+        <h3>ℹ️ No Records Found</h3>
+        <p>No documents available in this category for the active project.</p>
+      `;
+      return;
+    }
+
+    // ✅ Build scrollable list of records
     bottomContent.innerHTML = `
-      <h3 style='margin-bottom:16px;'>📄 Document Details</h3>
+      <h3 style='margin-bottom:16px;'>📄 ${category.toUpperCase()} Records</h3>
+      <ul class="doc-list">
+        ${records.map(doc => `
+          <li class="doc-item" data-id="${doc.id}">
+            <!-- Collapsed Header -->
+            <div class="doc-item-header" onclick="toggleRecordDetail('${doc.id}')">
+              <div class="doc-info">
+                <div class="doc-title">${doc.title}</div>
+                <div class="doc-meta">
+                  ${doc.record_content_name || category} • Recorded by ${doc.uploader_role || 'N/A'} • ${doc.date_recorded ? new Date(doc.date_recorded).toLocaleString() : 'N/A'}
+                  • Status: ${doc.status || 'Pending'}
+                  ${doc.action ? ` • Action: ${doc.action}` : ''}
+                </div>
+              </div>
+              <span class="doc-toggle">▾</span>
+            </div>
 
-      <!-- Collapsed Header Info -->
-      <div class='doc-field'><strong>Record Content:</strong> ${doc.record_content_name || category}</div>
-      <div class='doc-field'><strong>Title:</strong> ${doc.title || 'N/A'}</div>
-      <div class='doc-field'><strong>Recorded By:</strong> ${doc.uploader_role || 'N/A'}</div>
-      <div class='doc-field'><strong>Date & Time:</strong> ${doc.date_recorded ? new Date(doc.date_recorded).toLocaleString() : 'N/A'}</div>
-      <div class='doc-field'><strong>Status:</strong> <span class='status-pill'>${doc.status || 'Pending'}</span></div>
-      <div class='doc-field'><strong>Action:</strong> ${doc.action || 'No action yet'}</div>
+            <!-- Expanded Detail -->
+            <div class="doc-detail" style="display:none;">
+              <p><strong>Description:</strong> ${doc.description || 'No description provided'}</p>
+              ${doc.file_path ? `<a href='${doc.file_path}' target='_blank' class='btn primary'>⬇️ Download</a>` : '<button class="btn" disabled>⬇️ No File</button>'}
 
-      <!-- Expanded Detail -->
-      <div class='doc-detail'>
-        <p><strong>Description:</strong> ${doc.description || 'No description provided'}</p>
-        ${doc.file_path ? `<a href='${doc.file_path}' target='_blank' class='btn primary'>⬇️ Download</a>` : '<button class="btn" disabled>⬇️ No File</button>'}
+              <div class="review-history" style="margin-top:20px;">
+                <h4>Review History</h4>
+                <ul>
+                  ${(doc.reviews || []).map(r => `
+                    <li>${r.reviewer_role} ${r.action} on ${new Date(r.action_date).toLocaleString()}
+                      ${r.short_description ? ` — ${r.short_description}` : ''}
+                      ${r.rejection_reason ? `<span style="color:red;">Reason: ${r.rejection_reason}</span>` : ''}
+                    </li>
+                  `).join('')}
+                </ul>
+              </div>
 
-        <!-- Review History -->
-        <div class='review-history' style='margin-top:20px;'>
-          <h4>Review History</h4>
-          <ul>
-            ${(doc.reviews || []).map(r => `
-              <li>${r.reviewer_role} ${r.action} on ${new Date(r.action_date).toLocaleString()}
-                ${r.short_description ? ` — ${r.short_description}` : ''}
-                ${r.rejection_reason ? `<span style="color:red;">Reason: ${r.rejection_reason}</span>` : ''}
-              </li>
-            `).join('')}
-          </ul>
-        </div>
+              <div class="read-receipts" style="margin-top:20px;">
+                <h4>Viewed By</h4>
+                <ul>
+                  ${(doc.viewers || []).map(v => `
+                    <li>${v.viewer_role} (ID: ${v.viewer_id}) at ${new Date(v.viewed_at).toLocaleString()}</li>
+                  `).join('')}
+                </ul>
+              </div>
 
-        <!-- Read Receipts -->
-        <div class='read-receipts' style='margin-top:20px;'>
-          <h4>Viewed By</h4>
-          <ul>
-            ${(doc.viewers || []).map(v => `
-              <li>${v.viewer_role} (ID: ${v.viewer_id}) at ${new Date(v.viewed_at).toLocaleString()}</li>
-            `).join('')}
-          </ul>
-        </div>
-
-        <!-- Bottom Actions -->
-        <div class="detail-actions" style="margin-top:16px; display:flex; gap:8px;">
-          <button class="btn" onclick="collapseGrayPart()">← Close</button>
-          <button class="btn comment" onclick="openCommentPanel('${docId}')">💬 Comment</button>
-        </div>
-      </div>
+              <div class="detail-actions" style="margin-top:16px; display:flex; gap:8px;">
+                <button class="btn" onclick="toggleRecordDetail('${doc.id}')">← Close</button>
+                <button class="btn comment" onclick="openCommentPanel('${doc.id}')">💬 Comment</button>
+              </div>
+            </div>
+          </li>
+        `).join('')}
+      </ul>
     `;
   } catch (err) {
-    console.error('Document detail error:', err);
+    console.error('Fetch tab records error:', err);
     bottomContent.innerHTML = `
-      <h3>❌ Error Loading Document</h3>
-      <p>${err.message || 'Failed to load document details.'}</p>
+      <h3>❌ Error Loading Records</h3>
+      <p>${err.message || 'Failed to load records.'}</p>
     `;
+  }
+}
+
+// ============= TOGGLE DETAIL VIEW =============
+function toggleRecordDetail(recordId) {
+  const item = document.querySelector(`.doc-item[data-id="${recordId}"] .doc-detail`);
+  if (item) {
+    item.style.display = (item.style.display === 'none' || item.style.display === '') ? 'block' : 'none';
   }
 }
 
