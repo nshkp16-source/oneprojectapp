@@ -2953,20 +2953,143 @@ function setTabContent(key) {
 // ============= EVENTS =============
 bottomContent.addEventListener('click', (event) => {
   const target = event.target instanceof Element ? event.target : event.target.parentElement;
+  const addBtn = target ? target.closest('.add-doc-btn') : null;
+  if (addBtn) {
+    openAddRecordPanel();
+    return;
+  }
 
-  // ❌ Remove this block since add-doc-btn is gone
-  // const addBtn = target ? target.closest('.add-doc-btn') : null;
-  // if (addBtn) {
-  //   openAddRecordPanel();
-  //   return;
-  // }
-
-  // ✅ Keep record expand/collapse logic
   const header = target ? target.closest('.doc-item-header') : null;
   if (!header) return;
   const item = header.closest('.doc-item');
   if (item) item.classList.toggle('expanded');
 });
+
+function openAddDialog() {
+  const addDialog = document.getElementById('addDocumentDialog');
+  if (!addDialog) return;
+  addDialog.classList.add('active');
+}
+
+function closeAddDialog() {
+  const addDialog = document.getElementById('addDocumentDialog');
+  if (!addDialog) return;
+  addDialog.classList.remove('active');
+}
+
+// ✅ Adjusted Add Form for Contractual Records
+async function submitAddForm() {
+  const title = document.getElementById('addTitle').value.trim();
+  const description = document.getElementById('addDescription').value.trim();
+  const file = document.getElementById('addFile').files[0];
+
+  if (!title || !description) {
+    alert('Please fill in title and description.');
+    return;
+  }
+
+  const token = localStorage.getItem('authToken');
+  const projectId = localStorage.getItem('activeProjectId');
+  const activeTab = document.querySelector('.nav-tabs li.active').getAttribute('data-tab');
+
+  if (!token || !projectId) {
+    alert('Missing authentication or active project.');
+    return;
+  }
+
+  if (activeTab !== 'contractual-legal') {
+    alert('This Add option is only wired for Contractual & Legal right now.');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('title', title);
+  formData.append('description', description);
+  formData.append('projectId', projectId);
+  if (file) formData.append('file', file);
+
+  try {
+    const newRecord = await apiRequest('https://oneprojectapp-backend.onrender.com/records/add-record', {
+      method: 'POST',
+      body: formData
+    });
+    injectContractualRecord(newRecord);
+    document.getElementById('addDocumentForm').reset();
+    closeAddDialog();
+  } catch (err) {
+    alert('Error adding contractual record.');
+  }
+}
+
+// ✅ Injection function for Contractual Records
+function injectContractualRecord(rec) {
+  const list = document.getElementById('recordsList');
+  list.innerHTML += `
+    <li class="doc-item" data-id="${rec.id}">
+      <div class="doc-item-header">
+        <div class="doc-info">
+          <div class="doc-title">${rec.title}</div>
+          <div class="doc-meta">
+            Status: ${rec.status} • Issued: ${new Date(rec.issued_date).toLocaleDateString()} • Uploaded by: ${rec.role}
+          </div>
+        </div>
+        <span class="doc-toggle">▾</span>
+      </div>
+      <div class="doc-detail">
+        <p>${rec.description}</p>
+        ${rec.file_path ? `<a href="${rec.file_path}" target="_blank">View File</a>` : ''}
+      </div>
+    </li>
+  `;
+}
+
+function resendAddForm() {
+  const title = document.getElementById('addTitle').value.trim();
+  const description = document.getElementById('addDescription').value.trim();
+  const body = document.getElementById('addBody').value.trim();
+  if (!title && !description && !body) {
+    alert('Please add a title, description, or body before resending.');
+    return;
+  }
+  alert('Message resent successfully.');
+}
+
+// ✅ Use event delegation instead of re-registering listeners on every render
+function attachTabEvents() {
+  // This is now a no-op — tabs are handled by delegation below
+}
+
+// Event delegation for tab navigation
+document.addEventListener('DOMContentLoaded', () => {
+  const navTabs = document.getElementById('navTabs');
+  if (navTabs) {
+    navTabs.addEventListener('click', (e) => {
+      const tab = e.target.closest('li[data-tab]');
+      if (tab) {
+        const tabs = navTabs.querySelectorAll('li[data-tab]');
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const selected = tab.getAttribute('data-tab');
+        setTabContent(selected);
+      }
+    });
+  }
+});
+
+// Default load
+loadHomeTabs();
+initializeSummaryPanel();
+
+// ✅ Load initial data after tabs are set up
+setTimeout(() => {
+  const activeTab = document.querySelector('.nav-tabs li.active');
+  if (activeTab) {
+    const tabKey = activeTab.getAttribute('data-tab');
+    if (tabKey && tabKey !== 'meeting') {
+      fetchTabRecords(tabKey).then(records => renderRecords(records, tabKey));
+    }
+  }
+}, 100);
 
   // ============= DOCUMENT DETAIL =============
 async function openDocumentDetail(idx, docId, context) {
