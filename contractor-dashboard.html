@@ -2997,12 +2997,11 @@ setTimeout(() => {
   }
 }, 100);
 
-  // ============= DOCUMENT DETAIL =============
-async function openDocumentDetail(idx, docId, context) {
+// ============= DOCUMENT DETAIL =============
+async function openDocumentDetail(docId, category) {
   try {
     const token     = localStorage.getItem('authToken');
     const projectId = localStorage.getItem('activeProjectId');
-    const userId    = localStorage.getItem('userId');
 
     if (!docId) {
       bottomContent.innerHTML = `
@@ -3013,54 +3012,60 @@ async function openDocumentDetail(idx, docId, context) {
     }
 
     // ✅ Fetch document detail + workflow info
-    const doc = await apiRequest('https://oneprojectapp-backend.onrender.com/records/document-detail', {
+    const doc = await apiRequest('/api/document-detail', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ docId, projectId, userId })
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ docId, projectId, category })
     });
 
     // ✅ Build detail view
     bottomContent.innerHTML = `
       <h3 style='margin-bottom:16px;'>📄 Document Details</h3>
+
+      <!-- Collapsed Header Info -->
+      <div class='doc-field'><strong>Record Content:</strong> ${doc.record_content_name || category}</div>
       <div class='doc-field'><strong>Title:</strong> ${doc.title || 'N/A'}</div>
-      <div class='doc-field'><strong>Uploader:</strong> ${doc.uploader || 'N/A'}</div>
-      <div class='doc-field'><strong>Description:</strong> ${doc.description || 'N/A'}</div>
-      <div class='doc-field'><strong>Document Number:</strong> ${doc.number || 'N/A'}</div>
-      <div class='doc-field'><strong>Date Issued:</strong> ${doc.date ? new Date(doc.date).toLocaleDateString() : 'N/A'}</div>
+      <div class='doc-field'><strong>Recorded By:</strong> ${doc.uploader_role || 'N/A'}</div>
+      <div class='doc-field'><strong>Date & Time:</strong> ${doc.date_recorded ? new Date(doc.date_recorded).toLocaleString() : 'N/A'}</div>
       <div class='doc-field'><strong>Status:</strong> <span class='status-pill'>${doc.status || 'Pending'}</span></div>
+      <div class='doc-field'><strong>Action:</strong> ${doc.action || 'No action yet'}</div>
 
-      <!-- Workflow Actions -->
-      <div class='workflow-actions' style='margin-top:16px; display:flex; gap:8px;'>
-        <button class='btn approve' onclick='approveDocument("${docId}")'>✓ Approve</button>
-        <button class='btn reject' onclick='rejectDocument("${docId}")'>✗ Reject</button>
-        <button class='btn comment' onclick='openCommentPanel("${docId}")'>💬 Add Comment</button>
-      </div>
-
-      <!-- Review History -->
-      <div class='review-history' style='margin-top:20px;'>
-        <h4>Review History</h4>
-        <ul>
-          ${(doc.reviews || []).map(r => `
-            <li>${r.reviewer_role} ${r.action} on ${new Date(r.action_date).toLocaleString()}
-              ${r.short_description ? ` — ${r.short_description}` : ''}
-              ${r.rejection_reason ? `<span style="color:red;">Reason: ${r.rejection_reason}</span>` : ''}
-            </li>
-          `).join('')}
-        </ul>
-      </div>
-
-      <!-- Read Receipts -->
-      <div class='read-receipts' style='margin-top:20px;'>
-        <h4>Viewed By</h4>
-        <ul>
-          ${(doc.viewers || []).map(v => `
-            <li>${v.viewer_role} (ID: ${v.viewer_id}) at ${new Date(v.viewed_at).toLocaleString()}</li>
-          `).join('')}
-        </ul>
-      </div>
-
-      <div style='margin-top:16px;'>
+      <!-- Expanded Detail -->
+      <div class='doc-detail'>
+        <p><strong>Description:</strong> ${doc.description || 'No description provided'}</p>
         ${doc.file_path ? `<a href='${doc.file_path}' target='_blank' class='btn primary'>⬇️ Download</a>` : '<button class="btn" disabled>⬇️ No File</button>'}
+
+        <!-- Review History -->
+        <div class='review-history' style='margin-top:20px;'>
+          <h4>Review History</h4>
+          <ul>
+            ${(doc.reviews || []).map(r => `
+              <li>${r.reviewer_role} ${r.action} on ${new Date(r.action_date).toLocaleString()}
+                ${r.short_description ? ` — ${r.short_description}` : ''}
+                ${r.rejection_reason ? `<span style="color:red;">Reason: ${r.rejection_reason}</span>` : ''}
+              </li>
+            `).join('')}
+          </ul>
+        </div>
+
+        <!-- Read Receipts -->
+        <div class='read-receipts' style='margin-top:20px;'>
+          <h4>Viewed By</h4>
+          <ul>
+            ${(doc.viewers || []).map(v => `
+              <li>${v.viewer_role} (ID: ${v.viewer_id}) at ${new Date(v.viewed_at).toLocaleString()}</li>
+            `).join('')}
+          </ul>
+        </div>
+
+        <!-- Bottom Actions -->
+        <div class="detail-actions" style="margin-top:16px; display:flex; gap:8px;">
+          <button class="btn" onclick="collapseGrayPart()">← Close</button>
+          <button class="btn comment" onclick="openCommentPanel('${docId}')">💬 Comment</button>
+        </div>
       </div>
     `;
   } catch (err) {
