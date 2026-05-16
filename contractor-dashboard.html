@@ -2710,7 +2710,6 @@ function loadHomeTabs() {
     <li data-tab="meeting">Meeting</li>
   `;
   setTabContent('contractual-legal');
-  attachTabEvents();
 }
 
 function loadReportTabs() {
@@ -2723,18 +2722,31 @@ function loadReportTabs() {
     <li data-tab="communication-meetings">Communication & Meetings</li>
   `;
   setTabContent('planning-execution');
-  attachTabEvents();
 }
 
+// ============= SINGLE DELEGATED TAB CLICK HANDLER =============
+// Attached once on navTabs — no attachTabEvents() needed anywhere
+navTabs.addEventListener('click', (e) => {
+  const tab = e.target.closest('li[data-tab]');
+  if (!tab) return;
+  navTabs.querySelectorAll('li[data-tab]').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  setTabContent(tab.getAttribute('data-tab'));
+});
+
+// ============= SIDEBAR NAV =============
+// Single listener — handles both active-class toggle AND tab loading
 sidebarItems.forEach(item => {
   item.addEventListener('click', () => {
+    sidebarItems.forEach(i => i.classList.remove('active'));
+    item.classList.add('active');
     const key = item.getAttribute('data-nav');
     if (key === 'Project-Records') loadHomeTabs();
-    if (key === 'workspace') loadReportTabs();
+    if (key === 'workspace')       loadReportTabs();
   });
 });
 
-// ============= SET TAB CONTENT =============
+// ============= RENDER HELPERS =============
 function renderBottomContent(description, placeholder) {
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
@@ -2744,45 +2756,29 @@ function renderBottomContent(description, placeholder) {
       </div>
     </div>
     <div class="bottom-scroll-area">
-      <ul class="doc-list" id="recordsList">
-        <!-- Records will be injected dynamically -->
-      </ul>
-      <div class="no-data-placeholder">
+      <ul class="doc-list" id="recordsList"></ul>
+      <div class="no-data-placeholder" id="noDataPlaceholder" style="display:none;">
         <p>${placeholder}</p>
       </div>
     </div>
   `;
 
-  // ✅ Keep bottom space: show placeholder if no records
-  const recordsList = document.getElementById('recordsList');
-  const placeholderDiv = bottomContent.querySelector('.no-data-placeholder');
-  if (recordsList.children.length === 0) {
-    placeholderDiv.style.display = 'block';
-  } else {
-    placeholderDiv.style.display = 'none';
-  }
-
-  // ✅ Attach Add button event listener
-  const addBtnRendered = document.getElementById('addRecordBtnRendered');
-  if (addBtnRendered) {
-    addBtnRendered.addEventListener('click', () => {
-      openAddRecordPanel();
-    });
-  }
+  document.getElementById('addRecordBtnRendered').addEventListener('click', () => {
+    openAddRecordPanel();
+  });
 }
 
 function renderMeetingContent(activeView = 'minutes') {
   bottomContent.innerHTML = `
     <div class="meeting-options">
-      <button class="meeting-btn ${activeView === 'minutes' ? 'active' : ''}" onclick="switchMeetingView('minutes')">📋 Meeting Minutes</button>
+      <button class="meeting-btn ${activeView === 'minutes'   ? 'active' : ''}" onclick="switchMeetingView('minutes')">📋 Meeting Minutes</button>
       <button class="meeting-btn ${activeView === 'scheduled' ? 'active' : ''}" onclick="switchMeetingView('scheduled')">📅 Scheduled Meeting</button>
-      <button class="meeting-btn ${activeView === 'plan' ? 'active' : ''}" onclick="switchMeetingView('plan')">✏️ Plan Meeting</button>
+      <button class="meeting-btn ${activeView === 'plan'      ? 'active' : ''}" onclick="switchMeetingView('plan')">✏️ Plan Meeting</button>
     </div>
     <div class="bottom-scroll-area" id="meetingViewContainer"></div>
   `;
-  setTimeout(() => {
-    updateMeetingView(activeView);
-  }, 0);
+  // setTimeout defers until after the DOM is painted so meetingViewContainer exists
+  setTimeout(() => updateMeetingView(activeView), 0);
 }
 
 function switchMeetingView(view) {
@@ -2791,73 +2787,82 @@ function switchMeetingView(view) {
 
 async function updateMeetingView(activeView = 'minutes') {
   const container = document.getElementById('meetingViewContainer');
-  
-  switch(activeView) {
+  if (!container) return;
+
+  switch (activeView) {
     case 'minutes':
       container.innerHTML = `
-        <div style='display:flex; justify-content:flex-end; gap:12px; padding:12px;'>
-          <button class='btn primary' style='padding:10px 14px; font-size:13px;' onclick='openAddMeetingMinutesPanel()'>➕ Add Meeting Minute</button>
+        <div style="display:flex; justify-content:flex-end; gap:12px; padding:12px;">
+          <button class="btn primary" style="padding:10px 14px; font-size:13px;"
+                  onclick="openAddMeetingMinutesPanel()">➕ Add Meeting Minute</button>
         </div>
-        <div id="meetingListContainer" style="padding:12px;"><p style="text-align:center; color:#999;">Loading meeting minutes...</p></div>
+        <div id="meetingListContainer" style="padding:12px;">
+          <p style="text-align:center; color:#999;">Loading meeting minutes...</p>
+        </div>
       `;
       await displayMeetingList('minutes');
       break;
+
     case 'scheduled':
-      container.innerHTML = '<div id="meetingListContainer" style="padding:12px;"><p style="text-align:center; color:#999;">Loading scheduled meetings...</p></div>';
+      container.innerHTML = `
+        <div id="meetingListContainer" style="padding:12px;">
+          <p style="text-align:center; color:#999;">Loading scheduled meetings...</p>
+        </div>
+      `;
       await displayMeetingList('scheduled');
       break;
+
     case 'plan':
       container.innerHTML = `
-        <div style='padding:12px;'>
-          <h3 style='margin-bottom:16px; color:#333;'>📅 Schedule a New Meeting</h3>
-          <div class='form-group'>
+        <div style="padding:12px;">
+          <h3 style="margin-bottom:16px; color:#333;">📅 Schedule a New Meeting</h3>
+          <div class="form-group">
             <label>Meeting Title:</label>
-            <input type='text' id='meetingTitle' placeholder='e.g., Site Meeting - Week 2' />
+            <input type="text" id="meetingTitle" placeholder="e.g., Site Meeting - Week 2" />
           </div>
-          <div class='form-group'>
+          <div class="form-group">
             <label>Date & Time:</label>
-            <input type='datetime-local' id='meetingDateTime' />
+            <input type="datetime-local" id="meetingDateTime" />
           </div>
-          <div class='form-group'>
+          <div class="form-group">
             <label>Participants:</label>
-            <textarea id='meetingParticipants' placeholder='Enter participant names (comma-separated)' style='min-height:60px;'></textarea>
+            <textarea id="meetingParticipants" placeholder="Enter participant names (comma-separated)"
+                      style="min-height:60px;"></textarea>
           </div>
-          <div class='form-group'>
+          <div class="form-group">
             <label>Agenda:</label>
-            <textarea id='meetingAgenda' placeholder='Enter meeting agenda' style='min-height:80px;'></textarea>
+            <textarea id="meetingAgenda" placeholder="Enter meeting agenda"
+                      style="min-height:80px;"></textarea>
           </div>
-          <div class='form-group'>
+          <div class="form-group">
             <label>Attachments:</label>
-            <input type='file' id='meetingAttachments' multiple />
+            <input type="file" id="meetingAttachments" multiple />
           </div>
-          <div style='display:flex; gap:8px; margin-top:12px;'>
-            <button class='btn primary' id='scheduleMeetingBtn' style='flex:1; padding:10px;'>📅 Schedule Meeting</button>
-            <button class='btn' style='flex:1; padding:10px;' onclick='collapseGrayPart()'>Cancel</button>
+          <div style="display:flex; gap:8px; margin-top:12px;">
+            <button class="btn primary" id="scheduleMeetingBtn" style="flex:1; padding:10px;">📅 Schedule Meeting</button>
+            <button class="btn" style="flex:1; padding:10px;" onclick="collapseGrayPart()">Cancel</button>
           </div>
         </div>
       `;
-      
+
       document.getElementById('scheduleMeetingBtn').addEventListener('click', async () => {
-        const title = document.getElementById('meetingTitle').value.trim();
-        const dateTime = document.getElementById('meetingDateTime').value;
+        const title        = document.getElementById('meetingTitle').value.trim();
+        const dateTime     = document.getElementById('meetingDateTime').value;
         const participants = document.getElementById('meetingParticipants').value.trim();
-        const agenda = document.getElementById('meetingAgenda').value.trim();
-        
+        const agenda       = document.getElementById('meetingAgenda').value.trim();
+
         if (!title || !dateTime || !participants || !agenda) {
           alert('Please fill in all required fields.');
           return;
         }
-        
+
         try {
-          const token = localStorage.getItem('authToken');
           const projectId = localStorage.getItem('activeProjectId');
-          
-          const response = await apiRequest('https://oneprojectapp-backend.onrender.com/records/schedule-meeting', {
+          await apiRequest('https://oneprojectapp-backend.onrender.com/records/schedule-meeting', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ projectId, title, dateTime, participants, agenda })
           });
-          
           alert('Meeting scheduled successfully! Invitations sent to participants.');
           updateMeetingView('scheduled');
         } catch (err) {
@@ -2869,236 +2874,526 @@ async function updateMeetingView(activeView = 'minutes') {
   }
 }
 
+// ============= TAB CONTENT ROUTING =============
+const TAB_DESCRIPTIONS = {
+  'contractual-legal':            'Contract agreements, amendments, change orders, permits, insurance, tender docs.',
+  'administrative-instructional': 'RFAs, consultant instructions, meeting minutes, correspondence, schedule updates.',
+  'safety-compliance':            'Safety inspections, incident reports, NCRs, QC tests, risk assessments, method statements.',
+  'operational-performance':      'Daily site reports, progress reports, BoQ, technical specs, submittals, drawings, schedules, as-built docs.',
+  'financial':                    'Interim payment certificates, contractor claims, final account reports.',
+  'planning-execution':           'Planning strategies, execution reports, timeline tracking.',
+  'design-technical':             'Design documents, technical specifications, drawings.',
+  'quality-safety':               'Quality reports, safety audits, compliance checks.',
+  'financial-cost':               'Cost analysis, budget reports, financial statements.',
+  'compliance-risk':              'Compliance documentation, risk assessments, mitigation plans.',
+};
+
+const MEETING_TABS = new Set(['meeting', 'communication-meetings']);
+
 function setTabContent(key) {
-  switch (key) {
-    case 'contractual-legal':
-      renderBottomContent(
-        'Contract agreements, amendments, change orders, permits, insurance, tender docs.',
-        'No data available in this category.'
-      );
-      fetchTabRecords('contractual-legal').then(records => renderRecords(records, 'contractual-legal'));
-      break;
-    case 'administrative-instructional':
-      renderBottomContent(
-        'RFAs, consultant instructions, meeting minutes, correspondence, schedule updates.',
-        'No data available in this category.'
-      );
-      fetchTabRecords('administrative-instructional').then(records => renderRecords(records, 'administrative-instructional'));
-      break;
-    case 'safety-compliance':
-      renderBottomContent(
-        'Safety inspections, incident reports, NCRs, QC tests, risk assessments, method statements.',
-        'No data available in this category.'
-      );
-      fetchTabRecords('safety-compliance').then(records => renderRecords(records, 'safety-compliance'));
-      break;
-    case 'operational-performance':
-      renderBottomContent(
-        'Daily site reports, progress reports, BoQ, technical specs, submittals, drawings, schedules, as-built docs.',
-        'No data available in this category.'
-      );
-      fetchTabRecords('operational-performance').then(records => renderRecords(records, 'operational-performance'));
-      break;
-    case 'financial':
-      renderBottomContent(
-        'Interim payment certificates, contractor claims, final account reports.',
-        'No data available in this category.'
-      );
-      fetchTabRecords('financial').then(records => renderRecords(records, 'financial'));
-      break;
-    case 'meeting':
-      renderMeetingContent();
-      break;
-    case 'planning-execution':
-      renderBottomContent(
-        'Planning strategies, execution reports, timeline tracking.',
-        'No data available in this category.'
-      );
-      fetchTabRecords('planning-execution').then(records => renderRecords(records, 'planning-execution'));
-      break;
-    case 'design-technical':
-      renderBottomContent(
-        'Design documents, technical specifications, drawings.',
-        'No data available in this category.'
-      );
-      fetchTabRecords('design-technical').then(records => renderRecords(records, 'design-technical'));
-      break;
-    case 'quality-safety':
-      renderBottomContent(
-        'Quality reports, safety audits, compliance checks.',
-        'No data available in this category.'
-      );
-      fetchTabRecords('quality-safety').then(records => renderRecords(records, 'quality-safety'));
-      break;
-    case 'financial-cost':
-      renderBottomContent(
-        'Cost analysis, budget reports, financial statements.',
-        'No data available in this category.'
-      );
-      fetchTabRecords('financial-cost').then(records => renderRecords(records, 'financial-cost'));
-      break;
-    case 'compliance-risk':
-      renderBottomContent(
-        'Compliance documentation, risk assessments, mitigation plans.',
-        'No data available in this category.'
-      );
-      fetchTabRecords('compliance-risk').then(records => renderRecords(records, 'compliance-risk'));
-      break;
-    case 'communication-meetings':
-      renderMeetingContent();
-      break;
+  if (MEETING_TABS.has(key)) {
+    renderMeetingContent();
+    return;
   }
+
+  const description = TAB_DESCRIPTIONS[key] || '';
+  renderBottomContent(description, 'No data available in this category.');
+
+  fetchTabRecords(key)
+    .then(records => renderRecords(records, key))
+    .catch(err => {
+      console.error(`Failed to load records for tab "${key}":`, err);
+      showNoDataMessage('Error loading records. Please try again.', 'recordsList');
+    });
 }
 
-// ============= EVENTS =============
+// ============= BOTTOM CONTENT DELEGATED EVENTS =============
+// Single listener handles both Add button and doc-item expand/collapse
 bottomContent.addEventListener('click', (event) => {
-  const target = event.target instanceof Element ? event.target : event.target.parentElement;
-  const addBtn = target ? target.closest('.add-doc-btn') : null;
-  if (addBtn) {
+  // Add button (covers both static #addRecordBtn and rendered #addRecordBtnRendered)
+  if (event.target.closest('.add-doc-btn')) {
     openAddRecordPanel();
     return;
   }
 
-  const header = target ? target.closest('.doc-item-header') : null;
-  if (!header) return;
-  const item = header.closest('.doc-item');
-  if (item) item.classList.toggle('expanded');
-});
-
-// Event delegation for tab navigation
-document.addEventListener('DOMContentLoaded', () => {
-  const navTabs = document.getElementById('navTabs');
-  if (navTabs) {
-    navTabs.addEventListener('click', (e) => {
-      const tab = e.target.closest('li[data-tab]');
-      if (tab) {
-        const tabs = navTabs.querySelectorAll('li[data-tab]');
-        tabs.forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        const selected = tab.getAttribute('data-tab');
-        setTabContent(selected);
-      }
-    });
+  // Expand / collapse record item
+  const header = event.target.closest('.doc-item-header');
+  if (header) {
+    header.closest('.doc-item')?.classList.toggle('expanded');
   }
 });
 
-// Default load
-loadHomeTabs();
-initializeSummaryPanel();
+// ============= FETCH TAB RECORDS =============
+async function fetchTabRecords(tabKey) {
+  const projectId = localStorage.getItem('activeProjectId');
 
-// ✅ Load initial data after tabs are set up
-setTimeout(() => {
-  const activeTab = document.querySelector('.nav-tabs li.active');
-  if (activeTab) {
-    const tabKey = activeTab.getAttribute('data-tab');
-    if (tabKey && tabKey !== 'meeting') {
-      fetchTabRecords(tabKey).then(records => renderRecords(records, tabKey));
-    }
+  if (!projectId) {
+    showNoDataMessage('Please select a project first.', 'recordsList');
+    return [];
   }
-}, 100);
 
-// ============= DOCUMENTS LIST FOR TAB =============
-async function openDocumentDetail(category) {
   try {
-    const token     = localStorage.getItem('authToken');
-    const projectId = localStorage.getItem('activeProjectId');
-
-    if (!projectId) {
-      bottomContent.innerHTML = `
-        <h3>⚠️ No Project Selected</h3>
-        <p>Please select an active project first.</p>
-      `;
-      return;
-    }
-
-    // ✅ Fetch all records for project + category
-    const records = await apiRequest('/api/fetch-tab-records', {
+    const data = await apiRequest('https://oneprojectapp-backend.onrender.com/records/by-category', {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({ projectId, category })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, category: tabKey })
     });
 
-    if (!records || records.length === 0) {
-      bottomContent.innerHTML = `
-        <h3>ℹ️ No Records Found</h3>
-        <p>No documents available in this category for the active project.</p>
+    const records = data.records || [];
+    return records;
+  } catch (err) {
+    console.error(`fetchTabRecords error for "${tabKey}":`, err);
+    throw err; // let setTabContent's .catch() handle the UI
+  }
+}
+
+// ============= RENDER RECORDS =============
+function renderRecords(records, tabKey) {
+  const recordsList = document.getElementById('recordsList');
+  const placeholder = document.getElementById('noDataPlaceholder');
+  if (!recordsList) return;
+
+  if (!records || records.length === 0) {
+    if (placeholder) placeholder.style.display = 'block';
+    return;
+  }
+
+  if (placeholder) placeholder.style.display = 'none';
+
+  recordsList.innerHTML = records.map((rec, idx) => `
+    <li class="doc-item">
+      <div class="doc-item-header">
+        <div class="doc-info">
+          <div class="doc-title">${rec.title || 'Untitled'}</div>
+          <div class="doc-meta">
+            ${rec.number ? 'Doc #: ' + rec.number + ' &bull; ' : ''}
+            Issued: ${new Date(rec.issued_date || rec.date).toLocaleDateString()} &bull;
+            By: ${rec.uploader || rec.reporter || 'System'}
+          </div>
+        </div>
+        <span class="doc-toggle">▾</span>
+      </div>
+      <div class="doc-detail">
+        <p>${rec.description || rec.minutes || 'No details provided'}</p>
+        <div style="display:flex; gap:8px; margin-top:8px;">
+          <button class="doc-action-btn" style="background:#007B8A; color:#fff; flex:1;"
+                  onclick="openDocumentDetail(${idx}, '${rec.id}', '${tabKey}')">📖 View Details</button>
+          ${rec.file_path
+            ? `<a href="${rec.file_path}" target="_blank" class="doc-action-btn"
+                  style="background:#28a745; color:#fff; flex:1; text-align:center; text-decoration:none;">⬇️ Download</a>`
+            : ''}
+        </div>
+      </div>
+    </li>
+  `).join('');
+}
+
+// ============= UTILITY: EMPTY STATE =============
+function showNoDataMessage(message = 'No data available', containerId = 'recordsList') {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.innerHTML = `
+    <div class="no-data-placeholder show"
+         style="display:flex; align-items:center; justify-content:center; min-height:200px; padding:20px;">
+      <div style="text-align:center;">
+        <div style="font-size:48px; margin-bottom:12px;">📭</div>
+        <p style="color:#999; font-size:14px; margin:0;">${message}</p>
+        <p style="color:#bbb; font-size:12px; margin-top:8px;">Check back later for updates</p>
+      </div>
+    </div>
+  `;
+}
+
+// ============= DOCUMENT DETAIL =============
+async function openDocumentDetail(idx, docId, context) {
+  if (!docId) {
+    expandGrayPart(`
+      <h3 style="margin-bottom:16px;">⚠️ No Document Data</h3>
+      <p style="color:#666; text-align:center; padding:20px;">Unable to load document details. Please try again.</p>
+      <button class="btn" style="width:100%;" onclick="collapseGrayPart()">Back</button>
+    `);
+    return;
+  }
+
+  try {
+    const projectId = localStorage.getItem('activeProjectId');
+    const doc = await apiRequest('https://oneprojectapp-backend.onrender.com/records/document-detail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docId, projectId })
+    });
+
+    expandGrayPart(`
+      <h3 style="margin-bottom:16px;">📄 Document Details</h3>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Title</div>
+        <div class="gray-part-value">${doc.title || 'N/A'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Uploader</div>
+        <div class="gray-part-value">${doc.uploader || 'N/A'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Description</div>
+        <div class="gray-part-value">${doc.description || 'N/A'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Document Number</div>
+        <div class="gray-part-value">${doc.number || 'N/A'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Date Issued</div>
+        <div class="gray-part-value">${doc.date ? new Date(doc.date).toLocaleDateString() : 'N/A'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Status</div>
+        <div class="gray-part-value">
+          <span style="background:#007B8A; color:#fff; padding:4px 8px; border-radius:4px;
+                       font-size:11px; font-weight:bold;">${doc.status || 'Active'}</span>
+        </div>
+      </div>
+      <div style="margin-top:16px; display:flex; flex-direction:column; gap:8px;">
+        ${doc.file_path
+          ? `<a href="${doc.file_path}" target="_blank" class="btn primary"
+                style="text-align:center; text-decoration:none;">⬇️ Download</a>`
+          : `<button class="btn" disabled style="opacity:0.5;">⬇️ No File Available</button>`}
+        <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
+      </div>
+    `);
+  } catch (err) {
+    console.error('Document detail error:', err);
+    expandGrayPart(`
+      <h3 style="margin-bottom:16px;">❌ Error Loading Document</h3>
+      <p style="color:#666; text-align:center; padding:20px;">${err.message || 'Failed to load document details.'}</p>
+      <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
+    `);
+  }
+}
+
+// ============= REPORT DETAIL =============
+async function openReportDetail(idx, reportId, context) {
+  if (!reportId) {
+    expandGrayPart(`
+      <h3 style="margin-bottom:16px;">⚠️ No Report Data</h3>
+      <p style="color:#666; text-align:center; padding:20px;">Unable to load report details. Please try again.</p>
+      <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
+    `);
+    return;
+  }
+
+  try {
+    const projectId = localStorage.getItem('activeProjectId');
+    const report = await apiRequest('https://oneprojectapp-backend.onrender.com/records/report-detail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reportId, projectId })
+    });
+
+    let actionButtons = '';
+    let senderDetails = '';
+
+    if (context === 'contractor-reports') {
+      if (!report.approvalStatus || report.approvalStatus === 'pending') {
+        actionButtons = `
+          <button class="btn primary" style="width:100%;"
+                  onclick="approveTeamReport('${reportId}')">✓ Approve</button>
+          <button class="btn" style="width:100%; margin-top:8px;"
+                  onclick="rejectTeamReport('${reportId}')">✗ Reject</button>
+        `;
+      } else if (report.approvalStatus === 'approved') {
+        actionButtons = `
+          <button class="btn primary" style="width:100%; background:#28a745; margin-top:8px;"
+                  onclick="postTeamReport('${reportId}')">📤 Post Report</button>
+        `;
+      }
+    } else if (context === 'your-posted-reports') {
+      senderDetails = `
+        <div class="gray-part-field">
+          <div class="gray-part-label">Primary Sender</div>
+          <div class="gray-part-value">${report.reporter || 'N/A'} (${report.role || 'N/A'})</div>
+        </div>
       `;
+    }
+
+    const statusColor = report.approvalStatus === 'approved' ? '#28a745' : '#ff9800';
+
+    expandGrayPart(`
+      <h3 style="margin-bottom:16px;">📋 Report Details</h3>
+      ${senderDetails}
+      <div class="gray-part-field">
+        <div class="gray-part-label">Reporter</div>
+        <div class="gray-part-value">${report.reporter || 'N/A'} (${report.role || 'N/A'})</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Title</div>
+        <div class="gray-part-value">${report.title || 'N/A'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Description</div>
+        <div class="gray-part-value">${report.description || 'N/A'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Report Number</div>
+        <div class="gray-part-value">${report.number || 'N/A'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Date</div>
+        <div class="gray-part-value">${report.date ? new Date(report.date).toLocaleDateString() : 'N/A'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Status</div>
+        <div class="gray-part-value">
+          <span style="background:${statusColor}; color:#fff; padding:4px 8px; border-radius:4px;
+                       font-size:11px; font-weight:bold;">${report.approvalStatus || 'Pending'}</span>
+        </div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Attachments</div>
+        <div class="gray-part-value">${report.attachments || 'None'}</div>
+      </div>
+      <div style="margin-top:16px; display:flex; flex-direction:column; gap:8px;">
+        ${report.file_path
+          ? `<a href="${report.file_path}" target="_blank" class="btn primary"
+                style="text-align:center; text-decoration:none;">⬇️ Download</a>`
+          : `<button class="btn" disabled style="opacity:0.5;">⬇️ No Files</button>`}
+        ${actionButtons}
+        <button class="btn" style="width:100%;">💬 Add Comment</button>
+        <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
+      </div>
+    `);
+  } catch (err) {
+    console.error('Report detail error:', err);
+    expandGrayPart(`
+      <h3 style="margin-bottom:16px;">❌ Error Loading Report</h3>
+      <p style="color:#666; text-align:center; padding:20px;">${err.message || 'Failed to load report details.'}</p>
+      <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
+    `);
+  }
+}
+
+// ============= MEETING LIST =============
+async function displayMeetingList(type) {
+  const container = document.getElementById('meetingListContainer');
+  if (!container) return;
+
+  const projectId = localStorage.getItem('activeProjectId');
+  if (!projectId) {
+    showNoDataMessage('No project selected.', 'meetingListContainer');
+    return;
+  }
+
+  try {
+    const data = await apiRequest('https://oneprojectapp-backend.onrender.com/records/meetings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, type })
+    });
+
+    const meetings = data.meetings || [];
+    if (meetings.length === 0) {
+      showNoDataMessage('No meetings found.', 'meetingListContainer');
       return;
     }
 
-    // ✅ Build scrollable list of records
-    bottomContent.innerHTML = `
-      <h3 style='margin-bottom:16px;'>📄 ${category.toUpperCase()} Records</h3>
+    container.innerHTML = `
       <ul class="doc-list">
-        ${records.map(doc => `
-          <li class="doc-item" data-id="${doc.id}">
-            <!-- Collapsed Header -->
-            <div class="doc-item-header" onclick="toggleRecordDetail('${doc.id}')">
+        ${meetings.map(meeting => `
+          <li class="doc-item">
+            <div class="doc-item-header">
               <div class="doc-info">
-                <div class="doc-title">${doc.title}</div>
-                <div class="doc-meta">
-                  ${doc.record_content_name || category} • Recorded by ${doc.uploader_role || 'N/A'} • ${doc.date_recorded ? new Date(doc.date_recorded).toLocaleString() : 'N/A'}
-                  • Status: ${doc.status || 'Pending'}
-                  ${doc.action ? ` • Action: ${doc.action}` : ''}
-                </div>
+                <div class="doc-title">${meeting.title}</div>
+                <div class="doc-meta">${meeting.number} | ${new Date(meeting.date).toLocaleDateString()}</div>
               </div>
               <span class="doc-toggle">▾</span>
             </div>
-
-            <!-- Expanded Detail -->
-            <div class="doc-detail" style="display:none;">
-              <p><strong>Description:</strong> ${doc.description || 'No description provided'}</p>
-              ${doc.file_path ? `<a href='${doc.file_path}' target='_blank' class='btn primary'>⬇️ Download</a>` : '<button class="btn" disabled>⬇️ No File</button>'}
-
-              <div class="review-history" style="margin-top:20px;">
-                <h4>Review History</h4>
-                <ul>
-                  ${(doc.reviews || []).map(r => `
-                    <li>${r.reviewer_role} ${r.action} on ${new Date(r.action_date).toLocaleString()}
-                      ${r.short_description ? ` — ${r.short_description}` : ''}
-                      ${r.rejection_reason ? `<span style="color:red;">Reason: ${r.rejection_reason}</span>` : ''}
-                    </li>
-                  `).join('')}
-                </ul>
-              </div>
-
-              <div class="read-receipts" style="margin-top:20px;">
-                <h4>Viewed By</h4>
-                <ul>
-                  ${(doc.viewers || []).map(v => `
-                    <li>${v.viewer_role} (ID: ${v.viewer_id}) at ${new Date(v.viewed_at).toLocaleString()}</li>
-                  `).join('')}
-                </ul>
-              </div>
-
-              <div class="detail-actions" style="margin-top:16px; display:flex; gap:8px;">
-                <button class="btn" onclick="toggleRecordDetail('${doc.id}')">← Close</button>
-                <button class="btn comment" onclick="openCommentPanel('${doc.id}')">💬 Comment</button>
-              </div>
+            <div class="doc-detail">
+              <p>${meeting.description || 'No description provided'}</p>
+              <button class="doc-action-btn" style="background:#007B8A; color:#fff;"
+                      onclick="openMeetingDetail('${meeting.id}')">📖 View Details</button>
             </div>
           </li>
         `).join('')}
       </ul>
     `;
   } catch (err) {
-    console.error('Fetch tab records error:', err);
-    bottomContent.innerHTML = `
-      <h3>❌ Error Loading Records</h3>
-      <p>${err.message || 'Failed to load records.'}</p>
-    `;
+    console.error('Meeting list error:', err);
+    showNoDataMessage('Error loading meetings.', 'meetingListContainer');
   }
 }
 
-// ============= TOGGLE DETAIL VIEW =============
-function toggleRecordDetail(recordId) {
-  const item = document.querySelector(`.doc-item[data-id="${recordId}"] .doc-detail`);
-  if (item) {
-    item.style.display = (item.style.display === 'none' || item.style.display === '') ? 'block' : 'none';
+// ============= MEETING DETAIL =============
+async function openMeetingDetail(meetingId) {
+  if (!meetingId) {
+    expandGrayPart(`
+      <h3 style="margin-bottom:16px;">⚠️ No Meeting Data</h3>
+      <p style="color:#666; text-align:center; padding:20px;">Unable to load meeting details.</p>
+      <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
+    `);
+    return;
+  }
+
+  try {
+    const projectId = localStorage.getItem('activeProjectId');
+    const meeting = await apiRequest('https://oneprojectapp-backend.onrender.com/records/meeting-detail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ meetingId, projectId })
+    });
+
+    const statusColor = meeting.status === 'Completed' ? '#28a745' : '#ff9800';
+
+    expandGrayPart(`
+      <h3 style="margin-bottom:16px;">📅 Meeting Details</h3>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Title</div>
+        <div class="gray-part-value">${meeting.title || 'N/A'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Number</div>
+        <div class="gray-part-value">${meeting.number || 'N/A'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Date</div>
+        <div class="gray-part-value">${meeting.date ? new Date(meeting.date).toLocaleDateString() : 'N/A'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Status</div>
+        <div class="gray-part-value">
+          <span style="background:${statusColor}; color:#fff; padding:4px 8px; border-radius:4px;
+                       font-size:11px; font-weight:bold;">${meeting.status || 'Pending'}</span>
+        </div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Meeting Minutes</div>
+        <div class="gray-part-value">${meeting.minutes || 'Not recorded'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Participants</div>
+        <div class="gray-part-value">${meeting.participants || 'Not specified'}</div>
+      </div>
+      <div class="gray-part-field">
+        <div class="gray-part-label">Attachments</div>
+        <div class="gray-part-value">${meeting.attachments || 'None'}</div>
+      </div>
+      <div style="margin-top:16px; display:flex; flex-direction:column; gap:8px;">
+        ${meeting.file_path
+          ? `<a href="${meeting.file_path}" target="_blank" class="btn primary"
+                style="text-align:center; text-decoration:none;">⬇️ Download Attachments</a>`
+          : `<button class="btn" disabled style="opacity:0.5;">⬇️ No Files</button>`}
+        <button class="btn primary" style="width:100%;">💬 Add Comment</button>
+        <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
+      </div>
+    `);
+  } catch (err) {
+    console.error('Meeting detail error:', err);
+    expandGrayPart(`
+      <h3 style="margin-bottom:16px;">❌ Error Loading Meeting</h3>
+      <p style="color:#666; text-align:center; padding:20px;">${err.message || 'Failed to load meeting details.'}</p>
+      <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
+    `);
   }
 }
+
+// ============= REPORT ACTION HANDLERS =============
+async function approveTeamReport(reportId) {
+  if (!confirm('Are you sure you want to approve this report?')) return;
+  try {
+    await apiRequest('https://oneprojectapp-backend.onrender.com/records/approve-report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reportId })
+    });
+    alert('Report approved successfully!');
+    collapseGrayPart();
+  } catch (err) {
+    console.error('Approval error:', err);
+    alert('Failed to approve report.');
+  }
+}
+
+async function rejectTeamReport(reportId) {
+  const reason = prompt('Please provide a reason for rejection:');
+  if (!reason) return;
+  try {
+    await apiRequest('https://oneprojectapp-backend.onrender.com/records/reject-report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reportId, reason })
+    });
+    alert('Report rejected and sent back for revision.');
+    collapseGrayPart();
+  } catch (err) {
+    console.error('Rejection error:', err);
+    alert('Failed to reject report.');
+  }
+}
+
+async function postTeamReport(reportId) {
+  if (!confirm('Post this report to the project documentation?')) return;
+  try {
+    await apiRequest('https://oneprojectapp-backend.onrender.com/records/post-report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reportId })
+    });
+    alert('Report posted successfully!');
+    collapseGrayPart();
+  } catch (err) {
+    console.error('Post error:', err);
+    alert('Failed to post report.');
+  }
+}
+
+// ============= SEARCH =============
+document.getElementById('searchBox').addEventListener('keyup', (e) => {
+  const term = e.target.value.toLowerCase();
+  bottomContent.querySelectorAll('.doc-item').forEach(item => {
+    item.style.display = item.textContent.toLowerCase().includes(term) ? '' : 'none';
+  });
+});
+
+// ============= CLOSE DIALOGS ON OUTSIDE CLICK =============
+document.addEventListener('click', (event) => {
+  document.querySelectorAll('.modal-overlay.active').forEach(dialog => {
+    if (!dialog.querySelector('.modal-content').contains(event.target)) {
+      dialog.classList.remove('active');
+    }
+  });
+
+  if (profileDialog && !profileDialog.contains(event.target) && !profileIcon.contains(event.target)) {
+    profileDialog.style.display = 'none';
+  }
+  if (projectDialog && !projectDialog.contains(event.target) && !projectSelector.contains(event.target)) {
+    projectDialog.style.display = 'none';
+  }
+  if (logoutDialog && !logoutDialog.contains(event.target) && !logoutBtn.contains(event.target)) {
+    logoutDialog.classList.remove('active');
+  }
+});
+
+// ============= TOAST NOTIFICATION =============
+function showNotification(title, message) {
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="notification"
+         style="position:fixed; top:20px; right:20px; background:#fff; padding:16px;
+                border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.2); z-index:200;
+                animation:slideIn 0.3s ease-in-out; max-width:400px;">
+      <div style="font-weight:bold; color:#333; margin-bottom:4px;">${title}</div>
+      <div style="font-size:12px; color:#666;">${message}</div>
+      <button onclick="this.parentElement.remove();"
+              style="position:absolute; top:8px; right:8px; background:none;
+                     border:none; font-size:16px; cursor:pointer;">✕</button>
+    </div>
+    <style>
+      @keyframes slideIn { from { transform:translateX(400px); opacity:0; } to { transform:translateX(0); opacity:1; } }
+    </style>
+  `);
+  setTimeout(() => document.querySelector('.notification')?.remove(), 4000);
+}
+
+// ============= DEFAULT LOAD (runs once on page init) =============
+loadHomeTabs();
+initializeSummaryPanel();
 
   // ============= REPORT DETAIL =============
   async function openReportDetail(idx, reportId, context) {
