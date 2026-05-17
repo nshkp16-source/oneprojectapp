@@ -3073,10 +3073,12 @@ function renderRecordsList(records, category) {
   }
 
   const currentUserRole = localStorage.getItem('userRole') || '';
+  const token = localStorage.getItem('authToken');
 
   recordsList.innerHTML = records.map(doc => {
     const isUploader = currentUserRole === doc.uploader_role;
-    const fileName = doc.file_path ? doc.file_path.split('/').pop() : null;
+    const isUnread   = !doc.is_viewed;
+    const fileName   = doc.file_path ? doc.file_path.split('/').pop() : null;
 
     const reviews = (doc.reviews || []).map(r => `
       <li style="padding:6px 0; border-bottom:1px solid #f0f0f0; font-size:12px; color:#555;">
@@ -3090,15 +3092,17 @@ function renderRecordsList(records, category) {
 
     return `
       <li class="doc-item" data-id="${doc.id}" style="
-        background:#fff;
-        border:1px solid #e5e7eb;
+        background:${isUnread ? '#eff6ff' : '#fff'};
+        border:1px solid ${isUnread ? '#bfdbfe' : '#e5e7eb'};
+        border-left: 4px solid ${isUnread ? '#3b82f6' : '#e5e7eb'};
         border-radius:10px;
         margin-bottom:10px;
         overflow:hidden;
-        box-shadow:0 1px 3px rgba(0,0,0,0.06);
+        box-shadow:${isUnread ? '0 2px 8px rgba(59,130,246,0.10)' : '0 1px 3px rgba(0,0,0,0.06)'};
+        transition: background 0.3s, border 0.3s;
       ">
         <!-- COLLAPSED HEADER -->
-        <div class="doc-item-header" onclick="toggleRecordDetail('${doc.id}')" style="
+        <div class="doc-item-header" onclick="toggleRecordDetail('${doc.id}', '${category}')" style="
           display:flex;
           justify-content:space-between;
           align-items:center;
@@ -3107,11 +3111,17 @@ function renderRecordsList(records, category) {
           gap:12px;
         ">
           <div style="flex:1; min-width:0;">
-            <div style="font-weight:600; font-size:14px; color:#1f2937; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+            <div style="font-weight:${isUnread ? '700' : '600'}; font-size:14px; color:#1f2937; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:flex; align-items:center; gap:6px;">
+              ${isUnread ? `<span class="unread-dot-${doc.id}" style="
+                display:inline-block; width:8px; height:8px; flex-shrink:0;
+                background:#3b82f6; border-radius:50%;
+              "></span>` : ''}
               📄 ${doc.title}
+              ${isUnread ? `<span style="font-size:10px; color:#3b82f6; font-weight:700; margin-left:4px;">NEW</span>` : ''}
             </div>
             <div style="font-size:11px; color:#9ca3af; margin-top:3px;">
-              By ${doc.uploader_role || 'N/A'} &nbsp;•&nbsp; ${doc.date_recorded ? new Date(doc.date_recorded).toLocaleDateString() : 'N/A'}
+              By ${doc.uploader_role || 'N/A'} &nbsp;•&nbsp;
+              ${doc.date_recorded ? new Date(doc.date_recorded).toLocaleString() : 'N/A'}
             </div>
           </div>
           <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
@@ -3130,20 +3140,18 @@ function renderRecordsList(records, category) {
           </div>
 
           <!-- Attached File -->
-         <!-- Attached File -->
-${fileName ? `
-<div style="margin-bottom:12px;">
-  <div style="font-size:11px; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:.5px; margin-bottom:6px;">Attached File</div>
-  <a href="https://oneprojectapp-backend.onrender.com/api/download-file?recordId=${doc.id}&category=${category}"
-     target="_blank" style="
-       display:inline-flex; align-items:center; gap:6px;
-       background:#eff6ff; color:#2563eb;
-       border:1px solid #bfdbfe; border-radius:6px;
-       padding:6px 12px; font-size:12px; font-weight:500;
-       text-decoration:none;
-  ">⬇️ ${fileName}</a>
-</div>
-` : ''}
+          ${fileName ? `
+          <div style="margin-bottom:12px;">
+            <div style="font-size:11px; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:.5px; margin-bottom:6px;">Attached File</div>
+            <a onclick="downloadFile('${doc.id}', '${category}', '${fileName}')" style="
+              display:inline-flex; align-items:center; gap:6px;
+              background:#eff6ff; color:#2563eb;
+              border:1px solid #bfdbfe; border-radius:6px;
+              padding:6px 12px; font-size:12px; font-weight:500;
+              text-decoration:none; cursor:pointer;
+            ">⬇️ ${fileName}</a>
+          </div>
+          ` : ''}
 
           <!-- Review History -->
           <div style="margin-bottom:12px;">
@@ -3154,7 +3162,6 @@ ${fileName ? `
           <!-- Action Buttons -->
           <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; padding-top:12px; border-top:1px solid #e5e7eb;">
 
-            <!-- Comment button — stub, full design coming later -->
             <button onclick="openCommentSection('${doc.id}', '${category}')" style="
               flex:1; min-width:100px;
               padding:8px 12px; font-size:12px; font-weight:600;
@@ -3162,7 +3169,6 @@ ${fileName ? `
               border:1px solid #d1d5db; border-radius:6px; cursor:pointer;
             ">💬 Comment</button>
 
-            <!-- Approve / Reject — hidden for uploader -->
             ${!isUploader ? `
             <button onclick="handleRecordAction('${doc.id}', '${category}', 'approved')" style="
               flex:1; min-width:100px;
@@ -3188,13 +3194,66 @@ ${fileName ? `
 }
 
 // ============= TOGGLE DETAIL VIEW =============
-function toggleRecordDetail(recordId) {
-  const detail = document.getElementById(`detail-${recordId}`);
+function toggleRecordDetail(recordId, category) {
+  const detail  = document.getElementById(`detail-${recordId}`);
   const chevron = document.querySelector(`.chevron-${recordId}`);
+  const item    = document.querySelector(`.doc-item[data-id="${recordId}"]`);
   if (!detail) return;
+
   const isOpen = detail.style.display !== 'none';
   detail.style.display = isOpen ? 'none' : 'block';
   if (chevron) chevron.textContent = isOpen ? '▾' : '▴';
+
+  // ✅ Mark as viewed when opening
+  if (!isOpen) {
+    const token     = localStorage.getItem('authToken');
+    const projectId = localStorage.getItem('activeProjectId');
+
+    fetch("https://oneprojectapp-backend.onrender.com/api/mark-record-viewed", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({ projectId, recordId, category })
+    }).catch(err => console.error('Mark viewed error:', err));
+
+    // ✅ Remove unread styling immediately without waiting for server
+    const dot = document.querySelector(`.unread-dot-${recordId}`);
+    if (dot) dot.remove();
+    const newBadge = item.querySelector('span[style*="NEW"]');
+    if (newBadge) newBadge.remove();
+    if (item) {
+      item.style.background    = '#fff';
+      item.style.border        = '1px solid #e5e7eb';
+      item.style.borderLeft    = '4px solid #e5e7eb';
+      item.style.boxShadow     = '0 1px 3px rgba(0,0,0,0.06)';
+    }
+  }
+}
+
+// ============= DOWNLOAD FILE WITH AUTH TOKEN =============
+async function downloadFile(recordId, category, fileName) {
+  const token = localStorage.getItem('authToken');
+  try {
+    const response = await fetch(
+      `https://oneprojectapp-backend.onrender.com/api/download-file?recordId=${recordId}&category=${category}`,
+      { headers: { "Authorization": `Bearer ${token}` } }
+    );
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    const url  = window.URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error('Download error:', err);
+    alert('Failed to download file.');
+  }
 }
 
 // ============= COMMENT — stub, full design coming later =============
@@ -3204,7 +3263,7 @@ function openCommentSection(recordId, category) {
 
 // ============= APPROVE / REJECT =============
 async function handleRecordAction(recordId, category, action) {
-  const token = localStorage.getItem('authToken');
+  const token     = localStorage.getItem('authToken');
   const projectId = localStorage.getItem('activeProjectId');
 
   try {
@@ -3213,10 +3272,19 @@ async function handleRecordAction(recordId, category, action) {
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
       body: JSON.stringify({ projectId, recordId, category, action })
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    alert(`Record ${action} successfully.`);
+
+    const data = await response.json();
+
+    // ✅ Show backend message whether success or blocked
+    if (!response.ok) {
+      alert(data.error || `Failed to ${action} record.`);
+      return;
+    }
+
+    alert(data.message || `Record ${action} successfully.`);
     delete recordsCache[category];
     loadTabRecords(category);
+
   } catch (err) {
     console.error('Action error:', err);
     alert(`Failed to ${action} record.`);
