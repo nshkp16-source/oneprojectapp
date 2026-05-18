@@ -178,28 +178,6 @@
       return;
     }
 
-    // ✅ Local preview only (no backend upload yet)
-    let profileUrl = null;
-    if (profileFile) {
-      if (profileFile.size > 500 * 1024) {
-        messageEl.textContent = "Profile picture must not exceed 500KB.";
-        return;
-      }
-
-      // Create local preview URL
-      profileUrl = URL.createObjectURL(profileFile);
-
-      // Show preview immediately
-      const previewEl = document.getElementById("profilePreview");
-      if (previewEl) {
-        previewEl.style.backgroundImage = `url("${profileUrl}")`;
-        previewEl.textContent = "";
-      }
-
-      // Save file reference for later commit
-      window.pendingProfilePicture = profileFile;
-    }
-
     showLoading();
 
     try {
@@ -216,7 +194,7 @@
         return;
       }
 
-      // ✅ Build projectDetails with local preview URL
+      // ✅ Build projectDetails object
       const projectDetails = {
         client: {
           company_name: companyName,
@@ -225,16 +203,50 @@
           representative: representativeName,
           password_hash: password,   // raw password, backend will hash later
           title: title || null,
-          profile_picture: profileUrl // local preview URL only
+          profile_picture: null // will be set if file chosen
         }
       };
 
-      // ✅ Save to localStorage only (not DB yet)
-      localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
-      localStorage.setItem("clientEmail", companyEmail);
+      // ✅ Handle profile picture as base64
+      if (profileFile) {
+        if (profileFile.size > 500 * 1024) {
+          messageEl.textContent = "Profile picture must not exceed 500KB.";
+          return;
+        }
 
-      alert("Account created locally! Continue to project creation.");
-      window.location.href = "create-project.html";
+        const reader = new FileReader();
+        reader.onload = () => {
+          const base64String = reader.result; // ✅ base64 string
+
+          // Show preview immediately
+          const previewEl = document.getElementById("profilePreview");
+          if (previewEl) {
+            previewEl.style.backgroundImage = `url("${base64String}")`;
+            previewEl.textContent = "";
+          }
+
+          // Save base64 string in projectDetails
+          projectDetails.client.profile_picture = base64String;
+
+          // ✅ Save to localStorage
+          localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
+          localStorage.setItem("clientEmail", companyEmail);
+
+          // Keep the true file reference for commit
+          window.pendingProfilePicture = profileFile;
+
+          alert("Account created locally! Continue to project creation.");
+          window.location.href = "create-project.html";
+        };
+        reader.readAsDataURL(profileFile); // convert to base64
+      } else {
+        // ✅ Save without picture
+        localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
+        localStorage.setItem("clientEmail", companyEmail);
+
+        alert("Account created locally! Continue to project creation.");
+        window.location.href = "create-project.html";
+      }
     } catch (err) {
       console.error(err);
       resetLoading();
