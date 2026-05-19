@@ -2970,7 +2970,7 @@ bottomContent.addEventListener('click', (event) => {
 function attachTabEvents() {}
 
 // ============= BOOT =============
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   const navTabsEl = document.getElementById('navTabs');
   if (navTabsEl) {
     navTabsEl.addEventListener('click', (e) => {
@@ -2983,6 +2983,28 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
+
+  // 🔑 NEW: Fetch user info from backend using JWT
+  const token = localStorage.getItem('authToken');
+  if (token) {
+    try {
+      const response = await fetch('https://oneprojectapp-backend.onrender.com/api/me', {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const user = await response.json();
+        // Store decoded user info in memory (not localStorage)
+        window.currentUserId   = user.id;
+        window.currentUserRole = user.role;
+      } else {
+        console.error('Failed to fetch user info:', response.status);
+      }
+    } catch (err) {
+      console.error('Error fetching user info:', err);
+    }
+  }
+
   loadHomeTabs();
   initializeSummaryPanel();
   setTimeout(() => { loadTabRecords('contractual'); }, 50);
@@ -2995,36 +3017,18 @@ const recordsCache = {};
 //  ROLE HELPERS
 // ============================================================
 
-/**
- * Returns the workflow "side" for decision-maker roles.
- * Returns null for team_member or unrecognised roles.
- */
 function getSide(role) {
   const r = (role || '').toLowerCase().replace(/\s/g, '_');
   if (r === 'contractor' || r === 'contractor_pm') return 'contractor';
   if (r === 'consultant' || r === 'consultant_pm') return 'consultant';
   if (r === 'client'     || r === 'client_pm')     return 'client';
-  // team_member → intentionally returns null (no workflow side)
-  return null;
+  return null; // team_member or unknown
 }
 
-/**
- * Returns true if the role is a decision maker (can approve/accept/reject
- * and trigger Notices of Determination).
- */
 function isDecisionMaker(role) {
   return getSide(role) !== null;
 }
 
-/**
- * Given who uploaded and the current user's side, determine:
- *   { canAct: bool, actionLabel: 'Approve'|'Accept', step: 1|2 }
- *
- * Workflow matrix:
- *  Uploaded by contractor → step1: consultant (Approve), step2: client (Accept)
- *  Uploaded by consultant → step1: client (Approve),    step2: contractor (Accept)
- *  Uploaded by client     → step1: consultant (Approve), step2: contractor (Accept)
- */
 function getWorkflowRole(uploaderSide, reviewerSide) {
   const matrix = {
     contractor: { consultant: { step: 1, label: 'Approve' }, client: { step: 2, label: 'Accept' } },
@@ -3034,41 +3038,27 @@ function getWorkflowRole(uploaderSide, reviewerSide) {
   return matrix[uploaderSide]?.[reviewerSide] || null;
 }
 
-/**
- * Determine what action buttons to show for the current user on a given record.
- *
- * Returns one of:
- *   'team_member'       — comment-only; no workflow buttons, no notices
- *   'uploader'          — uploaded this record; sees Delete only
- *   'none'              — decision maker but irrelevant to this workflow path
- *   'notice_only'       — already acted; show Issue Notice button
- *   'awaiting_step1'    — step-2 reviewer waiting for step-1 to finish
- *   { label, step }     — show Approve/Accept + Reject buttons
- */
-function computeButtonState(doc, currentUserId, currentUserRole) {
-  // ── Team Member: comment-only, excluded from all workflow ────────
+function computeButtonState(doc) {
+  const currentUserId   = window.currentUserId;
+  const currentUserRole = window.currentUserRole;
+
   if (!isDecisionMaker(currentUserRole)) return 'team_member';
 
   const uploaderSide = getSide(doc.uploader_role || doc.role);
   const reviewerSide = getSide(currentUserRole);
   const isUploader   = String(doc.uploaded_by) === String(currentUserId);
 
-  // Uploader sees only Delete
   if (isUploader) return 'uploader';
 
-  // Decision maker but not in the workflow path for this record
   const wfRole = getWorkflowRole(uploaderSide, reviewerSide);
   if (!wfRole) return 'none';
 
-  // Has this user already acted?
   const reviews  = doc.reviews || [];
   const myReview = reviews.find(r => String(r.reviewer_id) === String(currentUserId));
-
   if (myReview && myReview.action && myReview.action !== 'no_action' && myReview.action !== 'view') {
     return 'notice_only';
   }
 
-  // Step-2 reviewer must wait for step-1 to be complete
   if (wfRole.step === 2) {
     const step1SideMap = {
       contractor: 'consultant',
@@ -3080,14 +3070,14 @@ function computeButtonState(doc, currentUserId, currentUserRole) {
       getSide(r.reviewer_role) === step1Side &&
       (r.action === 'approved' || r.action === 'accepted')
     );
-    if (!step1Done) return 'awaiting_step1';
+    if (!step1Done) return { state: 'awaiting_step1', pendingRole: step1Side };
   }
 
   return wfRole; // { label, step }
 }
 
 // ============= STATUS BADGE =============
-// Only workflow-relevant statuses are kept; legacy entries removed.
+// Workflow-relevant statuses + optional comment badge
 function statusBadge(status) {
   const map = {
     pending_review:                { label: 'Pending Review',              color: '#f59e0b' },
@@ -3097,6 +3087,7 @@ function statusBadge(status) {
     pending_contractor_acceptance: { label: 'Pending Contractor Accept.',  color: '#f97316' },
     approved_record:               { label: 'Approved',                    color: '#10b981' },
     rejected:                      { label: 'Rejected',                    color: '#ef4444' },
+    comment:                       { label: 'Comment',                     color: '#6b7280' } // NEW
   };
   const s = map[status] || { label: status || 'Pending', color: '#6b7280' };
   return `<span style="
@@ -3134,10 +3125,17 @@ async function loadTabRecords(category) {
 
     const response = await fetch('https://oneprojectapp-backend.onrender.com/api/fetch-tab-records', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      headers: { 
+        'Content-Type': 'application/json', 
+        'Authorization': `Bearer ${token}` 
+      },
       body: JSON.stringify({ projectId, category })
     });
 
+    if (response.status === 401) {
+      placeholderDiv.innerHTML = "<p style='color:#ef4444;'>⚠️ Unauthorized. Please log in again.</p>";
+      return;
+    }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data    = await response.json();
@@ -3169,16 +3167,14 @@ function renderRecordsList(records, category) {
     return;
   }
 
-  const currentUserRole = localStorage.getItem('userRole') || '';
-  const currentUserId   = localStorage.getItem('userId')   || '';
+  const currentUserRole = window.currentUserRole || '';
+  const currentUserId   = window.currentUserId   || '';
 
   recordsList.innerHTML = records.map(doc => {
     const isUnread = !doc.is_viewed;
     const fileName = doc.file_path ? doc.file_path.split('/').pop() : null;
 
     // ── Review history rows ──────────────────────────────────────
-    // Team Member comments appear here but are visually distinguished
-    // from workflow actions and do NOT affect step indicators.
     const reviews = (doc.reviews || []).map(r => {
       const isTMComment = !isDecisionMaker(r.reviewer_role) || r.action === 'comment';
       return `
@@ -3208,64 +3204,67 @@ function renderRecordsList(records, category) {
     }).join('');
 
     // ── Determine action buttons ─────────────────────────────────
-    const btnState = computeButtonState(doc, currentUserId, currentUserRole);
+    const btnState = computeButtonState(doc);
     let actionButtons = '';
 
-    switch (true) {
-      case btnState === 'team_member':
-        // Team Members see ONLY the Comment button (appended below, no extra buttons here)
-        break;
+    // Lock record if already approved → no buttons at all
+    if (doc.status === 'approved_record') {
+      actionButtons = ''; 
+    } else {
+      switch (true) {
+        case btnState === 'team_member':
+          // Team Members see ONLY the Comment button (but hidden if approved)
+          break;
 
-      case btnState === 'uploader':
-        actionButtons = `
-          <button onclick="deleteRecord('${doc.id}', '${category}')" style="
-            flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
-            background:#fee2e2;color:#991b1b;
-            border:1px solid #fca5a5;border-radius:6px;cursor:pointer;
-          ">🗑️ Delete</button>
-        `;
-        break;
+        case btnState === 'uploader':
+          actionButtons = `
+            <button onclick="deleteRecord('${doc.id}', '${category}')" style="
+              flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
+              background:#fee2e2;color:#991b1b;
+              border:1px solid #fca5a5;border-radius:6px;cursor:pointer;
+            ">🗑️ Delete</button>
+          `;
+          break;
 
-      case typeof btnState === 'object' && btnState !== null: {
-        // Active workflow step — show positive action + Reject
-        const positiveLabel  = btnState.label;
-        const positiveAction = positiveLabel.toLowerCase();
-        actionButtons = `
-          <button onclick="handleRecordAction('${doc.id}', '${category}', '${positiveAction}')" style="
-            flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
-            background:#d1fae5;color:#065f46;
-            border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;
-          ">✅ ${positiveLabel}</button>
-          <button onclick="handleRecordAction('${doc.id}', '${category}', 'rejected')" style="
-            flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
-            background:#fee2e2;color:#991b1b;
-            border:1px solid #fca5a5;border-radius:6px;cursor:pointer;
-          ">❌ Reject</button>
-        `;
-        break;
+        case typeof btnState === 'object' && btnState !== null && !btnState.state: {
+          // Active workflow step — show positive action + Reject
+          const positiveLabel  = btnState.label;
+          const positiveAction = positiveLabel.toLowerCase();
+          actionButtons = `
+            <button onclick="handleRecordAction('${doc.id}', '${category}', '${positiveAction}')" style="
+              flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
+              background:#d1fae5;color:#065f46;
+              border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;
+            ">✅ ${positiveLabel}</button>
+            <button onclick="handleRecordAction('${doc.id}', '${category}', 'rejected')" style="
+              flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
+              background:#fee2e2;color:#991b1b;
+              border:1px solid #fca5a5;border-radius:6px;cursor:pointer;
+            ">❌ Reject</button>
+          `;
+          break;
+        }
+
+        case btnState === 'notice_only':
+          // After acting, force Notice creation
+          actionButtons = `
+            <button onclick="openNoticeOfDetermination('${doc.id}', '${category}')" style="
+              flex:1;min-width:140px;padding:8px 14px;font-size:12px;font-weight:600;
+              background:#fef3c7;color:#92400e;
+              border:1px solid #fcd34d;border-radius:6px;cursor:pointer;
+            ">📋 Issue Notice of Determination</button>
+          `;
+          break;
+
+        case typeof btnState === 'object' && btnState.state === 'awaiting_step1':
+          actionButtons = `
+            <span style="
+              flex:1;padding:8px 12px;font-size:12px;color:#9ca3af;
+              font-style:italic;text-align:center;
+            ">⏳ Awaiting ${btnState.pendingRole} Approval</span>
+          `;
+          break;
       }
-
-      case btnState === 'notice_only':
-        // Decision maker who already acted — show Notice button
-        actionButtons = `
-          <button onclick="openNoticeOfDetermination('${doc.id}', '${category}')" style="
-            flex:1;min-width:140px;padding:8px 14px;font-size:12px;font-weight:600;
-            background:#fef3c7;color:#92400e;
-            border:1px solid #fcd34d;border-radius:6px;cursor:pointer;
-          ">📋 Issue Notice of Determination</button>
-        `;
-        break;
-
-      case btnState === 'awaiting_step1':
-        actionButtons = `
-          <span style="
-            flex:1;padding:8px 12px;font-size:12px;color:#9ca3af;
-            font-style:italic;text-align:center;
-          ">⏳ Awaiting prior review step…</span>
-        `;
-        break;
-
-      // 'none' → no extra buttons
     }
 
     return `
@@ -3375,11 +3374,6 @@ function renderRecordsList(records, category) {
 }
 
 // ============= WORKFLOW STEPS INDICATOR =============
-/**
- * Renders the visual step tracker.
- * Only rendered for decision-maker roles — team members never see this.
- * Team Member reviews (action === 'comment') are excluded from step matching.
- */
 function renderWorkflowSteps(doc, currentUserId, currentUserRole) {
   const uploaderSide = getSide(doc.uploader_role || doc.role);
   if (!uploaderSide) return '';
@@ -3402,38 +3396,48 @@ function renderWorkflowSteps(doc, currentUserId, currentUserRole) {
   const steps = stepMap[uploaderSide];
   if (!steps) return '';
 
-  // Only include decision-maker actions when evaluating workflow progress
+  // Only decision-maker actions count
   const workflowReviews = (doc.reviews || []).filter(r =>
-    isDecisionMaker(r.reviewer_role) && r.action !== 'comment' && r.action !== 'no_action' && r.action !== 'view'
+    isDecisionMaker(r.reviewer_role) &&
+    !['comment','no_action','view'].includes(r.action)
   );
 
   const stepsHtml = steps.map((step, idx) => {
     const matchingReview = workflowReviews.find(r => getSide(r.reviewer_role) === step.side);
-    let icon  = '⬜';
-    let color = '#9ca3af';
+    let icon  = '🔒';
+    let color = '#d1d5db';
+    let label = `Step ${idx + 1}: ${step.label}`;
 
     if (matchingReview) {
       if (matchingReview.action === 'rejected') {
         icon = '❌'; color = '#ef4444';
       } else {
         icon = '✅'; color = '#10b981';
+        // If approved/accepted but no notice yet, show reminder
+        if (doc.status !== 'approved_record' && doc.status !== 'rejected' && doc.record_kind !== 'notice') {
+          label += ' (Notice Required)';
+          icon = '📋'; color = '#f59e0b';
+        }
       }
-    } else if (idx > 0) {
-      const prevStep = steps[idx - 1];
-      const prevDone = workflowReviews.some(r =>
-        getSide(r.reviewer_role) === prevStep.side &&
-        (r.action === 'approved' || r.action === 'accepted')
-      );
-      icon  = prevDone ? '⏳' : '🔒';
-      color = prevDone ? '#f59e0b' : '#d1d5db';
     } else {
-      icon = '⏳'; color = '#f59e0b';
+      if (idx === 0) {
+        icon = '⏳'; color = '#f59e0b'; // first step always waiting
+      } else {
+        const prevStep = steps[idx - 1];
+        const prevDone = workflowReviews.some(r =>
+          getSide(r.reviewer_role) === prevStep.side &&
+          (r.action === 'approved' || r.action === 'accepted')
+        );
+        if (prevDone) {
+          icon = '⏳'; color = '#f59e0b'; // unlocked and waiting
+        }
+      }
     }
 
     return `
       <div style="display:flex;align-items:center;gap:6px;">
         <span style="font-size:14px;">${icon}</span>
-        <span style="font-size:11px;font-weight:600;color:${color};">Step ${idx + 1}: ${step.label}</span>
+        <span style="font-size:11px;font-weight:600;color:${color};">${label}</span>
       </div>
     `;
   }).join('<div style="font-size:10px;color:#d1d5db;margin:0 4px;">→</div>');
@@ -3460,27 +3464,29 @@ function toggleRecordDetail(recordId, category) {
   if (!isOpen) {
     const token         = localStorage.getItem('authToken');
     const projectId     = localStorage.getItem('activeProjectId');
-    const currentUserId = localStorage.getItem('userId') || '';
-    const item2         = document.querySelector(`.doc-item[data-id="${recordId}"]`);
-    const isUploader    = item2?.dataset.uploadedBy
-      ? String(item2.dataset.uploadedBy) === String(currentUserId)
-      : false;
+    const currentUserId = window.currentUserId || '';
 
+    const isUploader = String(item?.dataset.uploadedBy) === String(currentUserId);
+
+    // ✅ Mark record as viewed in DB if not uploader
     if (!isUploader) {
       fetch('https://oneprojectapp-backend.onrender.com/api/mark-record-viewed', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ projectId, recordId, category })
-      }).catch(err => console.error('Mark viewed error:', err));
-    }
-
-    const dot = document.querySelector(`.unread-dot-${recordId}`);
-    if (dot) dot.remove();
-    if (item) {
-      item.style.background = '#fff';
-      item.style.border     = '1px solid #e5e7eb';
-      item.style.borderLeft = '4px solid #e5e7eb';
-      item.style.boxShadow  = '0 1px 3px rgba(0,0,0,0.06)';
+      })
+      .then(() => {
+        // remove unread dot and update styling
+        const dot = document.querySelector(`.unread-dot-${recordId}`);
+        if (dot) dot.remove();
+        if (item) {
+          item.style.background = '#fff';
+          item.style.border     = '1px solid #e5e7eb';
+          item.style.borderLeft = '4px solid #e5e7eb';
+          item.style.boxShadow  = '0 1px 3px rgba(0,0,0,0.06)';
+        }
+      })
+      .catch(err => console.error('Mark viewed error:', err));
     }
   }
 }
