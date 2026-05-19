@@ -2766,8 +2766,12 @@ async function submitNewMeetingMinute(title, details, date, attachments) {
 // ============================================================
 //  RECORDS DISPLAY — Full Workflow Script
 //  Supports: Contractor, Contractor PM, Consultant, Consultant PM,
-//            Client, Client PM
-//  Each "side" (contractor / consultant / client) acts as one.
+//            Client, Client PM, Team Member
+//
+//  ROLE TIERS:
+//    Decision Makers → contractor, contractor_pm, consultant,
+//                      consultant_pm, client, client_pm
+//    Team Members    → team_member (comment-only, no workflow access)
 // ============================================================
 
 // ============= SIDEBAR NAV =============
@@ -2780,7 +2784,7 @@ sidebarItems.forEach(item => {
 });
 
 // ============= TABS MANAGEMENT =============
-const navTabs      = document.getElementById('navTabs');
+const navTabs       = document.getElementById('navTabs');
 const bottomContent = document.getElementById('bottomContent');
 
 function loadHomeTabs() {
@@ -2813,7 +2817,7 @@ sidebarItems.forEach(item => {
   item.addEventListener('click', () => {
     const key = item.getAttribute('data-nav');
     if (key === 'Project-Records') loadHomeTabs();
-    if (key === 'workspace') loadReportTabs();
+    if (key === 'workspace')       loadReportTabs();
   });
 });
 
@@ -2990,14 +2994,27 @@ const recordsCache = {};
 
 // ============================================================
 //  ROLE HELPERS
-//  "side" = contractor | consultant | client
 // ============================================================
+
+/**
+ * Returns the workflow "side" for decision-maker roles.
+ * Returns null for team_member or unrecognised roles.
+ */
 function getSide(role) {
   const r = (role || '').toLowerCase().replace(/\s/g, '_');
   if (r === 'contractor' || r === 'contractor_pm') return 'contractor';
   if (r === 'consultant' || r === 'consultant_pm') return 'consultant';
   if (r === 'client'     || r === 'client_pm')     return 'client';
+  // team_member → intentionally returns null (no workflow side)
   return null;
+}
+
+/**
+ * Returns true if the role is a decision maker (can approve/accept/reject
+ * and trigger Notices of Determination).
+ */
+function isDecisionMaker(role) {
+  return getSide(role) !== null;
 }
 
 /**
@@ -3005,9 +3022,9 @@ function getSide(role) {
  *   { canAct: bool, actionLabel: 'Approve'|'Accept', step: 1|2 }
  *
  * Workflow matrix:
- *  Uploaded by contractor → step1: consultant (Approve/Reject), step2: client (Accept/Reject)
- *  Uploaded by consultant → step1: client (Approve/Reject),    step2: contractor (Accept/Reject)
- *  Uploaded by client     → step1: consultant (Approve/Reject), step2: contractor (Accept/Reject)
+ *  Uploaded by contractor → step1: consultant (Approve), step2: client (Accept)
+ *  Uploaded by consultant → step1: client (Approve),    step2: contractor (Accept)
+ *  Uploaded by client     → step1: consultant (Approve), step2: contractor (Accept)
  */
 function getWorkflowRole(uploaderSide, reviewerSide) {
   const matrix = {
@@ -3020,39 +3037,46 @@ function getWorkflowRole(uploaderSide, reviewerSide) {
 
 /**
  * Determine what action buttons to show for the current user on a given record.
+ *
  * Returns one of:
- *   'none'              — uploader or irrelevant role
- *   'notice_only'       — already acted, show Issue Notice button only
+ *   'team_member'       — comment-only; no workflow buttons, no notices
+ *   'uploader'          — uploaded this record; sees Delete only
+ *   'none'              — decision maker but irrelevant to this workflow path
+ *   'notice_only'       — already acted; show Issue Notice button
+ *   'awaiting_step1'    — step-2 reviewer waiting for step-1 to finish
  *   { label, step }     — show Approve/Accept + Reject buttons
  */
 function computeButtonState(doc, currentUserId, currentUserRole) {
-  const uploaderSide  = getSide(doc.uploader_role || doc.role);
-  const reviewerSide  = getSide(currentUserRole);
-  const isUploader    = String(doc.uploaded_by) === String(currentUserId);
+  // ── Team Member: comment-only, excluded from all workflow ────────
+  if (!isDecisionMaker(currentUserRole)) return 'team_member';
 
-  // Uploader sees only Delete (handled separately)
+  const uploaderSide = getSide(doc.uploader_role || doc.role);
+  const reviewerSide = getSide(currentUserRole);
+  const isUploader   = String(doc.uploaded_by) === String(currentUserId);
+
+  // Uploader sees only Delete
   if (isUploader) return 'uploader';
 
-  // Not a relevant decision-maker side
+  // Decision maker but not in the workflow path for this record
   const wfRole = getWorkflowRole(uploaderSide, reviewerSide);
   if (!wfRole) return 'none';
 
-  // Check if this user (or their side) has already acted
-  const reviews = doc.reviews || [];
+  // Has this user already acted?
+  const reviews  = doc.reviews || [];
   const myReview = reviews.find(r => String(r.reviewer_id) === String(currentUserId));
 
   if (myReview && myReview.action && myReview.action !== 'no_action' && myReview.action !== 'view') {
     return 'notice_only';
   }
 
-  // Check if step 1 has been completed before showing step 2
+  // Step-2 reviewer must wait for step-1 to be complete
   if (wfRole.step === 2) {
-    const uploaderSideConfig = {
+    const step1SideMap = {
       contractor: 'consultant',
       consultant: 'client',
       client:     'consultant',
     };
-    const step1Side = uploaderSideConfig[uploaderSide];
+    const step1Side = step1SideMap[uploaderSide];
     const step1Done = reviews.some(r =>
       getSide(r.reviewer_role) === step1Side &&
       (r.action === 'approved' || r.action === 'accepted')
@@ -3064,19 +3088,16 @@ function computeButtonState(doc, currentUserId, currentUserRole) {
 }
 
 // ============= STATUS BADGE =============
+// Only workflow-relevant statuses are kept; legacy entries removed.
 function statusBadge(status) {
   const map = {
-    pending_review:                    { label: 'Pending Review',              color: '#f59e0b' },
-    pending_consultant_approval:       { label: 'Pending Consultant Approval', color: '#8b5cf6' },
-    pending_client_acceptance:         { label: 'Pending Client Acceptance',   color: '#3b82f6' },
-    pending_client_approval:           { label: 'Pending Client Approval',     color: '#3b82f6' },
-    pending_contractor_acceptance:     { label: 'Pending Contractor Accept.',  color: '#f97316' },
-    approved_record:                   { label: 'Approved',                    color: '#10b981' },
-    rejected:                          { label: 'Rejected',                    color: '#ef4444' },
-    // legacy / fallback
-    approved: { label: 'Approved', color: '#10b981' },
-    draft:    { label: 'Draft',    color: '#6b7280' },
-    posted:   { label: 'Posted',   color: '#3b82f6' },
+    pending_review:                { label: 'Pending Review',              color: '#f59e0b' },
+    pending_consultant_approval:   { label: 'Pending Consultant Approval', color: '#8b5cf6' },
+    pending_client_acceptance:     { label: 'Pending Client Acceptance',   color: '#3b82f6' },
+    pending_client_approval:       { label: 'Pending Client Approval',     color: '#3b82f6' },
+    pending_contractor_acceptance: { label: 'Pending Contractor Accept.',  color: '#f97316' },
+    approved_record:               { label: 'Approved',                    color: '#10b981' },
+    rejected:                      { label: 'Rejected',                    color: '#ef4444' },
   };
   const s = map[status] || { label: status || 'Pending', color: '#6b7280' };
   return `<span style="
@@ -3153,75 +3174,100 @@ function renderRecordsList(records, category) {
   const currentUserId   = localStorage.getItem('userId')   || '';
 
   recordsList.innerHTML = records.map(doc => {
-    const isUploader = String(doc.uploaded_by) === String(currentUserId);
-    const isUnread   = !doc.is_viewed;
-    const fileName   = doc.file_path ? doc.file_path.split('/').pop() : null;
+    const isUnread = !doc.is_viewed;
+    const fileName = doc.file_path ? doc.file_path.split('/').pop() : null;
 
     // ── Review history rows ──────────────────────────────────────
-    const reviews = (doc.reviews || []).map(r => `
-      <li style="
-        display:flex;justify-content:space-between;align-items:center;
-        padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555;
-      ">
-        <span><strong>${r.reviewer_role}</strong></span>
-        <span style="
-          color:${r.action === 'approved' || r.action === 'accepted' ? '#10b981' : r.action === 'rejected' ? '#ef4444' : '#6b7280'};
-          font-weight:600;text-transform:capitalize;
-        ">${r.action}</span>
-        <span style="color:#9ca3af;">${new Date(r.action_date).toLocaleString()}</span>
-        ${r.comment ? `<span style="color:#6b7280;font-style:italic;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.comment}">💬 ${r.comment}</span>` : ''}
-      </li>
-    `).join('');
+    // Team Member comments appear here but are visually distinguished
+    // from workflow actions and do NOT affect step indicators.
+    const reviews = (doc.reviews || []).map(r => {
+      const isTMComment = !isDecisionMaker(r.reviewer_role) || r.action === 'comment';
+      return `
+        <li style="
+          display:flex;justify-content:space-between;align-items:center;
+          padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555;
+          ${isTMComment ? 'opacity:0.75;' : ''}
+        ">
+          <span>
+            <strong>${r.reviewer_role}</strong>
+            ${isTMComment ? `<span style="
+              background:#e5e7eb;color:#6b7280;
+              border-radius:8px;padding:1px 6px;font-size:10px;margin-left:4px;
+            ">comment</span>` : ''}
+          </span>
+          ${!isTMComment ? `<span style="
+            color:${r.action === 'approved' || r.action === 'accepted' ? '#10b981' : r.action === 'rejected' ? '#ef4444' : '#6b7280'};
+            font-weight:600;text-transform:capitalize;
+          ">${r.action}</span>` : '<span></span>'}
+          <span style="color:#9ca3af;">${new Date(r.action_date).toLocaleString()}</span>
+          ${r.comment ? `<span style="
+            color:#6b7280;font-style:italic;max-width:160px;
+            overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+          " title="${r.comment}">💬 ${r.comment}</span>` : ''}
+        </li>
+      `;
+    }).join('');
 
-    // ── Determine what action buttons to show ────────────────────
+    // ── Determine action buttons ─────────────────────────────────
     const btnState = computeButtonState(doc, currentUserId, currentUserRole);
-
     let actionButtons = '';
 
-    if (btnState === 'uploader') {
-      // Uploader sees Delete only
-      actionButtons = `
-        <button onclick="deleteRecord('${doc.id}', '${category}')" style="
-          flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
-          background:#fee2e2;color:#991b1b;
-          border:1px solid #fca5a5;border-radius:6px;cursor:pointer;
-        ">🗑️ Delete</button>
-      `;
-    } else if (typeof btnState === 'object') {
-      // Active step — show positive action + Reject
-      const positiveLabel = btnState.label; // 'Approve' or 'Accept'
-      const positiveAction = positiveLabel.toLowerCase(); // 'approve' or 'accept'
-      actionButtons = `
-        <button onclick="handleRecordAction('${doc.id}', '${category}', '${positiveAction}')" style="
-          flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
-          background:#d1fae5;color:#065f46;
-          border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;
-        ">✅ ${positiveLabel}</button>
-        <button onclick="handleRecordAction('${doc.id}', '${category}', 'rejected')" style="
-          flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
-          background:#fee2e2;color:#991b1b;
-          border:1px solid #fca5a5;border-radius:6px;cursor:pointer;
-        ">❌ Reject</button>
-      `;
-    } else if (btnState === 'notice_only') {
-      // Already acted — show Notice of Determination button only
-      actionButtons = `
-        <button onclick="openNoticeOfDetermination('${doc.id}', '${category}')" style="
-          flex:1;min-width:140px;padding:8px 14px;font-size:12px;font-weight:600;
-          background:#fef3c7;color:#92400e;
-          border:1px solid #fcd34d;border-radius:6px;cursor:pointer;
-        ">📋 Issue Notice of Determination</button>
-      `;
-    } else if (btnState === 'awaiting_step1') {
-      // Step 2 reviewer waiting for step 1 to complete
-      actionButtons = `
-        <span style="
-          flex:1;padding:8px 12px;font-size:12px;color:#9ca3af;
-          font-style:italic;text-align:center;
-        ">⏳ Awaiting prior review step…</span>
-      `;
+    switch (true) {
+      case btnState === 'team_member':
+        // Team Members see ONLY the Comment button (appended below, no extra buttons here)
+        break;
+
+      case btnState === 'uploader':
+        actionButtons = `
+          <button onclick="deleteRecord('${doc.id}', '${category}')" style="
+            flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
+            background:#fee2e2;color:#991b1b;
+            border:1px solid #fca5a5;border-radius:6px;cursor:pointer;
+          ">🗑️ Delete</button>
+        `;
+        break;
+
+      case typeof btnState === 'object' && btnState !== null: {
+        // Active workflow step — show positive action + Reject
+        const positiveLabel  = btnState.label;
+        const positiveAction = positiveLabel.toLowerCase();
+        actionButtons = `
+          <button onclick="handleRecordAction('${doc.id}', '${category}', '${positiveAction}')" style="
+            flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
+            background:#d1fae5;color:#065f46;
+            border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;
+          ">✅ ${positiveLabel}</button>
+          <button onclick="handleRecordAction('${doc.id}', '${category}', 'rejected')" style="
+            flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
+            background:#fee2e2;color:#991b1b;
+            border:1px solid #fca5a5;border-radius:6px;cursor:pointer;
+          ">❌ Reject</button>
+        `;
+        break;
+      }
+
+      case btnState === 'notice_only':
+        // Decision maker who already acted — show Notice button
+        actionButtons = `
+          <button onclick="openNoticeOfDetermination('${doc.id}', '${category}')" style="
+            flex:1;min-width:140px;padding:8px 14px;font-size:12px;font-weight:600;
+            background:#fef3c7;color:#92400e;
+            border:1px solid #fcd34d;border-radius:6px;cursor:pointer;
+          ">📋 Issue Notice of Determination</button>
+        `;
+        break;
+
+      case btnState === 'awaiting_step1':
+        actionButtons = `
+          <span style="
+            flex:1;padding:8px 12px;font-size:12px;color:#9ca3af;
+            font-style:italic;text-align:center;
+          ">⏳ Awaiting prior review step…</span>
+        `;
+        break;
+
+      // 'none' → no extra buttons
     }
-    // 'none' → no action buttons shown (irrelevant role)
 
     return `
       <li class="doc-item" data-id="${doc.id}" data-uploaded-by="${doc.uploaded_by}" style="
@@ -3275,7 +3321,7 @@ function renderRecordsList(records, category) {
             <div style="font-size:13px;color:#374151;line-height:1.7;">${doc.description || 'No description provided.'}</div>
           </div>
 
-          <!-- Tied to notice (if this is a notice) -->
+          <!-- Tied-to record (notices only) -->
           ${doc.record_kind === 'notice' && doc.notice_tied_id ? `
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Tied to Record</div>
@@ -3297,7 +3343,7 @@ function renderRecordsList(records, category) {
           </div>
           ` : ''}
 
-          <!-- Review History -->
+          <!-- Review History (includes TM comments) -->
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Review History</div>
             ${reviews.length > 0
@@ -3306,12 +3352,12 @@ function renderRecordsList(records, category) {
             }
           </div>
 
-          <!-- Workflow step indicator -->
-          ${renderWorkflowSteps(doc, currentUserId, currentUserRole)}
+          <!-- Workflow Step Indicator (decision makers only) -->
+          ${isDecisionMaker(currentUserRole) ? renderWorkflowSteps(doc, currentUserId, currentUserRole) : ''}
 
           <!-- Action Buttons -->
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid #e5e7eb;">
-            <!-- Comment — visible to everyone -->
+            <!-- Comment — visible to ALL roles including Team Members -->
             <button onclick="openCommentSection('${doc.id}', '${category}')" style="
               flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
               background:#f3f4f6;color:#374151;
@@ -3331,7 +3377,9 @@ function renderRecordsList(records, category) {
 
 // ============= WORKFLOW STEPS INDICATOR =============
 /**
- * Renders a small visual showing which approval steps are done/pending.
+ * Renders the visual step tracker.
+ * Only rendered for decision-maker roles — team members never see this.
+ * Team Member reviews (action === 'comment') are excluded from step matching.
  */
 function renderWorkflowSteps(doc, currentUserId, currentUserRole) {
   const uploaderSide = getSide(doc.uploader_role || doc.role);
@@ -3339,15 +3387,15 @@ function renderWorkflowSteps(doc, currentUserId, currentUserRole) {
 
   const stepMap = {
     contractor: [
-      { side: 'consultant', label: 'Consultant Approval' },
-      { side: 'client',     label: 'Client Acceptance'   },
+      { side: 'consultant', label: 'Consultant Approval'   },
+      { side: 'client',     label: 'Client Acceptance'     },
     ],
     consultant: [
-      { side: 'client',      label: 'Client Approval'       },
-      { side: 'contractor',  label: 'Contractor Acceptance' },
+      { side: 'client',     label: 'Client Approval'       },
+      { side: 'contractor', label: 'Contractor Acceptance' },
     ],
     client: [
-      { side: 'consultant', label: 'Consultant Approval'  },
+      { side: 'consultant', label: 'Consultant Approval'   },
       { side: 'contractor', label: 'Contractor Acceptance' },
     ],
   };
@@ -3355,16 +3403,15 @@ function renderWorkflowSteps(doc, currentUserId, currentUserRole) {
   const steps = stepMap[uploaderSide];
   if (!steps) return '';
 
-  const reviews = doc.reviews || [];
+  // Only include decision-maker actions when evaluating workflow progress
+  const workflowReviews = (doc.reviews || []).filter(r =>
+    isDecisionMaker(r.reviewer_role) && r.action !== 'comment' && r.action !== 'no_action' && r.action !== 'view'
+  );
 
   const stepsHtml = steps.map((step, idx) => {
-    const matchingReview = reviews.find(r =>
-      getSide(r.reviewer_role) === step.side &&
-      r.action && r.action !== 'no_action' && r.action !== 'view'
-    );
+    const matchingReview = workflowReviews.find(r => getSide(r.reviewer_role) === step.side);
     let icon  = '⬜';
     let color = '#9ca3af';
-    let label = step.label;
 
     if (matchingReview) {
       if (matchingReview.action === 'rejected') {
@@ -3373,17 +3420,13 @@ function renderWorkflowSteps(doc, currentUserId, currentUserRole) {
         icon = '✅'; color = '#10b981';
       }
     } else if (idx > 0) {
-      // Check if previous step is done
       const prevStep = steps[idx - 1];
-      const prevDone = reviews.some(r =>
+      const prevDone = workflowReviews.some(r =>
         getSide(r.reviewer_role) === prevStep.side &&
         (r.action === 'approved' || r.action === 'accepted')
       );
-      if (!prevDone) {
-        icon = '🔒'; color = '#d1d5db';
-      } else {
-        icon = '⏳'; color = '#f59e0b';
-      }
+      icon  = prevDone ? '⏳' : '🔒';
+      color = prevDone ? '#f59e0b' : '#d1d5db';
     } else {
       icon = '⏳'; color = '#f59e0b';
     }
@@ -3391,7 +3434,7 @@ function renderWorkflowSteps(doc, currentUserId, currentUserRole) {
     return `
       <div style="display:flex;align-items:center;gap:6px;">
         <span style="font-size:14px;">${icon}</span>
-        <span style="font-size:11px;font-weight:600;color:${color};">Step ${idx + 1}: ${label}</span>
+        <span style="font-size:11px;font-weight:600;color:${color};">Step ${idx + 1}: ${step.label}</span>
       </div>
     `;
   }).join('<div style="font-size:10px;color:#d1d5db;margin:0 4px;">→</div>');
@@ -3435,10 +3478,10 @@ function toggleRecordDetail(recordId, category) {
     const dot = document.querySelector(`.unread-dot-${recordId}`);
     if (dot) dot.remove();
     if (item) {
-      item.style.background  = '#fff';
-      item.style.border      = '1px solid #e5e7eb';
-      item.style.borderLeft  = '4px solid #e5e7eb';
-      item.style.boxShadow   = '0 1px 3px rgba(0,0,0,0.06)';
+      item.style.background = '#fff';
+      item.style.border     = '1px solid #e5e7eb';
+      item.style.borderLeft = '4px solid #e5e7eb';
+      item.style.boxShadow  = '0 1px 3px rgba(0,0,0,0.06)';
     }
   }
 }
@@ -3510,20 +3553,106 @@ async function deleteRecord(recordId, category) {
   }
 }
 
-// ============= COMMENT =============
+// ============================================================
+//  COMMENT SECTION
+//  Opens a lightweight modal. Posts { action: 'comment', comment: '...' }
+//  to the review endpoint. Works for ALL roles including Team Members.
+//  Backend must save it in document_reviews with action='comment'.
+//  Comments do NOT change record status and do NOT trigger notices.
+// ============================================================
 function openCommentSection(recordId, category) {
-  // TODO: implement comment panel
+  // Remove any existing comment modal
+  const existing = document.getElementById('commentModal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'commentModal';
+  modal.style.cssText = `
+    position:fixed;inset:0;z-index:9999;
+    display:flex;align-items:center;justify-content:center;
+    background:rgba(0,0,0,0.45);
+  `;
+  modal.innerHTML = `
+    <div style="
+      background:#fff;border-radius:12px;padding:24px;
+      width:min(420px,90vw);box-shadow:0 20px 60px rgba(0,0,0,0.2);
+    ">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h3 style="margin:0;font-size:16px;color:#1f2937;">💬 Add Comment</h3>
+        <button id="closeCommentModal" style="
+          background:none;border:none;font-size:20px;color:#9ca3af;cursor:pointer;line-height:1;
+        ">×</button>
+      </div>
+      <textarea id="commentText" placeholder="Enter your comment…" style="
+        width:100%;min-height:100px;padding:10px 12px;
+        border:1px solid #d1d5db;border-radius:8px;
+        font-size:13px;color:#374151;resize:vertical;box-sizing:border-box;
+      "></textarea>
+      <div style="display:flex;gap:8px;margin-top:14px;">
+        <button id="submitCommentBtn" style="
+          flex:1;padding:10px;font-size:13px;font-weight:600;
+          background:#2563eb;color:#fff;
+          border:none;border-radius:8px;cursor:pointer;
+        ">Submit Comment</button>
+        <button id="cancelCommentBtn" style="
+          flex:1;padding:10px;font-size:13px;font-weight:600;
+          background:#f3f4f6;color:#374151;
+          border:1px solid #d1d5db;border-radius:8px;cursor:pointer;
+        ">Cancel</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  document.getElementById('closeCommentModal').addEventListener('click', () => modal.remove());
+  document.getElementById('cancelCommentBtn').addEventListener('click',  () => modal.remove());
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+  document.getElementById('submitCommentBtn').addEventListener('click', async () => {
+    const comment = document.getElementById('commentText').value.trim();
+    if (!comment) { alert('Please enter a comment.'); return; }
+
+    const token     = localStorage.getItem('authToken');
+    const projectId = localStorage.getItem('activeProjectId');
+
+    try {
+      const response = await fetch('https://oneprojectapp-backend.onrender.com/api/review-record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ projectId, recordId, category, action: 'comment', comment })
+      });
+      const data = await response.json();
+      if (!response.ok) { alert(data.error || 'Failed to submit comment.'); return; }
+
+      modal.remove();
+      // Bust cache and re-render so the comment appears in review history
+      delete recordsCache[category];
+      loadTabRecords(category);
+    } catch (err) {
+      console.error('Comment error:', err);
+      alert('Failed to submit comment. Please try again.');
+    }
+  });
 }
 
 // ============================================================
 //  APPROVE / ACCEPT / REJECT
-//  After a successful action, the buttons are gone (re-render)
-//  and the "Issue Notice of Determination" button appears instead.
+//  Restricted to decision makers only (enforced in computeButtonState).
+//  After a successful action:
+//    1. Cache is busted and list re-renders.
+//    2. Notice of Determination is auto-prompted (decision makers only).
 // ============================================================
 async function handleRecordAction(recordId, category, action) {
+  // Guard: double-check the current user is a decision maker
+  const currentUserRole = localStorage.getItem('userRole') || '';
+  if (!isDecisionMaker(currentUserRole)) {
+    console.warn('handleRecordAction blocked: team_member attempted a workflow action.');
+    return;
+  }
+
   const token     = localStorage.getItem('authToken');
   const projectId = localStorage.getItem('activeProjectId');
-
   const actionLabel = action === 'approve' ? 'approve'
                     : action === 'accept'  ? 'accept'
                     : 'reject';
@@ -3539,12 +3668,11 @@ async function handleRecordAction(recordId, category, action) {
 
     alert(data.message || `Record ${actionLabel}d successfully.`);
 
-    // ── Bust cache and re-render ──────────────────────────────────
+    // Bust cache and re-render
     delete recordsCache[category];
     loadTabRecords(category);
 
-    // After re-render the list will show the Notice button (notice_only state).
-    // We also auto-prompt to issue a notice right away:
+    // Auto-prompt Notice of Determination — decision makers only
     setTimeout(() => openNoticeOfDetermination(recordId, category), 400);
 
   } catch (err) {
@@ -3555,20 +3683,23 @@ async function handleRecordAction(recordId, category, action) {
 
 // ============================================================
 //  NOTICE OF DETERMINATION
-//  Opens the same Add Record panel but pre-configured as:
-//    record_kind = 'notice'
-//    notice_tied_id = recordId
-//  The panel already knows it is a "notice" so it can label
-//  itself accordingly and skip the "tab" selector.
+//  Only reachable by decision makers (notice_only state or post-action).
+//  Team Members never see the Notice button and this function
+//  is never called from their UI path.
 // ============================================================
 function openNoticeOfDetermination(recordId, category) {
-  // Call the existing openAddRecordPanel with notice context.
-  // The panel function must accept these optional params.
+  // Extra guard: team members should never reach here, but be safe
+  const currentUserRole = localStorage.getItem('userRole') || '';
+  if (!isDecisionMaker(currentUserRole)) {
+    console.warn('openNoticeOfDetermination blocked: non-decision-maker role.');
+    return;
+  }
+
   if (typeof openAddRecordPanel === 'function') {
     openAddRecordPanel({
-      recordKind:    'notice',
-      noticeTiedId:  recordId,
-      category:      category,
+      recordKind:   'notice',
+      noticeTiedId: recordId,
+      category:     category,
     });
   } else {
     console.error('openAddRecordPanel is not defined. Cannot open Notice of Determination panel.');
