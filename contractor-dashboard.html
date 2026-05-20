@@ -1163,8 +1163,10 @@ async function refreshAccessToken() {
 // =========================
 const token = localStorage.getItem("authToken");
 const decoded = parseJwt(token);
-const consultantEmail = decoded?.email;
-const consultantRole  = decoded?.role;
+// FIX #1: renamed from consultantEmail/consultantRole → contractorEmail/contractorRole
+// so they match every usage throughout the file
+const contractorEmail = decoded?.email;
+const contractorRole  = decoded?.role;
 
 // DOM elements
 const profileIcon       = document.getElementById('profileIcon');
@@ -1182,11 +1184,36 @@ const projectDialog     = document.getElementById("projectDialog");
 const activeProject     = document.getElementById("activeProject");
 
 // =========================
+// Global Active Project Manager
+// FIX #3: moved ABOVE DOMContentLoaded so ProjectContext.getId() can be
+// called safely inside the boot sequence
+// =========================
+window.ProjectContext = {
+  set(project) {
+    localStorage.setItem("activeProjectId",   project.id);
+    localStorage.setItem("activeProjectName", project.name);
+    const el = document.getElementById("activeProject");
+    if (el) el.textContent = project.name;
+  },
+  getId()  { return localStorage.getItem("activeProjectId"); },
+  getName(){ return localStorage.getItem("activeProjectName"); },
+  clear()  { localStorage.removeItem("activeProjectId"); localStorage.removeItem("activeProjectName"); }
+};
+
+// =========================
+// Tab-set tracker
+// FIX #5: track which tab-set is currently loaded so Project-Records tabs
+// and Workspace/Report tabs never mix with each other
+// =========================
+let currentTabSet = null; // 'home' | 'report'
+
+// =========================
 // BOOT — single DOMContentLoaded
 // =========================
 document.addEventListener("DOMContentLoaded", async () => {
 
   // 1. Display email + role from JWT
+  // FIX #1 applied: contractorEmail / contractorRole used consistently
   if (profileEmail) profileEmail.textContent = contractorEmail;
   if (profileRole)  profileRole.textContent  = `Role: ${contractorRole}`;
 
@@ -1210,8 +1237,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // 3. Fetch contractor profile picture
+  // FIX #2: variable renamed from `consultant` → `contractor` to match all usages
   try {
-    const consultant = await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/profile", { method: "GET" });
+    const contractor = await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/profile", { method: "GET" });
     if (contractor.profile_picture && contractor.profile_picture.trim() !== "") {
       profileIcon.style.backgroundImage      = `url("${contractor.profile_picture}")`;
       profileIconLarge.style.backgroundImage = `url("${contractor.profile_picture}")`;
@@ -1227,8 +1255,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // 4. Fetch projects
+  // FIX #4: POST body added so the request is valid
   try {
-    const data     = await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/projects", { method: "POST", headers: { "Content-Type": "application/json" } });
+    const data     = await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})          // ← was missing
+    });
     const projects = data.projects || [];
     if (projects.length > 0) {
       projectDialog.innerHTML = "";
@@ -1275,21 +1308,6 @@ async function fetchProjectDetails(projectId) {
     console.error("Project details fetch error:", err);
   }
 }
-
-// =========================
-// Global Active Project Manager
-// =========================
-window.ProjectContext = {
-  set(project) {
-    localStorage.setItem("activeProjectId",   project.id);
-    localStorage.setItem("activeProjectName", project.name);
-    const el = document.getElementById("activeProject");
-    if (el) el.textContent = project.name;
-  },
-  getId()  { return localStorage.getItem("activeProjectId"); },
-  getName(){ return localStorage.getItem("activeProjectName"); },
-  clear()  { localStorage.removeItem("activeProjectId"); localStorage.removeItem("activeProjectName"); }
-};
 
 // =========================
 // Project selector toggle
@@ -1350,6 +1368,7 @@ profileUpload.addEventListener('change', async (e) => {
 deletePictureBtn.addEventListener('click', async () => {
   try {
     await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/delete-picture", { method: "POST" });
+    // FIX #1 applied: contractorEmail used consistently
     const ch = contractorEmail.charAt(0).toUpperCase();
     profileIcon.style.backgroundImage      = "";
     profileIcon.textContent                = ch;
@@ -1518,6 +1537,7 @@ document.addEventListener('click', (event) => {
 
 // =========================
 // Sidebar nav active state
+// FIX #5: each nav item now loads ONLY its own tab-set and clears the other
 // =========================
 const sidebarItems = document.querySelectorAll('.nav-item[data-nav]');
 sidebarItems.forEach(item => {
@@ -1525,8 +1545,14 @@ sidebarItems.forEach(item => {
     sidebarItems.forEach(i => i.classList.remove('active'));
     item.classList.add('active');
     const key = item.getAttribute('data-nav');
-    if (key === 'Project-Records') loadHomeTabs();
-    if (key === 'workspace')       loadReportTabs();
+    if (key === 'Project-Records') {
+      // Only load home tabs when explicitly on Project-Records nav
+      if (currentTabSet !== 'home') loadHomeTabs();
+    }
+    if (key === 'workspace') {
+      // Only load report tabs when explicitly on Workspace nav
+      if (currentTabSet !== 'report') loadReportTabs();
+    }
   });
 });
 
@@ -1696,15 +1722,45 @@ function openSchedulePanel() {
 
 // =======================================================================
 //  TABS
+// FIX #5: loadHomeTabs / loadReportTabs now set currentTabSet so the two
+//  sets can never bleed into each other.  attachTabEvents is scoped to the
+//  correct set via a `tabSet` parameter.
 // =======================================================================
 const navTabs       = document.getElementById('navTabs');
 const bottomContent = document.getElementById('bottomContent');
 
-// ── attachTabEvents: wires click handlers for whatever tabs are in navTabs ──
-function attachTabEvents() {
+// ── HOME tab definitions ──────────────────────────────────────────────
+const HOME_TABS = [
+  { key: 'contractual',    label: 'Contractual &amp; Legal' },
+  { key: 'administrative', label: 'Administrative &amp; Instructional' },
+  { key: 'safety',         label: 'Safety &amp; Compliance' },
+  { key: 'operational',    label: 'Operational &amp; Performance' },
+  { key: 'financial',      label: 'Financial' },
+  { key: 'meeting',        label: 'Meeting' },
+];
+
+// ── REPORT tab definitions ────────────────────────────────────────────
+const REPORT_TABS = [
+  { key: 'planning-execution',      label: 'Planning &amp; Execution' },
+  { key: 'design-technical',        label: 'Design &amp; Technical' },
+  { key: 'quality-safety',          label: 'Quality &amp; Safety' },
+  { key: 'financial-cost',          label: 'Financial &amp; Cost' },
+  { key: 'compliance-risk',         label: 'Compliance &amp; Risk' },
+  { key: 'communication-meetings',  label: 'Communication &amp; Meetings' },
+];
+
+// All valid keys per set — used to guard setTabContent
+const HOME_TAB_KEYS   = new Set(HOME_TABS.map(t => t.key));
+const REPORT_TAB_KEYS = new Set(REPORT_TABS.map(t => t.key));
+
+/**
+ * attachTabEvents
+ * Clones navTabs to remove stale listeners, then wires click handling
+ * that only calls setTabContent for tabs belonging to `tabSet`.
+ */
+function attachTabEvents(tabSet) {
   const navTabsEl = document.getElementById('navTabs');
   if (!navTabsEl) return;
-  // Remove any previously attached listener by cloning the node
   const fresh = navTabsEl.cloneNode(true);
   navTabsEl.parentNode.replaceChild(fresh, navTabsEl);
   fresh.addEventListener('click', (e) => {
@@ -1713,33 +1769,30 @@ function attachTabEvents() {
     fresh.querySelectorAll('li[data-tab]').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
     const category = tab.getAttribute('data-tab');
+
+    // Guard: only handle tabs that belong to the current tab-set
+    if (tabSet === 'home'   && !HOME_TAB_KEYS.has(category))   return;
+    if (tabSet === 'report' && !REPORT_TAB_KEYS.has(category))  return;
+
     if (typeof setTabContent === 'function') setTabContent(category);
   });
 }
 
 function loadHomeTabs() {
-  navTabs.innerHTML = `
-    <li data-tab="contractual" class="active">Contractual &amp; Legal</li>
-    <li data-tab="administrative">Administrative &amp; Instructional</li>
-    <li data-tab="safety">Safety &amp; Compliance</li>
-    <li data-tab="operational">Operational &amp; Performance</li>
-    <li data-tab="financial">Financial</li>
-    <li data-tab="meeting">Meeting</li>
-  `;
-  attachTabEvents();
+  currentTabSet = 'home';
+  navTabs.innerHTML = HOME_TABS
+    .map((t, i) => `<li data-tab="${t.key}"${i === 0 ? ' class="active"' : ''}>${t.label}</li>`)
+    .join('');
+  attachTabEvents('home');
   setTabContent('contractual');
 }
 
 function loadReportTabs() {
-  navTabs.innerHTML = `
-    <li data-tab="planning-execution" class="active">Planning &amp; Execution</li>
-    <li data-tab="design-technical">Design &amp; Technical</li>
-    <li data-tab="quality-safety">Quality &amp; Safety</li>
-    <li data-tab="financial-cost">Financial &amp; Cost</li>
-    <li data-tab="compliance-risk">Compliance &amp; Risk</li>
-    <li data-tab="communication-meetings">Communication &amp; Meetings</li>
-  `;
-  attachTabEvents();
+  currentTabSet = 'report';
+  navTabs.innerHTML = REPORT_TABS
+    .map((t, i) => `<li data-tab="${t.key}"${i === 0 ? ' class="active"' : ''}>${t.label}</li>`)
+    .join('');
+  attachTabEvents('report');
   setTabContent('planning-execution');
 }
 
@@ -1864,21 +1917,33 @@ async function openMeetingDetail(meetingId) {
   } catch(err) { console.error('Meeting detail error:', err); expandGrayPart(`<p>Error loading meeting.</p><button class='btn' onclick='collapseGrayPart()'>← Back</button>`); }
 }
 
+/**
+ * setTabContent
+ * FIX #5: guards ensure a home-tab key never renders inside a report tab-set
+ * and vice-versa.
+ */
 function setTabContent(key) {
+  // Guard: reject keys that don't belong to the active tab-set
+  if (currentTabSet === 'home'   && !HOME_TAB_KEYS.has(key))   return;
+  if (currentTabSet === 'report' && !REPORT_TAB_KEYS.has(key))  return;
+
   const map = {
+    // ── Home tabs ──
     'contractual':              ['Contract agreements, amendments, change orders, permits, insurance, tender docs.', 'contractual'],
     'administrative':           ['RFAs, consultant instructions, meeting minutes, correspondence, schedule updates.',  'administrative'],
     'safety':                   ['Safety inspections, incident reports, NCRs, QC tests, risk assessments.',           'safety'],
     'operational':              ['Daily site reports, progress reports, BoQ, technical specs, submittals, drawings.', 'operational'],
     'financial':                ['Interim payment certificates, contractor claims, final account reports.',            'financial'],
+    'meeting':                  [null, null],
+    // ── Report tabs ──
     'planning-execution':       ['Planning strategies, execution reports, timeline tracking.',                         null],
     'design-technical':         ['Design documents, technical specifications, drawings.',                              null],
     'quality-safety':           ['Quality reports, safety audits, compliance checks.',                                 null],
     'financial-cost':           ['Cost analysis, budget reports, financial statements.',                               null],
     'compliance-risk':          ['Compliance documentation, risk assessments, mitigation plans.',                      null],
     'communication-meetings':   [null, null],
-    'meeting':                  [null, null],
   };
+
   if (key === 'meeting' || key === 'communication-meetings') { renderMeetingContent(); return; }
   const entry = map[key];
   if (!entry) return;
@@ -2003,7 +2068,6 @@ function renderRecordsList(records, category) {
     const fileName    = doc.file_path ? doc.file_path.split('/').pop() : null;
     const fullyLocked = isRecordFullyAccepted(doc);
 
-    // Review history rows
     const reviewsHtml = (doc.reviews || []).map(r => {
       const isTMComment = !isDecisionMaker(r.reviewer_role) || r.action === 'comment';
       return `
@@ -2015,18 +2079,16 @@ function renderRecordsList(records, category) {
         </li>`;
     }).join('');
 
-    // Action buttons
     let actionButtons = '';
     if (fullyLocked) {
       actionButtons = `<span style="flex:1;padding:8px 12px;font-size:12px;color:#10b981;font-style:italic;text-align:center;font-weight:600;">🔒 Record Locked — Final Acceptance Issued</span>`;
     } else {
       const btnState = computeButtonState(doc);
       if (btnState === 'team_member') {
-        // only comment button — added separately below
+        // comment button only — added below
       } else if (btnState === 'uploader') {
         actionButtons = `<button onclick="deleteRecord('${doc.id}','${category}')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">🗑️ Delete</button>`;
       } else if (btnState === 'notice_only') {
-        // Determine whether their existing action was a rejection
         const myReview   = (doc.reviews||[]).find(r => String(r.reviewer_id)===String(currentUserId));
         const wasRejected= myReview?.action === 'rejected';
         actionButtons = `<button onclick="openNoticeOfDetermination('${doc.id}','${category}',${wasRejected})" style="flex:1;min-width:140px;padding:8px 14px;font-size:12px;font-weight:600;background:${wasRejected?'#fee2e2':'#fef3c7'};color:${wasRejected?'#991b1b':'#92400e'};border:1px solid ${wasRejected?'#fca5a5':'#fcd34d'};border-radius:6px;cursor:pointer;">${wasRejected?'📋 Issue Rejection Notice':'📋 Issue Notice of Determination'}</button>`;
@@ -2041,7 +2103,6 @@ function renderRecordsList(records, category) {
       }
     }
 
-    // Comment button: all users except when locked
     const commentButton = fullyLocked ? '' : `<button onclick="openCommentSection('${doc.id}','${category}')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">💬 Comment</button>`;
 
     return `
@@ -2188,7 +2249,7 @@ async function deleteRecord(recordId, category) {
 }
 
 // =======================================================================
-//  COMMENT SECTION — all roles, never changes status
+//  COMMENT SECTION
 // =======================================================================
 function openCommentSection(recordId, category) {
   const existing = document.getElementById('commentModal');
@@ -2231,7 +2292,7 @@ function openCommentSection(recordId, category) {
 }
 
 // =======================================================================
-//  WORKFLOW ACTIONS — decision makers only
+//  WORKFLOW ACTIONS
 // =======================================================================
 async function handleRecordAction(recordId, category, action) {
   if (!isDecisionMaker(window.currentUserRole)) {
@@ -2250,15 +2311,12 @@ async function handleRecordAction(recordId, category, action) {
     alert(data.message||`Record ${actionLabel}d successfully.`);
     delete recordsCache[category];
     loadTabRecords(category);
-    // Prompt notice — pass isRejection flag
     setTimeout(() => openNoticeOfDetermination(recordId, category, action==='rejected'), 400);
   } catch(err) { console.error('Action error:', err); alert(`Failed to ${actionLabel} record.`); }
 }
 
 // =======================================================================
 //  NOTICE OF DETERMINATION / REJECTION NOTICE
-//  Opens the Add Record panel pre-configured as a notice.
-//  The form submits to a different endpoint and carries noticeTiedId.
 // =======================================================================
 function openNoticeOfDetermination(recordId, category, isRejection = false) {
   if (!isDecisionMaker(window.currentUserRole)) {
@@ -2274,8 +2332,6 @@ function openNoticeOfDetermination(recordId, category, isRejection = false) {
 
 // =======================================================================
 //  ADD RECORD PANEL
-//  Called with no args      → new record form
-//  Called with noticeConfig → notice / rejection_notice form
 // =======================================================================
 function openAddRecordPanel(noticeConfig = null) {
   const isNotice      = noticeConfig !== null;
@@ -2283,12 +2339,10 @@ function openAddRecordPanel(noticeConfig = null) {
   const noticeTiedId  = isNotice ? noticeConfig.noticeTiedId : null;
   const noticeCategory= isNotice ? noticeConfig.category     : null;
 
-  // For a notice we use the category from the tied record; for new records use the active tab
   const activeTabElement  = document.querySelector('#navTabs li.active');
   const category          = isNotice ? noticeCategory : (activeTabElement ? activeTabElement.getAttribute('data-tab') : 'contractual');
   const tabLabel          = activeTabElement ? activeTabElement.textContent.trim() : 'Records';
 
-  // Header text differs between new record and notice types
   const panelTitle = recordKind === 'rejection_notice'
     ? '📋 Issue Rejection Notice'
     : recordKind === 'notice'
@@ -2309,11 +2363,9 @@ function openAddRecordPanel(noticeConfig = null) {
 
   const html = `
     <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
-      <!-- Fixed header -->
       <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
         <h3 style="margin:0;color:#333;font-size:20px;">${panelTitle}</h3>
       </div>
-      <!-- Scrollable body -->
       <div style="flex:1;overflow-y:auto;padding:16px 20px;">
         ${noticeInfoBanner}
         ${categoryInfo}
@@ -2321,14 +2373,10 @@ function openAddRecordPanel(noticeConfig = null) {
           <input type="hidden" id="recordCategory"  value="${category}"/>
           <input type="hidden" id="recordKindField" value="${recordKind}"/>
           <input type="hidden" id="noticeTiedIdField" value="${noticeTiedId||''}"/>
-
-          <!-- Title -->
           <div style="margin-bottom:20px;">
             <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">${isNotice?'Notice Title *':'Title *'}</label>
             <input type="text" id="recordTitle" required placeholder="${isNotice?'Enter notice title (e.g., Determination of Claim #12)':'Enter record title (e.g., Foundation Agreement)'}" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"/>
           </div>
-
-          <!-- Description / rich text -->
           <div style="margin-bottom:20px;">
             <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">${isNotice?'Notice Content *':'Description *'}</label>
             <div style="display:flex;flex-wrap:wrap;gap:4px;padding:8px;background:#f5f5f5;border:1px solid #ddd;border-bottom:none;border-radius:6px 6px 0 0;">
@@ -2346,8 +2394,6 @@ function openAddRecordPanel(noticeConfig = null) {
             </div>
             <style>#recordDescription:empty:before{content:attr(placeholder);color:#aaa;pointer-events:none;}</style>
           </div>
-
-          <!-- Attachment -->
           <div style="margin-bottom:24px;">
             <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Attach Document</label>
             <div id="attachmentDropZone" style="display:flex;align-items:center;gap:12px;padding:16px;border:2px dashed #ddd;border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
@@ -2362,7 +2408,6 @@ function openAddRecordPanel(noticeConfig = null) {
           </div>
         </form>
       </div>
-      <!-- Fixed footer -->
       <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;background:#fff;display:flex;gap:12px;">
         <button type="button" onclick="document.getElementById('addRecordForm').requestSubmit()" style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:${recordKind==='rejection_notice'?'#dc2626':recordKind==='notice'?'#d97706':'#28a745'};color:#fff;border:none;border-radius:6px;cursor:pointer;">
           ${recordKind==='rejection_notice'?'📋 Issue Rejection Notice':recordKind==='notice'?'📋 Issue Notice':'✓ Save Record'}
@@ -2373,7 +2418,6 @@ function openAddRecordPanel(noticeConfig = null) {
 
   expandGrayPart(html);
 
-  // Attachment handlers
   const dropZone      = document.getElementById('attachmentDropZone');
   const attachInput   = document.getElementById('recordAttachment');
   const attachNameEl  = document.getElementById('attachmentName');
@@ -2387,7 +2431,6 @@ function openAddRecordPanel(noticeConfig = null) {
     else attachNameEl.style.display='none';
   }
 
-  // Form submit
   document.getElementById('addRecordForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -2411,7 +2454,7 @@ function openAddRecordPanel(noticeConfig = null) {
       formData.append('title',       title);
       formData.append('description', description);
       formData.append('projectId',   localStorage.getItem('activeProjectId'));
-      formData.append('recordKind',  rKind);   // 'new' | 'notice' | 'rejection_notice'
+      formData.append('recordKind',  rKind);
       if (tiedId) formData.append('noticeTiedId', tiedId);
       if (fileInput.files.length > 0) formData.append('attachment', fileInput.files[0]);
 
@@ -2441,7 +2484,7 @@ function openAddRecordPanel(noticeConfig = null) {
 }
 window.openAddRecordPanel = openAddRecordPanel;
 
-// Bottom content add-btn event (handles dynamically re-rendered button)
+// Bottom content add-btn event
 document.getElementById('bottomContent').addEventListener('click', (event) => {
   const target = event.target instanceof Element ? event.target : event.target.parentElement;
   const addBtn = target ? target.closest('.add-doc-btn') : null;
@@ -2554,16 +2597,26 @@ async function handleNotificationClick(notificationId, recordType, recordId) {
     const projectId = localStorage.getItem('activeProjectId');
     await apiRequest(`https://oneprojectapp-backend.onrender.com/notifications/${notificationId}/read?projectId=${projectId}`, { method:'PUT' });
     await updateNotificationBadge();
-    const tabMap = { contractual:'contractual', administrative:'administrative', safety:'safety', operational:'operational', financial:'financial' };
+
+    const tabMap = {
+      contractual:    'contractual',
+      administrative: 'administrative',
+      safety:         'safety',
+      operational:    'operational',
+      financial:      'financial'
+    };
     const tabKey = tabMap[recordType];
     if (tabKey) {
-      // Find and click the matching tab
-      const tabs = document.querySelectorAll('#navTabs li[data-tab]');
-      tabs.forEach(t => { if (t.getAttribute('data-tab')===tabKey) t.click(); });
+      // Ensure we are in the home tab-set before switching tabs
+      if (currentTabSet !== 'home') loadHomeTabs();
       setTimeout(() => {
-        const el = document.querySelector(`.doc-item[data-id='${recordId}']`);
-        if (el) el.scrollIntoView({ behavior:'smooth' });
-      }, 300);
+        const tabs = document.querySelectorAll('#navTabs li[data-tab]');
+        tabs.forEach(t => { if (t.getAttribute('data-tab') === tabKey) t.click(); });
+        setTimeout(() => {
+          const el = document.querySelector(`.doc-item[data-id='${recordId}']`);
+          if (el) el.scrollIntoView({ behavior:'smooth' });
+        }, 300);
+      }, 100);
     }
     collapseGrayPart();
   } catch(err) { console.error("Mark as read error:", err); }
@@ -2577,7 +2630,6 @@ async function updateNotificationBadge() {
     notificationBadge.textContent = data.count || "0";
   } catch(err) { notificationBadge.textContent = "0"; }
 }
-
 </script>
 </body>
 </html>
