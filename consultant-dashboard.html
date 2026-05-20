@@ -443,9 +443,8 @@
 }
 
 .gray-toggle-btn.hidden {
-  /* Removed opacity: 0 to keep it visible when panel is hidden */
-  /* opacity: 0; */
-  /* pointer-events: none; */
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 /* Left sub-part */
@@ -1259,7 +1258,12 @@ document.addEventListener("DOMContentLoaded", async () => {
             fetchProjectDetails(project.id);
             clearAllRecordCache();
             const activeTab = document.querySelector('#navTabs li.active')?.getAttribute('data-tab') || 'contractual';
-            loadTabRecords(activeTab);
+            if (['contractual','administrative','safety','operational','financial','meeting'].includes(activeTab)) {
+              loadTabRecords(activeTab);
+            } else {
+              setTabContent(activeTab);
+            }
+            updateNotificationBadge();
           };
           item.addEventListener('click', selectProject);
           item.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') selectProject(); });
@@ -2210,25 +2214,25 @@ function renderRecordsList(records, category) {
       if (btnState === 'team_member') {
         // only comment button — added separately below
       } else if (btnState === 'uploader') {
-        actionButtons = `<button onclick="deleteRecord('${doc.id}','${category}')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">🗑️ Delete</button>`;
+        actionButtons = `<button onclick="event.stopPropagation(); deleteRecord('${doc.id}','${category}')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">🗑️ Delete</button>`;
       } else if (btnState === 'notice_only') {
         // Determine whether their existing action was a rejection
         const myReview   = (doc.reviews||[]).find(r => String(r.reviewer_id)===String(currentUserId));
         const wasRejected= myReview?.action === 'rejected';
-        actionButtons = `<button onclick="openNoticeOfDetermination('${doc.id}','${category}',${wasRejected})" style="flex:1;min-width:140px;padding:8px 14px;font-size:12px;font-weight:600;background:${wasRejected?'#fee2e2':'#fef3c7'};color:${wasRejected?'#991b1b':'#92400e'};border:1px solid ${wasRejected?'#fca5a5':'#fcd34d'};border-radius:6px;cursor:pointer;">${wasRejected?'📋 Issue Rejection Notice':'📋 Issue Notice of Determination'}</button>`;
+        actionButtons = `<button onclick="event.stopPropagation(); openNoticeOfDetermination('${doc.id}','${category}',${wasRejected})" style="flex:1;min-width:140px;padding:8px 14px;font-size:12px;font-weight:600;background:${wasRejected?'#fee2e2':'#fef3c7'};color:${wasRejected?'#991b1b':'#92400e'};border:1px solid ${wasRejected?'#fca5a5':'#fcd34d'};border-radius:6px;cursor:pointer;">${wasRejected?'📋 Issue Rejection Notice':'📋 Issue Notice of Determination'}</button>`;
       } else if (typeof btnState === 'object' && btnState !== null && btnState.state === 'awaiting_step1') {
         actionButtons = `<span style="flex:1;padding:8px 12px;font-size:12px;color:#9ca3af;font-style:italic;text-align:center;">⏳ Awaiting ${btnState.pendingRole} Approval</span>`;
       } else if (typeof btnState === 'object' && btnState !== null && btnState.label) {
         const positiveLabel  = btnState.label;
         const positiveAction = positiveLabel.toLowerCase();
         actionButtons = `
-          <button onclick="handleRecordAction('${doc.id}','${category}','${positiveAction}')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">✅ ${positiveLabel}</button>
-          <button onclick="handleRecordAction('${doc.id}','${category}','rejected')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">❌ Reject</button>`;
+          <button onclick="event.stopPropagation(); handleRecordAction('${doc.id}','${category}','${positiveAction}')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">✅ ${positiveLabel}</button>
+          <button onclick="event.stopPropagation(); handleRecordAction('${doc.id}','${category}','rejected')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">❌ Reject</button>`;
       }
     }
 
     // Comment button: all users except when locked
-    const commentButton = fullyLocked ? '' : `<button onclick="openCommentSection('${doc.id}','${category}')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">💬 Comment</button>`;
+    const commentButton = fullyLocked ? '' : `<button onclick="event.stopPropagation(); openCommentSection('${doc.id}','${category}')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">💬 Comment</button>`;
 
     return `
       <li class="doc-item" data-id="${doc.id}" data-uploaded-by="${doc.uploaded_by}" style="background:${isUnread?'#eff6ff':'#fff'};border:1px solid ${isUnread?'#bfdbfe':'#e5e7eb'};border-left:4px solid ${isUnread?'#3b82f6':'#e5e7eb'};border-radius:10px;margin-bottom:10px;overflow:hidden;box-shadow:${isUnread?'0 2px 8px rgba(59,130,246,0.10)':'0 1px 3px rgba(0,0,0,0.06)'};transition:background 0.3s,border 0.3s;">
@@ -2261,7 +2265,7 @@ function renderRecordsList(records, category) {
           ${fileName?`
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Attached File</div>
-            <a onclick="downloadFile('${doc.id}','${category}','${fileName}')" style="display:inline-flex;align-items:center;gap:6px;background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:500;text-decoration:none;cursor:pointer;">⬇️ ${fileName}</a>
+            <a onclick="event.stopPropagation(); downloadFile('${doc.id}','${category}','${fileName}')" style="display:inline-flex;align-items:center;gap:6px;background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:500;text-decoration:none;cursor:pointer;">⬇️ ${fileName}</a>
           </div>`:''}
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Review History</div>
