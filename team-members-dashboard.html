@@ -601,7 +601,6 @@
   <div class="profile-email" id="profileEmail">email: example@email.com</div>
   <div class="profile-role" id="profileRole">role: Contractor – Team Member</div>
   <div class="team-member-role" id="position">position: Site Engineer</div>
-  <div class="task-item" id="taskItem">task: Manage the site</div>
 
   <button class="btn" id="editProfileBtn" data-translate="edit-profile">Edit Profile</button>
   <div id="editProfileOptions" style="display:none; margin-top:8px;">
@@ -979,8 +978,7 @@ const profileUpload = document.getElementById('profileUpload');
 const profileIconLarge = document.getElementById('profileIconLarge');
 const profileEmail = document.getElementById('profileEmail');
 const profileRole = document.getElementById('profileRole');
-const profilePosition = document.getElementById("position");   // ✅ match HTML
-const profileTask = document.getElementById("taskItem");       // ✅ match HTML
+const profilePosition = document.getElementById("position");
 const projectSelector = document.getElementById("projectSelector");
 const projectDialog = document.getElementById("projectDialog");
 const activeProject = document.getElementById("activeProject");
@@ -992,15 +990,9 @@ function updateProfileDialog(project) {
   if (profileEmail) profileEmail.textContent = `email: ${teamMemberEmail}`;
   if (profileRole) profileRole.textContent = `role: ${project.assigned_part} – Team Member`;
 
-  // ✅ Use backend or LocalStorage fallback
   const storedPosition = localStorage.getItem("activeProjectPosition");
-  const storedTask = localStorage.getItem("activeProjectTask");
-
   if (profilePosition) {
     profilePosition.textContent = `position: ${project.position || storedPosition || "Not specified"}`;
-  }
-  if (profileTask) {
-    profileTask.textContent = `task: ${project.task || storedTask || "No task assigned"}`;
   }
 }
 
@@ -1247,15 +1239,12 @@ window.ProjectContext = {
     localStorage.setItem("activeProjectName", project.name);
     localStorage.setItem("activeProjectPart", project.assigned_part);
     localStorage.setItem("activeProjectPosition", project.position);
-    localStorage.setItem("activeProjectTask", project.task);
 
-    // Update UI if element exists
     const activeProjectElement = document.getElementById("activeProject");
     if (activeProjectElement) {
       activeProjectElement.textContent = project.name;
     }
 
-    // ✅ Immediately refresh role + position + task in dialog
     updateProfileDialog(project);
   },
 
@@ -1263,14 +1252,12 @@ window.ProjectContext = {
   getName() { return localStorage.getItem("activeProjectName"); },
   getPart() { return localStorage.getItem("activeProjectPart"); },
   getPosition() { return localStorage.getItem("activeProjectPosition"); },
-  getTask() { return localStorage.getItem("activeProjectTask"); },
 
   clear() {
     localStorage.removeItem("activeProjectId");
     localStorage.removeItem("activeProjectName");
     localStorage.removeItem("activeProjectPart");
     localStorage.removeItem("activeProjectPosition");
-    localStorage.removeItem("activeProjectTask");
   }
 };
 
@@ -1557,26 +1544,27 @@ confirmLogout.addEventListener('click', async () => {
 
   function loadHomeTabs() {
     navTabs.innerHTML = `
-      <li data-tab="overview" class="active">Project Overview</li>
-      <li data-tab="daily">Daily Report</li>
+      <li data-tab="contractual" class="active">Contractual &amp; Legal</li>
+      <li data-tab="administrative">Administrative &amp; Instructional</li>
+      <li data-tab="safety">Safety &amp; Compliance</li>
+      <li data-tab="operational">Operational &amp; Performance</li>
+      <li data-tab="financial">Financial</li>
       <li data-tab="meeting">Meeting</li>
-      <li data-tab="assigned-members">Assigned Members</li>
-      <li data-tab="schedule">Tap to View Schedule</li>
     `;
-    setTabContent('overview');
     attachTabEvents();
+    setTabContent('contractual');
   }
 
   function loadReportTabs() {
     navTabs.innerHTML = `
-      <li data-tab="consultant-reports" class="active">Consultant Reports</li>
-      <li data-tab="contractor-reports">Contractor Reports</li>
-      <li data-tab="client-reports">Client Reports</li>
-      <li data-tab="report">Compose Report</li>
-      <li data-tab="myreports">Open Your Reports</li>
+      <li data-tab="work-center" class="active">Work Center</li>
+      <li data-tab="planning-execution">Planning &amp; Execution</li>
+      <li data-tab="documents-approval">Documents &amp; Approval</li>
+      <li data-tab="control-reports">Control &amp; Reports</li>
+      <li data-tab="communication-meetings">Communication &amp; Meetings</li>
     `;
-    setTabContent('consultant-reports');
     attachTabEvents();
+    setTabContent('work-center');
   }
 
   sidebarItems.forEach(item => {
@@ -1587,196 +1575,106 @@ confirmLogout.addEventListener('click', async () => {
     });
   });
 
-  // ============= SAMPLE DATA =============
-  const sampleDocs = [
-    { title: 'Foundation Report', number: 'DOC-001', date: '2026-01-10', uploader: 'John Smith', description: 'Detailed foundation analysis and recommendations.' },
-    { title: 'Safety Inspection', number: 'DOC-002', date: '2026-01-08', uploader: 'Jane Doe', description: 'Quarterly safety compliance review.' },
-    { title: 'Progress Update', number: 'DOC-003', date: '2026-01-05', uploader: 'Mike Johnson', description: 'Current project milestone status.' }
-  ];
+  // Records cache + bottom content renderer
+  const recordsCache = {};
 
-  const sampleReports = [
-    { title: 'Site Condition Report', number: 'REP-001', date: '2026-01-10', reporter: 'John Smith', role: 'Site Manager', description: 'Current site conditions and weather.' },
-    { title: 'Material Delivery Status', number: 'REP-002', date: '2026-01-08', reporter: 'Jane Doe', role: 'Material Coordinator', description: 'Delivery schedules and inventory.' },
-    { title: 'Labor Allocation', number: 'REP-003', date: '2026-01-05', reporter: 'Mike Johnson', role: 'Labor Manager', description: 'Current labor distribution on site.' }
-  ];
+  function renderBottomContent(description, placeholder) {
+    bottomContent.innerHTML = `
+      <div style="padding: 16px; color: #333;">
+        <h3>${description}</h3>
+        <div id="recordsList" style="margin-top: 12px; color: #999;">
+          <p>${placeholder}</p>
+        </div>
+      </div>
+    `;
+  }
 
-  const sampleMeetings = [
-    { title: 'Foundation Pouring Planning', number: 'MTG-001', date: '2026-01-12', status: 'Scheduled', minutes: 'Discussed timeline, equipment needs, team allocation. All parties agreed on Phase 1 scope.', participants: 'John Smith, Jane Doe, Mike Johnson', attachments: 'timeline.pdf, equipment_list.xlsx' },
-    { title: 'Safety & Compliance Review', number: 'MTG-002', date: '2026-01-10', status: 'Completed', minutes: 'Reviewed site safety protocols. All personnel certified. Zero incidents reported this quarter.', participants: 'Jane Doe, Safety Officer', attachments: 'safety_report.pdf' },
-    { title: 'Progress Update - Week 2', number: 'MTG-003', date: '2026-01-08', status: 'Completed', minutes: 'Site conditions favorable. Foundation 60% complete. On schedule for Phase 2 transition.', participants: 'All Team Members', attachments: 'progress_chart.png' }
-  ];
+  function renderMeetingContent(activeView = 'minutes') {
+    bottomContent.innerHTML = `
+      <div style="display: flex; gap: 12px; flex-wrap: wrap; padding: 12px;">
+        <button class="meeting-btn ${activeView==='minutes'   ?'active':''}" onclick="switchMeetingView('minutes')">📋 Meeting Minutes</button>
+        <button class="meeting-btn ${activeView==='scheduled' ?'active':''}" onclick="switchMeetingView('scheduled')">📅 Scheduled Meeting</button>
+      </div>
+      <div id="meetingViewContainer" style="padding: 12px;"></div>
+    `;
+    updateMeetingView(activeView);
+  }
 
-  const sampleMembers = {
-    client: [
-      { role: 'Leader', name: 'Robert Wilson', email: 'robert.wilson@clientco.com', phone: '+1-555-0101', position: 'Project Director', tasks: 'Project oversight, Budget approval, Stakeholder management', attachments: 'ID_robert_wilson.pdf' },
-      { role: 'PM', name: 'Sarah Johnson', email: 'sarah.johnson@clientco.com', phone: '+1-555-0102', position: 'Client Project Manager', tasks: 'Timeline coordination, Quality assurance, Client communication', attachments: 'contract_sarah.pdf' },
-      { role: 'Team Member', name: 'Emily Chen', email: 'emily.chen@clientco.com', phone: '+1-555-0103', position: 'Quality Inspector', tasks: 'Daily inspections, Documentation, Compliance checks', attachments: '' },
-      { role: 'Team Member', name: 'James Miller', email: 'james.miller@clientco.com', phone: '+1-555-0104', position: 'Budget Analyst', tasks: 'Cost tracking, Financial reporting, Budget forecasting', attachments: '' }
-    ],
-    contractor: [
-      { role: 'Leader', name: 'David Brown', email: 'david.brown@contractor.com', phone: '+1-555-0201', position: 'Contractor Director', tasks: 'Resource allocation, Safety management, Contract compliance', attachments: 'license_david_brown.pdf' },
-      { role: 'PM', name: 'Mike Johnson', email: 'mike.johnson@contractor.com', phone: '+1-555-0202', position: 'Site Manager', tasks: 'Daily operations, Team coordination, Equipment management', attachments: 'certification_mike.pdf' },
-      { role: 'Team Member', name: 'Carlos Rodriguez', email: 'carlos.rodriguez@contractor.com', phone: '+1-555-0203', position: 'Lead Foreman', tasks: 'Crew supervision, Work scheduling, Site safety', attachments: '' },
-      { role: 'Team Member', name: 'Thomas Gray', email: 'thomas.gray@contractor.com', phone: '+1-555-0204', position: 'Equipment Operator', tasks: 'Heavy equipment operation, Maintenance, Safety compliance', attachments: '' }
-    ],
-    consultant: [
-      { role: 'Leader', name: 'John Smith', email: 'john.smith@consultant.com', phone: '+1-555-0301', position: 'Consulting Director', tasks: 'Strategic planning, Technical oversight, Risk management', attachments: 'qualifications_john.pdf' },
-      { role: 'PM', name: 'Jane Doe', email: 'jane.doe@consultant.com', phone: '+1-555-0302', position: 'Consultant Project Manager', tasks: 'Technical guidance, Reporting, Stakeholder communication', attachments: 'experience_jane.pdf' },
-      { role: 'Team Member', name: 'Patricia Anderson', email: 'patricia.anderson@consultant.com', phone: '+1-555-0303', position: 'Structural Engineer', tasks: 'Design review, Technical analysis, Quality verification', attachments: '' },
-      { role: 'Team Member', name: 'Richard Thompson', email: 'richard.thompson@consultant.com', phone: '+1-555-0304', position: 'Safety Consultant', tasks: 'Safety audits, Protocol development, Training', attachments: '' }
-    ]
-  };
+  function switchMeetingView(view) { renderMeetingContent(view); }
 
-  // ============= SET TAB CONTENT =============
-  function setTabContent(key) {
-    switch (key) {
-      case 'overview':
-        let overviewHtml = '<h3>Project Overview</h3><ul class="doc-list">';
-        sampleDocs.forEach((doc, idx) => {
-          overviewHtml += `
-            <li class="doc-item">
-              <div class="doc-info">
-                <div class="doc-title">${doc.title}</div>
-                <div class="doc-meta">${doc.number} | Issued: ${doc.date}</div>
-              </div>
-              <button class="doc-action-btn" onclick="openDocumentDetail(${idx}, 'overview')">View</button>
-            </li>
-          `;
+  async function updateMeetingView(activeView = 'minutes') {
+    const container = document.getElementById('meetingViewContainer');
+    if (!container) return;
+    container.innerHTML = '<p style="color: #999;">No meetings available.</p>';
+  }
+
+  // ============= LOAD RECORDS VIA API =============
+  async function loadTabRecords(category) {
+    const recordsListEl = document.getElementById('recordsList');
+    if (!recordsListEl) return;
+    if (recordsCache[category]) { 
+      recordsListEl.innerHTML = recordsCache[category] || '<p style="color: #999;">No records found.</p>'; 
+      return; 
+    }
+    try {
+      const token = localStorage.getItem('authToken');
+      const projectId = localStorage.getItem('activeProjectId');
+      if (!projectId) { recordsListEl.innerHTML = '<p style="color: #ef4444;">No project selected.</p>'; return; }
+      recordsListEl.innerHTML = '<p style="color: #999;">Loading...</p>';
+      const response = await fetch('https://oneprojectapp-backend.onrender.com/api/fetch-tab-records', {
+        method:'POST', 
+        headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},
+        body: JSON.stringify({ projectId, category })
+      });
+      if (response.status === 401) { recordsListEl.innerHTML = '<p style="color: #ef4444;">Unauthorized. Please log in again.</p>'; return; }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const records = data.records || [];
+      if (records.length === 0) {
+        recordsListEl.innerHTML = '<p style="color: #999;">No records found in this category.</p>';
+        recordsCache[category] = '';
+      } else {
+        let html = '<ul class="doc-list">';
+        records.forEach(rec => {
+          html += `
+            <li class="doc-item" style="padding: 12px; background: rgba(255,255,255,0.6); border: 1px solid #e0e0e0; border-radius: 6px; margin-bottom: 8px;">
+              <div style="font-weight: bold; color: #333; font-size: 14px;">📄 ${rec.title}</div>
+              <div style="font-size: 11px; color: #999; margin-top: 4px;">By ${rec.uploader_role || 'N/A'} &nbsp;•&nbsp; ${rec.date_recorded ? new Date(rec.date_recorded).toLocaleString() : 'N/A'}</div>
+            </li>`;
         });
-        overviewHtml += '</ul>';
-        bottomContent.innerHTML = overviewHtml;
-        break;
-
-      case 'daily':
-        bottomContent.innerHTML = `
-          <h3>Daily Report</h3>
-          <p style='margin-bottom:12px; color:#666;'>Click on images to download</p>
-          <div class='image-gallery' id='dailyGallery'>
-            <img src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22%3E%3Crect fill=%22%23ddd%22 width=%22100%22 height=%22100%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 font-size=%2214%22 fill=%22%23999%22%3ESample 1%3C/text%3E%3C/svg%3E' class='gallery-img' alt='Daily Image 1' onclick="promptImageDownload('daily_image_1.jpg')">
-            <img src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22%3E%3Crect fill=%22%23ddd%22 width=%22100%22 height=%22100%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 font-size=%2214%22 fill=%22%23999%22%3ESample 2%3C/text%3E%3C/svg%3E' class='gallery-img' alt='Daily Image 2' onclick="promptImageDownload('daily_image_2.jpg')">
-            <img src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22%3E%3Crect fill=%22%23ddd%22 width=%22100%22 height=%22100%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 font-size=%2214%22 fill=%22%23999%22%3ESample 3%3C/text%3E%3C/svg%3E' class='gallery-img' alt='Daily Image 3' onclick="promptImageDownload('daily_image_3.jpg')">
-          </div>
-        `;
-        break;
-
-      case 'meeting':
-        // Meeting with three options at top
-        let meetingOptionsHtml = `
-          <div style='margin-bottom:20px;'>
-            <div style='display:flex; gap:12px; flex-wrap:wrap;'>
-              <button class='btn primary' id='meetingOptScheduled' style='flex:1; min-width:150px; padding:10px; background:#007B8A;'>📅 Scheduled Meeting</button>
-              <button class='btn' id='meetingOptLast' style='flex:1; min-width:150px; padding:10px;'>📋 Last Meeting</button>
-              <button class='btn' id='meetingOptScheduleNew' style='flex:1; min-width:150px; padding:10px;'>➕ Schedule Meeting</button>
-            </div>
-          </div>
-          <div id='meetingListContainer'></div>
-        `;
-        bottomContent.innerHTML = meetingOptionsHtml;
-        
-        // Show Scheduled Meetings by default
-        displayMeetingList('scheduled');
-        
-        // Add event listeners to the three buttons
-        document.getElementById('meetingOptScheduled').addEventListener('click', () => {
-          document.getElementById('meetingOptScheduled').style.background = '#007B8A';
-          document.getElementById('meetingOptScheduled').style.color = '#fff';
-          document.getElementById('meetingOptLast').style.background = '#fff';
-          document.getElementById('meetingOptLast').style.color = '#333';
-          document.getElementById('meetingOptScheduleNew').style.background = '#fff';
-          document.getElementById('meetingOptScheduleNew').style.color = '#333';
-          displayMeetingList('scheduled');
-        });
-        
-        document.getElementById('meetingOptLast').addEventListener('click', () => {
-          document.getElementById('meetingOptScheduled').style.background = '#fff';
-          document.getElementById('meetingOptScheduled').style.color = '#333';
-          document.getElementById('meetingOptLast').style.background = '#007B8A';
-          document.getElementById('meetingOptLast').style.color = '#fff';
-          document.getElementById('meetingOptScheduleNew').style.background = '#fff';
-          document.getElementById('meetingOptScheduleNew').style.color = '#333';
-          displayMeetingList('last');
-        });
-        
-        document.getElementById('meetingOptScheduleNew').addEventListener('click', () => {
-          document.getElementById('meetingOptScheduled').style.background = '#fff';
-          document.getElementById('meetingOptScheduled').style.color = '#333';
-          document.getElementById('meetingOptLast').style.background = '#fff';
-          document.getElementById('meetingOptLast').style.color = '#333';
-          document.getElementById('meetingOptScheduleNew').style.background = '#007B8A';
-          document.getElementById('meetingOptScheduleNew').style.color = '#fff';
-          displayScheduleMeetingForm();
-        });
-        break;
-
-      case 'schedule':
-        openSchedulePanel();
-        break;
-
-      case 'assigned-members':
-        displayAssignedMembers();
-        break;
-
-      case 'consultant-reports':
-      case 'contractor-reports':
-      case 'client-reports':
-        renderReportTab(key);
-        break;
-
-      case 'report':
-        bottomContent.innerHTML = `
-          <h3>Compose Report</h3>
-          <div class="form-group">
-            <label>Title:</label>
-            <input type="text" id="reportTitle" placeholder="Enter report title" />
-          </div>
-          <div class="form-group">
-            <label>Description:</label>
-            <textarea id="reportDescription" placeholder="Enter report description..."></textarea>
-          </div>
-          <div class="form-group">
-            <label>Attachments:</label>
-            <input type="file" id="reportAttachment" multiple />
-          </div>
-          <button class="btn primary" id="sendReportBtn" style="width:100%;">Send Report</button>
-        `;
-        break;
-
-      case 'myreports':
-        let myReportHtml = '<h3>My Reports</h3><ul class="doc-list">';
-        sampleReports.forEach((report, idx) => {
-          myReportHtml += `
-            <li class="doc-item">
-              <div class="doc-info">
-                <div class="doc-title">${report.title}</div>
-                <div class="doc-meta">${report.number} | Issued: ${report.date}</div>
-              </div>
-              <button class="doc-action-btn" onclick="openReportDetail(${idx}, 'myreports')">View</button>
-            </li>
-          `;
-        });
-        myReportHtml += '</ul>';
-        bottomContent.innerHTML = myReportHtml;
-        break;
+        html += '</ul>';
+        recordsListEl.innerHTML = html;
+        recordsCache[category] = html;
+      }
+    } catch(err) {
+      console.error('Records fetch error:', err);
+      recordsListEl.innerHTML = '<p style="color: #ef4444;">Error loading records. Please try again.</p>';
     }
   }
 
-  function renderReportTab(tabType) {
-    let title = tabType === 'consultant-reports' ? 'Consultant Reports' : 
-                tabType === 'contractor-reports' ? 'Contractor Reports' : 'Client Reports';
-    let reportHtml = `<h3>${title}</h3><ul class="doc-list">`;
-    sampleReports.forEach((report, idx) => {
-      reportHtml += `
-        <li class="doc-item">
-          <div class="doc-info">
-            <div class="doc-title">${report.title}</div>
-            <div class="doc-meta">${report.number} | Issued: ${report.date}</div>
-          </div>
-          <button class="doc-action-btn" onclick="openReportDetail(${idx}, '${tabType}')">View</button>
-        </li>
-      `;
-    });
-    reportHtml += '</ul>';
-    bottomContent.innerHTML = reportHtml;
+  // ============= SET TAB CONTENT =============
+  function setTabContent(key) {
+    const map = {
+      'contractual':    ['Contract agreements, amendments, change orders, permits, insurance, tender docs.', 'contractual'],
+      'administrative': ['RFAs, consultant instructions, meeting minutes, correspondence, schedule updates.',  'administrative'],
+      'safety':         ['Safety inspections, incident reports, NCRs, QC tests, risk assessments.',           'safety'],
+      'operational':    ['Daily site reports, progress reports, BoQ, technical specs, submittals, drawings.', 'operational'],
+      'financial':      ['Interim payment certificates, contractor claims, final account reports.',            'financial'],
+      'meeting':        [null, null],
+      'work-center':            ['Task list, work packages, assigned team members, priorities, due dates.',     'work-center'],
+      'planning-execution':     ['Daily site reports, manpower, work done, material delivery status.',          'planning-execution'],
+      'documents-approval':     ['Drawings, RFIs, submittals, method statements, approvals.',                   'documents-approval'],
+      'control-reports':        ['Cost tracking, variations, risk register, quality observations.',             'control-reports'],
+      'communication-meetings': [null, null],
+    };
+
+    if (key === 'meeting' || key === 'communication-meetings') { renderMeetingContent(); return; }
+
+    const entry = map[key];
+    if (!entry) return;
+    const [desc, category] = entry;
+    renderBottomContent(desc || '', 'No data available in this category.');
+    if (category) loadTabRecords(category);
   }
 
   function attachTabEvents() {
@@ -1791,705 +1689,10 @@ confirmLogout.addEventListener('click', async () => {
     });
   }
 
-  // Default load
+  // Initialize on page load
   loadHomeTabs();
-
-  // ============= DOCUMENT DETAIL =============
-  function openDocumentDetail(idx, context) {
-    const doc = sampleDocs[idx];
-    const html = `
-      <h3 style='margin-bottom:16px;'>Document Details</h3>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Uploader:</div>
-        <div class='gray-part-value'>${doc.uploader}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Title:</div>
-        <div class='gray-part-value'>${doc.title}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Description:</div>
-        <div class='gray-part-value'>${doc.description}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Document Number:</div>
-        <div class='gray-part-value'>${doc.number}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Date Issued:</div>
-        <div class='gray-part-value'>${doc.date}</div>
-      </div>
-      <div style='margin-top:16px; display:flex; gap:8px;'>
-        <button class='btn primary' style='flex:1;'>Download</button>
-        <button class='btn' style='flex:1;' onclick='collapseGrayPart()'>Back</button>
-      </div>
-    `;
-    expandGrayPart(html);
-  }
-
-  // ============= REPORT DETAIL =============
-  function openReportDetail(idx, context) {
-    const report = sampleReports[idx];
-    const html = `
-      <h3 style='margin-bottom:16px;'>Report Details</h3>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Reporter:</div>
-        <div class='gray-part-value'>${report.reporter} (${report.role})</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Title:</div>
-        <div class='gray-part-value'>${report.title}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Description:</div>
-        <div class='gray-part-value'>${report.description}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Report Number:</div>
-        <div class='gray-part-value'>${report.number}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Date:</div>
-        <div class='gray-part-value'>${report.date}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Attachments:</div>
-        <div class='gray-part-value'>sample_file.pdf, image.jpg</div>
-      </div>
-      <div style='margin-top:16px; display:flex; flex-direction:column; gap:8px;'>
-        <button class='btn primary' style='width:100%;'>Download</button>
-        <button class='btn' style='width:100%;'>Reply (Pending PM Approval)</button>
-        <button class='btn' style='width:100%;' onclick='collapseGrayPart()'>Back</button>
-      </div>
-    `;
-    expandGrayPart(html);
-  }
-
-  // ============= MEETING FUNCTIONS =============
-  function displayMeetingList(type) {
-    const container = document.getElementById('meetingListContainer');
-    let meetsToShow = [];
-    
-    if (type === 'scheduled') {
-      meetsToShow = sampleMeetings.filter(m => m.status === 'Scheduled');
-    } else if (type === 'last') {
-      meetsToShow = sampleMeetings.filter(m => m.status === 'Completed').slice(-1);
-    }
-    
-    if (meetsToShow.length === 0) {
-      container.innerHTML = '<p style="color:#999; text-align:center; padding:20px;">No meetings found.</p>';
-      return;
-    }
-    
-    let html = '<ul class="doc-list">';
-    meetsToShow.forEach((meeting, idx) => {
-      html += `
-        <li class="doc-item">
-          <div class="doc-info">
-            <div class="doc-title">${meeting.title}</div>
-            <div class="doc-meta">${meeting.number} | ${meeting.date}</div>
-          </div>
-          <button class="doc-action-btn" onclick="openMeetingDetail(${sampleMeetings.indexOf(meeting)})">View More</button>
-        </li>
-      `;
-    });
-    html += '</ul>';
-    container.innerHTML = html;
-  }
-
-  function displayScheduleMeetingForm() {
-    const container = document.getElementById('meetingListContainer');
-    container.innerHTML = `
-      <h3 style='margin-bottom:16px; color:#333;'>Schedule a New Meeting</h3>
-      <div class='form-group'>
-        <label>Meeting Title:</label>
-        <input type='text' id='meetingTitle' placeholder='Enter meeting title' />
-      </div>
-      <div class='form-group'>
-        <label>Date & Time:</label>
-        <input type='datetime-local' id='meetingDateTime' />
-      </div>
-      <div class='form-group'>
-        <label>Participants:</label>
-        <textarea id='meetingParticipants' placeholder='Enter participant names (comma-separated)'></textarea>
-      </div>
-      <div class='form-group'>
-        <label>Agenda:</label>
-        <textarea id='meetingAgenda' placeholder='Enter meeting agenda'></textarea>
-      </div>
-      <div class='form-group'>
-        <label>Attachments:</label>
-        <input type='file' id='meetingAttachments' multiple />
-      </div>
-      <button class='btn primary' id='scheduleMeetingBtn' style='width:100%; padding:10px;'>Schedule Meeting</button>
-    `;
-    
-    document.getElementById('scheduleMeetingBtn').addEventListener('click', () => {
-      const title = document.getElementById('meetingTitle').value.trim();
-      const dateTime = document.getElementById('meetingDateTime').value;
-      const participants = document.getElementById('meetingParticipants').value.trim();
-      const agenda = document.getElementById('meetingAgenda').value.trim();
-      
-      if (!title || !dateTime || !participants || !agenda) {
-        alert('Please fill in all required fields.');
-        return;
-      }
-      
-      alert('Meeting scheduled successfully! Invitations sent to participants.');
-      displayMeetingList('scheduled');
-    });
-  }
-
-  function openMeetingDetail(idx) {
-    const meeting = sampleMeetings[idx];
-    const html = `
-      <h3 style='margin-bottom:16px;'>Meeting Details</h3>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Title:</div>
-        <div class='gray-part-value'>${meeting.title}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Number:</div>
-        <div class='gray-part-value'>${meeting.number}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Date:</div>
-        <div class='gray-part-value'>${meeting.date}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Status:</div>
-        <div class='gray-part-value'><span style='background:${meeting.status === 'Completed' ? '#28a745' : '#ff9800'}; color:#fff; padding:4px 8px; border-radius:4px; font-size:11px; font-weight:bold;'>${meeting.status}</span></div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Meeting Minutes:</div>
-        <div class='gray-part-value'>${meeting.minutes}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Participants:</div>
-        <div class='gray-part-value'>${meeting.participants}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Attachments:</div>
-        <div class='gray-part-value'>${meeting.attachments}</div>
-      </div>
-      <div style='margin-top:16px; display:flex; flex-direction:column; gap:8px;'>
-        <button class='btn primary' style='width:100%;'>Download Attachments</button>
-        <button class='btn' style='width:100%;'>Add Comment</button>
-        <button class='btn' style='width:100%;' onclick='collapseGrayPart()'>Back</button>
-      </div>
-    `;
-    expandGrayPart(html);
-  }
-
-  // ============= DISPLAY ASSIGNED MEMBERS =============
-  function displayAssignedMembers() {
-    const categories = ['client', 'contractor', 'consultant'];
-    const categoryLabels = {
-      client: 'Client Team',
-      contractor: 'Contractor Team',
-      consultant: 'Consultant Team'
-    };
-
-    let html = `<div style='padding:20px; overflow-y:auto; height:100%;'>`;
-
-    categories.forEach(category => {
-      html += `
-        <div style='margin-bottom:24px;'>
-          <h3 style='color:#007B8A; margin:0 0 16px 0; font-size:16px; font-weight:bold;'>${categoryLabels[category]}</h3>
-      `;
-
-      const roles = ['Leader', 'Project Manager', 'Team Member'];
-      const members = sampleMembers[category];
-
-      members.forEach((member, index) => {
-        const roleLabel = member.role === 'PM' ? 'Project Manager' : member.role;
-        const isTeamMember = member.role === 'Team Member';
-        
-        html += `
-          <div style='background:#f9f9f9; border-left:4px solid #007B8A; padding:12px 16px; margin-bottom:12px; border-radius:4px; display:flex; justify-content:space-between; align-items:center;'>
-            <div style='flex:1;'>
-              <div style='font-weight:bold; color:#333; margin-bottom:4px;'>${member.name}</div>
-              <div style='font-size:12px; color:#666; margin-bottom:2px;'>${roleLabel} - ${member.position}</div>
-              <div style='font-size:11px; color:#999;'>${member.email} | ${member.phone}</div>
-            </div>
-            <button class='btn primary' style='padding:8px 16px; white-space:nowrap; margin-left:12px;' onclick='openMemberDetail("${category}", ${index})'>View More</button>
-          </div>
-        `;
-      });
-
-      html += `</div>`;
-    });
-
-    html += `</div>`;
-    bottomContent.innerHTML = html;
-  }
-
-  // ============= OPEN MEMBER DETAIL =============
-  function openMemberDetail(category, index) {
-    const member = sampleMembers[category][index];
-    const roleLabel = member.role === 'PM' ? 'Project Manager' : member.role;
-
-    let html = `
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Name:</div>
-        <div class='gray-part-value'>${member.name}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Role:</div>
-        <div class='gray-part-value'>${roleLabel}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Position:</div>
-        <div class='gray-part-value'>${member.position}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Email:</div>
-        <div class='gray-part-value'>${member.email}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Phone:</div>
-        <div class='gray-part-value'>${member.phone}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Category:</div>
-        <div class='gray-part-value'>${category.charAt(0).toUpperCase() + category.slice(1)}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Assigned Tasks:</div>
-        <div class='gray-part-value'>${member.tasks}</div>
-      </div>
-      <div class='gray-part-field'>
-        <div class='gray-part-label'>Attachments:</div>
-        <div class='gray-part-value'>${member.attachments}</div>
-      </div>
-      <div style='margin-top:16px; display:flex; flex-direction:column; gap:8px;'>
-        <button class='btn primary' style='width:100%;'>Download Attachments</button>
-        <button class='btn' style='width:100%;'>Send Message</button>
-        <button class='btn' style='width:100%;' onclick='collapseGrayPart()'>Back</button>
-      </div>
-    `;
-    expandGrayPart(html);
-  }
-
-  // ============= PROMPT IMAGE DOWNLOAD =============
-  function promptImageDownload(fileName) {
-    const fileType = fileName.split('.').pop().toUpperCase();
-    if (confirm(`Do you want to download this image? Format: ${fileType}`)) {
-      alert(`Downloading ${fileName}...`);
-    }
-  }
-
-  // ============= SAMPLE SCHEDULE DATA =============
-  const scheduleData = {
-    planned: {
-      poster: 'John Smith (Consultant PM)',
-      role: 'Consultant Project Manager',
-      date: '2026-01-12',
-      title: 'Foundation Pouring - Phase 1',
-      content: 'Start foundation concrete pouring for sections A1-A3. Weather permitting. All safety protocols must be followed.',
-      comments: [
-        { author: 'John Smith', role: 'Consultant PM', text: 'Foundation work scheduled for today. Concrete delivery confirmed at 8 AM.', timestamp: '2026-01-12 08:00', isOriginal: true },
-        { author: 'Jane Doe', role: 'Site Manager', text: 'Team ready. All equipment checked and site cleared.', timestamp: '2026-01-12 09:15', isPending: false }
-      ]
-    },
-    actual: {
-      poster: 'Jane Doe (Site Manager)',
-      role: 'Site Manager',
-      date: '2026-01-12',
-      title: 'Foundation Progress Update',
-      content: 'Completed pouring of sections A1-A2. Section A3 in progress. No safety incidents reported.',
-      comments: [
-        { author: 'Jane Doe', role: 'Site Manager', text: 'Foundation pouring progressing well. A1-A2 sections cured. Moving to A3 now.', timestamp: '2026-01-12 14:30', isOriginal: true },
-        { author: 'Mike Johnson', role: 'Contractor', text: 'Team performing excellently. Expected to finish A3 by end of day.', timestamp: '2026-01-12 15:45', isPending: false }
-      ]
-    }
-  };
-
-  const weatherIcons = {
-    'Sun': '☀️',
-    'Rain': '🌧️',
-    'Cloud': '☁️',
-    'Snow': '❄️',
-    'Wind': '💨'
-  };
-
-  const currentWeather = 'Sun'; // Can be dynamically updated
-
-  // ============= SCHEDULE PANEL =============
-  function openSchedulePanel() {
-    const today = new Date();
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const currentDayName = dayNames[today.getDay()];
-    const currentDateStr = today.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    
-    const html = `
-      <div style='display:flex; flex-direction:column; height:100%; padding:20px; gap:20px;'>
-        <!-- Calendar Top Box -->
-        <div style='width:80%; background:#fff; border-radius:8px; padding:16px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 2px 8px rgba(0,0,0,0.1); height:16.67%;'>
-          <div style='display:flex; align-items:center; gap:12px;'>
-            <span style='font-size:28px;'>${weatherIcons[currentWeather]}</span>
-            <div>
-              <div style='font-size:24px; font-weight:bold;'>${currentDayName}</div>
-              <div style='font-size:14px; color:#666;'>${currentWeather}</div>
-            </div>
-          </div>
-          <div style='text-align:right; cursor:pointer; padding:8px 16px; background:#f0f0f0; border-radius:6px; transition:background 0.2s;' id='dateClickBtn' title='Click to pick a different date'>
-            <div style='font-size:12px; color:#999;'>Current Date</div>
-            <div style='font-size:20px; font-weight:bold;'>${currentDateStr}</div>
-          </div>
-        </div>
-
-        <!-- Parallel Boxes Container -->
-        <div style='display:flex; gap:20px; flex:1;'>
-          <!-- Left Box: Planned Schedule -->
-          <div style='flex:1; background:#fff; border-radius:8px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 2px 8px rgba(0,0,0,0.1);'>
-            <div style='padding:16px; border-bottom:2px solid #007B8A; background:#f9f9f9;'>
-              <div style='font-size:16px; font-weight:bold; color:#333; margin-bottom:4px;'>📋 Planned Schedule</div>
-              <div style='font-size:12px; color:#666;'>from Consultant PM</div>
-            </div>
-            <div style='flex:1; overflow-y:auto; padding:16px;'>
-              <div style='background:#e6f7ff; padding:12px; border-radius:6px; border-left:4px solid #007B8A; margin-bottom:16px;'>
-                <div style='font-weight:bold; color:#333; margin-bottom:4px;'>${scheduleData.planned.title}</div>
-                <div style='font-size:12px; color:#666; margin-bottom:8px;'>${scheduleData.planned.content}</div>
-                <div style='font-size:11px; color:#999;'>by ${scheduleData.planned.poster}</div>
-              </div>
-              <div id='plannedComments' style='display:flex; flex-direction:column; gap:12px;'></div>
-            </div>
-            <div style='padding:12px; border-top:1px solid #eee; background:#fafafa;'>
-              <button class='btn primary' id='plannedWriteBtn' style='width:100%; margin-bottom:8px; padding:8px;'>Write Comment</button>
-              <div id='plannedReplyBox' style='display:none;'>
-                <textarea id='plannedReplyText' placeholder='Add your reply...' style='width:100%; padding:8px; border:1px solid #ccc; border-radius:4px; font-size:12px; min-height:60px; font-family:Arial; resize:vertical;'></textarea>
-                <div style='display:flex; gap:8px; margin-top:8px;'>
-                  <button id='plannedReplyBtn' class='btn primary' style='flex:1; padding:8px;'>Submit</button>
-                  <button id='plannedCancelBtn' class='btn' style='flex:1; padding:8px;'>Cancel</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Right Box: Actual Schedule -->
-          <div style='flex:1; background:#fff; border-radius:8px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 2px 8px rgba(0,0,0,0.1);'>
-            <div style='padding:16px; border-bottom:2px solid #28a745; background:#f9f9f9;'>
-              <div style='font-size:16px; font-weight:bold; color:#333; margin-bottom:4px;'>✓ Actual Schedule</div>
-              <div style='font-size:12px; color:#666;'>Progress Update</div>
-            </div>
-            <div style='flex:1; overflow-y:auto; padding:16px;'>
-              <div style='background:#f0fdf4; padding:12px; border-radius:6px; border-left:4px solid #28a745; margin-bottom:16px;'>
-                <div style='font-weight:bold; color:#333; margin-bottom:4px;'>${scheduleData.actual.title}</div>
-                <div style='font-size:12px; color:#666; margin-bottom:8px;'>${scheduleData.actual.content}</div>
-                <div style='font-size:11px; color:#999;'>by ${scheduleData.actual.poster}</div>
-              </div>
-              <div id='actualComments' style='display:flex; flex-direction:column; gap:12px;'></div>
-            </div>
-            <div style='padding:12px; border-top:1px solid #eee; background:#fafafa;'>
-              <button class='btn primary' id='actualWriteBtn' style='width:100%; margin-bottom:8px; padding:8px;'>Write Comment</button>
-              <div id='actualReplyBox' style='display:none;'>
-                <textarea id='actualReplyText' placeholder='Add your reply...' style='width:100%; padding:8px; border:1px solid #ccc; border-radius:4px; font-size:12px; min-height:60px; font-family:Arial; resize:vertical;'></textarea>
-                <div style='display:flex; gap:8px; margin-top:8px;'>
-                  <button id='actualReplyBtn' class='btn primary' style='flex:1; padding:8px;'>Submit</button>
-                  <button id='actualCancelBtn' class='btn' style='flex:1; padding:8px;'>Cancel</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Back Button -->
-        <div style='display:flex; gap:12px; justify-content:center;'>
-          <button id='scheduleBackBtn' class='btn primary' style='padding:10px 24px; font-size:14px;'>← Back to Dashboard</button>
-        </div>
-      </div>
-    `;
-    
-    expandGrayPart(html);
-    
-    // Initialize schedule panel functionality
-    initSchedulePanel();
-  }
-
-  // ============= SCHEDULE PANEL FUNCTIONALITY =============
-  function initSchedulePanel() {
-    // Render comments
-    renderScheduleComments('plannedComments', scheduleData.planned.comments);
-    renderScheduleComments('actualComments', scheduleData.actual.comments);
-
-    // Write Comment button handlers (show reply box)
-    document.getElementById('plannedWriteBtn').addEventListener('click', () => {
-      const replyBox = document.getElementById('plannedReplyBox');
-      replyBox.style.display = replyBox.style.display === 'none' ? 'block' : 'none';
-    });
-
-    document.getElementById('actualWriteBtn').addEventListener('click', () => {
-      const replyBox = document.getElementById('actualReplyBox');
-      replyBox.style.display = replyBox.style.display === 'none' ? 'block' : 'none';
-    });
-
-    // Cancel button handlers (hide reply box)
-    document.getElementById('plannedCancelBtn').addEventListener('click', () => {
-      document.getElementById('plannedReplyBox').style.display = 'none';
-      document.getElementById('plannedReplyText').value = '';
-    });
-
-    document.getElementById('actualCancelBtn').addEventListener('click', () => {
-      document.getElementById('actualReplyBox').style.display = 'none';
-      document.getElementById('actualReplyText').value = '';
-    });
-
-    // Submit button handlers (post comment)
-    document.getElementById('plannedReplyBtn').addEventListener('click', () => {
-      const text = document.getElementById('plannedReplyText').value.trim();
-      if (text) {
-        addScheduleComment('planned', text);
-        document.getElementById('plannedReplyText').value = '';
-        document.getElementById('plannedReplyBox').style.display = 'none';
-      } else {
-        alert('Please enter a comment.');
-      }
-    });
-
-    document.getElementById('actualReplyBtn').addEventListener('click', () => {
-      const text = document.getElementById('actualReplyText').value.trim();
-      if (text) {
-        addScheduleComment('actual', text);
-        document.getElementById('actualReplyText').value = '';
-        document.getElementById('actualReplyBox').style.display = 'none';
-      } else {
-        alert('Please enter a comment.');
-      }
-    });
-
-    // Back button handler
-    document.getElementById('scheduleBackBtn').addEventListener('click', () => {
-      collapseGrayPart();
-    });
-
-    // Date picker handler
-    document.getElementById('dateClickBtn').addEventListener('click', () => {
-      openScheduleDatePicker();
-    });
-  }
-
-  function renderScheduleComments(containerId, comments) {
-    const container = document.getElementById(containerId);
-    container.innerHTML = '';
-    comments.forEach(comment => {
-      const commentDiv = document.createElement('div');
-      commentDiv.style.cssText = 'padding:12px; background:#f9f9f9; border-radius:6px; border-left:3px solid #999;';
-      
-      const statusBadge = comment.isPending ? ' <span style="background:#ff9800; color:#fff; padding:2px 6px; border-radius:3px; font-size:10px; font-weight:bold;">Pending PM Approval</span>' : '';
-      
-      commentDiv.innerHTML = `
-        <div style='display:flex; justify-content:space-between; margin-bottom:6px;'>
-          <div style='font-weight:bold; font-size:13px;'>${comment.author}</div>
-          <div style='font-size:11px; color:#999;'>${comment.timestamp}</div>
-        </div>
-        <div style='font-size:11px; color:#666; margin-bottom:6px;'>${comment.role}${statusBadge}</div>
-        <div style='font-size:13px; color:#333;'>${comment.text}</div>
-      `;
-      container.appendChild(commentDiv);
-    });
-  }
-
-  function addScheduleComment(boxType, text) {
-    const data = boxType === 'planned' ? scheduleData.planned : scheduleData.actual;
-    const now = new Date();
-    const timestamp = now.toLocaleString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-    
-    const newComment = {
-      author: 'You',
-      role: 'Team Member',
-      text: text,
-      timestamp: timestamp,
-      isPending: false
-    };
-    
-    data.comments.push(newComment);
-    const containerId = boxType === 'planned' ? 'plannedComments' : 'actualComments';
-    renderScheduleComments(containerId, data.comments);
-    
-    alert('Comment posted successfully.');
-  }
-
-  function openScheduleDatePicker() {
-    const dialog = document.createElement('div');
-    dialog.id = 'scheduleDatePickerDialog';
-    dialog.style.cssText = `
-      position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5);
-      display:flex; justify-content:center; align-items:center; z-index:1000;
-    `;
-    
-    const today = new Date();
-    let currentPickerDate = new Date(today);
-    
-    const generateCalendar = () => {
-      const month = currentPickerDate.getMonth();
-      const year = currentPickerDate.getFullYear();
-      const firstDay = new Date(year, month, 1).getDay();
-      const daysInMonth = new Date(year, month + 1, 0).getDate();
-      
-      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
-                          'July', 'August', 'September', 'October', 'November', 'December'];
-      
-      let html = `
-        <div style='background:#fff; border-radius:10px; padding:20px; min-width:320px; box-shadow:0 10px 40px rgba(0,0,0,0.3);'>
-          <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;'>
-            <button id='pickerPrevBtn' class='btn'>← Prev</button>
-            <div style='font-weight:bold; font-size:16px;'>${monthNames[month]} ${year}</div>
-            <button id='pickerNextBtn' class='btn'>Next →</button>
-          </div>
-          <table style='width:100%; border-collapse:collapse; margin-bottom:16px;'>
-            <thead><tr>
-              ${dayNames.map(day => `<th style='padding:8px; font-size:12px; font-weight:bold; color:#666;'>${day}</th>`).join('')}
-            </tr></thead>
-            <tbody id='pickerCalendarBody' style='text-align:center;'></tbody>
-          </table>
-          <div style='display:flex; gap:8px; justify-content:flex-end;'>
-            <button id='pickerCancelBtn' class='btn'>Cancel</button>
-            <button id='pickerConfirmBtn' class='btn primary'>Select</button>
-          </div>
-        </div>
-      `;
-      
-      return html;
-    };
-    
-    const renderPickerCalendar = () => {
-      const month = currentPickerDate.getMonth();
-      const year = currentPickerDate.getFullYear();
-      const firstDay = new Date(year, month, 1).getDay();
-      const daysInMonth = new Date(year, month + 1, 0).getDate();
-      
-      const tbody = document.getElementById('pickerCalendarBody');
-      tbody.innerHTML = '';
-      
-      let row = document.createElement('tr');
-      for (let i = 0; i < firstDay; i++) {
-        row.appendChild(document.createElement('td'));
-      }
-      
-      for (let d = 1; d <= daysInMonth; d++) {
-        if ((firstDay + d - 1) % 7 === 0 && d > 1) {
-          tbody.appendChild(row);
-          row = document.createElement('tr');
-        }
-        
-        const cell = document.createElement('td');
-        cell.style.cssText = 'padding:8px; cursor:pointer; border-radius:4px; transition:background 0.2s;';
-        cell.textContent = d;
-        
-        const cellDate = new Date(year, month, d);
-        if (cellDate.toDateString() === today.toDateString()) {
-          cell.style.background = '#007B8A';
-          cell.style.color = '#fff';
-          cell.style.fontWeight = 'bold';
-        }
-        
-        cell.addEventListener('click', () => {
-          currentPickerDate = new Date(year, month, d);
-          renderPickerCalendar();
-        });
-        
-        cell.addEventListener('mouseenter', () => {
-          if (cellDate.toDateString() !== today.toDateString()) {
-            cell.style.background = '#f0f0f0';
-          }
-        });
-        
-        cell.addEventListener('mouseleave', () => {
-          if (cellDate.toDateString() !== today.toDateString()) {
-            cell.style.background = '';
-          }
-        });
-        
-        row.appendChild(cell);
-      }
-      
-      tbody.appendChild(row);
-    };
-    
-    dialog.innerHTML = generateCalendar();
-    document.body.appendChild(dialog);
-    renderPickerCalendar();
-    
-    document.getElementById('pickerPrevBtn').addEventListener('click', () => {
-      currentPickerDate.setMonth(currentPickerDate.getMonth() - 1);
-      renderPickerCalendar();
-    });
-    
-    document.getElementById('pickerNextBtn').addEventListener('click', () => {
-      currentPickerDate.setMonth(currentPickerDate.getMonth() + 1);
-      renderPickerCalendar();
-    });
-    
-    document.getElementById('pickerCancelBtn').addEventListener('click', () => {
-      document.body.removeChild(dialog);
-    });
-    
-    document.getElementById('pickerConfirmBtn').addEventListener('click', () => {
-      const selectedDate = currentPickerDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-      alert(`Selected date: ${selectedDate}`);
-      document.body.removeChild(dialog);
-    });
-    
-    dialog.addEventListener('click', (e) => {
-      if (e.target === dialog) {
-        document.body.removeChild(dialog);
-      }
-    });
-  }
-
-  // ============= SEND REPORT =============
-  document.addEventListener('click', (e) => {
-    if (e.target && e.target.id === 'sendReportBtn') {
-      const title = (document.getElementById('reportTitle') || {}).value || '';
-      const desc = (document.getElementById('reportDescription') || {}).value || '';
-      if (!title || !desc) {
-        alert('Please add a title and description.');
-        return;
-      }
-      alert('Report submitted (Pending Approval).');
-      document.getElementById('reportTitle').value = '';
-      document.getElementById('reportDescription').value = '';
-      document.getElementById('reportAttachment').value = '';
-    }
-  });
-
-  // ============= SEARCH FUNCTIONALITY =============
-  const searchBox = document.getElementById('searchBox');
-  searchBox.addEventListener('keyup', (e) => {
-    const searchTerm = e.target.value.toLowerCase();
-    const items = bottomContent.querySelectorAll('.doc-item, .form-group');
-    items.forEach(item => {
-      const text = item.textContent.toLowerCase();
-      item.style.display = text.includes(searchTerm) ? '' : 'none';
-    });
-  });
-
-  // ============= CLOSE DIALOGS ON OUTSIDE CLICK =============
-  document.addEventListener('click', (event) => {
-    const dialogs = document.querySelectorAll('.modal-overlay.active');
-    dialogs.forEach(dialog => {
-      if (!dialog.querySelector('.modal-content').contains(event.target)) {
-        dialog.classList.remove('active');
-      }
-    });
-
-    if (profileDialog && !profileDialog.contains(event.target) && !profileIcon.contains(event.target)) {
-      profileDialog.style.display = 'none';
-    }
-
-    if (projectDialog && !projectDialog.contains(event.target) && !projectSelector.contains(event.target)) {
-      projectDialog.style.display = 'none';
-    }
-
-    if (logoutDialog && !logoutDialog.contains(event.target) && !logoutBtn.contains(event.target)) {
-      logoutDialog.classList.remove('active');
-    }
-  });
-
-  // ============= INITIALIZE ON PAGE LOAD =============
-  initializeSummaryPanel();
+});
 </script>
 </body>
 </html>
+
