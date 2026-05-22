@@ -1953,8 +1953,9 @@ function openProjectScheduleForm() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const result = await response.json();
       if (result.success) {
-        alert('Schedule saved successfully.');
-        collapseGrayPart();
+        alert('Schedule saved successfully. Opening Actual Progress reporting.');
+        // open Actual Progress page (pass saved milestones if backend returned them)
+        openActualProgressPage(result);
       } else {
         throw new Error(result.message || 'Unable to save schedule.');
       }
@@ -1963,6 +1964,186 @@ function openProjectScheduleForm() {
       alert('Failed to save schedule. Please try again.');
     }
   });
+}
+
+// =======================================================================
+//  ACTUAL PROGRESS / DAILY REPORTING (Page 3)
+// =======================================================================
+function openActualProgressPage(savedResult) {
+  // Use saved milestones if backend returned them, otherwise use in-memory `milestones`
+  const dataMilestones = (savedResult && savedResult.milestones && Array.isArray(savedResult.milestones)) ? savedResult.milestones : milestones.slice();
+  // ensure numeric executed fields
+  dataMilestones.forEach(ms => { ms.executed = ms.executed || 0; ms.entries = ms.entries || []; ms.completed = !!ms.completed; });
+
+  const html = `
+    <div style='width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;background:linear-gradient(180deg,#eef4f8 0%,#ffffff 100%);'>
+      <div style='padding:20px 24px;border-bottom:2px solid #007B8A;background:#fff;flex-shrink:0;'>
+        <h3 style='margin:0;color:#233e5b;font-size:24px;font-weight:700;'>🏗️ Actual Progress Reporting</h3>
+        <p style='margin:8px 0 0;color:#556b7d;'>Select a milestone, report daily executed quantity, and monitor planned vs actual.</p>
+      </div>
+      <div style='flex:1;overflow:auto;padding:18px;display:flex;gap:18px;'>
+        <div style='width:360px;flex-shrink:0;display:flex;flex-direction:column;gap:12px;'>
+          <div style='background:#fff;border:1px solid #d1dbe6;border-radius:12px;padding:12px;'><strong style='font-size:14px;'>Planned Milestones</strong></div>
+          <div id='progressMilestoneList' style='background:#fff;border:1px solid #d1dbe6;border-radius:12px;padding:12px;max-height:560px;overflow:auto;display:flex;flex-direction:column;gap:8px;'></div>
+        </div>
+
+        <div style='flex:1;display:flex;flex-direction:column;gap:12px;'>
+          <div id='activeMilestoneCard' style='background:#fff;border:1px solid #d1dbe6;border-radius:12px;padding:16px;min-height:140px;'></div>
+
+          <div id='dailyProgressForm' style='background:#fff;border:1px solid #d1dbe6;border-radius:12px;padding:16px;display:none;'>
+            <div style='display:flex;gap:12px;align-items:center;margin-bottom:12px;'>
+              <label style='flex:1;'>Executed Quantity (today)<input id='executedToday' type='number' min='0' step='any' style='width:140px;margin-left:8px;padding:8px;border:1px solid #cbd5e1;border-radius:8px;'/></label>
+              <div id='executedUnit' style='padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;'>unit</div>
+            </div>
+            <div style='margin-bottom:12px;'><label>Notes / Remarks<textarea id='dailyRemarks' style='width:100%;min-height:64px;padding:8px;border:1px solid #cbd5e1;border-radius:8px;'></textarea></label></div>
+            <div style='display:flex;gap:12px;align-items:center;margin-bottom:12px;'><label style='display:flex;align-items:center;gap:8px;'><input id='dailyAttachment' type='file' style=''/></label></div>
+            <div style='display:flex;gap:12px;justify-content:flex-end;'><button id='updateDailyBtn' class='btn primary' style='padding:10px 18px;'>Update Daily Progress</button><button id='markEndedBtn' class='btn' style='padding:10px 18px;background:#f3f4f6;color:#111;'>Mark Activity Ended</button></div>
+          </div>
+
+          <div style='background:#fff;border:1px solid #d1dbe6;border-radius:12px;padding:12px;min-height:220px;display:flex;flex-direction:column;'>
+            <div style='font-weight:700;margin-bottom:8px;'>View Project Timeline</div>
+            <div id='progressChartContainer' style='flex:1;border-top:1px solid #e6edf6;padding-top:12px;overflow:auto;min-height:120px;'></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  expandGrayPart(html);
+
+  // local state for this page
+  let progressMilestones = dataMilestones.map(ms => ({ ...ms }));
+  let activeId = progressMilestones.length ? progressMilestones[0].id : null;
+
+  const listEl = document.getElementById('progressMilestoneList');
+  const activeCard = document.getElementById('activeMilestoneCard');
+  const dailyForm = document.getElementById('dailyProgressForm');
+  const executedToday = document.getElementById('executedToday');
+  const executedUnit = document.getElementById('executedUnit');
+  const dailyRemarks = document.getElementById('dailyRemarks');
+  const dailyAttachment = document.getElementById('dailyAttachment');
+  const updateDailyBtn = document.getElementById('updateDailyBtn');
+  const markEndedBtn = document.getElementById('markEndedBtn');
+  const chartContainer = document.getElementById('progressChartContainer');
+
+  function renderMilestoneList() {
+    listEl.innerHTML = progressMilestones.map(ms => {
+      const plannedQty = ms.quantity || '—';
+      const exec = Number(ms.executed || 0);
+      const completed = ms.completed ? '<span style="background:#10b981;color:#fff;padding:4px 8px;border-radius:8px;font-size:12px;margin-left:8px;">Completed</span>' : '';
+      return `<div data-id='${ms.id}' style='padding:8px;border:1px solid #e6eef8;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;'><div><strong>${ms.title || 'Untitled'}</strong><div style='font-size:12px;color:#64748b;'>${ms.start || 'Start'} → ${ms.end || 'End'} • Planned: ${plannedQty} ${ms.unit || ''}</div></div><div style='text-align:right'><div style='font-weight:700;'>${exec} ${ms.unit || ''}</div>${completed}</div></div>`;
+    }).join('');
+    // attach click
+    listEl.querySelectorAll('[data-id]').forEach(el => el.addEventListener('click', () => selectProgressMilestone(el.getAttribute('data-id'))));
+  }
+
+  function selectProgressMilestone(id) {
+    activeId = id;
+    const ms = progressMilestones.find(m => m.id === id);
+    if (!ms) return;
+    activeCard.innerHTML = `
+      <div style='display:flex;justify-content:space-between;align-items:flex-start;gap:12px;'>
+        <div>
+          <div style='font-size:16px;font-weight:700;'>${ms.title || 'Untitled milestone'}</div>
+          <div style='font-size:13px;color:#6b7280;margin-top:6px;'>${ms.description || '—'}</div>
+          <div style='font-size:13px;color:#374151;margin-top:8px;'>Planned Dates: ${ms.start || '—'} - ${ms.end || '—'}</div>
+          <div style='font-size:13px;color:#374151;margin-top:6px;'>Planned Quantity: <strong>${ms.quantity || '0'}</strong> Unit: <strong>${ms.unit || ''}</strong></div>
+          <div style='font-size:13px;color:#374151;margin-top:6px;'>Dependency: <strong>${ms.dependencyLabel || 'None'}</strong> Attachment ID: <strong>${ms.attachmentId || '—'}</strong></div>
+        </div>
+        <div style='text-align:right;min-width:160px;'>
+          <div style='font-size:13px;color:#6b7280;'>Executed</div>
+          <div style='font-size:20px;font-weight:700;margin-top:6px;'>${ms.executed || 0} ${ms.unit || ''}</div>
+        </div>
+      </div>
+    `;
+    // show form
+    dailyForm.style.display = ms.completed ? 'none' : 'block';
+    executedUnit.textContent = ms.unit || '';
+    executedToday.value = '';
+    dailyRemarks.value = '';
+    updateMarkEndedState(ms);
+  }
+
+  function updateMarkEndedState(ms) {
+    const planned = parseFloat(ms.quantity) || 0;
+    const exec = Number(ms.executed || 0);
+    if (ms.completed) {
+      markEndedBtn.disabled = true;
+      markEndedBtn.textContent = 'Completed';
+    } else if (exec >= planned && planned > 0) {
+      markEndedBtn.disabled = false;
+      markEndedBtn.textContent = 'Mark Activity Ended';
+    } else {
+      markEndedBtn.disabled = true;
+      markEndedBtn.textContent = 'Mark Activity Ended';
+    }
+  }
+
+  function updateProgressChart() {
+    // simple textual bars by percent of planned quantity
+    chartContainer.innerHTML = '';
+    progressMilestones.forEach(ms => {
+      const planned = parseFloat(ms.quantity) || 0;
+      const exec = Number(ms.executed || 0);
+      const pct = planned > 0 ? Math.min(100, Math.round((exec / planned) * 100)) : 0;
+      const behind = exec < planned && (new Date(ms.end) < new Date()) ? true : false;
+      const bar = `
+        <div style='display:flex;align-items:center;gap:12px;margin-bottom:8px;'>
+          <div style='width:180px;font-size:13px;color:#374151;'>${ms.title}</div>
+          <div style='flex:1;background:#e6eef8;border-radius:8px;height:16px;position:relative;overflow:hidden;box-shadow:inset 0 1px 0 rgba(255,255,255,0.6);'>
+            <div style='width:${pct}%;height:100%;background:${behind?"#ef4444":"#10b981"};'></div>
+          </div>
+          <div style='width:80px;text-align:right;font-size:12px;color:#374151;'>${exec}/${planned}</div>
+        </div>
+      `;
+      chartContainer.insertAdjacentHTML('beforeend', bar);
+    });
+  }
+
+  function addDailyProgress() {
+    const ms = progressMilestones.find(m => m.id === activeId);
+    if (!ms) return alert('Select a milestone first.');
+    const value = parseFloat(executedToday.value);
+    if (!value || value <= 0) return alert('Enter a positive executed quantity.');
+    const planned = parseFloat(ms.quantity) || 0;
+    const newTotal = Number(ms.executed || 0) + value;
+    if (planned > 0 && newTotal > planned) {
+      alert('Quantity exceeded — cannot add this entry.');
+      return;
+    }
+    // add entry
+    ms.entries.push({ date: (new Date()).toISOString().slice(0,10), qty: value, remarks: dailyRemarks.value || '' });
+    ms.executed = newTotal;
+    renderMilestoneList();
+    selectProgressMilestone(ms.id);
+    updateProgressChart();
+  }
+
+  function markActivityEnded() {
+    const ms = progressMilestones.find(m => m.id === activeId);
+    if (!ms) return;
+    const planned = parseFloat(ms.quantity) || 0;
+    const exec = Number(ms.executed || 0);
+    if (exec < planned) return alert('Cannot mark ended: executed quantity less than planned.');
+    if (exec > planned) return alert('Quantity exceeded — cannot mark as completed.');
+    ms.completed = true;
+    renderMilestoneList();
+    selectProgressMilestone(ms.id);
+    updateProgressChart();
+  }
+
+  // wire form buttons
+  updateDailyBtn.addEventListener('click', addDailyProgress);
+  markEndedBtn.addEventListener('click', markActivityEnded);
+
+  // initial render
+  renderMilestoneList();
+  if (activeId) selectProgressMilestone(activeId);
+  updateProgressChart();
+
+  // expose for debug if needed
+  window.progressMilestones = progressMilestones;
+  window.openActualProgressPage = openActualProgressPage;
 }
 
 // =======================================================================
