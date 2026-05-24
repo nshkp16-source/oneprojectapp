@@ -3271,7 +3271,6 @@ function openActualProgressPage(savedSchedule) {
 // =======================================================================
 const bottomContent = document.getElementById('bottomContent');
 
-// Always re-query navTabs fresh — never cache it as a const
 function getNavTabs() {
   return document.getElementById('navTabs');
 }
@@ -3279,11 +3278,8 @@ function getNavTabs() {
 function attachTabEvents() {
   const navTabsEl = getNavTabs();
   if (!navTabsEl) return;
-
-  // Clone to remove any previously attached listeners
   const fresh = navTabsEl.cloneNode(true);
   navTabsEl.parentNode.replaceChild(fresh, navTabsEl);
-
   fresh.addEventListener('click', (e) => {
     const tab = e.target.closest('li[data-tab]');
     if (!tab) return;
@@ -3385,8 +3381,8 @@ async function updateMeetingView(activeView = 'minutes') {
         if (!title||!dateTime||!participants||!agenda) { alert('Please fill in all required fields.'); return; }
         try {
           const res = await fetch('https://oneprojectapp-backend.onrender.com/records/schedule-meeting', {
-            method:'POST',
-            headers:{'Content-Type':'application/json','Authorization':`Bearer ${localStorage.getItem('authToken')}`},
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
             body: JSON.stringify({ projectId: localStorage.getItem('activeProjectId'), title, dateTime, participants, agenda })
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -3402,10 +3398,15 @@ async function displayMeetingList(type) {
   try {
     const projectId = localStorage.getItem('activeProjectId');
     if (!projectId) { document.getElementById('meetingListContainer').innerHTML = '<p style="text-align:center;color:#999;">No project selected.</p>'; return; }
-    const data     = await apiRequest('https://oneprojectapp-backend.onrender.com/records/meetings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ projectId, type }) });
+    const res = await fetch('https://oneprojectapp-backend.onrender.com/records/meetings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
+      body: JSON.stringify({ projectId, type })
+    });
+    const data = await res.json();
     const meetings = data.meetings || [];
-    const container= document.getElementById('meetingListContainer');
-    if (meetings.length === 0) { container.innerHTML = '<p style="text-align:center;color:#999;">No meetings found.</p>'; return; }
+    const container = document.getElementById('meetingListContainer');
+    if (!meetings.length) { container.innerHTML = '<p style="text-align:center;color:#999;">No meetings found.</p>'; return; }
     container.innerHTML = '<ul class="doc-list">' + meetings.map(m => `
       <li class="doc-item">
         <div class="doc-item-header">
@@ -3428,7 +3429,12 @@ async function displayMeetingList(type) {
 
 async function openMeetingDetail(meetingId) {
   try {
-    const data = await apiRequest('https://oneprojectapp-backend.onrender.com/records/meeting-detail', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ meetingId, projectId: localStorage.getItem('activeProjectId') }) });
+    const res = await fetch('https://oneprojectapp-backend.onrender.com/records/meeting-detail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
+      body: JSON.stringify({ meetingId, projectId: localStorage.getItem('activeProjectId') })
+    });
+    const data = await res.json();
     expandGrayPart(`
       <h3 style='margin-bottom:16px;'>📅 Meeting Details</h3>
       <div class='gray-part-field'><div class='gray-part-label'>Title</div><div class='gray-part-value'>${data.title||'N/A'}</div></div>
@@ -3442,24 +3448,19 @@ async function openMeetingDetail(meetingId) {
 
 function setTabContent(key) {
   const map = {
-    // ── Home tabs ─────────────────────────────────────────────────────────
-    'contractual':    ['Contract agreements, amendments, change orders, permits, insurance, tender docs.', 'contractual'],
-    'administrative': ['RFAs, consultant instructions, meeting minutes, correspondence, schedule updates.',  'administrative'],
-    'safety':         ['Safety inspections, incident reports, NCRs, QC tests, risk assessments.',           'safety'],
-    'operational':    ['Daily site reports, progress reports, BoQ, technical specs, submittals, drawings.', 'operational'],
-    'financial':      ['Interim payment certificates, contractor claims, final account reports.',            'financial'],
-    'meeting':        [null, null],   // ← home tabs only
-
-    // ── Workspace / Report tabs ───────────────────────────────────────────
-    'work-center':            ['Task list, work packages, assigned team members, priorities, due dates, look-ahead planning, progress tracking, delays / blockers, linked drawings and related files.',     'work-center'],
-    'planning-execution':     ['Daily site reports, manpower, work done today, work planned next, material delivery status, equipment status, site photos, subcontractor activity, field issues.',          'planning-execution'],
-    'documents-approval':     ['Drawings, RFIs, submittals, method statements, material approvals, inspection requests, revision history, document transmittals, approval workflows.',                     'documents-approval'],
-    'control-reports':        ['Cost tracking, budget vs actual, variations / change orders, risk register, issue tracker, quality observations, safety observations, weekly / monthly reports, KPI summary.', 'control-reports'],
-    'communication-meetings': [null, null],   // ← report tabs only
+    'contractual':            ['Contract agreements, amendments, change orders, permits, insurance, tender docs.', 'contractual'],
+    'administrative':         ['RFAs, consultant instructions, meeting minutes, correspondence, schedule updates.',  'administrative'],
+    'safety':                 ['Safety inspections, incident reports, NCRs, QC tests, risk assessments.',           'safety'],
+    'operational':            ['Daily site reports, progress reports, BoQ, technical specs, submittals, drawings.', 'operational'],
+    'financial':              ['Interim payment certificates, contractor claims, final account reports.',            'financial'],
+    'meeting':                [null, null],
+    'work-center':            ['Task list, work packages, assigned team members, priorities, due dates.',           'work-center'],
+    'planning-execution':     ['Daily site reports, manpower, work done today, material delivery status.',          'planning-execution'],
+    'documents-approval':     ['Drawings, RFIs, submittals, method statements, material approvals.',               'documents-approval'],
+    'control-reports':        ['Cost tracking, budget vs actual, variations, risk register, KPI summary.',         'control-reports'],
+    'communication-meetings': [null, null],
   };
-
   if (key === 'meeting' || key === 'communication-meetings') { renderMeetingContent(); return; }
-
   const entry = map[key];
   if (!entry) return;
   const [desc, category] = entry;
@@ -3468,55 +3469,100 @@ function setTabContent(key) {
 }
 
 // =======================================================================
-//  RECORDS CACHE + ROLE HELPERS
+//  ROLE HELPERS
 // =======================================================================
 const recordsCache = {};
 
 function getSide(role) {
   const r = (role||'').toLowerCase().replace(/\s/g,'_');
-  if (r==='contractor'||r==='contractor_pm') return 'contractor';
-  if (r==='consultant'||r==='consultant_pm') return 'consultant';
-  if (r==='client'    ||r==='client_pm')     return 'client';
+  if (r==='contractor'||r==='contractor_project_manager') return 'contractor';
+  if (r==='consultant'||r==='consultant_project_manager') return 'consultant';
+  if (r==='client'    ||r==='client_project_manager')     return 'client';
   return null;
 }
-function isDecisionMaker(role) { return getSide(role) !== null; }
-function getWorkflowRole(uploaderSide, reviewerSide) {
-  const matrix = {
-    contractor: { consultant:{ step:1, label:'Approve' }, client:{ step:2, label:'Accept' } },
-    consultant: { client:    { step:1, label:'Approve' }, contractor:{ step:2, label:'Accept' } },
-    client:     { consultant:{ step:1, label:'Approve' }, contractor:{ step:2, label:'Accept' } },
-  };
-  return matrix[uploaderSide]?.[reviewerSide] || null;
-}
 
+function isDecisionMaker(role) { return getSide(role) !== null; }
+
+// =======================================================================
+//  WORKFLOW LOGIC
+//
+//  Returns one of:
+//    'uploader'           — current user posted this record
+//    'team_member'        — non-decision-maker, not uploader
+//    'awaiting_step1'     — decision maker but step 1 not yet done by required party
+//    { step, label, action } — decision maker who can act now (label = 'Approve'|'Accept')
+//    'acted'              — decision maker already acted, next step = Add Notice
+//    'locked'             — record fully accepted, nothing more to do
+// =======================================================================
 function computeButtonState(doc) {
   const currentUserId   = window.currentUserId;
   const currentUserRole = window.currentUserRole;
-  if (!isDecisionMaker(currentUserRole)) return 'team_member';
-  const uploaderSide = getSide(doc.uploader_role || doc.role);
-  const reviewerSide = getSide(currentUserRole);
-  const isUploader   = String(doc.uploaded_by) === String(currentUserId);
+  const uploaderSide    = getSide(doc.uploader_role || doc.role);
+  const reviewerSide    = getSide(currentUserRole);
+  const isUploader      = String(doc.uploaded_by) === String(currentUserId);
+
+  // Uploader sees only delete
   if (isUploader) return 'uploader';
-  const wfRole = getWorkflowRole(uploaderSide, reviewerSide);
-  if (!wfRole) return 'none';
-  const reviews  = doc.reviews || [];
-  const myReview = reviews.find(r => String(r.reviewer_id) === String(currentUserId));
-  if (myReview && myReview.action && !['no_action','view','comment'].includes(myReview.action)) return 'notice_only';
-  if (wfRole.step === 2) {
-    const step1SideMap = { contractor:'consultant', consultant:'client', client:'consultant' };
-    const step1Side    = step1SideMap[uploaderSide];
-    const step1Done    = reviews.some(r => getSide(r.reviewer_role)===step1Side && (r.action==='approved'||r.action==='accepted'));
-    if (!step1Done) return { state:'awaiting_step1', pendingRole: step1Side };
+
+  // Fully locked — accepted by final step
+  if (isRecordFullyAccepted(doc)) return 'locked';
+
+  // Non-decision-maker (team member)
+  if (!isDecisionMaker(currentUserRole)) return 'team_member';
+
+  // Decision maker — check if they've already acted
+  const reviews    = doc.reviews || [];
+  const myReview   = reviews.find(r => String(r.reviewer_id) === String(currentUserId));
+  const workflowActions = ['approved', 'accepted', 'rejected'];
+  const alreadyActed = myReview && workflowActions.includes(myReview.action);
+
+  if (alreadyActed) return 'acted'; // show "Add Notice" only
+
+  // Determine which step this reviewer handles
+  // Step 1: first party to review; Step 2: second party to review
+  const stepMap = {
+    contractor: [
+      { side: 'consultant', step: 1, label: 'Approve', action: 'approved' },
+      { side: 'client',     step: 2, label: 'Accept',  action: 'accepted' },
+    ],
+    consultant: [
+      { side: 'client',      step: 1, label: 'Approve', action: 'approved' },
+      { side: 'contractor',  step: 2, label: 'Accept',  action: 'accepted' },
+    ],
+    client: [
+      { side: 'consultant',  step: 1, label: 'Approve', action: 'approved' },
+      { side: 'contractor',  step: 2, label: 'Accept',  action: 'accepted' },
+    ],
+  };
+
+  const steps = stepMap[uploaderSide];
+  if (!steps) return 'none';
+
+  // Find which step the current reviewer belongs to
+  const myStep = steps.find(s => s.side === reviewerSide);
+  if (!myStep) return 'none';
+
+  // If this is step 2, check step 1 is done first
+  if (myStep.step === 2) {
+    const step1Side = steps.find(s => s.step === 1)?.side;
+    const step1Done = reviews.some(r =>
+      getSide(r.reviewer_role) === step1Side &&
+      (r.action === 'approved' || r.action === 'accepted')
+    );
+    if (!step1Done) return { state: 'awaiting_step1', pendingRole: step1Side };
   }
-  return wfRole;
+
+  return myStep; // { step, label, action }
 }
 
 function isRecordFullyAccepted(doc) {
   if (doc.status === 'approved_record') return true;
   const uploaderSide = getSide(doc.uploader_role || doc.role);
-  const step2SideMap = { contractor:'client', consultant:'contractor', client:'contractor' };
-  const step2Side    = step2SideMap[uploaderSide];
-  return (doc.reviews||[]).some(r => getSide(r.reviewer_role)===step2Side && r.action==='accepted');
+  const step2SideMap = { contractor: 'client', consultant: 'contractor', client: 'contractor' };
+  const step2Side = step2SideMap[uploaderSide];
+  return (doc.reviews||[]).some(r =>
+    getSide(r.reviewer_role) === step2Side && r.action === 'accepted'
+  );
 }
 
 function statusBadge(status) {
@@ -3549,7 +3595,8 @@ async function loadTabRecords(category) {
     placeholderDiv.style.display = 'block';
     placeholderDiv.innerHTML = "<p style='color:#999;'>Loading...</p>";
     const response = await fetch('https://oneprojectapp-backend.onrender.com/api/fetch-tab-records', {
-      method:'POST', headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ projectId, category })
     });
     if (response.status === 401) { placeholderDiv.innerHTML = "<p style='color:#ef4444;'>⚠️ Unauthorized. Please log in again.</p>"; return; }
@@ -3568,143 +3615,268 @@ function renderRecordsList(records, category) {
   const recordsList    = document.getElementById('recordsList');
   const placeholderDiv = document.querySelector('.no-data-placeholder');
   if (!recordsList || !placeholderDiv) return;
-  if (records.length === 0) {
+  if (!records.length) {
     recordsList.innerHTML = '';
     placeholderDiv.style.display = 'block';
     placeholderDiv.innerHTML = '<p>ℹ️ No records found in this category.</p>';
     return;
   }
-  const currentUserRole     = window.currentUserRole || '';
-  const currentUserId       = window.currentUserId   || '';
-  const userIsDecisionMaker = isDecisionMaker(currentUserRole);
+  placeholderDiv.style.display = 'none';
 
   recordsList.innerHTML = records.map(doc => {
-    const isUnread    = !doc.is_viewed;
-    const fileName    = doc.file_path ? doc.file_path.split('/').pop() : null;
-    const fullyLocked = isRecordFullyAccepted(doc);
+    const isUnread  = !doc.is_viewed;
+    const fileName  = doc.file_path ? doc.file_path.split('/').pop() : null;
+    const isLocked  = isRecordFullyAccepted(doc);
+    const btnState  = computeButtonState(doc);
 
-    // Review history rows
+    // Format posted date/time
+    const postedAt  = doc.date_recorded
+      ? new Date(doc.date_recorded).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' })
+      : 'N/A';
+
+    // ── Review history rows ──
     const reviewsHtml = (doc.reviews || []).map(r => {
-      const isTMComment = !isDecisionMaker(r.reviewer_role) || r.action === 'comment';
+      const actionColor = r.action==='approved'||r.action==='accepted'
+        ? '#10b981' : r.action==='rejected' ? '#ef4444' : '#9ca3af';
+      const actionLabel = r.action === 'no_action' ? '(viewed)' : r.action;
       return `
-        <li style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555;${isTMComment?'opacity:0.75;':''}">
-          <span><strong>${r.reviewer_role}</strong>${isTMComment?`<span style="background:#e5e7eb;color:#6b7280;border-radius:8px;padding:1px 6px;font-size:10px;margin-left:4px;">comment</span>`:''}</span>
-          ${!isTMComment?`<span style="color:${r.action==='approved'||r.action==='accepted'?'#10b981':r.action==='rejected'?'#ef4444':'#6b7280'};font-weight:600;text-transform:capitalize;">${r.action}</span>`:'<span></span>'}
-          <span style="color:#9ca3af;">${new Date(r.action_date).toLocaleString()}</span>
-          ${r.comment?`<span style="color:#6b7280;font-style:italic;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.comment}">💬 ${r.comment}</span>`:''}
+        <li style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;
+                   border-bottom:1px solid #f0f0f0;font-size:12px;color:#555;">
+          <div style="flex:1;">
+            <span style="font-weight:600;">${r.reviewer_role}</span>
+            <span style="color:${actionColor};font-weight:600;margin-left:8px;text-transform:capitalize;">${actionLabel}</span>
+            <span style="color:#9ca3af;margin-left:8px;">${new Date(r.action_date).toLocaleString(undefined,{dateStyle:'short',timeStyle:'short'})}</span>
+            ${r.comment ? `<div style="margin-top:4px;color:#6b7280;font-style:italic;padding:4px 8px;background:#f9fafb;border-radius:4px;border-left:2px solid #d1d5db;">💬 ${r.comment}</div>` : ''}
+          </div>
         </li>`;
     }).join('');
 
-    // Action buttons
+    // ── Build action buttons based on role/state ──
     let actionButtons = '';
-    if (fullyLocked) {
+
+    if (isLocked) {
+      // Fully accepted — nothing more to do
       actionButtons = `<span style="flex:1;padding:8px 12px;font-size:12px;color:#10b981;font-style:italic;text-align:center;font-weight:600;">🔒 Record Locked — Final Acceptance Issued</span>`;
-    } else {
-      const btnState = computeButtonState(doc);
-      if (btnState === 'team_member') {
-        // only comment button — added separately below
-      } else if (btnState === 'uploader') {
-        actionButtons = `<button onclick="deleteRecord('${doc.id}','${category}')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">🗑️ Delete</button>`;
-      } else if (btnState === 'notice_only') {
-        // Determine whether their existing action was a rejection
-        const myReview   = (doc.reviews||[]).find(r => String(r.reviewer_id)===String(currentUserId));
-        const wasRejected= myReview?.action === 'rejected';
-        actionButtons = `<button onclick="openNoticeOfDetermination('${doc.id}','${category}',${wasRejected})" style="flex:1;min-width:140px;padding:8px 14px;font-size:12px;font-weight:600;background:${wasRejected?'#fee2e2':'#fef3c7'};color:${wasRejected?'#991b1b':'#92400e'};border:1px solid ${wasRejected?'#fca5a5':'#fcd34d'};border-radius:6px;cursor:pointer;">${wasRejected?'📋 Issue Rejection Notice':'📋 Issue Notice of Determination'}</button>`;
-      } else if (typeof btnState === 'object' && btnState !== null && btnState.state === 'awaiting_step1') {
-        actionButtons = `<span style="flex:1;padding:8px 12px;font-size:12px;color:#9ca3af;font-style:italic;text-align:center;">⏳ Awaiting ${btnState.pendingRole} Approval</span>`;
-      } else if (typeof btnState === 'object' && btnState !== null && btnState.label) {
-        const positiveLabel  = btnState.label;
-        const positiveAction = positiveLabel.toLowerCase();
+
+    } else if (btnState === 'uploader') {
+      // Uploader: only delete (and only if no workflow actions taken yet)
+      const hasWorkflowAction = (doc.reviews||[]).some(r => ['approved','accepted','rejected'].includes(r.action));
+      if (!hasWorkflowAction) {
         actionButtons = `
-          <button onclick="handleRecordAction('${doc.id}','${category}','${positiveAction}')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">✅ ${positiveLabel}</button>
-          <button onclick="handleRecordAction('${doc.id}','${category}','rejected')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">❌ Reject</button>`;
+          <button onclick="deleteRecord('${doc.id}','${category}')"
+            style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
+                   background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">
+            🗑️ Delete
+          </button>`;
+      } else {
+        actionButtons = `<span style="flex:1;padding:8px 12px;font-size:12px;color:#9ca3af;font-style:italic;">Record is under review — cannot delete.</span>`;
+      }
+
+    } else if (btnState === 'acted') {
+      // Decision maker already acted — show only "Add Notice" as next required step
+      const myReview   = (doc.reviews||[]).find(r => String(r.reviewer_id)===String(window.currentUserId));
+      const wasRejected = myReview?.action === 'rejected';
+      actionButtons = `
+        <button onclick="openNoticeOfDetermination('${doc.id}','${category}',${wasRejected})"
+          style="flex:1;min-width:160px;padding:8px 14px;font-size:12px;font-weight:600;
+                 background:${wasRejected?'#fee2e2':'#fef3c7'};
+                 color:${wasRejected?'#991b1b':'#92400e'};
+                 border:1px solid ${wasRejected?'#fca5a5':'#fcd34d'};
+                 border-radius:6px;cursor:pointer;">
+          📋 ${wasRejected ? 'Issue Rejection Notice' : 'Issue Notice of Determination'}
+        </button>`;
+
+    } else if (typeof btnState === 'object' && btnState?.state === 'awaiting_step1') {
+      actionButtons = `<span style="flex:1;padding:8px 12px;font-size:12px;color:#9ca3af;font-style:italic;text-align:center;">⏳ Awaiting ${btnState.pendingRole} Approval</span>`;
+
+    } else if (typeof btnState === 'object' && btnState?.label) {
+      // Decision maker who can act: show their specific action + Reject
+      // Never show Approve and Accept together
+      actionButtons = `
+        <button onclick="handleDecisionMakerAction('${doc.id}','${category}','${btnState.action}')"
+          style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
+                 background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">
+          ✅ ${btnState.label}
+        </button>
+        <button onclick="handleDecisionMakerAction('${doc.id}','${category}','rejected')"
+          style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
+                 background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">
+          ❌ Reject
+        </button>`;
+
+    } else if (btnState === 'team_member') {
+      // Team member: approve/reject (action col only) + comment (comment col only)
+      const myReview = (doc.reviews||[]).find(r => String(r.reviewer_id)===String(window.currentUserId));
+      const myAction = myReview?.action;
+      const hasActed = myAction && myAction !== 'no_action';
+
+      if (hasActed) {
+        const actionColor = myAction === 'approved' ? '#10b981' : myAction === 'rejected' ? '#ef4444' : '#6b7280';
+        actionButtons = `
+          <span style="flex:1;padding:8px 12px;font-size:12px;color:${actionColor};font-weight:600;">
+            ${myAction === 'approved' ? '✅' : '❌'} You ${myAction} this record
+          </span>
+          <button onclick="openTeamMemberComment('${doc.id}','${category}')"
+            style="min-width:110px;padding:8px 12px;font-size:12px;font-weight:600;
+                   background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">
+            💬 ${myReview?.comment ? 'Edit Comment' : 'Add Comment'}
+          </button>`;
+      } else {
+        actionButtons = `
+          <button onclick="handleTeamMemberAction('${doc.id}','${category}','approved')"
+            style="flex:1;min-width:90px;padding:8px 12px;font-size:12px;font-weight:600;
+                   background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">
+            ✅ Approve
+          </button>
+          <button onclick="handleTeamMemberAction('${doc.id}','${category}','rejected')"
+            style="flex:1;min-width:90px;padding:8px 12px;font-size:12px;font-weight:600;
+                   background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">
+            ❌ Reject
+          </button>
+          <button onclick="openTeamMemberComment('${doc.id}','${category}')"
+            style="min-width:110px;padding:8px 12px;font-size:12px;font-weight:600;
+                   background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">
+            💬 Comment
+          </button>`;
       }
     }
 
-    // Comment button: all users except when locked
-    const commentButton = fullyLocked ? '' : `<button onclick="openCommentSection('${doc.id}','${category}')" style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">💬 Comment</button>`;
+    // ── Workflow steps visual ──
+    const workflowHtml = isDecisionMaker(window.currentUserRole) && !isLocked
+      ? renderWorkflowSteps(doc, window.currentUserId, window.currentUserRole)
+      : '';
 
     return `
-      <li class="doc-item" data-id="${doc.id}" data-uploaded-by="${doc.uploaded_by}" style="background:${isUnread?'#eff6ff':'#fff'};border:1px solid ${isUnread?'#bfdbfe':'#e5e7eb'};border-left:4px solid ${isUnread?'#3b82f6':'#e5e7eb'};border-radius:10px;margin-bottom:10px;overflow:hidden;box-shadow:${isUnread?'0 2px 8px rgba(59,130,246,0.10)':'0 1px 3px rgba(0,0,0,0.06)'};transition:background 0.3s,border 0.3s;">
-        <div class="doc-item-header" onclick="toggleRecordDetail('${doc.id}','${category}')" style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;cursor:pointer;gap:12px;">
+      <li class="doc-item" data-id="${doc.id}" data-uploaded-by="${doc.uploaded_by}"
+        style="background:${isUnread?'#eff6ff':'#fff'};
+               border:1px solid ${isUnread?'#bfdbfe':'#e5e7eb'};
+               border-left:4px solid ${isUnread?'#3b82f6':'#e5e7eb'};
+               border-radius:10px;margin-bottom:10px;overflow:hidden;
+               box-shadow:${isUnread?'0 2px 8px rgba(59,130,246,0.10)':'0 1px 3px rgba(0,0,0,0.06)'};
+               transition:background 0.3s,border 0.3s;">
+
+        <!-- ── Card header (click to expand) ── -->
+        <div class="doc-item-header"
+          onclick="toggleRecordDetail('${doc.id}','${category}')"
+          style="display:flex;justify-content:space-between;align-items:center;
+                 padding:12px 16px;cursor:pointer;gap:12px;">
           <div style="flex:1;min-width:0;">
-            <div style="font-weight:${isUnread?'700':'600'};font-size:14px;color:#1f2937;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px;">
+            <div style="font-weight:${isUnread?'700':'600'};font-size:14px;color:#1f2937;
+                        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+                        display:flex;align-items:center;gap:6px;">
               ${isUnread?`<span class="unread-dot-${doc.id}" style="display:inline-block;width:8px;height:8px;flex-shrink:0;background:#3b82f6;border-radius:50%;"></span>`:''}
               📄 ${doc.title}
               ${doc.record_kind==='notice'?`<span style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">NOTICE</span>`:''}
               ${doc.record_kind==='rejection_notice'?`<span style="background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">REJECTION NOTICE</span>`:''}
-              ${fullyLocked?`<span style="background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">🔒 LOCKED</span>`:''}
+              ${isLocked?`<span style="background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">🔒 LOCKED</span>`:''}
             </div>
-            <div style="font-size:11px;color:#9ca3af;margin-top:3px;">By ${doc.uploader_role||'N/A'} &nbsp;•&nbsp; ${doc.date_recorded?new Date(doc.date_recorded).toLocaleString():'N/A'}</div>
+            <!-- Posted by + date/time always visible -->
+            <div style="font-size:11px;color:#9ca3af;margin-top:3px;">
+              Posted by <strong style="color:#6b7280;">${doc.uploader_role||'N/A'}</strong>
+              &nbsp;•&nbsp; ${postedAt}
+            </div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
             ${statusBadge(doc.status)}
             <span style="color:#9ca3af;font-size:16px;" class="chevron-${doc.id}">▾</span>
           </div>
         </div>
-        <div class="doc-detail" id="detail-${doc.id}" style="display:none;padding:14px 16px;border-top:1px solid #f3f4f6;background:#fafafa;">
+
+        <!-- ── Expanded detail ── -->
+        <div class="doc-detail" id="detail-${doc.id}"
+          style="display:none;padding:14px 16px;border-top:1px solid #f3f4f6;background:#fafafa;">
+
+          <!-- Description -->
           <div style="margin-bottom:12px;">
-            <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Description</div>
+            <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+                        letter-spacing:.5px;margin-bottom:4px;">Description</div>
             <div style="font-size:13px;color:#374151;line-height:1.7;">${doc.description||'No description provided.'}</div>
           </div>
+
+          <!-- Tied notice reference -->
           ${(doc.record_kind==='notice'||doc.record_kind==='rejection_notice')&&doc.notice_tied_id?`
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Tied to Record</div>
             <div style="font-size:13px;color:#92400e;">📎 Record #${doc.notice_tied_id}</div>
           </div>`:''}
+
+          <!-- Attached file -->
           ${fileName?`
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Attached File</div>
-            <a onclick="downloadFile('${doc.id}','${category}','${fileName}')" style="display:inline-flex;align-items:center;gap:6px;background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:500;text-decoration:none;cursor:pointer;">⬇️ ${fileName}</a>
+            <a onclick="downloadFile('${doc.id}','${category}','${fileName}')"
+              style="display:inline-flex;align-items:center;gap:6px;background:#eff6ff;color:#2563eb;
+                     border:1px solid #bfdbfe;border-radius:6px;padding:6px 12px;
+                     font-size:12px;font-weight:500;text-decoration:none;cursor:pointer;">
+              ⬇️ ${fileName}
+            </a>
           </div>`:''}
+
+          <!-- Review history -->
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Review History</div>
-            ${reviewsHtml.length>0?`<ul style="margin:0;padding:0;list-style:none;">${reviewsHtml}</ul>`:'<p style="font-size:12px;color:#9ca3af;margin:0;">No reviews yet.</p>'}
+            ${reviewsHtml.length>0
+              ? `<ul style="margin:0;padding:0;list-style:none;">${reviewsHtml}</ul>`
+              : '<p style="font-size:12px;color:#9ca3af;margin:0;">No reviews yet.</p>'}
           </div>
-          ${userIsDecisionMaker ? renderWorkflowSteps(doc, currentUserId, currentUserRole) : ''}
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid #e5e7eb;">
-            ${commentButton}
+
+          <!-- Workflow steps (decision makers only) -->
+          ${workflowHtml}
+
+          <!-- Action buttons -->
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;
+                      padding-top:12px;border-top:1px solid #e5e7eb;">
             ${actionButtons}
           </div>
         </div>
       </li>`;
   }).join('');
-
-  placeholderDiv.style.display = 'none';
 }
 
+// ── Workflow steps visual ──────────────────────────────────────────────────
 function renderWorkflowSteps(doc, currentUserId, currentUserRole) {
   const uploaderSide = getSide(doc.uploader_role || doc.role);
   if (!uploaderSide) return '';
   const stepMap = {
-    contractor: [{ side:'consultant', label:'Consultant Approval' }, { side:'client',    label:'Client Acceptance'     }],
-    consultant: [{ side:'client',     label:'Client Approval'     }, { side:'contractor',label:'Contractor Acceptance' }],
-    client:     [{ side:'consultant', label:'Consultant Approval' }, { side:'contractor',label:'Contractor Acceptance' }],
+    contractor: [{ side:'consultant', label:'Consultant Approval' }, { side:'client',     label:'Client Acceptance'      }],
+    consultant: [{ side:'client',     label:'Client Approval'     }, { side:'contractor', label:'Contractor Acceptance'  }],
+    client:     [{ side:'consultant', label:'Consultant Approval' }, { side:'contractor', label:'Contractor Acceptance'  }],
   };
   const steps = stepMap[uploaderSide];
   if (!steps) return '';
-  const workflowReviews = (doc.reviews||[]).filter(r => isDecisionMaker(r.reviewer_role) && !['comment','no_action','view'].includes(r.action));
+
+  const workflowReviews = (doc.reviews||[]).filter(r =>
+    isDecisionMaker(r.reviewer_role) && ['approved','accepted','rejected'].includes(r.action)
+  );
+
   const stepsHtml = steps.map((step, idx) => {
-    const matchingReview = workflowReviews.find(r => getSide(r.reviewer_role) === step.side);
-    let icon='🔒', color='#d1d5db', label=`Step ${idx+1}: ${step.label}`;
-    if (matchingReview) {
-      if (matchingReview.action==='rejected') { icon='❌'; color='#ef4444'; label+=' (Rejected)'; }
-      else {
-        icon='✅'; color='#10b981';
-        if (doc.status!=='approved_record'&&doc.status!=='rejected'&&doc.record_kind!=='notice'&&doc.record_kind!=='rejection_notice') { label+=' (Notice Required)'; icon='📋'; color='#f59e0b'; }
-      }
+    const match = workflowReviews.find(r => getSide(r.reviewer_role) === step.side);
+    let icon = '🔒', color = '#d1d5db', label = `Step ${idx+1}: ${step.label}`;
+    if (match) {
+      if (match.action === 'rejected') { icon='❌'; color='#ef4444'; label+=' — Rejected'; }
+      else { icon='✅'; color='#10b981'; label+=' — Done (Notice Required)'; }
+    } else if (idx===0) {
+      icon='⏳'; color='#f59e0b';
     } else {
-      if (idx===0) { icon='⏳'; color='#f59e0b'; }
-      else {
-        const prevDone = workflowReviews.some(r => getSide(r.reviewer_role)===steps[idx-1].side && (r.action==='approved'||r.action==='accepted'));
-        if (prevDone) { icon='⏳'; color='#f59e0b'; }
-      }
+      const prev = workflowReviews.some(r => getSide(r.reviewer_role)===steps[0].side && (r.action==='approved'||r.action==='accepted'));
+      if (prev) { icon='⏳'; color='#f59e0b'; }
     }
-    return `<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:14px;">${icon}</span><span style="font-size:11px;font-weight:600;color:${color};">${label}</span></div>`;
+    return `<div style="display:flex;align-items:center;gap:6px;">
+      <span style="font-size:14px;">${icon}</span>
+      <span style="font-size:11px;font-weight:600;color:${color};">${label}</span>
+    </div>`;
   }).join('<div style="font-size:10px;color:#d1d5db;margin:0 4px;">→</div>');
-  return `<div style="margin-bottom:12px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;"><div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Approval Workflow</div><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">${stepsHtml}</div></div>`;
+
+  return `
+    <div style="margin-bottom:12px;padding:10px 12px;background:#f8fafc;
+                border:1px solid #e2e8f0;border-radius:8px;">
+      <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+                  letter-spacing:.5px;margin-bottom:8px;">Approval Workflow</div>
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">${stepsHtml}</div>
+    </div>`;
 }
 
+// ── Toggle expand ─────────────────────────────────────────────────────────
 function toggleRecordDetail(recordId, category) {
   const detail  = document.getElementById(`detail-${recordId}`);
   const chevron = document.querySelector(`.chevron-${recordId}`);
@@ -3717,32 +3889,163 @@ function toggleRecordDetail(recordId, category) {
     const isUploader = String(item?.dataset.uploadedBy) === String(window.currentUserId||'');
     if (!isUploader) {
       fetch('https://oneprojectapp-backend.onrender.com/api/mark-record-viewed', {
-        method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':`Bearer ${localStorage.getItem('authToken')}`},
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
         body: JSON.stringify({ projectId: localStorage.getItem('activeProjectId'), recordId, category })
       }).then(() => {
         const dot = document.querySelector(`.unread-dot-${recordId}`);
         if (dot) dot.remove();
-        if (item) { item.style.background='#fff'; item.style.border='1px solid #e5e7eb'; item.style.borderLeft='4px solid #e5e7eb'; item.style.boxShadow='0 1px 3px rgba(0,0,0,0.06)'; }
+        if (item) {
+          item.style.background='#fff';
+          item.style.border='1px solid #e5e7eb';
+          item.style.borderLeft='4px solid #e5e7eb';
+          item.style.boxShadow='0 1px 3px rgba(0,0,0,0.06)';
+        }
       }).catch(err => console.error('Mark viewed error:', err));
     }
   }
 }
 
+// =======================================================================
+//  DECISION MAKER ACTION
+//  Updates document_reviews.action AND record table status
+// =======================================================================
+async function handleDecisionMakerAction(recordId, category, action) {
+  if (!isDecisionMaker(window.currentUserRole)) return;
+  try {
+    const response = await fetch('https://oneprojectapp-backend.onrender.com/api/review-record', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
+      body: JSON.stringify({
+        projectId: localStorage.getItem('activeProjectId'),
+        recordId, category, action,
+        actorType: 'decision_maker'   // backend uses this to know it should update status
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) { alert(data.error||`Failed to ${action} record.`); return; }
+    alert(data.message||`Record ${action} successfully.`);
+    delete recordsCache[category];
+    loadTabRecords(category);
+    // After acting, show notice prompt after short delay
+    setTimeout(() => openNoticeOfDetermination(recordId, category, action === 'rejected'), 400);
+  } catch(err) { console.error('Decision maker action error:', err); alert(`Failed to ${action} record.`); }
+}
+
+// =======================================================================
+//  TEAM MEMBER ACTION
+//  Updates document_reviews.action ONLY — does NOT change record status
+// =======================================================================
+async function handleTeamMemberAction(recordId, category, action) {
+  try {
+    const response = await fetch('https://oneprojectapp-backend.onrender.com/api/review-record', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
+      body: JSON.stringify({
+        projectId: localStorage.getItem('activeProjectId'),
+        recordId, category, action,
+        actorType: 'team_member'      // backend uses this to skip status update
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) { alert(data.error||'Failed to record your action.'); return; }
+    delete recordsCache[category];
+    loadTabRecords(category);
+  } catch(err) { console.error('Team member action error:', err); alert('Failed to record your action.'); }
+}
+
+// =======================================================================
+//  TEAM MEMBER COMMENT
+//  Saves text to document_reviews.comment column only
+//  Does NOT change action column or record status
+// =======================================================================
+function openTeamMemberComment(recordId, category) {
+  const existing = document.getElementById('commentModal');
+  if (existing) existing.remove();
+
+  // Pre-fill existing comment if any
+  const cachedRecords = recordsCache[category] || [];
+  const doc = cachedRecords.find(r => String(r.id) === String(recordId));
+  const myReview = (doc?.reviews||[]).find(r => String(r.reviewer_id) === String(window.currentUserId));
+  const existingComment = myReview?.comment || '';
+
+  const modal = document.createElement('div');
+  modal.id = 'commentModal';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:24px;width:min(420px,90vw);
+                box-shadow:0 20px 60px rgba(0,0,0,0.2);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h3 style="margin:0;font-size:16px;color:#1f2937;">💬 Add Comment</h3>
+        <button id="closeCommentModal" style="background:none;border:none;font-size:20px;color:#9ca3af;cursor:pointer;">×</button>
+      </div>
+      <p style="font-size:12px;color:#9ca3af;margin:0 0 12px;">Your comment is stored alongside your review. It does not affect the record status.</p>
+      <textarea id="commentText" placeholder="Enter your comment…"
+        style="width:100%;min-height:100px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
+               font-size:13px;color:#374151;resize:vertical;box-sizing:border-box;">${existingComment}</textarea>
+      <div style="display:flex;gap:8px;margin-top:14px;">
+        <button id="submitCommentBtn"
+          style="flex:1;padding:10px;font-size:13px;font-weight:600;background:#2563eb;color:#fff;
+                 border:none;border-radius:8px;cursor:pointer;">
+          Submit Comment
+        </button>
+        <button id="cancelCommentBtn"
+          style="flex:1;padding:10px;font-size:13px;font-weight:600;background:#f3f4f6;color:#374151;
+                 border:1px solid #d1d5db;border-radius:8px;cursor:pointer;">
+          Cancel
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  document.getElementById('closeCommentModal').addEventListener('click', () => modal.remove());
+  document.getElementById('cancelCommentBtn').addEventListener('click',  () => modal.remove());
+  modal.addEventListener('click', (e) => { if (e.target===modal) modal.remove(); });
+
+  document.getElementById('submitCommentBtn').addEventListener('click', async () => {
+    const comment = document.getElementById('commentText').value.trim();
+    if (!comment) { alert('Please enter a comment.'); return; }
+    try {
+      const response = await fetch('https://oneprojectapp-backend.onrender.com/api/review-record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
+        body: JSON.stringify({
+          projectId: localStorage.getItem('activeProjectId'),
+          recordId, category,
+          action: 'comment',          // special signal — backend saves to comment col only
+          comment,
+          actorType: 'team_member'
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) { alert(data.error||'Failed to submit comment.'); return; }
+      modal.remove();
+      delete recordsCache[category];
+      loadTabRecords(category);
+    } catch(err) { console.error('Comment error:', err); alert('Failed to submit comment.'); }
+  });
+}
+
+// =======================================================================
+//  DOWNLOAD / DELETE
+// =======================================================================
 async function downloadFile(recordId, category, fileName) {
   const token = localStorage.getItem('authToken');
   try {
-    const response = await fetch(`https://oneprojectapp-backend.onrender.com/api/download-file?recordId=${recordId}&category=${category}`, { method:'GET', headers:{'Authorization':`Bearer ${token}`} });
-    if (!response.ok) { const err = await response.json().catch(()=>({})); alert(err.error||`Failed to download.`); return; }
+    const response = await fetch(
+      `https://oneprojectapp-backend.onrender.com/api/download-file?recordId=${recordId}&category=${category}`,
+      { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } }
+    );
+    if (!response.ok) { const err=await response.json().catch(()=>({})); alert(err.error||'Failed to download.'); return; }
     const contentType = response.headers.get('content-type')||'';
     if (contentType.includes('application/json')) {
       const data = await response.json();
-      if (data.url) { const a=document.createElement('a'); a.href=data.url; a.download=fileName; a.target='_blank'; document.body.appendChild(a); a.click(); a.remove(); }
+      if (data.url) { const a=document.createElement('a');a.href=data.url;a.download=fileName;a.target='_blank';document.body.appendChild(a);a.click();a.remove(); }
       else alert(data.error||'File not available.');
       return;
     }
     const blob = await response.blob();
-    if (blob.size===0) { alert('File is empty.'); return; }
+    if (!blob.size) { alert('File is empty.'); return; }
     const url = window.URL.createObjectURL(blob);
     const a   = document.createElement('a');
     a.href=url; a.download=fileName;
@@ -3755,8 +4058,8 @@ async function deleteRecord(recordId, category) {
   if (!confirm('Are you sure you want to delete this record? This cannot be undone.')) return;
   try {
     const response = await fetch('https://oneprojectapp-backend.onrender.com/api/delete-record', {
-      method:'DELETE',
-      headers:{'Content-Type':'application/json','Authorization':`Bearer ${localStorage.getItem('authToken')}`},
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
       body: JSON.stringify({ projectId: localStorage.getItem('activeProjectId'), recordId, category })
     });
     const data = await response.json();
@@ -3768,94 +4071,20 @@ async function deleteRecord(recordId, category) {
 }
 
 // =======================================================================
-//  COMMENT SECTION — all roles, never changes status
-// =======================================================================
-function openCommentSection(recordId, category) {
-  const existing = document.getElementById('commentModal');
-  if (existing) existing.remove();
-  const modal = document.createElement('div');
-  modal.id = 'commentModal';
-  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);';
-  modal.innerHTML = `
-    <div style="background:#fff;border-radius:12px;padding:24px;width:min(420px,90vw);box-shadow:0 20px 60px rgba(0,0,0,0.2);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <h3 style="margin:0;font-size:16px;color:#1f2937;">💬 Add Comment</h3>
-        <button id="closeCommentModal" style="background:none;border:none;font-size:20px;color:#9ca3af;cursor:pointer;">×</button>
-      </div>
-      <textarea id="commentText" placeholder="Enter your comment…" style="width:100%;min-height:100px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;color:#374151;resize:vertical;box-sizing:border-box;"></textarea>
-      <div style="display:flex;gap:8px;margin-top:14px;">
-        <button id="submitCommentBtn" style="flex:1;padding:10px;font-size:13px;font-weight:600;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;">Submit Comment</button>
-        <button id="cancelCommentBtn" style="flex:1;padding:10px;font-size:13px;font-weight:600;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;">Cancel</button>
-      </div>
-    </div>`;
-  document.body.appendChild(modal);
-  document.getElementById('closeCommentModal').addEventListener('click', () => modal.remove());
-  document.getElementById('cancelCommentBtn').addEventListener('click',  () => modal.remove());
-  modal.addEventListener('click', (e) => { if (e.target===modal) modal.remove(); });
-  document.getElementById('submitCommentBtn').addEventListener('click', async () => {
-    const comment = document.getElementById('commentText').value.trim();
-    if (!comment) { alert('Please enter a comment.'); return; }
-    try {
-      const response = await fetch('https://oneprojectapp-backend.onrender.com/api/review-record', {
-        method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':`Bearer ${localStorage.getItem('authToken')}`},
-        body: JSON.stringify({ projectId: localStorage.getItem('activeProjectId'), recordId, category, action:'comment', comment })
-      });
-      const data = await response.json();
-      if (!response.ok) { alert(data.error||'Failed to submit comment.'); return; }
-      modal.remove();
-      delete recordsCache[category];
-      loadTabRecords(category);
-    } catch(err) { console.error('Comment error:', err); alert('Failed to submit comment.'); }
-  });
-}
-
-// =======================================================================
-//  WORKFLOW ACTIONS — decision makers only
-// =======================================================================
-async function handleRecordAction(recordId, category, action) {
-  if (!isDecisionMaker(window.currentUserRole)) {
-    console.warn('handleRecordAction blocked: non-decision-maker attempted a workflow action.');
-    return;
-  }
-  const actionLabel = action==='approve'?'approve':action==='accept'?'accept':'reject';
-  try {
-    const response = await fetch('https://oneprojectapp-backend.onrender.com/api/review-record', {
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':`Bearer ${localStorage.getItem('authToken')}`},
-      body: JSON.stringify({ projectId: localStorage.getItem('activeProjectId'), recordId, category, action })
-    });
-    const data = await response.json();
-    if (!response.ok) { alert(data.error||`Failed to ${actionLabel} record.`); return; }
-    alert(data.message||`Record ${actionLabel}d successfully.`);
-    delete recordsCache[category];
-    loadTabRecords(category);
-    // Prompt notice — pass isRejection flag
-    setTimeout(() => openNoticeOfDetermination(recordId, category, action==='rejected'), 400);
-  } catch(err) { console.error('Action error:', err); alert(`Failed to ${actionLabel} record.`); }
-}
-
-// =======================================================================
 //  NOTICE OF DETERMINATION / REJECTION NOTICE
-//  Opens the Add Record panel pre-configured as a notice.
-//  The form submits to a different endpoint and carries noticeTiedId.
+//  Decision makers only — opens add-record panel pre-configured as notice
 // =======================================================================
 function openNoticeOfDetermination(recordId, category, isRejection = false) {
-  if (!isDecisionMaker(window.currentUserRole)) {
-    console.warn('openNoticeOfDetermination blocked: non-decision-maker role.');
-    return;
-  }
+  if (!isDecisionMaker(window.currentUserRole)) return;
   openAddRecordPanel({
     recordKind:   isRejection ? 'rejection_notice' : 'notice',
     noticeTiedId: recordId,
-    category:     category,
+    category,
   });
 }
 
 // =======================================================================
 //  ADD RECORD PANEL
-//  Called with no args      → new record form
-//  Called with noticeConfig → notice / rejection_notice form
 // =======================================================================
 function openAddRecordPanel(noticeConfig = null) {
   const isNotice      = noticeConfig !== null;
@@ -3863,12 +4092,10 @@ function openAddRecordPanel(noticeConfig = null) {
   const noticeTiedId  = isNotice ? noticeConfig.noticeTiedId : null;
   const noticeCategory= isNotice ? noticeConfig.category     : null;
 
-  // For a notice we use the category from the tied record; for new records use the active tab
-  const activeTabElement  = document.querySelector('#navTabs li.active');
-  const category          = isNotice ? noticeCategory : (activeTabElement ? activeTabElement.getAttribute('data-tab') : 'contractual');
-  const tabLabel          = activeTabElement ? activeTabElement.textContent.trim() : 'Records';
+  const activeTabElement = document.querySelector('#navTabs li.active');
+  const category         = isNotice ? noticeCategory : (activeTabElement ? activeTabElement.getAttribute('data-tab') : 'contractual');
+  const tabLabel         = activeTabElement ? activeTabElement.textContent.trim() : 'Records';
 
-  // Header text differs between new record and notice types
   const panelTitle = recordKind === 'rejection_notice'
     ? '📋 Issue Rejection Notice'
     : recordKind === 'notice'
@@ -3876,9 +4103,19 @@ function openAddRecordPanel(noticeConfig = null) {
     : `➕ Add Record — ${tabLabel}`;
 
   const noticeInfoBanner = isNotice ? `
-    <div style="margin-bottom:18px;padding:14px 16px;background:${recordKind==='rejection_notice'?'#fff1f2':'#fffbeb'};border:1px solid ${recordKind==='rejection_notice'?'#fca5a5':'#fcd34d'};border-radius:10px;">
-      <div style="font-size:13px;font-weight:700;color:${recordKind==='rejection_notice'?'#991b1b':'#92400e'};margin-bottom:4px;">${recordKind==='rejection_notice'?'⚠️ Rejection Notice':'📋 Notice of Determination'}</div>
-      <div style="font-size:12px;color:#555;line-height:1.6;">This notice will be tied to Record <strong>#${noticeTiedId}</strong>. It will be saved as a <strong>${recordKind==='rejection_notice'?'Rejection Notice':'Notice of Determination'}</strong> in the same category.</div>
+    <div style="margin-bottom:18px;padding:14px 16px;
+                background:${recordKind==='rejection_notice'?'#fff1f2':'#fffbeb'};
+                border:1px solid ${recordKind==='rejection_notice'?'#fca5a5':'#fcd34d'};
+                border-radius:10px;">
+      <div style="font-size:13px;font-weight:700;
+                  color:${recordKind==='rejection_notice'?'#991b1b':'#92400e'};margin-bottom:4px;">
+        ${recordKind==='rejection_notice'?'⚠️ Rejection Notice':'📋 Notice of Determination'}
+      </div>
+      <div style="font-size:12px;color:#555;line-height:1.6;">
+        This notice will be tied to Record <strong>#${noticeTiedId}</strong>.
+        It will be saved as a <strong>${recordKind==='rejection_notice'?'Rejection Notice':'Notice of Determination'}</strong>
+        in the same category.
+      </div>
     </div>` : '';
 
   const categoryInfo = !isNotice ? `
@@ -3889,29 +4126,34 @@ function openAddRecordPanel(noticeConfig = null) {
 
   const html = `
     <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
-      <!-- Fixed header -->
       <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
         <h3 style="margin:0;color:#333;font-size:20px;">${panelTitle}</h3>
       </div>
-      <!-- Scrollable body -->
       <div style="flex:1;overflow-y:auto;padding:16px 20px;">
         ${noticeInfoBanner}
         ${categoryInfo}
         <form id="addRecordForm">
-          <input type="hidden" id="recordCategory"  value="${category}"/>
-          <input type="hidden" id="recordKindField" value="${recordKind}"/>
+          <input type="hidden" id="recordCategory"    value="${category}"/>
+          <input type="hidden" id="recordKindField"   value="${recordKind}"/>
           <input type="hidden" id="noticeTiedIdField" value="${noticeTiedId||''}"/>
 
-          <!-- Title -->
           <div style="margin-bottom:20px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">${isNotice?'Notice Title *':'Title *'}</label>
-            <input type="text" id="recordTitle" required placeholder="${isNotice?'Enter notice title (e.g., Determination of Claim #12)':'Enter record title (e.g., Foundation Agreement)'}" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"/>
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
+                          font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
+              ${isNotice?'Notice Title *':'Title *'}
+            </label>
+            <input type="text" id="recordTitle" required
+              placeholder="${isNotice?'e.g. Determination of Claim #12':'e.g. Foundation Agreement'}"
+              style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"/>
           </div>
 
-          <!-- Description / rich text -->
           <div style="margin-bottom:20px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">${isNotice?'Notice Content *':'Description *'}</label>
-            <div style="display:flex;flex-wrap:wrap;gap:4px;padding:8px;background:#f5f5f5;border:1px solid #ddd;border-bottom:none;border-radius:6px 6px 0 0;">
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
+                          font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
+              ${isNotice?'Notice Content *':'Description *'}
+            </label>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;padding:8px;background:#f5f5f5;
+                        border:1px solid #ddd;border-bottom:none;border-radius:6px 6px 0 0;">
               <button type="button" onclick="document.execCommand('bold')"      style="width:32px;height:32px;font-weight:bold;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">B</button>
               <button type="button" onclick="document.execCommand('italic')"    style="width:32px;height:32px;font-style:italic;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">I</button>
               <button type="button" onclick="document.execCommand('underline')" style="width:32px;height:32px;text-decoration:underline;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">U</button>
@@ -3921,16 +4163,22 @@ function openAddRecordPanel(noticeConfig = null) {
               <button type="button" onclick="document.execCommand('redo')" style="width:32px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">↪</button>
             </div>
             <div id="recordDescription" contenteditable="true"
-              placeholder="${isNotice?'Provide the full notice content, findings, and determination...':'Provide detailed description of the record...'}"
-              style="width:100%;min-height:200px;padding:12px;border:1px solid #ddd;border-radius:0 0 6px 6px;font-size:14px;color:#333;line-height:1.7;background:#fff;outline:none;box-sizing:border-box;overflow-y:auto;">
+              placeholder="${isNotice?'Provide the full notice content…':'Provide detailed description…'}"
+              style="width:100%;min-height:200px;padding:12px;border:1px solid #ddd;
+                     border-radius:0 0 6px 6px;font-size:14px;color:#333;line-height:1.7;
+                     background:#fff;outline:none;box-sizing:border-box;overflow-y:auto;">
             </div>
             <style>#recordDescription:empty:before{content:attr(placeholder);color:#aaa;pointer-events:none;}</style>
           </div>
 
-          <!-- Attachment -->
           <div style="margin-bottom:24px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Attach Document</label>
-            <div id="attachmentDropZone" style="display:flex;align-items:center;gap:12px;padding:16px;border:2px dashed #ddd;border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
+                          font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
+              Attach Document
+            </label>
+            <div id="attachmentDropZone"
+              style="display:flex;align-items:center;gap:12px;padding:16px;
+                     border:2px dashed #ddd;border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
               <div style="font-size:24px;">📎</div>
               <div style="flex:1;">
                 <div style="font-weight:bold;color:#333;font-size:14px;">Click to upload or drag file</div>
@@ -3942,43 +4190,51 @@ function openAddRecordPanel(noticeConfig = null) {
           </div>
         </form>
       </div>
-      <!-- Fixed footer -->
       <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;background:#fff;display:flex;gap:12px;">
-        <button type="button" onclick="document.getElementById('addRecordForm').requestSubmit()" style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:${recordKind==='rejection_notice'?'#dc2626':recordKind==='notice'?'#d97706':'#28a745'};color:#fff;border:none;border-radius:6px;cursor:pointer;">
+        <button type="button" onclick="document.getElementById('addRecordForm').requestSubmit()"
+          style="flex:1;padding:12px;font-size:14px;font-weight:bold;
+                 background:${recordKind==='rejection_notice'?'#dc2626':recordKind==='notice'?'#d97706':'#28a745'};
+                 color:#fff;border:none;border-radius:6px;cursor:pointer;">
           ${recordKind==='rejection_notice'?'📋 Issue Rejection Notice':recordKind==='notice'?'📋 Issue Notice':'✓ Save Record'}
         </button>
-        <button type="button" onclick="collapseGrayPart()" style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:#f5f5f5;color:#333;border:1px solid #ddd;border-radius:6px;cursor:pointer;">✕ Cancel</button>
+        <button type="button" onclick="collapseGrayPart()"
+          style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:#f5f5f5;
+                 color:#333;border:1px solid #ddd;border-radius:6px;cursor:pointer;">
+          ✕ Cancel
+        </button>
       </div>
     </div>`;
 
   expandGrayPart(html);
 
-  // Attachment handlers
-  const dropZone      = document.getElementById('attachmentDropZone');
-  const attachInput   = document.getElementById('recordAttachment');
-  const attachNameEl  = document.getElementById('attachmentName');
+  const dropZone    = document.getElementById('attachmentDropZone');
+  const attachInput = document.getElementById('recordAttachment');
+  const attachNameEl= document.getElementById('attachmentName');
   dropZone.addEventListener('click',    () => attachInput.click());
   dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.borderColor='#007B8A'; });
   dropZone.addEventListener('dragleave',()  => { dropZone.style.borderColor='#ddd'; });
-  dropZone.addEventListener('drop',     (e) => { e.preventDefault(); dropZone.style.borderColor='#ddd'; if (e.dataTransfer.files.length>0){ attachInput.files=e.dataTransfer.files; updateAttachDisplay(); } });
+  dropZone.addEventListener('drop',     (e) => { e.preventDefault(); dropZone.style.borderColor='#ddd'; if(e.dataTransfer.files.length>0){attachInput.files=e.dataTransfer.files;updateAttachDisplay();} });
   attachInput.addEventListener('change', updateAttachDisplay);
+
   function updateAttachDisplay() {
-    if (attachInput.files.length>0) { const f=attachInput.files[0]; attachNameEl.textContent=`✓ ${f.name} (${(f.size/1024/1024).toFixed(2)} MB)`; attachNameEl.style.display='block'; }
-    else attachNameEl.style.display='none';
+    if (attachInput.files.length>0) {
+      const f=attachInput.files[0];
+      attachNameEl.textContent=`✓ ${f.name} (${(f.size/1024/1024).toFixed(2)} MB)`;
+      attachNameEl.style.display='block';
+    } else attachNameEl.style.display='none';
   }
 
-  // Form submit
   document.getElementById('addRecordForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      const title       = document.getElementById('recordTitle').value.trim();
-      const descEl      = document.getElementById('recordDescription');
-      const description = descEl ? descEl.innerHTML.trim() : '';
-      const descText    = descEl ? descEl.innerText.trim() : '';
-      const fileInput   = document.getElementById('recordAttachment');
-      const rCategory   = document.getElementById('recordCategory').value;
-      const rKind       = document.getElementById('recordKindField').value;
-      const tiedId      = document.getElementById('noticeTiedIdField').value;
+      const title      = document.getElementById('recordTitle').value.trim();
+      const descEl     = document.getElementById('recordDescription');
+      const description= descEl ? descEl.innerHTML.trim() : '';
+      const descText   = descEl ? descEl.innerText.trim() : '';
+      const fileInput  = document.getElementById('recordAttachment');
+      const rCategory  = document.getElementById('recordCategory').value;
+      const rKind      = document.getElementById('recordKindField').value;
+      const tiedId     = document.getElementById('noticeTiedIdField').value;
 
       if (!title)               throw new Error('Title is required.');
       if (title.length < 3)     throw new Error('Title must be at least 3 characters.');
@@ -3991,7 +4247,7 @@ function openAddRecordPanel(noticeConfig = null) {
       formData.append('title',       title);
       formData.append('description', description);
       formData.append('projectId',   localStorage.getItem('activeProjectId'));
-      formData.append('recordKind',  rKind);   // 'new' | 'notice' | 'rejection_notice'
+      formData.append('recordKind',  rKind);
       if (tiedId) formData.append('noticeTiedId', tiedId);
       if (fileInput.files.length > 0) formData.append('attachment', fileInput.files[0]);
 
@@ -4003,16 +4259,14 @@ function openAddRecordPanel(noticeConfig = null) {
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       const data = await response.json();
       if (data.success) {
-        const successMsg = rKind === 'rejection_notice' ? `✓ Rejection Notice "${title}" issued successfully.`
-                         : rKind === 'notice'           ? `✓ Notice of Determination "${title}" issued successfully.`
-                         : `✓ Record "${title}" saved successfully.`;
-        alert(successMsg);
+        const msg = rKind==='rejection_notice' ? `✓ Rejection Notice "${title}" issued successfully.`
+                  : rKind==='notice'           ? `✓ Notice of Determination "${title}" issued successfully.`
+                  : `✓ Record "${title}" saved successfully.`;
+        alert(msg);
         delete recordsCache[rCategory];
         loadTabRecords(rCategory);
         collapseGrayPart();
-      } else {
-        throw new Error(data.message || 'Failed to save.');
-      }
+      } else throw new Error(data.message || 'Failed to save.');
     } catch(err) {
       console.error('❌ Form submission error:', err);
       alert('Error: ' + err.message);
@@ -4021,7 +4275,7 @@ function openAddRecordPanel(noticeConfig = null) {
 }
 window.openAddRecordPanel = openAddRecordPanel;
 
-// Bottom content add-btn event (handles dynamically re-rendered button)
+// Bottom content event delegation
 document.getElementById('bottomContent').addEventListener('click', (event) => {
   const target = event.target instanceof Element ? event.target : event.target.parentElement;
   const addBtn = target ? target.closest('.add-doc-btn') : null;
@@ -4043,14 +4297,27 @@ function openAddMeetingMinutesPanel() {
       </div>
       <div style="flex:1;overflow-y:auto;padding:16px 20px;">
         <form id="addMeetingMinutesForm">
-          <div style="margin-bottom:20px;"><label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Title *</label><input type="text" id="meetingMinuteTitle" required placeholder="e.g., Site Handover Minutes" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"/></div>
-          <div style="margin-bottom:20px;"><label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Details *</label><textarea id="meetingMinuteDetails" required placeholder="Enter the meeting minutes content..." style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;min-height:120px;resize:vertical;box-sizing:border-box;"></textarea></div>
-          <div style="margin-bottom:20px;"><label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Date</label><input type="date" id="meetingMinuteDate" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"/></div>
+          <div style="margin-bottom:20px;">
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Title *</label>
+            <input type="text" id="meetingMinuteTitle" required placeholder="e.g., Site Handover Minutes" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"/>
+          </div>
+          <div style="margin-bottom:20px;">
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Details *</label>
+            <textarea id="meetingMinuteDetails" required placeholder="Enter the meeting minutes content..." style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;min-height:120px;resize:vertical;box-sizing:border-box;"></textarea>
+          </div>
+          <div style="margin-bottom:20px;">
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Date</label>
+            <input type="date" id="meetingMinuteDate" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"/>
+          </div>
           <div style="margin-bottom:16px;">
             <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Attachment</label>
             <div id="mmDropZone" style="display:flex;align-items:center;gap:12px;padding:16px;border:2px dashed #ddd;border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
               <div style="font-size:24px;">📝</div>
-              <div style="flex:1;"><div style="font-weight:bold;color:#333;font-size:14px;">Click to upload or drag files</div><div style="font-size:12px;color:#999;margin-top:4px;">PDF, DOC, DOCX, XLS, XLSX, JPG, PNG (Max 10MB)</div><input type="file" id="meetingMinuteAttachment" style="display:none;" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png" multiple/></div>
+              <div style="flex:1;">
+                <div style="font-weight:bold;color:#333;font-size:14px;">Click to upload or drag files</div>
+                <div style="font-size:12px;color:#999;margin-top:4px;">PDF, DOC, DOCX, XLS, XLSX, JPG, PNG (Max 10MB)</div>
+                <input type="file" id="meetingMinuteAttachment" style="display:none;" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png" multiple/>
+              </div>
             </div>
             <div id="mmAttachmentName" style="margin-top:8px;font-size:12px;color:#28a745;font-weight:bold;display:none;"></div>
           </div>
@@ -4062,18 +4329,20 @@ function openAddMeetingMinutesPanel() {
       </div>
     </div>`;
   expandGrayPart(html);
+
   const mmDrop  = document.getElementById('mmDropZone');
   const mmInput = document.getElementById('meetingMinuteAttachment');
   const mmName  = document.getElementById('mmAttachmentName');
   mmDrop.addEventListener('click',    () => mmInput.click());
-  mmDrop.addEventListener('dragover', (e)=> { e.preventDefault(); mmDrop.style.borderColor='#007B8A'; });
+  mmDrop.addEventListener('dragover', (e) => { e.preventDefault(); mmDrop.style.borderColor='#007B8A'; });
   mmDrop.addEventListener('dragleave',()  => { mmDrop.style.borderColor='#ddd'; });
-  mmDrop.addEventListener('drop',     (e) => { e.preventDefault(); mmDrop.style.borderColor='#ddd'; if(e.dataTransfer.files.length>0){ mmInput.files=e.dataTransfer.files; updateMMDisplay(); }});
+  mmDrop.addEventListener('drop',     (e) => { e.preventDefault(); mmDrop.style.borderColor='#ddd'; if(e.dataTransfer.files.length>0){mmInput.files=e.dataTransfer.files;updateMMDisplay();} });
   mmInput.addEventListener('change', updateMMDisplay);
   function updateMMDisplay() {
-    if(mmInput.files.length>0){ mmName.textContent=`✓ ${mmInput.files.length} file(s) selected`; mmName.style.display='block'; }
+    if (mmInput.files.length>0) { mmName.textContent=`✓ ${mmInput.files.length} file(s) selected`; mmName.style.display='block'; }
     else mmName.style.display='none';
   }
+
   document.getElementById('saveMeetingMinuteBtn').addEventListener('click', async () => {
     const title   = document.getElementById('meetingMinuteTitle').value.trim();
     const details = document.getElementById('meetingMinuteDetails').value.trim();
@@ -4088,7 +4357,9 @@ function openAddMeetingMinutesPanel() {
       if (date) formData.append('date', date);
       Array.from(mmInput.files).forEach(f => formData.append('documents', f));
       const response = await fetch('https://oneprojectapp-backend.onrender.com/records/add-record', {
-        method:'POST', headers:{'Authorization':`Bearer ${localStorage.getItem('authToken')}`}, body: formData
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
+        body: formData
       });
       if (!response.ok) throw new Error(response.statusText);
       const result = await response.json();
@@ -4107,19 +4378,25 @@ const notificationBadge = document.getElementById('notificationBadge');
 notificationIcon.addEventListener('click', async () => {
   try {
     const projectId = localStorage.getItem('activeProjectId');
+    const userId    = window.currentUserId;
     if (!projectId) { expandGrayPart("<p>Please select a project.</p>"); return; }
-    const data = await apiRequest(`https://oneprojectapp-backend.onrender.com/notifications?projectId=${projectId}`, {});
+    const res  = await fetch(
+      `https://oneprojectapp-backend.onrender.com/notifications?projectId=${projectId}&userId=${userId}`,
+      { headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` } }
+    );
+    const data = await res.json();
     let html = `<h3 style='margin-bottom:16px;'>Notifications</h3>`;
-    if (!data.success || data.notifications.length === 0) {
+    if (!data.success || !data.notifications.length) {
       html += `<p>No notifications.</p>`;
       notificationBadge.textContent = "0";
     } else {
       html += `<ul style='max-height:400px;overflow-y:auto;padding:0;list-style:none;'>`;
       data.notifications.forEach(n => {
-        html += `<li style='padding:12px;border-bottom:1px solid #eee;cursor:pointer;border-radius:6px;margin-bottom:6px;background:${n.read?'#fff':'#eff6ff'};' onclick="handleNotificationClick('${n.id}','${n.concept}','${n.record_id}')">
+        html += `<li style='padding:12px;border-bottom:1px solid #eee;cursor:pointer;border-radius:6px;margin-bottom:6px;background:${n.read?'#fff':'#eff6ff'};'
+          onclick="handleNotificationClick('${n.id}','${n.concept}','${n.record_id}')">
           <strong>${n.concept} record</strong><br/>
-          <span style='font-size:12px;color:#555;'>${n.title}</span><br/>
-          <div style='font-size:11px;color:#999;margin-top:4px;'>Posted by ${n.poster_role}</div>
+          <span style='font-size:12px;color:#555;'>${n.message||''}</span><br/>
+          <div style='font-size:11px;color:#999;margin-top:4px;'>Posted by ${n.added_by_role||''}</div>
         </li>`;
       });
       html += `</ul>`;
@@ -4132,14 +4409,17 @@ notificationIcon.addEventListener('click', async () => {
 async function handleNotificationClick(notificationId, recordType, recordId) {
   try {
     const projectId = localStorage.getItem('activeProjectId');
-    await apiRequest(`https://oneprojectapp-backend.onrender.com/notifications/${notificationId}/read?projectId=${projectId}`, { method:'PUT' });
+    const userId    = window.currentUserId;
+    const userRole  = window.currentUserRole;
+    await fetch(
+      `https://oneprojectapp-backend.onrender.com/notifications/${notificationId}/read?projectId=${projectId}&userId=${userId}&userRole=${userRole}`,
+      { method: 'PUT', headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` } }
+    );
     await updateNotificationBadge();
     const tabMap = { contractual:'contractual', administrative:'administrative', safety:'safety', operational:'operational', financial:'financial' };
     const tabKey = tabMap[recordType];
     if (tabKey) {
-      // Find and click the matching tab
-      const tabs = document.querySelectorAll('#navTabs li[data-tab]');
-      tabs.forEach(t => { if (t.getAttribute('data-tab')===tabKey) t.click(); });
+      document.querySelectorAll('#navTabs li[data-tab]').forEach(t => { if (t.getAttribute('data-tab')===tabKey) t.click(); });
       setTimeout(() => {
         const el = document.querySelector(`.doc-item[data-id='${recordId}']`);
         if (el) el.scrollIntoView({ behavior:'smooth' });
@@ -4153,7 +4433,11 @@ async function updateNotificationBadge() {
   try {
     const projectId = localStorage.getItem('activeProjectId');
     if (!projectId) return;
-    const data = await apiRequest(`https://oneprojectapp-backend.onrender.com/notifications/unreadCount?projectId=${projectId}`, {});
+    const res  = await fetch(
+      `https://oneprojectapp-backend.onrender.com/notifications/unreadCount?projectId=${projectId}`,
+      { headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` } }
+    );
+    const data = await res.json();
     notificationBadge.textContent = data.count || "0";
   } catch(err) { notificationBadge.textContent = "0"; }
 }
