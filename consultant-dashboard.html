@@ -3267,11 +3267,25 @@ function openActualProgressPage(savedSchedule) {
 }
 
 // =======================================================================
-//  BOOTSTRAP — must run before anything else
-//  Calls /api/me using the JWT token to verify it is valid,
-//  then starts the app, notification badge, and polling.
-//  NOTE: window.currentUserId / window.currentUserRole are no longer set
-//  here — button state is now fully computed by the backend.
+//  CATEGORY MAP — single source of truth
+//  tab key (frontend)  →  DB table name (backend)
+//  This map lives HERE only. Backend uses the same table names.
+//  Never send raw tab keys to the backend — always translate first.
+// =======================================================================
+const CATEGORY_TABLE_MAP = {
+  contractual:    'contractual_records',
+  administrative: 'administrative_records',
+  safety:         'safety_records',
+  operational:    'operational_records',
+  financial:      'financial_records',
+};
+
+function tabToTable(tabKey) {
+  return CATEGORY_TABLE_MAP[tabKey] || tabKey;
+}
+
+// =======================================================================
+//  BOOTSTRAP
 // =======================================================================
 async function bootstrapUser() {
   const token = localStorage.getItem('authToken');
@@ -3281,7 +3295,6 @@ async function bootstrapUser() {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     if (!res.ok) { window.location.href = '/login.html'; return; }
-    // Token confirmed valid — load the app
     loadHomeTabs();
     updateNotificationBadge();
     setInterval(updateNotificationBadge, 30000);
@@ -3291,18 +3304,23 @@ async function bootstrapUser() {
   }
 }
 
+// =======================================================================
+//  STATUS BADGE
+// =======================================================================
 function statusBadge(status) {
   const map = {
-    pending_review:                { label:'Pending Review',              color:'#f59e0b' },
-    pending_consultant_approval:   { label:'Pending Consultant Approval', color:'#8b5cf6' },
-    pending_client_acceptance:     { label:'Pending Client Acceptance',   color:'#3b82f6' },
-    pending_client_approval:       { label:'Pending Client Approval',     color:'#3b82f6' },
-    pending_contractor_acceptance: { label:'Pending Contractor Accept.',  color:'#f97316' },
-    approved_record:               { label:'Approved',                    color:'#10b981' },
-    rejected:                      { label:'Rejected',                    color:'#ef4444' },
+    pending_review:                { label: 'Pending Review',              color: '#f59e0b' },
+    pending_consultant_approval:   { label: 'Pending Consultant Approval', color: '#8b5cf6' },
+    pending_client_acceptance:     { label: 'Pending Client Acceptance',   color: '#3b82f6' },
+    pending_client_approval:       { label: 'Pending Client Approval',     color: '#3b82f6' },
+    pending_contractor_acceptance: { label: 'Pending Contractor Accept.',  color: '#f97316' },
+    approved_record:               { label: 'Approved',                    color: '#10b981' },
+    rejected:                      { label: 'Rejected',                    color: '#ef4444' },
   };
   const s = map[status] || { label: status || 'Pending', color: '#6b7280' };
-  return `<span style="background:${s.color}20;color:${s.color};border:1px solid ${s.color}60;border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;white-space:nowrap;">${s.label}</span>`;
+  return `<span style="background:${s.color}20;color:${s.color};border:1px solid ${s.color}60;
+    border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;white-space:nowrap;">
+    ${s.label}</span>`;
 }
 
 // =======================================================================
@@ -3310,9 +3328,7 @@ function statusBadge(status) {
 // =======================================================================
 const bottomContent = document.getElementById('bottomContent');
 
-function getNavTabs() {
-  return document.getElementById('navTabs');
-}
+function getNavTabs() { return document.getElementById('navTabs'); }
 
 function attachTabEvents() {
   const navTabsEl = getNavTabs();
@@ -3324,8 +3340,7 @@ function attachTabEvents() {
     if (!tab) return;
     fresh.querySelectorAll('li[data-tab]').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
-    const key = tab.getAttribute('data-tab');
-    if (typeof setTabContent === 'function') setTabContent(key);
+    setTabContent(tab.getAttribute('data-tab'));
   });
 }
 
@@ -3342,18 +3357,26 @@ function loadHomeTabs() {
   setTabContent('contractual');
 }
 
-function loadReportTabs() {
-  getNavTabs().innerHTML = `
-    <li data-tab="work-center" class="active">Work Center</li>
-    <li data-tab="planning-execution">Planning &amp; Execution</li>
-    <li data-tab="documents-approval">Documents &amp; Approval</li>
-    <li data-tab="control-reports">Control &amp; Reports</li>
-    <li data-tab="communication-meetings">Communication &amp; Meetings</li>
-  `;
-  attachTabEvents();
-  setTabContent('work-center');
+function setTabContent(tabKey) {
+  const map = {
+    contractual:    'Contract agreements, amendments, change orders, permits, insurance, tender docs.',
+    administrative: 'RFAs, consultant instructions, meeting minutes, correspondence, schedule updates.',
+    safety:         'Safety inspections, incident reports, NCRs, QC tests, risk assessments.',
+    operational:    'Daily site reports, progress reports, BoQ, technical specs, submittals, drawings.',
+    financial:      'Interim payment certificates, contractor claims, final account reports.',
+    meeting:        null,
+  };
+  if (tabKey === 'meeting') { renderMeetingContent(); return; }
+  const desc = map[tabKey];
+  if (desc === undefined) return;
+  renderBottomContent(desc, 'No data available in this category.');
+  // Pass tabKey — loadTabRecords translates internally to DB table name
+  loadTabRecords(tabKey);
 }
 
+// =======================================================================
+//  BOTTOM CONTENT SHELL
+// =======================================================================
 function renderBottomContent(description, placeholder) {
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
@@ -3363,204 +3386,52 @@ function renderBottomContent(description, placeholder) {
     <div class="bottom-scroll-area">
       <ul class="doc-list" id="recordsList"></ul>
       <div class="no-data-placeholder"><p>${placeholder}</p></div>
-    </div>
-  `;
-  document.getElementById('addRecordBtnRendered').addEventListener('click', () => openAddRecordPanel());
-}
-
-function renderMeetingContent(activeView = 'minutes') {
-  bottomContent.innerHTML = `
-    <div class="meeting-options">
-      <button class="meeting-btn ${activeView === 'minutes'   ? 'active' : ''}" onclick="switchMeetingView('minutes')">📋 Meeting Minutes</button>
-      <button class="meeting-btn ${activeView === 'scheduled' ? 'active' : ''}" onclick="switchMeetingView('scheduled')">📅 Scheduled Meeting</button>
-      <button class="meeting-btn ${activeView === 'plan'      ? 'active' : ''}" onclick="switchMeetingView('plan')">✏️ Plan Meeting</button>
-    </div>
-    <div class="bottom-scroll-area" id="meetingViewContainer"></div>
-  `;
-  setTimeout(() => updateMeetingView(activeView), 0);
-}
-
-function switchMeetingView(view) { renderMeetingContent(view); }
-
-async function updateMeetingView(activeView = 'minutes') {
-  const container = document.getElementById('meetingViewContainer');
-  if (!container) return;
-  switch (activeView) {
-    case 'minutes':
-      container.innerHTML = `
-        <div style='display:flex;justify-content:flex-end;gap:12px;padding:12px;'>
-          <button class='btn primary' style='padding:10px 14px;font-size:13px;' onclick='openAddMeetingMinutesPanel()'>➕ Add Meeting Minute</button>
-        </div>
-        <div id="meetingListContainer" style="padding:12px;"><p style="text-align:center;color:#999;">Loading meeting minutes...</p></div>
-      `;
-      await displayMeetingList('minutes');
-      break;
-    case 'scheduled':
-      container.innerHTML = '<div id="meetingListContainer" style="padding:12px;"><p style="text-align:center;color:#999;">Loading scheduled meetings...</p></div>';
-      await displayMeetingList('scheduled');
-      break;
-    case 'plan':
-      container.innerHTML = `
-        <div style='padding:12px;'>
-          <h3 style='margin-bottom:16px;color:#333;'>📅 Schedule a New Meeting</h3>
-          <div class='form-group'><label>Meeting Title:</label><input type='text' id='meetingTitle' placeholder='e.g., Site Meeting - Week 2'/></div>
-          <div class='form-group'><label>Date &amp; Time:</label><input type='datetime-local' id='meetingDateTime'/></div>
-          <div class='form-group'><label>Participants:</label><textarea id='meetingParticipants' placeholder='Enter participant names (comma-separated)' style='min-height:60px;'></textarea></div>
-          <div class='form-group'><label>Agenda:</label><textarea id='meetingAgenda' placeholder='Enter meeting agenda' style='min-height:80px;'></textarea></div>
-          <div style='display:flex;gap:8px;margin-top:12px;'>
-            <button class='btn primary' id='scheduleMeetingBtn' style='flex:1;padding:10px;'>📅 Schedule Meeting</button>
-            <button class='btn' style='flex:1;padding:10px;' onclick='collapseGrayPart()'>Cancel</button>
-          </div>
-        </div>
-      `;
-      document.getElementById('scheduleMeetingBtn').addEventListener('click', async () => {
-        const title        = document.getElementById('meetingTitle').value.trim();
-        const dateTime     = document.getElementById('meetingDateTime').value;
-        const participants = document.getElementById('meetingParticipants').value.trim();
-        const agenda       = document.getElementById('meetingAgenda').value.trim();
-        if (!title || !dateTime || !participants || !agenda) { alert('Please fill in all required fields.'); return; }
-        try {
-          const res = await fetch('https://oneprojectapp-backend.onrender.com/records/schedule-meeting', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
-            body: JSON.stringify({ projectId: localStorage.getItem('activeProjectId'), title, dateTime, participants, agenda })
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          alert('Meeting scheduled successfully!');
-          updateMeetingView('scheduled');
-        } catch (err) { console.error('Schedule meeting error:', err); alert('Failed to schedule meeting.'); }
-      });
-      break;
-  }
-}
-
-async function displayMeetingList(type) {
-  try {
-    const projectId = localStorage.getItem('activeProjectId');
-    if (!projectId) { document.getElementById('meetingListContainer').innerHTML = '<p style="text-align:center;color:#999;">No project selected.</p>'; return; }
-    const res = await fetch('https://oneprojectapp-backend.onrender.com/records/meetings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
-      body: JSON.stringify({ projectId, type })
-    });
-    const data     = await res.json();
-    const meetings = data.meetings || [];
-    const container = document.getElementById('meetingListContainer');
-    if (!meetings.length) { container.innerHTML = '<p style="text-align:center;color:#999;">No meetings found.</p>'; return; }
-    container.innerHTML = '<ul class="doc-list">' + meetings.map(m => `
-      <li class="doc-item">
-        <div class="doc-item-header">
-          <div class="doc-info">
-            <div class="doc-title">${m.title}</div>
-            <div class="doc-meta">${new Date(m.date).toLocaleDateString()}</div>
-          </div>
-          <span class="doc-toggle">▾</span>
-        </div>
-        <div class="doc-detail">
-          <p>${m.description || 'No description provided'}</p>
-          <button class="doc-action-btn" style='background:#007B8A;color:#fff;' onclick="openMeetingDetail('${m.id}')">📖 View Details</button>
-        </div>
-      </li>`).join('') + '</ul>';
-    container.querySelectorAll('.doc-item-header').forEach(h => {
-      h.addEventListener('click', () => h.closest('.doc-item').classList.toggle('expanded'));
-    });
-  } catch (err) { console.error('Meeting list error:', err); }
-}
-
-async function openMeetingDetail(meetingId) {
-  try {
-    const res = await fetch('https://oneprojectapp-backend.onrender.com/records/meeting-detail', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
-      body: JSON.stringify({ meetingId, projectId: localStorage.getItem('activeProjectId') })
-    });
-    const data = await res.json();
-    expandGrayPart(`
-      <h3 style='margin-bottom:16px;'>📅 Meeting Details</h3>
-      <div class='gray-part-field'><div class='gray-part-label'>Title</div><div class='gray-part-value'>${data.title || 'N/A'}</div></div>
-      <div class='gray-part-field'><div class='gray-part-label'>Date</div><div class='gray-part-value'>${data.date ? new Date(data.date).toLocaleDateString() : 'N/A'}</div></div>
-      <div class='gray-part-field'><div class='gray-part-label'>Participants</div><div class='gray-part-value'>${data.participants || 'Not specified'}</div></div>
-      <div class='gray-part-field'><div class='gray-part-label'>Minutes</div><div class='gray-part-value'>${data.minutes || 'Not recorded'}</div></div>
-      <div style='margin-top:16px;'><button class='btn' style='width:100%;' onclick='collapseGrayPart()'>← Back</button></div>
-    `);
-  } catch (err) {
-    console.error('Meeting detail error:', err);
-    expandGrayPart(`<p>Error loading meeting.</p><button class='btn' onclick='collapseGrayPart()'>← Back</button>`);
-  }
-}
-
-function setTabContent(key) {
-  const map = {
-    'contractual':            ['Contract agreements, amendments, change orders, permits, insurance, tender docs.', 'contractual'],
-    'administrative':         ['RFAs, consultant instructions, meeting minutes, correspondence, schedule updates.',  'administrative'],
-    'safety':                 ['Safety inspections, incident reports, NCRs, QC tests, risk assessments.',           'safety'],
-    'operational':            ['Daily site reports, progress reports, BoQ, technical specs, submittals, drawings.', 'operational'],
-    'financial':              ['Interim payment certificates, contractor claims, final account reports.',            'financial'],
-    'meeting':                [null, null],
-    'work-center':            ['Task list, work packages, assigned team members, priorities, due dates.',           'work-center'],
-    'planning-execution':     ['Daily site reports, manpower, work done today, material delivery status.',          'planning-execution'],
-    'documents-approval':     ['Drawings, RFIs, submittals, method statements, material approvals.',               'documents-approval'],
-    'control-reports':        ['Cost tracking, budget vs actual, variations, risk register, KPI summary.',         'control-reports'],
-    'communication-meetings': [null, null],
-  };
-  if (key === 'meeting' || key === 'communication-meetings') { renderMeetingContent(); return; }
-  const entry = map[key];
-  if (!entry) return;
-  const [desc, category] = entry;
-  renderBottomContent(desc || '', 'No data available in this category.');
-  if (category) loadTabRecords(category);
+    </div>`;
+  // Read active tab from DOM at click time — not from closure
+  document.getElementById('addRecordBtnRendered').addEventListener('click', () => {
+    const activeTab = getNavTabs()?.querySelector('li.active');
+    openAddRecordPanel(null, activeTab?.getAttribute('data-tab') || 'contractual');
+  });
 }
 
 // =======================================================================
-//  RECORDS CACHE
+//  RECORDS CACHE  (keyed by tabKey, not table name)
 // =======================================================================
 const recordsCache = {};
 
 // =======================================================================
-//  LOAD + RENDER RECORDS
-//
-//  No longer marks records as viewed on fetch.
-//  Mark-viewed now fires ONLY when a user expands a specific record
-//  for the first time (inside toggleRecordDetail).
-//
-//  The backend must decode the authToken on every fetch and return
-//  per-user computed fields for each record:
-//    - is_uploader  (bool)
-//    - is_viewed    (bool)  — from document_reviews WHERE reviewer_id = me
-//    - my_review    { action, comment }
-//    - btn_state    — pre-computed by backend based on record status + my role
-//
-//  Frontend renders whatever btn_state the backend returns.
+//  LOAD TAB RECORDS
+//  Sends DB table name to backend. Frontend keeps tabKey for cache key.
 // =======================================================================
-async function loadTabRecords(category) {
+async function loadTabRecords(tabKey) {
   const recordsList    = document.getElementById('recordsList');
   const placeholderDiv = document.querySelector('.no-data-placeholder');
   if (!recordsList || !placeholderDiv) return;
 
-  // Use cache if available (cleared on any mutation: add/delete/approve)
-  if (recordsCache[category]) {
-    renderRecordsList(recordsCache[category], category);
+  if (recordsCache[tabKey]) {
+    renderRecordsList(recordsCache[tabKey], tabKey);
     return;
   }
 
+  const token     = localStorage.getItem('authToken');
+  const projectId = localStorage.getItem('activeProjectId');
+
+  if (!projectId) {
+    placeholderDiv.style.display = 'block';
+    placeholderDiv.innerHTML = '<p>⚠️ No Project Selected</p>';
+    return;
+  }
+
+  recordsList.innerHTML = '';
+  placeholderDiv.style.display = 'block';
+  placeholderDiv.innerHTML = "<p style='color:#999;'>Loading...</p>";
+
   try {
-    const token     = localStorage.getItem('authToken');
-    const projectId = localStorage.getItem('activeProjectId');
-
-    if (!projectId) {
-      placeholderDiv.style.display = 'block';
-      placeholderDiv.innerHTML = '<p>⚠️ No Project Selected</p>';
-      return;
-    }
-
-    recordsList.innerHTML = '';
-    placeholderDiv.style.display  = 'block';
-    placeholderDiv.innerHTML = "<p style='color:#999;'>Loading...</p>";
-
     const response = await fetch('https://oneprojectapp-backend.onrender.com/api/fetch-tab-records', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ projectId, category })
+      // ✅ Send DB table name — backend queries the right table
+      body: JSON.stringify({ projectId, recordType: tabToTable(tabKey) })
     });
 
     if (response.status === 401) {
@@ -3570,11 +3441,13 @@ async function loadTabRecords(category) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
-    recordsCache[category] = data.records || [];
-    renderRecordsList(recordsCache[category], category);
+    // ✅ Each record carries its own tabKey so buttons always know their context
+    const records = (data.records || []).map(r => ({ ...r, _tabKey: tabKey }));
+    recordsCache[tabKey] = records;
+    renderRecordsList(records, tabKey);
 
   } catch (err) {
-    console.error('❌ Listing error:', err);
+    console.error('Listing error:', err);
     const pl = document.querySelector('.no-data-placeholder');
     if (pl) {
       pl.style.display = 'block';
@@ -3585,28 +3458,20 @@ async function loadTabRecords(category) {
 
 // =======================================================================
 //  MARK RECORD VIEWED
-//
-//  Called only from toggleRecordDetail on FIRST expand.
-//  Second expand skips this entirely because:
-//    - cached.is_viewed is already true after first confirm
-//    - backend also has UNIQUE(record_type, record_id, reviewer_id) so
-//      duplicate inserts do nothing (ON CONFLICT DO NOTHING)
-//
-//  Blue highlight and dot are removed only after backend confirms (res.ok).
-//  Cache is updated so re-renders don't flash blue again.
+//  Sends DB table name so backend inserts correct record_type
 // =======================================================================
-function markRecordViewed(recordId, category) {
+function markRecordViewed(recordId, tabKey) {
   const token     = localStorage.getItem('authToken');
   const projectId = localStorage.getItem('activeProjectId');
 
   fetch('https://oneprojectapp-backend.onrender.com/api/mark-record-viewed', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-    body: JSON.stringify({ projectId, recordId, category })
+    // ✅ recordType matches document_reviews.record_type exactly
+    body: JSON.stringify({ projectId, recordId, recordType: tabToTable(tabKey) })
   })
   .then(res => {
     if (res.ok) {
-      // Remove blue unread styling from the rendered item
       const item = document.querySelector(`.doc-item[data-id="${recordId}"]`);
       const dot  = document.querySelector(`.unread-dot-${recordId}`);
       if (dot)  dot.remove();
@@ -3616,8 +3481,7 @@ function markRecordViewed(recordId, category) {
         item.style.borderLeft = '4px solid #e5e7eb';
         item.style.boxShadow  = '0 1px 3px rgba(0,0,0,0.06)';
       }
-      // Update cache — subsequent expands won't re-fire the API call
-      const cached = (recordsCache[category] || []).find(r => String(r.id) === String(recordId));
+      const cached = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
       if (cached) cached.is_viewed = true;
     }
   })
@@ -3627,11 +3491,15 @@ function markRecordViewed(recordId, category) {
 // =======================================================================
 //  RENDER RECORDS LIST
 //
-//  btn_state comes from backend (doc.btn_state).
-//  is_uploader and is_viewed also come from backend (doc.is_uploader,
-//  doc.is_viewed). my_review comes as doc.my_review { action, comment }.
+//  All identity data (is_uploader, btn_state, my_review, is_viewed,
+//  is_decision_maker, workflow_steps) comes from the backend.
+//  Frontend only renders what it receives.
+//
+//  ✅ tabKey stored on each DOM element via data-tab-key attribute
+//  ✅ Buttons read recordId + tabKey from the DOM element at click time
+//     — never from a baked-in closure string
 // =======================================================================
-function renderRecordsList(records, category) {
+function renderRecordsList(records, tabKey) {
   const recordsList    = document.getElementById('recordsList');
   const placeholderDiv = document.querySelector('.no-data-placeholder');
   if (!recordsList || !placeholderDiv) return;
@@ -3652,148 +3520,149 @@ function renderRecordsList(records, category) {
     const btnState   = doc.btn_state;
     const myReview   = doc.my_review || {};
 
-    const postedAt = doc.date_recorded || doc.issued_date
-      ? new Date(doc.date_recorded || doc.issued_date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+    const postedAt = doc.issued_date
+      ? new Date(doc.issued_date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
       : 'N/A';
 
-    // ── Review history rows ──
+    // Review history
     const decisionMakerReviews = (doc.reviews || []).filter(r => r.is_decision_maker === true);
     const teamMemberReviews    = (doc.reviews || []).filter(r => r.is_decision_maker !== true);
 
     const decisionReviewsHtml = decisionMakerReviews.map(r => {
       const actionColor = (r.action === 'approved' || r.action === 'accepted')
         ? '#10b981' : r.action === 'rejected' ? '#ef4444' : '#9ca3af';
-      const actionLabel = r.action === 'no_action' ? '(viewed)' : r.action;
       return `
-        <li style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;
-                   border-bottom:1px solid #f0f0f0;font-size:12px;color:#555;">
-          <div style="flex:1;">
-            <span style="font-weight:600;">${r.reviewer_role}</span>
-            <span style="color:${actionColor};font-weight:600;margin-left:8px;text-transform:capitalize;">${actionLabel}</span>
-            <span style="color:#9ca3af;margin-left:8px;">${new Date(r.action_date).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}</span>
-            ${r.comment ? `<div style="margin-top:4px;color:#6b7280;font-style:italic;padding:4px 8px;background:#f9fafb;border-radius:4px;border-left:2px solid #d1d5db;">💬 ${r.comment}</div>` : ''}
-          </div>
+        <li style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555;">
+          <span style="font-weight:600;">${r.reviewer_role}</span>
+          <span style="color:${actionColor};font-weight:600;margin-left:8px;text-transform:capitalize;">
+            ${r.action === 'no_action' ? '(viewed)' : r.action}
+          </span>
+          <span style="color:#9ca3af;margin-left:8px;">
+            ${new Date(r.action_date).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
+          </span>
+          ${r.comment ? `<div style="margin-top:4px;color:#6b7280;font-style:italic;padding:4px 8px;
+            background:#f9fafb;border-radius:4px;border-left:2px solid #d1d5db;">💬 ${r.comment}</div>` : ''}
         </li>`;
     }).join('');
 
-    const teamMemberViewersHtml = teamMemberReviews.length
-      ? `
-        <div style="margin-top:10px;">
-          <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">👥 Viewers (Team Members)</div>
-          <ul style="margin:0;padding:0;list-style:none;">
-            ${teamMemberReviews.map(r => {
-              const actionColor = r.action === 'approved' ? '#10b981' : r.action === 'rejected' ? '#ef4444' : '#9ca3af';
-              const actionLabel = r.action === 'no_action' ? 'Viewed' : (r.action.charAt(0).toUpperCase() + r.action.slice(1));
-              return `
-                <li style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;
-                           border-bottom:1px solid #f7f7f7;font-size:12px;color:#555;">
-                  <div style="flex:1;">
-                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                      <span style="font-weight:600;color:#374151;">${r.reviewer_role || 'Team Member'}</span>
-                      ${r.reviewer_email    ? `<span style="font-size:11px;color:#9ca3af;">(${r.reviewer_email})</span>` : ''}
-                      ${r.reviewer_position ? `<span style="font-size:11px;background:#f3f4f6;color:#6b7280;border-radius:4px;padding:1px 6px;">${r.reviewer_position}</span>` : ''}
-                      <span style="color:${actionColor};font-weight:600;text-transform:capitalize;">${actionLabel}</span>
-                      <span style="color:#9ca3af;font-size:11px;">${new Date(r.action_date).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}</span>
-                    </div>
-                    ${r.comment ? `<div style="margin-top:5px;color:#6b7280;font-style:italic;padding:5px 8px;background:#f9fafb;border-radius:4px;border-left:2px solid #d1d5db;font-size:12px;">💬 ${r.comment}</div>` : ''}
-                  </div>
-                </li>`;
-            }).join('')}
-          </ul>
-        </div>`
-      : '';
+    const teamMemberViewersHtml = teamMemberReviews.length ? `
+      <div style="margin-top:10px;">
+        <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+          letter-spacing:.5px;margin-bottom:6px;">👥 Viewers (Team Members)</div>
+        <ul style="margin:0;padding:0;list-style:none;">
+          ${teamMemberReviews.map(r => {
+            const ac = r.action === 'approved' ? '#10b981' : r.action === 'rejected' ? '#ef4444' : '#9ca3af';
+            const al = r.action === 'no_action' ? 'Viewed' : (r.action.charAt(0).toUpperCase() + r.action.slice(1));
+            return `
+              <li style="padding:8px 0;border-bottom:1px solid #f7f7f7;font-size:12px;color:#555;">
+                <span style="font-weight:600;color:#374151;">${r.reviewer_role || 'Team Member'}</span>
+                ${r.reviewer_email ? `<span style="font-size:11px;color:#9ca3af;">(${r.reviewer_email})</span>` : ''}
+                ${r.reviewer_position ? `<span style="font-size:11px;background:#f3f4f6;color:#6b7280;
+                  border-radius:4px;padding:1px 6px;">${r.reviewer_position}</span>` : ''}
+                <span style="color:${ac};font-weight:600;text-transform:capitalize;">${al}</span>
+                <span style="color:#9ca3af;font-size:11px;">
+                  ${new Date(r.action_date).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
+                </span>
+                ${r.comment ? `<div style="margin-top:5px;color:#6b7280;font-style:italic;padding:5px 8px;
+                  background:#f9fafb;border-radius:4px;border-left:2px solid #d1d5db;font-size:12px;">
+                  💬 ${r.comment}</div>` : ''}
+              </li>`;
+          }).join('')}
+        </ul>
+      </div>` : '';
 
-    // ── Action buttons ──
-    // All button decisions driven by backend btn_state string.
+    // ✅ NO onclick strings with baked-in values.
+    //    Buttons use data-action only. The click handler reads
+    //    recordId and tabKey from the closest .doc-item at runtime.
     let actionButtons = '';
 
     if (isLocked) {
-      actionButtons = `<span style="flex:1;padding:8px 12px;font-size:12px;color:#10b981;font-style:italic;text-align:center;font-weight:600;">🔒 Record Locked — Final Acceptance Issued</span>`;
+      actionButtons = `<span style="flex:1;padding:8px 12px;font-size:12px;color:#10b981;
+        font-style:italic;text-align:center;font-weight:600;">
+        🔒 Record Locked — Final Acceptance Issued</span>`;
 
     } else if (btnState === 'uploader') {
-      const hasWorkflowAction = (doc.reviews || []).some(r => ['approved', 'accepted', 'rejected'].includes(r.action));
-      if (!hasWorkflowAction) {
-        actionButtons = `
-          <button onclick="deleteRecord('${doc.id}','${category}')"
+      const hasWorkflowAction = (doc.reviews || [])
+        .some(r => ['approved','accepted','rejected'].includes(r.action));
+      actionButtons = hasWorkflowAction
+        ? `<span style="flex:1;padding:8px 12px;font-size:12px;color:#9ca3af;font-style:italic;">
+            Record is under review — cannot delete.</span>`
+        : `<button data-action="delete"
             style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
-                   background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">
-            🗑️ Delete
-          </button>`;
-      } else {
-        actionButtons = `<span style="flex:1;padding:8px 12px;font-size:12px;color:#9ca3af;font-style:italic;">Record is under review — cannot delete.</span>`;
-      }
+            background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">
+            🗑️ Delete</button>`;
 
     } else if (btnState === 'acted') {
-      const wasRejected = myReview.action === 'rejected';
+      const isRej = myReview.action === 'rejected';
       actionButtons = `
-        <button onclick="openNoticeOfDetermination('${doc.id}','${category}',${wasRejected})"
+        <button data-action="open-notice" data-is-rejection="${isRej}"
           style="flex:1;min-width:160px;padding:8px 14px;font-size:12px;font-weight:600;
-                 background:${wasRejected ? '#fee2e2' : '#fef3c7'};
-                 color:${wasRejected ? '#991b1b' : '#92400e'};
-                 border:1px solid ${wasRejected ? '#fca5a5' : '#fcd34d'};
-                 border-radius:6px;cursor:pointer;">
-          📋 ${wasRejected ? 'Issue Rejection Notice' : 'Issue Notice of Determination'}
+          background:${isRej ? '#fee2e2' : '#fef3c7'};
+          color:${isRej ? '#991b1b' : '#92400e'};
+          border:1px solid ${isRej ? '#fca5a5' : '#fcd34d'};border-radius:6px;cursor:pointer;">
+          📋 ${isRej ? 'Issue Rejection Notice' : 'Issue Notice of Determination'}
         </button>`;
 
     } else if (btnState === 'awaiting') {
-      actionButtons = `<span style="flex:1;padding:8px 12px;font-size:12px;color:#9ca3af;font-style:italic;text-align:center;">⏳ Awaiting ${doc.pending_role || 'prior'} Approval</span>`;
+      actionButtons = `<span style="flex:1;padding:8px 12px;font-size:12px;color:#9ca3af;
+        font-style:italic;text-align:center;">
+        ⏳ Awaiting ${doc.pending_role || 'prior'} Approval</span>`;
 
     } else if (btnState === 'can_approve') {
       actionButtons = `
-        <button onclick="handleDecisionMakerAction('${doc.id}','${category}','approved')"
+        <button data-action="approve"
           style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
-                 background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">
+          background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">
           ✅ ${doc.approve_label || 'Approve'}
         </button>
-        <button onclick="handleDecisionMakerAction('${doc.id}','${category}','rejected')"
+        <button data-action="reject"
           style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
-                 background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">
+          background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">
           ❌ Reject
         </button>`;
 
     } else if (btnState === 'team_member') {
       const myAction = myReview.action;
       const hasActed = myAction && myAction !== 'no_action';
-
       if (hasActed) {
-        const actionColor = myAction === 'approved' ? '#10b981' : myAction === 'rejected' ? '#ef4444' : '#6b7280';
+        const ac = myAction === 'approved' ? '#10b981' : myAction === 'rejected' ? '#ef4444' : '#6b7280';
         actionButtons = `
-          <span style="flex:1;padding:8px 12px;font-size:12px;color:${actionColor};font-weight:600;">
+          <span style="flex:1;padding:8px 12px;font-size:12px;color:${ac};font-weight:600;">
             ${myAction === 'approved' ? '✅' : '❌'} You ${myAction} this record
           </span>
-          <button onclick="openTeamMemberComment('${doc.id}','${category}')"
+          <button data-action="comment"
             style="min-width:110px;padding:8px 12px;font-size:12px;font-weight:600;
-                   background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">
+            background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">
             💬 ${myReview.comment ? 'Edit Comment' : 'Add Comment'}
           </button>`;
       } else {
         actionButtons = `
-          <button onclick="handleTeamMemberAction('${doc.id}','${category}','approved')"
+          <button data-action="tm-approve"
             style="flex:1;min-width:90px;padding:8px 12px;font-size:12px;font-weight:600;
-                   background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">
+            background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">
             ✅ Approve
           </button>
-          <button onclick="handleTeamMemberAction('${doc.id}','${category}','rejected')"
+          <button data-action="tm-reject"
             style="flex:1;min-width:90px;padding:8px 12px;font-size:12px;font-weight:600;
-                   background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">
+            background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">
             ❌ Reject
           </button>
-          <button onclick="openTeamMemberComment('${doc.id}','${category}')"
+          <button data-action="comment"
             style="min-width:110px;padding:8px 12px;font-size:12px;font-weight:600;
-                   background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">
+            background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">
             💬 Comment
           </button>`;
       }
     }
 
-    // ── Workflow steps visual ──
-    // Only shown when backend says this user is a decision maker
     const workflowHtml = doc.is_decision_maker === true && !isLocked
-      ? renderWorkflowSteps(doc)
-      : '';
+      ? renderWorkflowSteps(doc) : '';
 
+    // ✅ data-id and data-tab-key on the li — read at click time, never baked into onclick
     return `
-      <li class="doc-item" data-id="${doc.id}" data-category="${category}"
+      <li class="doc-item"
+        data-id="${doc.id}"
+        data-tab-key="${tabKey}"
         style="background:${isUnread ? '#eff6ff' : '#fff'};
                border:1px solid ${isUnread ? '#bfdbfe' : '#e5e7eb'};
                border-left:4px solid ${isUnread ? '#3b82f6' : '#e5e7eb'};
@@ -3801,19 +3670,27 @@ function renderRecordsList(records, category) {
                box-shadow:${isUnread ? '0 2px 8px rgba(59,130,246,0.10)' : '0 1px 3px rgba(0,0,0,0.06)'};
                transition:background 0.3s,border 0.3s;">
 
-        <div class="doc-item-header"
-          onclick="toggleRecordDetail('${doc.id}','${category}')"
+        <div class="doc-item-header" data-action="toggle"
           style="display:flex;justify-content:space-between;align-items:center;
                  padding:12px 16px;cursor:pointer;gap:12px;">
           <div style="flex:1;min-width:0;">
             <div style="font-weight:${isUnread ? '700' : '600'};font-size:14px;color:#1f2937;
                         white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
                         display:flex;align-items:center;gap:6px;">
-              ${isUnread ? `<span class="unread-dot-${doc.id}" style="display:inline-block;width:8px;height:8px;flex-shrink:0;background:#3b82f6;border-radius:50%;"></span>` : ''}
+              ${isUnread
+                ? `<span class="unread-dot-${doc.id}" style="display:inline-block;width:8px;height:8px;
+                    flex-shrink:0;background:#3b82f6;border-radius:50%;"></span>`
+                : ''}
               📄 ${doc.title}
-              ${doc.record_kind === 'notice'           ? `<span style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">NOTICE</span>` : ''}
-              ${doc.record_kind === 'rejection_notice' ? `<span style="background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">REJECTION NOTICE</span>` : ''}
-              ${isLocked ? `<span style="background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">🔒 LOCKED</span>` : ''}
+              ${doc.record_kind === 'notice'
+                ? `<span style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;
+                    border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">NOTICE</span>` : ''}
+              ${doc.record_kind === 'rejection_notice'
+                ? `<span style="background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;
+                    border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">REJECTION NOTICE</span>` : ''}
+              ${isLocked
+                ? `<span style="background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;
+                    border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">🔒 LOCKED</span>` : ''}
             </div>
             <div style="font-size:11px;color:#9ca3af;margin-top:3px;">
               Posted by <strong style="color:#6b7280;">${doc.uploader_role || 'N/A'}</strong>
@@ -3830,29 +3707,34 @@ function renderRecordsList(records, category) {
           style="display:none;padding:14px 16px;border-top:1px solid #f3f4f6;background:#fafafa;">
 
           <div style="margin-bottom:12px;">
-            <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Description</div>
-            <div style="font-size:13px;color:#374151;line-height:1.7;">${doc.description || 'No description provided.'}</div>
+            <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+              letter-spacing:.5px;margin-bottom:4px;">Description</div>
+            <div style="font-size:13px;color:#374151;line-height:1.7;">
+              ${doc.description || 'No description provided.'}</div>
           </div>
 
-          ${(doc.record_kind === 'notice' || doc.record_kind === 'rejection_notice') && doc.notice_tied_id ? `
-          <div style="margin-bottom:12px;">
-            <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Tied to Record</div>
-            <div style="font-size:13px;color:#92400e;">📎 Record #${doc.notice_tied_id}</div>
-          </div>` : ''}
+          ${(doc.record_kind === 'notice' || doc.record_kind === 'rejection_notice') && doc.notice_tied_id
+            ? `<div style="margin-bottom:12px;">
+                <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+                  letter-spacing:.5px;margin-bottom:4px;">Tied to Record</div>
+                <div style="font-size:13px;color:#92400e;">📎 Record #${doc.notice_tied_id}</div>
+               </div>` : ''}
 
-          ${fileName ? `
-          <div style="margin-bottom:12px;">
-            <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Attached File</div>
-            <a onclick="downloadFile('${doc.id}','${category}','${fileName}')"
-              style="display:inline-flex;align-items:center;gap:6px;background:#eff6ff;color:#2563eb;
-                     border:1px solid #bfdbfe;border-radius:6px;padding:6px 12px;
-                     font-size:12px;font-weight:500;text-decoration:none;cursor:pointer;">
-              ⬇️ ${fileName}
-            </a>
-          </div>` : ''}
+          ${fileName
+            ? `<div style="margin-bottom:12px;">
+                <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+                  letter-spacing:.5px;margin-bottom:6px;">Attached File</div>
+                <a data-action="download" data-filename="${fileName}"
+                  style="display:inline-flex;align-items:center;gap:6px;background:#eff6ff;color:#2563eb;
+                  border:1px solid #bfdbfe;border-radius:6px;padding:6px 12px;
+                  font-size:12px;font-weight:500;text-decoration:none;cursor:pointer;">
+                  ⬇️ ${fileName}
+                </a>
+               </div>` : ''}
 
           <div style="margin-bottom:12px;">
-            <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Review History</div>
+            <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+              letter-spacing:.5px;margin-bottom:6px;">Review History</div>
             ${decisionReviewsHtml.length > 0
               ? `<ul style="margin:0;padding:0;list-style:none;">${decisionReviewsHtml}</ul>`
               : '<p style="font-size:12px;color:#9ca3af;margin:0;">No decision-maker reviews yet.</p>'}
@@ -3861,7 +3743,8 @@ function renderRecordsList(records, category) {
 
           ${workflowHtml}
 
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid #e5e7eb;">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:12px;
+            border-top:1px solid #e5e7eb;">
             ${actionButtons}
           </div>
         </div>
@@ -3871,90 +3754,142 @@ function renderRecordsList(records, category) {
 
 // =======================================================================
 //  WORKFLOW STEPS VISUAL
-//
-//  Uses doc.workflow_steps array returned by backend.
-//  Backend should return doc.workflow_steps as:
-//  [
-//    { label: 'Consultant Approval', status: 'done' | 'pending' | 'rejected' | 'locked' },
-//    { label: 'Client Acceptance',   status: 'done' | 'pending' | 'rejected' | 'locked' }
-//  ]
 // =======================================================================
 function renderWorkflowSteps(doc) {
   const steps = doc.workflow_steps;
   if (!steps || !steps.length) return '';
-
   const stepsHtml = steps.map((step, idx) => {
     let icon, color, label = `Step ${idx + 1}: ${step.label}`;
     switch (step.status) {
-      case 'done':     icon = '✅'; color = '#10b981'; label += ' — Done (Notice Required)'; break;
-      case 'rejected': icon = '❌'; color = '#ef4444'; label += ' — Rejected';               break;
-      case 'pending':  icon = '⏳'; color = '#f59e0b';                                        break;
-      default:         icon = '🔒'; color = '#d1d5db';                                        break;
+      case 'done':     icon = '✅'; color = '#10b981'; label += ' — Done'; break;
+      case 'rejected': icon = '❌'; color = '#ef4444'; label += ' — Rejected'; break;
+      case 'pending':  icon = '⏳'; color = '#f59e0b'; break;
+      default:         icon = '🔒'; color = '#d1d5db'; break;
     }
     return `<div style="display:flex;align-items:center;gap:6px;">
-      <span style="font-size:14px;">${icon}</span>
+      <span>${icon}</span>
       <span style="font-size:11px;font-weight:600;color:${color};">${label}</span>
     </div>`;
   }).join('<div style="font-size:10px;color:#d1d5db;margin:0 4px;">→</div>');
-
   return `
-    <div style="margin-bottom:12px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
-      <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Approval Workflow</div>
+    <div style="margin-bottom:12px;padding:10px 12px;background:#f8fafc;
+      border:1px solid #e2e8f0;border-radius:8px;">
+      <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+        letter-spacing:.5px;margin-bottom:8px;">Approval Workflow</div>
       <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">${stepsHtml}</div>
     </div>`;
 }
 
 // =======================================================================
-//  TOGGLE RECORD DETAIL (EXPAND / COLLAPSE)
+//  SINGLE EVENT DELEGATE — bottomContent
 //
-//  Mark-viewed fires HERE on first expand only.
-//  Logic:
-//    - If opening and doc is not uploader and not yet viewed → call markRecordViewed
-//    - If already viewed (cached.is_viewed === true) → skip, no API call
-//    - Second expand: cache already has is_viewed=true → skip
-//    - Backend also has UNIQUE constraint → even if called twice, no duplicate row
+//  All clicks on records are handled HERE.
+//  recordId and tabKey are always read from the DOM at click time.
+//  Nothing is baked into onclick strings.
 // =======================================================================
-function toggleRecordDetail(recordId, category) {
+bottomContent.addEventListener('click', (e) => {
+  // ── Add record button ──
+  if (e.target.closest('.add-doc-btn')) {
+    const activeTab = getNavTabs()?.querySelector('li.active');
+    openAddRecordPanel(null, activeTab?.getAttribute('data-tab') || 'contractual');
+    return;
+  }
+
+  // ── Find the action and the owning doc-item ──
+  const actionEl = e.target.closest('[data-action]');
+  if (!actionEl) return;
+  const action = actionEl.getAttribute('data-action');
+
+  // Toggle doesn't need recordId — it works on the header's parent
+  if (action === 'toggle') {
+    const item    = actionEl.closest('.doc-item');
+    const tabKey  = item.getAttribute('data-tab-key');
+    const recordId = item.getAttribute('data-id');
+    toggleRecordDetail(recordId, tabKey);
+    return;
+  }
+
+  // All other actions need both recordId and tabKey from the doc-item
+  const item     = actionEl.closest('.doc-item');
+  if (!item) return;
+  const recordId = item.getAttribute('data-id');
+  const tabKey   = item.getAttribute('data-tab-key');
+
+  switch (action) {
+    case 'approve':
+      handleDecisionMakerAction(recordId, tabKey, 'approved');
+      break;
+    case 'reject':
+      handleDecisionMakerAction(recordId, tabKey, 'rejected');
+      break;
+    case 'tm-approve':
+      handleTeamMemberAction(recordId, tabKey, 'approved');
+      break;
+    case 'tm-reject':
+      handleTeamMemberAction(recordId, tabKey, 'rejected');
+      break;
+    case 'comment':
+      openTeamMemberComment(recordId, tabKey);
+      break;
+    case 'open-notice': {
+      const isRejection = actionEl.getAttribute('data-is-rejection') === 'true';
+      openNoticeOfDetermination(recordId, tabKey, isRejection);
+      break;
+    }
+    case 'delete':
+      deleteRecord(recordId, tabKey);
+      break;
+    case 'download': {
+      const fileName = actionEl.getAttribute('data-filename');
+      downloadFile(recordId, tabKey, fileName);
+      break;
+    }
+  }
+});
+
+// =======================================================================
+//  TOGGLE RECORD DETAIL
+// =======================================================================
+function toggleRecordDetail(recordId, tabKey) {
   const detail  = document.getElementById(`detail-${recordId}`);
   const chevron = document.querySelector(`.chevron-${recordId}`);
   if (!detail) return;
-
   const isOpen = detail.style.display !== 'none';
-
   if (!isOpen) {
-    const cached = (recordsCache[category] || []).find(r => String(r.id) === String(recordId));
+    const cached = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
     if (cached && !cached.is_uploader && !cached.is_viewed) {
-      markRecordViewed(recordId, category);
+      markRecordViewed(recordId, tabKey);
     }
   }
-
   detail.style.display = isOpen ? 'none' : 'block';
   if (chevron) chevron.textContent = isOpen ? '▾' : '▴';
 }
 
 // =======================================================================
 //  DECISION MAKER ACTION
-//
-//  Backend enforces role checks. actorType: 'decision_maker' sent so
-//  backend advances record status.
+//  Sends recordType (DB table name) — backend uses this to find the record
+//  and write the correct record_type into document_reviews
 // =======================================================================
-async function handleDecisionMakerAction(recordId, category, action) {
+async function handleDecisionMakerAction(recordId, tabKey, action) {
   try {
     const response = await fetch('https://oneprojectapp-backend.onrender.com/api/review-record', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
       body: JSON.stringify({
-        projectId: localStorage.getItem('activeProjectId'),
-        recordId, category, action,
-        actorType: 'decision_maker'
+        projectId:  localStorage.getItem('activeProjectId'),
+        recordId,
+        recordType: tabToTable(tabKey),   // ✅ DB table name, not tab key
+        action,
+        actorType:  'decision_maker'
       })
     });
     const data = await response.json();
     if (!response.ok) { alert(data.error || `Failed to ${action} record.`); return; }
     alert(data.message || `Record ${action} successfully.`);
-    delete recordsCache[category];
-    loadTabRecords(category);
-    setTimeout(() => openNoticeOfDetermination(recordId, category, action === 'rejected'), 400);
+    delete recordsCache[tabKey];
+    await loadTabRecords(tabKey);
+    // ✅ No setTimeout — open notice only after records have re-loaded
+    openNoticeOfDetermination(recordId, tabKey, action === 'rejected');
   } catch (err) {
     console.error('Decision maker action error:', err);
     alert(`Failed to ${action} record.`);
@@ -3963,25 +3898,24 @@ async function handleDecisionMakerAction(recordId, category, action) {
 
 // =======================================================================
 //  TEAM MEMBER ACTION
-//
-//  actorType: 'team_member' — backend must NOT advance record status.
-//  Stores the action in document_reviews but workflow is unchanged.
 // =======================================================================
-async function handleTeamMemberAction(recordId, category, action) {
+async function handleTeamMemberAction(recordId, tabKey, action) {
   try {
     const response = await fetch('https://oneprojectapp-backend.onrender.com/api/review-record', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
       body: JSON.stringify({
-        projectId: localStorage.getItem('activeProjectId'),
-        recordId, category, action,
-        actorType: 'team_member'
+        projectId:  localStorage.getItem('activeProjectId'),
+        recordId,
+        recordType: tabToTable(tabKey),   // ✅ DB table name
+        action,
+        actorType:  'team_member'
       })
     });
     const data = await response.json();
     if (!response.ok) { alert(data.error || 'Failed to record your action.'); return; }
-    delete recordsCache[category];
-    loadTabRecords(category);
+    delete recordsCache[tabKey];
+    loadTabRecords(tabKey);
   } catch (err) {
     console.error('Team member action error:', err);
     alert('Failed to record your action.');
@@ -3990,32 +3924,36 @@ async function handleTeamMemberAction(recordId, category, action) {
 
 // =======================================================================
 //  TEAM MEMBER COMMENT
-//
-//  Existing comment read from doc.my_review.comment (backend-returned).
 // =======================================================================
-function openTeamMemberComment(recordId, category) {
+function openTeamMemberComment(recordId, tabKey) {
   const existing = document.getElementById('commentModal');
   if (existing) existing.remove();
 
-  const cachedRecords   = recordsCache[category] || [];
-  const doc             = cachedRecords.find(r => String(r.id) === String(recordId));
-  const existingComment = doc?.my_review?.comment || '';
+  const cached          = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
+  const existingComment = cached?.my_review?.comment || '';
 
   const modal = document.createElement('div');
   modal.id = 'commentModal';
   modal.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);';
   modal.innerHTML = `
-    <div style="background:#fff;border-radius:12px;padding:24px;width:min(420px,90vw);box-shadow:0 20px 60px rgba(0,0,0,0.2);">
+    <div style="background:#fff;border-radius:12px;padding:24px;width:min(420px,90vw);">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <h3 style="margin:0;font-size:16px;color:#1f2937;">💬 Add Comment</h3>
         <button id="closeCommentModal" style="background:none;border:none;font-size:20px;color:#9ca3af;cursor:pointer;">×</button>
       </div>
-      <p style="font-size:12px;color:#9ca3af;margin:0 0 12px;">Your comment is stored alongside your review. It does not affect the record status.</p>
+      <p style="font-size:12px;color:#9ca3af;margin:0 0 12px;">
+        Your comment is stored alongside your review. It does not affect the record status.</p>
       <textarea id="commentText" placeholder="Enter your comment…"
-        style="width:100%;min-height:100px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;color:#374151;resize:vertical;box-sizing:border-box;">${existingComment}</textarea>
+        style="width:100%;min-height:100px;padding:10px 12px;border:1px solid #d1d5db;
+        border-radius:8px;font-size:13px;color:#374151;resize:vertical;box-sizing:border-box;">
+        ${existingComment}</textarea>
       <div style="display:flex;gap:8px;margin-top:14px;">
-        <button id="submitCommentBtn" style="flex:1;padding:10px;font-size:13px;font-weight:600;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;">Submit Comment</button>
-        <button id="cancelCommentBtn" style="flex:1;padding:10px;font-size:13px;font-weight:600;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;">Cancel</button>
+        <button id="submitCommentBtn" style="flex:1;padding:10px;font-size:13px;font-weight:600;
+          background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+          Submit Comment</button>
+        <button id="cancelCommentBtn" style="flex:1;padding:10px;font-size:13px;font-weight:600;
+          background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;">
+          Cancel</button>
       </div>
     </div>`;
   document.body.appendChild(modal);
@@ -4032,18 +3970,19 @@ function openTeamMemberComment(recordId, category) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
         body: JSON.stringify({
-          projectId: localStorage.getItem('activeProjectId'),
-          recordId, category,
-          action: 'no_action',
+          projectId:  localStorage.getItem('activeProjectId'),
+          recordId,
+          recordType: tabToTable(tabKey),   // ✅ DB table name
+          action:     'no_action',
           comment,
-          actorType: 'team_member'
+          actorType:  'team_member'
         })
       });
       const data = await response.json();
       if (!response.ok) { alert(data.error || 'Failed to submit comment.'); return; }
       modal.remove();
-      delete recordsCache[category];
-      loadTabRecords(category);
+      delete recordsCache[tabKey];
+      loadTabRecords(tabKey);
     } catch (err) {
       console.error('Comment error:', err);
       alert('Failed to submit comment.');
@@ -4052,13 +3991,14 @@ function openTeamMemberComment(recordId, category) {
 }
 
 // =======================================================================
-//  DOWNLOAD / DELETE
+//  DOWNLOAD FILE
 // =======================================================================
-async function downloadFile(recordId, category, fileName) {
+async function downloadFile(recordId, tabKey, fileName) {
   const token = localStorage.getItem('authToken');
   try {
     const response = await fetch(
-      `https://oneprojectapp-backend.onrender.com/api/download-file?recordId=${recordId}&category=${category}`,
+      // ✅ Send recordType so backend queries the right table
+      `https://oneprojectapp-backend.onrender.com/api/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}`,
       { method: 'GET', headers: { 'Authorization': `Bearer ${token}` } }
     );
     if (!response.ok) { const err = await response.json().catch(() => ({})); alert(err.error || 'Failed to download.'); return; }
@@ -4080,69 +4020,81 @@ async function downloadFile(recordId, category, fileName) {
   } catch (err) { console.error('Download error:', err); alert('Failed to download file.'); }
 }
 
-async function deleteRecord(recordId, category) {
+// =======================================================================
+//  DELETE RECORD
+// =======================================================================
+async function deleteRecord(recordId, tabKey) {
   if (!confirm('Are you sure you want to delete this record? This cannot be undone.')) return;
   try {
     const response = await fetch('https://oneprojectapp-backend.onrender.com/api/delete-record', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
-      body: JSON.stringify({ projectId: localStorage.getItem('activeProjectId'), recordId, category })
+      body: JSON.stringify({
+        projectId:  localStorage.getItem('activeProjectId'),
+        recordId,
+        recordType: tabToTable(tabKey)    // ✅ DB table name
+      })
     });
     const data = await response.json();
     if (!response.ok) { alert(data.error || 'Failed to delete record.'); return; }
     alert('Record deleted successfully.');
-    delete recordsCache[category];
-    loadTabRecords(category);
+    delete recordsCache[tabKey];
+    loadTabRecords(tabKey);
   } catch (err) { console.error('Delete error:', err); alert('Failed to delete record.'); }
 }
 
 // =======================================================================
 //  NOTICE OF DETERMINATION / REJECTION NOTICE
-//
-//  Backend enforces role checks.
 // =======================================================================
-function openNoticeOfDetermination(recordId, category, isRejection = false) {
+function openNoticeOfDetermination(recordId, tabKey, isRejection = false) {
   openAddRecordPanel({
     recordKind:   isRejection ? 'rejection_notice' : 'notice',
     noticeTiedId: recordId,
-    category,
-  });
+    tabKey,
+  }, tabKey);
 }
 
 // =======================================================================
 //  ADD RECORD PANEL
+//  tabKey always passed explicitly — never read from active DOM tab
 // =======================================================================
-function openAddRecordPanel(noticeConfig = null) {
-  const isNotice       = noticeConfig !== null;
-  const recordKind     = isNotice ? noticeConfig.recordKind   : 'new';
-  const noticeTiedId   = isNotice ? noticeConfig.noticeTiedId : null;
-  const noticeCategory = isNotice ? noticeConfig.category     : null;
+function openAddRecordPanel(noticeConfig = null, tabKey = null) {
+  const isNotice     = noticeConfig !== null;
+  const recordKind   = isNotice ? noticeConfig.recordKind   : 'new';
+  const noticeTiedId = isNotice ? noticeConfig.noticeTiedId : null;
+  // ✅ tabKey is always explicit — never falls back to DOM query
+  const resolvedTab  = tabKey || (isNotice ? noticeConfig.tabKey : null) || 'contractual';
 
-  const activeTabElement = document.querySelector('#navTabs li.active');
-  const category         = isNotice ? noticeCategory : (activeTabElement ? activeTabElement.getAttribute('data-tab') : 'contractual');
-  const tabLabel         = activeTabElement ? activeTabElement.textContent.trim() : 'Records';
+  const tabLabels = {
+    contractual:    'Contractual & Legal',
+    administrative: 'Administrative & Instructional',
+    safety:         'Safety & Compliance',
+    operational:    'Operational & Performance',
+    financial:      'Financial',
+  };
+  const tabLabel = tabLabels[resolvedTab] || resolvedTab;
 
-  const panelTitle = recordKind === 'rejection_notice'
-    ? '📋 Issue Rejection Notice'
-    : recordKind === 'notice'
-    ? '📋 Issue Notice of Determination'
+  const panelTitle = recordKind === 'rejection_notice' ? '📋 Issue Rejection Notice'
+    : recordKind === 'notice' ? '📋 Issue Notice of Determination'
     : `➕ Add Record — ${tabLabel}`;
 
   const noticeInfoBanner = isNotice ? `
     <div style="margin-bottom:18px;padding:14px 16px;
-                background:${recordKind === 'rejection_notice' ? '#fff1f2' : '#fffbeb'};
-                border:1px solid ${recordKind === 'rejection_notice' ? '#fca5a5' : '#fcd34d'};border-radius:10px;">
-      <div style="font-size:13px;font-weight:700;color:${recordKind === 'rejection_notice' ? '#991b1b' : '#92400e'};margin-bottom:4px;">
+      background:${recordKind === 'rejection_notice' ? '#fff1f2' : '#fffbeb'};
+      border:1px solid ${recordKind === 'rejection_notice' ? '#fca5a5' : '#fcd34d'};border-radius:10px;">
+      <div style="font-size:13px;font-weight:700;
+        color:${recordKind === 'rejection_notice' ? '#991b1b' : '#92400e'};margin-bottom:4px;">
         ${recordKind === 'rejection_notice' ? '⚠️ Rejection Notice' : '📋 Notice of Determination'}
       </div>
       <div style="font-size:12px;color:#555;line-height:1.6;">
-        This notice will be tied to Record <strong>#${noticeTiedId}</strong>.
-        It will be saved as a <strong>${recordKind === 'rejection_notice' ? 'Rejection Notice' : 'Notice of Determination'}</strong> in the same category.
+        This notice is tied to Record <strong>#${noticeTiedId}</strong> in
+        <strong>${tabLabel}</strong>.
       </div>
     </div>` : '';
 
   const categoryInfo = !isNotice ? `
-    <div style="margin-bottom:18px;padding:16px;background:#f7fbfd;border:1px solid #d8eef7;border-radius:10px;">
+    <div style="margin-bottom:18px;padding:16px;background:#f7fbfd;
+      border:1px solid #d8eef7;border-radius:10px;">
       <div style="font-size:14px;font-weight:bold;color:#007B8A;margin-bottom:6px;">Category</div>
       <div style="font-size:15px;color:#333;">${tabLabel}</div>
     </div>` : '';
@@ -4155,56 +4107,77 @@ function openAddRecordPanel(noticeConfig = null) {
       <div style="flex:1;overflow-y:auto;padding:16px 20px;">
         ${noticeInfoBanner}${categoryInfo}
         <form id="addRecordForm">
-          <input type="hidden" id="recordCategory"    value="${category}"/>
+          <!-- ✅ Store tabKey and recordType together — recordType is what backend receives -->
+          <input type="hidden" id="formTabKey"        value="${resolvedTab}"/>
+          <input type="hidden" id="formRecordType"    value="${tabToTable(resolvedTab)}"/>
           <input type="hidden" id="recordKindField"   value="${recordKind}"/>
           <input type="hidden" id="noticeTiedIdField" value="${noticeTiedId || ''}"/>
           <div style="margin-bottom:20px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">${isNotice ? 'Notice Title *' : 'Title *'}</label>
-            <input type="text" id="recordTitle" required placeholder="${isNotice ? 'e.g. Determination of Claim #12' : 'e.g. Foundation Agreement'}"
-              style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"/>
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
+              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
+              ${isNotice ? 'Notice Title *' : 'Title *'}</label>
+            <input type="text" id="recordTitle" required
+              placeholder="${isNotice ? 'e.g. Determination of Claim #12' : 'e.g. Foundation Agreement'}"
+              style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;
+              font-size:14px;box-sizing:border-box;"/>
           </div>
           <div style="margin-bottom:20px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">${isNotice ? 'Notice Content *' : 'Description *'}</label>
-            <div style="display:flex;flex-wrap:wrap;gap:4px;padding:8px;background:#f5f5f5;border:1px solid #ddd;border-bottom:none;border-radius:6px 6px 0 0;">
-              <button type="button" onclick="document.execCommand('bold')"                style="width:32px;height:32px;font-weight:bold;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">B</button>
-              <button type="button" onclick="document.execCommand('italic')"              style="width:32px;height:32px;font-style:italic;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">I</button>
-              <button type="button" onclick="document.execCommand('underline')"           style="width:32px;height:32px;text-decoration:underline;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">U</button>
-              <button type="button" onclick="document.execCommand('insertUnorderedList')" style="width:32px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">☰</button>
-              <button type="button" onclick="document.execCommand('insertOrderedList')"   style="width:32px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">№</button>
-              <button type="button" onclick="document.execCommand('undo')"                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">↩</button>
-              <button type="button" onclick="document.execCommand('redo')"                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">↪</button>
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
+              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
+              ${isNotice ? 'Notice Content *' : 'Description *'}</label>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;padding:8px;background:#f5f5f5;
+              border:1px solid #ddd;border-bottom:none;border-radius:6px 6px 0 0;">
+              <button type="button" onclick="document.execCommand('bold')"
+                style="width:32px;height:32px;font-weight:bold;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">B</button>
+              <button type="button" onclick="document.execCommand('italic')"
+                style="width:32px;height:32px;font-style:italic;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">I</button>
+              <button type="button" onclick="document.execCommand('underline')"
+                style="width:32px;height:32px;text-decoration:underline;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">U</button>
+              <button type="button" onclick="document.execCommand('insertUnorderedList')"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;">☰</button>
+              <button type="button" onclick="document.execCommand('undo')"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;">↩</button>
+              <button type="button" onclick="document.execCommand('redo')"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;">↪</button>
             </div>
             <div id="recordDescription" contenteditable="true"
               placeholder="${isNotice ? 'Provide the full notice content…' : 'Provide detailed description…'}"
-              style="width:100%;min-height:200px;padding:12px;border:1px solid #ddd;border-radius:0 0 6px 6px;font-size:14px;color:#333;line-height:1.7;background:#fff;outline:none;box-sizing:border-box;overflow-y:auto;"></div>
+              style="width:100%;min-height:200px;padding:12px;border:1px solid #ddd;
+              border-radius:0 0 6px 6px;font-size:14px;color:#333;line-height:1.7;
+              background:#fff;outline:none;box-sizing:border-box;overflow-y:auto;"></div>
             <style>#recordDescription:empty:before{content:attr(placeholder);color:#aaa;pointer-events:none;}</style>
           </div>
           <div style="margin-bottom:24px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Attach Document</label>
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
+              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Attach Document</label>
             <div id="attachmentDropZone"
-              style="display:flex;align-items:center;gap:12px;padding:16px;border:2px dashed #ddd;border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
+              style="display:flex;align-items:center;gap:12px;padding:16px;border:2px dashed #ddd;
+              border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
               <div style="font-size:24px;">📎</div>
               <div style="flex:1;">
                 <div style="font-weight:bold;color:#333;font-size:14px;">Click to upload or drag file</div>
-                <div style="font-size:12px;color:#999;margin-top:4px;">PDF, DOC, DOCX, XLS, XLSX, JPG, PNG (Max 10MB)</div>
-                <input type="file" id="recordAttachment" style="display:none;" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"/>
+                <div style="font-size:12px;color:#999;margin-top:4px;">
+                  PDF, DOC, DOCX, XLS, XLSX, JPG, PNG (Max 10MB)</div>
+                <input type="file" id="recordAttachment" style="display:none;"
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"/>
               </div>
             </div>
-            <div id="attachmentName" style="margin-top:8px;font-size:12px;color:#28a745;font-weight:bold;display:none;"></div>
+            <div id="attachmentName" style="margin-top:8px;font-size:12px;color:#28a745;
+              font-weight:bold;display:none;"></div>
           </div>
         </form>
       </div>
       <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;background:#fff;display:flex;gap:12px;">
-        <button type="button" onclick="document.getElementById('addRecordForm').requestSubmit()"
+        <button type="button" id="saveRecordBtn"
           style="flex:1;padding:12px;font-size:14px;font-weight:bold;
-                 background:${recordKind === 'rejection_notice' ? '#dc2626' : recordKind === 'notice' ? '#d97706' : '#28a745'};
-                 color:#fff;border:none;border-radius:6px;cursor:pointer;">
-          ${recordKind === 'rejection_notice' ? '📋 Issue Rejection Notice' : recordKind === 'notice' ? '📋 Issue Notice' : '✓ Save Record'}
+          background:${recordKind === 'rejection_notice' ? '#dc2626' : recordKind === 'notice' ? '#d97706' : '#28a745'};
+          color:#fff;border:none;border-radius:6px;cursor:pointer;">
+          ${recordKind === 'rejection_notice' ? '📋 Issue Rejection Notice'
+            : recordKind === 'notice' ? '📋 Issue Notice' : '✓ Save Record'}
         </button>
         <button type="button" onclick="collapseGrayPart()"
-          style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:#f5f5f5;color:#333;border:1px solid #ddd;border-radius:6px;cursor:pointer;">
-          ✕ Cancel
-        </button>
+          style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:#f5f5f5;
+          color:#333;border:1px solid #ddd;border-radius:6px;cursor:pointer;">✕ Cancel</button>
       </div>
     </div>`;
 
@@ -4213,31 +4186,34 @@ function openAddRecordPanel(noticeConfig = null) {
   const dropZone     = document.getElementById('attachmentDropZone');
   const attachInput  = document.getElementById('recordAttachment');
   const attachNameEl = document.getElementById('attachmentName');
-  dropZone.addEventListener('click',    () => attachInput.click());
-  dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.borderColor = '#007B8A'; });
-  dropZone.addEventListener('dragleave', ()  => { dropZone.style.borderColor = '#ddd'; });
-  dropZone.addEventListener('drop',     (e) => { e.preventDefault(); dropZone.style.borderColor = '#ddd'; if (e.dataTransfer.files.length > 0) { attachInput.files = e.dataTransfer.files; updateAttachDisplay(); } });
-  attachInput.addEventListener('change', updateAttachDisplay);
-
-  function updateAttachDisplay() {
+  const updateAttachDisplay = () => {
     if (attachInput.files.length > 0) {
       const f = attachInput.files[0];
-      attachNameEl.textContent = `✓ ${f.name} (${(f.size / 1024 / 1024).toFixed(2)} MB)`;
+      attachNameEl.textContent = `✓ ${f.name} (${(f.size/1024/1024).toFixed(2)} MB)`;
       attachNameEl.style.display = 'block';
     } else {
       attachNameEl.style.display = 'none';
     }
-  }
+  };
+  dropZone.addEventListener('click',    () => attachInput.click());
+  dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.borderColor = '#007B8A'; });
+  dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = '#ddd'; });
+  dropZone.addEventListener('drop',     (e) => {
+    e.preventDefault(); dropZone.style.borderColor = '#ddd';
+    if (e.dataTransfer.files.length > 0) { attachInput.files = e.dataTransfer.files; updateAttachDisplay(); }
+  });
+  attachInput.addEventListener('change', updateAttachDisplay);
 
-  document.getElementById('addRecordForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
+  document.getElementById('saveRecordBtn').addEventListener('click', async () => {
     try {
       const title     = document.getElementById('recordTitle').value.trim();
       const descEl    = document.getElementById('recordDescription');
-      const description = descEl ? descEl.innerHTML.trim() : '';
+      const descHtml  = descEl ? descEl.innerHTML.trim() : '';
       const descText  = descEl ? descEl.innerText.trim() : '';
       const fileInput = document.getElementById('recordAttachment');
-      const rCategory = document.getElementById('recordCategory').value;
+      // ✅ Always read from the hidden fields set at panel open time
+      const rType     = document.getElementById('formRecordType').value;
+      const rTabKey   = document.getElementById('formTabKey').value;
       const rKind     = document.getElementById('recordKindField').value;
       const tiedId    = document.getElementById('noticeTiedIdField').value;
 
@@ -4245,12 +4221,13 @@ function openAddRecordPanel(noticeConfig = null) {
       if (title.length < 3)     throw new Error('Title must be at least 3 characters.');
       if (!descText)            throw new Error('Content is required.');
       if (descText.length < 10) throw new Error('Content must be at least 10 characters.');
-      if (fileInput.files[0] && fileInput.files[0].size > 10 * 1024 * 1024) throw new Error('File size must not exceed 10MB.');
+      if (fileInput.files[0] && fileInput.files[0].size > 10 * 1024 * 1024)
+        throw new Error('File size must not exceed 10MB.');
 
       const formData = new FormData();
-      formData.append('category',    rCategory);
+      formData.append('recordType',  rType);      // ✅ DB table name
       formData.append('title',       title);
-      formData.append('description', description);
+      formData.append('description', descHtml);
       formData.append('projectId',   localStorage.getItem('activeProjectId'));
       formData.append('recordKind',  rKind);
       if (tiedId) formData.append('noticeTiedId', tiedId);
@@ -4264,89 +4241,306 @@ function openAddRecordPanel(noticeConfig = null) {
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       const data = await response.json();
       if (data.success) {
-        const msg = rKind === 'rejection_notice' ? `✓ Rejection Notice "${title}" issued successfully.`
-                  : rKind === 'notice'           ? `✓ Notice of Determination "${title}" issued successfully.`
-                  : `✓ Record "${title}" saved successfully.`;
-        alert(msg);
-        delete recordsCache[rCategory];
-        loadTabRecords(rCategory);
+        alert(rKind === 'rejection_notice' ? `✓ Rejection Notice "${title}" issued.`
+          : rKind === 'notice' ? `✓ Notice of Determination "${title}" issued.`
+          : `✓ Record "${title}" saved.`);
+        delete recordsCache[rTabKey];
+        loadTabRecords(rTabKey);
         collapseGrayPart();
       } else throw new Error(data.message || 'Failed to save.');
     } catch (err) {
-      console.error('❌ Form submission error:', err);
+      console.error('Form submission error:', err);
       alert('Error: ' + err.message);
     }
   });
 }
 window.openAddRecordPanel = openAddRecordPanel;
 
-// Bottom content event delegation
-document.getElementById('bottomContent').addEventListener('click', (event) => {
-  const target = event.target instanceof Element ? event.target : event.target.parentElement;
-  const addBtn = target ? target.closest('.add-doc-btn') : null;
-  if (addBtn) { openAddRecordPanel(); return; }
-  const header = target ? target.closest('.doc-item-header') : null;
-  if (!header) return;
-  const item = header.closest('.doc-item');
-  if (item) item.classList.toggle('expanded');
+// =======================================================================
+//  NOTIFICATIONS
+// =======================================================================
+const notificationIcon  = document.getElementById('notificationIcon');
+const notificationBadge = document.getElementById('notificationBadge');
+
+async function updateNotificationBadge() {
+  try {
+    const projectId = localStorage.getItem('activeProjectId');
+    const token     = localStorage.getItem('authToken');
+    if (!projectId || !token) return;
+    const res   = await fetch(
+      `https://oneprojectapp-backend.onrender.com/notifications/unread-count?projectId=${projectId}`,
+      { headers: { 'Authorization': `Bearer ${token}` } }
+    );
+    const data  = await res.json();
+    const count = data.count ?? 0;
+    notificationBadge.textContent   = count;
+    notificationBadge.style.display = count > 0 ? 'inline-block' : 'none';
+  } catch (err) {
+    notificationBadge.textContent   = '0';
+    notificationBadge.style.display = 'none';
+  }
+}
+
+notificationIcon.addEventListener('click', async () => {
+  const projectId = localStorage.getItem('activeProjectId');
+  const token     = localStorage.getItem('authToken');
+  if (!projectId) { expandGrayPart('<p>Please select a project first.</p>'); return; }
+  notificationBadge.textContent   = '0';
+  notificationBadge.style.display = 'none';
+  try {
+    const res           = await fetch(
+      `https://oneprojectapp-backend.onrender.com/notifications?projectId=${projectId}`,
+      { headers: { 'Authorization': `Bearer ${token}` } }
+    );
+    const data          = await res.json();
+    const notifications = data.notifications || [];
+    if (notifications.length > 0) {
+      await fetch('https://oneprojectapp-backend.onrender.com/notifications/mark-all-read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ projectId, notificationIds: notifications.map(n => n.id) })
+      });
+    }
+    renderNotificationPanel(notifications);
+  } catch (err) {
+    expandGrayPart(`<p style="color:#ef4444;">⚠️ Error loading notifications.</p>
+      <button class="btn" onclick="collapseGrayPart()">← Back</button>`);
+  }
 });
 
+function renderNotificationPanel(notifications) {
+  let html = `
+    <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;">
+      <h3 style="margin:0;color:#333;font-size:18px;">🔔 Notifications</h3>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:16px 20px;">`;
+
+  if (!notifications.length) {
+    html += `<div style="text-align:center;padding:40px 0;color:#9ca3af;">
+      <div style="font-size:32px;margin-bottom:8px;">🔔</div>
+      <p style="margin:0;">No notifications yet.</p></div>`;
+  } else {
+    html += `<ul style="padding:0;margin:0;list-style:none;">`;
+    notifications.forEach(n => {
+      const isUnread = !n.is_read;
+      // ✅ entity_type from DB is already the table name e.g. 'contractual_records'
+      //    We store it as-is on the li — handleNotificationClick translates back to tabKey
+      html += `
+        <li data-notif-entity-type="${n.entity_type}" data-notif-entity-id="${n.entity_id}"
+          data-action="notif-click"
+          style="padding:14px 16px;border-radius:8px;margin-bottom:8px;cursor:pointer;
+          background:${isUnread ? '#eff6ff' : '#fff'};
+          border:1px solid ${isUnread ? '#bfdbfe' : '#e5e7eb'};
+          border-left:4px solid ${isUnread ? '#3b82f6' : '#e5e7eb'};">
+          <div style="font-weight:${isUnread ? '700' : '600'};font-size:13px;color:#1f2937;
+            margin-bottom:4px;display:flex;align-items:center;gap:6px;">
+            ${isUnread ? '<span style="display:inline-block;width:7px;height:7px;background:#3b82f6;border-radius:50%;"></span>' : ''}
+            ${n.entity_type.replace('_records','').replace('_','-')} Record
+          </div>
+          <div style="font-size:12px;color:#6b7280;line-height:1.5;">${n.message || ''}</div>
+          <div style="font-size:11px;color:#9ca3af;margin-top:6px;">
+            By <strong>${n.added_by_role || 'Unknown'}</strong> &nbsp;•&nbsp;
+            ${new Date(n.created_at).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}
+          </div>
+        </li>`;
+    });
+    html += `</ul>`;
+  }
+  html += `</div>
+    <div style="padding:16px 20px;border-top:1px solid #e5e7eb;">
+      <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
+    </div>`;
+  expandGrayPart(html);
+
+  // ✅ Delegate notification clicks inside the panel
+  document.querySelector('.gray-part, #grayPart, #sidePanel')
+    ?.addEventListener('click', (e) => {
+      const li = e.target.closest('[data-action="notif-click"]');
+      if (!li) return;
+      const entityType = li.getAttribute('data-notif-entity-type'); // e.g. 'contractual_records'
+      const entityId   = li.getAttribute('data-notif-entity-id');
+      handleNotificationClick(entityType, entityId);
+    }, { once: true });
+}
+
 // =======================================================================
-//  MEETING MINUTES PANEL
+//  NOTIFICATION CLICK — navigate to tab then expand record
+//  entityType is the DB table name — reverse-map to tabKey
 // =======================================================================
+async function handleNotificationClick(entityType, entityId) {
+  // ✅ Reverse map: DB table name → tab key
+  const TABLE_TAB_MAP = {
+    contractual_records:    'contractual',
+    administrative_records: 'administrative',
+    safety_records:         'safety',
+    operational_records:    'operational',
+    financial_records:      'financial',
+  };
+
+  const tabKey = TABLE_TAB_MAP[entityType];
+  if (!tabKey) return;
+
+  collapseGrayPart();
+
+  // Click the tab
+  const tabEl = document.querySelector(`#navTabs li[data-tab="${tabKey}"]`);
+  if (tabEl) tabEl.click();
+
+  // ✅ Wait for loadTabRecords to finish before trying to expand the record
+  //    loadTabRecords populates recordsCache[tabKey] — poll until it's there
+  const waitForRecord = () => new Promise((resolve) => {
+    const check = () => {
+      const cached = recordsCache[tabKey];
+      if (cached && cached.some(r => String(r.id) === String(entityId))) {
+        resolve();
+      } else {
+        setTimeout(check, 100);
+      }
+    };
+    check();
+  });
+
+  // Timeout safety — don't wait forever
+  await Promise.race([
+    waitForRecord(),
+    new Promise(resolve => setTimeout(resolve, 5000))
+  ]);
+
+  const el = document.querySelector(`.doc-item[data-id='${entityId}']`);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const detail = document.getElementById(`detail-${entityId}`);
+    if (detail && detail.style.display === 'none') {
+      toggleRecordDetail(entityId, tabKey);
+    }
+  }
+}
+
+// =======================================================================
+//  MEETING (unchanged from original — no record_type issues here)
+// =======================================================================
+function renderMeetingContent(activeView = 'minutes') {
+  bottomContent.innerHTML = `
+    <div class="meeting-options">
+      <button class="meeting-btn ${activeView==='minutes'?'active':''}"
+        onclick="switchMeetingView('minutes')">📋 Meeting Minutes</button>
+      <button class="meeting-btn ${activeView==='scheduled'?'active':''}"
+        onclick="switchMeetingView('scheduled')">📅 Scheduled Meeting</button>
+      <button class="meeting-btn ${activeView==='plan'?'active':''}"
+        onclick="switchMeetingView('plan')">✏️ Plan Meeting</button>
+    </div>
+    <div class="bottom-scroll-area" id="meetingViewContainer"></div>`;
+  setTimeout(() => updateMeetingView(activeView), 0);
+}
+
+function switchMeetingView(view) { renderMeetingContent(view); }
+
+async function updateMeetingView(activeView = 'minutes') {
+  const container = document.getElementById('meetingViewContainer');
+  if (!container) return;
+  if (activeView === 'minutes') {
+    container.innerHTML = `
+      <div style='display:flex;justify-content:flex-end;gap:12px;padding:12px;'>
+        <button class='btn primary' onclick='openAddMeetingMinutesPanel()'>➕ Add Meeting Minute</button>
+      </div>
+      <div id="meetingListContainer" style="padding:12px;">
+        <p style="text-align:center;color:#999;">Loading...</p></div>`;
+    await displayMeetingList('minutes');
+  } else if (activeView === 'scheduled') {
+    container.innerHTML = '<div id="meetingListContainer" style="padding:12px;"><p style="text-align:center;color:#999;">Loading...</p></div>';
+    await displayMeetingList('scheduled');
+  }
+}
+
+async function displayMeetingList(type) {
+  const projectId = localStorage.getItem('activeProjectId');
+  const container = document.getElementById('meetingListContainer');
+  if (!projectId) { container.innerHTML = '<p style="text-align:center;color:#999;">No project selected.</p>'; return; }
+  try {
+    const res  = await fetch('https://oneprojectapp-backend.onrender.com/records/meetings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
+      body: JSON.stringify({ projectId, type })
+    });
+    const data     = await res.json();
+    const meetings = data.meetings || [];
+    if (!meetings.length) { container.innerHTML = '<p style="text-align:center;color:#999;">No meetings found.</p>'; return; }
+    container.innerHTML = '<ul class="doc-list">' + meetings.map(m => `
+      <li class="doc-item">
+        <div class="doc-item-header" onclick="this.closest('.doc-item').classList.toggle('expanded')">
+          <div class="doc-info">
+            <div class="doc-title">${m.title}</div>
+            <div class="doc-meta">${new Date(m.date).toLocaleDateString()}</div>
+          </div>
+          <span class="doc-toggle">▾</span>
+        </div>
+        <div class="doc-detail">
+          <p>${m.description || 'No description provided'}</p>
+          <button class="doc-action-btn" style='background:#007B8A;color:#fff;'
+            onclick="openMeetingDetail('${m.id}')">📖 View Details</button>
+        </div>
+      </li>`).join('') + '</ul>';
+  } catch (err) { console.error('Meeting list error:', err); }
+}
+
+async function openMeetingDetail(meetingId) {
+  try {
+    const res  = await fetch('https://oneprojectapp-backend.onrender.com/records/meeting-detail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
+      body: JSON.stringify({ meetingId, projectId: localStorage.getItem('activeProjectId') })
+    });
+    const data = await res.json();
+    expandGrayPart(`
+      <h3 style='margin-bottom:16px;'>📅 Meeting Details</h3>
+      <div class='gray-part-field'><div class='gray-part-label'>Title</div>
+        <div class='gray-part-value'>${data.title||'N/A'}</div></div>
+      <div class='gray-part-field'><div class='gray-part-label'>Date</div>
+        <div class='gray-part-value'>${data.date?new Date(data.date).toLocaleDateString():'N/A'}</div></div>
+      <div class='gray-part-field'><div class='gray-part-label'>Participants</div>
+        <div class='gray-part-value'>${data.participants||'Not specified'}</div></div>
+      <div class='gray-part-field'><div class='gray-part-label'>Minutes</div>
+        <div class='gray-part-value'>${data.minutes||'Not recorded'}</div></div>
+      <div style='margin-top:16px;'>
+        <button class='btn' style='width:100%;' onclick='collapseGrayPart()'>← Back</button></div>`);
+  } catch (err) {
+    expandGrayPart(`<p>Error loading meeting.</p>
+      <button class='btn' onclick='collapseGrayPart()'>← Back</button>`);
+  }
+}
+
 function openAddMeetingMinutesPanel() {
-  const html = `
+  expandGrayPart(`
     <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
       <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
         <h3 style="margin:0;color:#333;font-size:20px;">➕ Add Meeting Minute</h3>
       </div>
       <div style="flex:1;overflow-y:auto;padding:16px 20px;">
-        <form id="addMeetingMinutesForm">
-          <div style="margin-bottom:20px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Title *</label>
-            <input type="text" id="meetingMinuteTitle" required placeholder="e.g., Site Handover Minutes" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"/>
-          </div>
-          <div style="margin-bottom:20px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Details *</label>
-            <textarea id="meetingMinuteDetails" required placeholder="Enter the meeting minutes content..." style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;min-height:120px;resize:vertical;box-sizing:border-box;"></textarea>
-          </div>
-          <div style="margin-bottom:20px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Date</label>
-            <input type="date" id="meetingMinuteDate" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"/>
-          </div>
-          <div style="margin-bottom:16px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Attachment</label>
-            <div id="mmDropZone" style="display:flex;align-items:center;gap:12px;padding:16px;border:2px dashed #ddd;border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
-              <div style="font-size:24px;">📝</div>
-              <div style="flex:1;">
-                <div style="font-weight:bold;color:#333;font-size:14px;">Click to upload or drag files</div>
-                <div style="font-size:12px;color:#999;margin-top:4px;">PDF, DOC, DOCX, XLS, XLSX, JPG, PNG (Max 10MB)</div>
-                <input type="file" id="meetingMinuteAttachment" style="display:none;" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png" multiple/>
-              </div>
-            </div>
-            <div id="mmAttachmentName" style="margin-top:8px;font-size:12px;color:#28a745;font-weight:bold;display:none;"></div>
-          </div>
-        </form>
+        <div style="margin-bottom:20px;">
+          <label style="display:block;font-weight:bold;color:#007B8A;font-size:12px;margin-bottom:8px;">TITLE *</label>
+          <input type="text" id="meetingMinuteTitle" placeholder="e.g., Site Handover Minutes"
+            style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"/>
+        </div>
+        <div style="margin-bottom:20px;">
+          <label style="display:block;font-weight:bold;color:#007B8A;font-size:12px;margin-bottom:8px;">DETAILS *</label>
+          <textarea id="meetingMinuteDetails" placeholder="Enter meeting minutes content..."
+            style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;min-height:120px;resize:vertical;box-sizing:border-box;"></textarea>
+        </div>
+        <div style="margin-bottom:20px;">
+          <label style="display:block;font-weight:bold;color:#007B8A;font-size:12px;margin-bottom:8px;">DATE</label>
+          <input type="date" id="meetingMinuteDate"
+            style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"/>
+        </div>
       </div>
       <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;background:#fff;display:flex;gap:12px;">
-        <button type="button" id="saveMeetingMinuteBtn" style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:#28a745;color:#fff;border:none;border-radius:6px;cursor:pointer;">✓ Save Minutes</button>
-        <button type="button" onclick="collapseGrayPart()" style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:#f5f5f5;color:#333;border:1px solid #ddd;border-radius:6px;cursor:pointer;">✕ Cancel</button>
+        <button type="button" id="saveMeetingMinuteBtn"
+          style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:#28a745;color:#fff;border:none;border-radius:6px;cursor:pointer;">
+          ✓ Save Minutes</button>
+        <button type="button" onclick="collapseGrayPart()"
+          style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:#f5f5f5;color:#333;border:1px solid #ddd;border-radius:6px;cursor:pointer;">
+          ✕ Cancel</button>
       </div>
-    </div>`;
-  expandGrayPart(html);
-
-  const mmDrop  = document.getElementById('mmDropZone');
-  const mmInput = document.getElementById('meetingMinuteAttachment');
-  const mmName  = document.getElementById('mmAttachmentName');
-  mmDrop.addEventListener('click',    () => mmInput.click());
-  mmDrop.addEventListener('dragover', (e) => { e.preventDefault(); mmDrop.style.borderColor = '#007B8A'; });
-  mmDrop.addEventListener('dragleave', ()  => { mmDrop.style.borderColor = '#ddd'; });
-  mmDrop.addEventListener('drop',     (e) => { e.preventDefault(); mmDrop.style.borderColor = '#ddd'; if (e.dataTransfer.files.length > 0) { mmInput.files = e.dataTransfer.files; updateMMDisplay(); } });
-  mmInput.addEventListener('change', updateMMDisplay);
-  function updateMMDisplay() {
-    if (mmInput.files.length > 0) { mmName.textContent = `✓ ${mmInput.files.length} file(s) selected`; mmName.style.display = 'block'; }
-    else mmName.style.display = 'none';
-  }
+    </div>`);
 
   document.getElementById('saveMeetingMinuteBtn').addEventListener('click', async () => {
     const title   = document.getElementById('meetingMinuteTitle').value.trim();
@@ -4358,191 +4552,18 @@ function openAddMeetingMinutesPanel() {
       formData.append('title',     title);
       formData.append('details',   details);
       formData.append('projectId', localStorage.getItem('activeProjectId'));
-      formData.append('category',  'meeting-minutes');
       if (date) formData.append('date', date);
-      Array.from(mmInput.files).forEach(f => formData.append('documents', f));
-      const response = await fetch('https://oneprojectapp-backend.onrender.com/records/add-record', {
+      const response = await fetch('https://oneprojectapp-backend.onrender.com/records/add-meeting-minute', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
         body: formData
       });
       if (!response.ok) throw new Error(response.statusText);
       const result = await response.json();
-      if (result.success) { alert('Meeting minute added successfully!'); collapseGrayPart(); renderMeetingContent('minutes'); }
-      else alert('Failed to add minutes: ' + (result.message || 'Unknown error'));
-    } catch (err) { console.error('add meeting minute', err); alert('Unable to save meeting minute.'); }
+      if (result.success) { alert('Meeting minute added!'); collapseGrayPart(); renderMeetingContent('minutes'); }
+      else alert('Failed: ' + (result.message || 'Unknown error'));
+    } catch (err) { alert('Unable to save meeting minute.'); }
   });
-}
-
-// =======================================================================
-//  NOTIFICATIONS
-//
-//  Badge driven by notification_recipients per-user is_read count.
-//  Bell click fetches only this user's notifications (token → user_id).
-//  Badge zeroes immediately on click (optimistic).
-//  All fetched notifications marked read on open via mark-all-read POST.
-//  Clicking a notification navigates to the tab and auto-expands the record.
-//
-//  Requires:
-//    notification_recipients (notification_id, user_id, is_read, read_at)
-//    UNIQUE(notification_id, user_id)
-//
-//  Backend endpoints:
-//    GET  /notifications/unread-count?projectId=X  → { count }
-//    GET  /notifications?projectId=X               → { notifications[] }
-//    POST /notifications/mark-all-read             → { projectId, notificationIds[] }
-// =======================================================================
-const notificationIcon  = document.getElementById('notificationIcon');
-const notificationBadge = document.getElementById('notificationBadge');
-
-// ── Fetch unread count and update badge ───────────────────────────────
-async function updateNotificationBadge() {
-  try {
-    const projectId = localStorage.getItem('activeProjectId');
-    const token     = localStorage.getItem('authToken');
-    if (!projectId || !token) return;
-
-    const res  = await fetch(
-      `https://oneprojectapp-backend.onrender.com/notifications/unread-count?projectId=${projectId}`,
-      { headers: { 'Authorization': `Bearer ${token}` } }
-    );
-    const data  = await res.json();
-    const count = data.count ?? 0;
-    notificationBadge.textContent   = count;
-    notificationBadge.style.display = count > 0 ? 'inline-block' : 'none';
-  } catch (err) {
-    console.error('Badge update error:', err);
-    notificationBadge.textContent   = '0';
-    notificationBadge.style.display = 'none';
-  }
-}
-
-// ── Bell icon click ───────────────────────────────────────────────────
-notificationIcon.addEventListener('click', async () => {
-  const projectId = localStorage.getItem('activeProjectId');
-  const token     = localStorage.getItem('authToken');
-
-  if (!projectId) {
-    expandGrayPart('<p>Please select a project first.</p>');
-    return;
-  }
-
-  // Optimistically zero badge immediately
-  notificationBadge.textContent   = '0';
-  notificationBadge.style.display = 'none';
-
-  try {
-    const res  = await fetch(
-      `https://oneprojectapp-backend.onrender.com/notifications?projectId=${projectId}`,
-      { headers: { 'Authorization': `Bearer ${token}` } }
-    );
-    const data          = await res.json();
-    const notifications = data.notifications || [];
-
-    // Mark ALL as read for this user in one call
-    if (notifications.length > 0) {
-      const ids = notifications.map(n => n.id);
-      await fetch('https://oneprojectapp-backend.onrender.com/notifications/mark-all-read', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ projectId, notificationIds: ids })
-      });
-    }
-
-    renderNotificationPanel(notifications);
-
-  } catch (err) {
-    console.error('Notification fetch error:', err);
-    expandGrayPart(`
-      <p style="color:#ef4444;">⚠️ Error loading notifications.</p>
-      <button class="btn" onclick="collapseGrayPart()">← Back</button>
-    `);
-  }
-});
-
-// ── Render notification panel ─────────────────────────────────────────
-function renderNotificationPanel(notifications) {
-  let html = `
-    <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;">
-      <h3 style="margin:0;color:#333;font-size:18px;">🔔 Notifications</h3>
-    </div>
-    <div style="flex:1;overflow-y:auto;padding:16px 20px;">`;
-
-  if (!notifications.length) {
-    html += `
-      <div style="text-align:center;padding:40px 0;color:#9ca3af;">
-        <div style="font-size:32px;margin-bottom:8px;">🔔</div>
-        <p style="margin:0;">No notifications yet.</p>
-      </div>`;
-  } else {
-    html += `<ul style="padding:0;margin:0;list-style:none;">`;
-    notifications.forEach(n => {
-      const isUnread = !n.is_read;
-      html += `
-        <li onclick="handleNotificationClick('${n.id}','${n.entity_type}','${n.entity_id}')"
-          style="padding:14px 16px;border-radius:8px;margin-bottom:8px;cursor:pointer;
-                 background:${isUnread ? '#eff6ff' : '#fff'};
-                 border:1px solid ${isUnread ? '#bfdbfe' : '#e5e7eb'};
-                 border-left:4px solid ${isUnread ? '#3b82f6' : '#e5e7eb'};
-                 transition:background 0.2s;">
-          <div style="flex:1;">
-            <div style="font-weight:${isUnread ? '700' : '600'};font-size:13px;color:#1f2937;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
-              ${isUnread ? '<span style="display:inline-block;width:7px;height:7px;background:#3b82f6;border-radius:50%;flex-shrink:0;"></span>' : ''}
-              ${n.entity_type ? n.entity_type.charAt(0).toUpperCase() + n.entity_type.slice(1) : ''} Record
-            </div>
-            <div style="font-size:12px;color:#6b7280;line-height:1.5;">${n.message || ''}</div>
-            <div style="font-size:11px;color:#9ca3af;margin-top:6px;">
-              By <strong>${n.added_by_role || 'Unknown'}</strong>
-              &nbsp;•&nbsp;
-              ${new Date(n.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
-            </div>
-          </div>
-        </li>`;
-    });
-    html += `</ul>`;
-  }
-
-  html += `</div>
-    <div style="padding:16px 20px;border-top:1px solid #e5e7eb;flex-shrink:0;">
-      <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
-    </div>`;
-
-  expandGrayPart(html);
-}
-
-// ── Handle clicking a specific notification ───────────────────────────
-async function handleNotificationClick(notificationId, entityType, entityId) {
-  try {
-    const tabMap = {
-      contractual:    'contractual',
-      administrative: 'administrative',
-      safety:         'safety',
-      operational:    'operational',
-      financial:      'financial',
-      meeting:        'meeting'
-    };
-
-    const tabKey = tabMap[entityType];
-    if (tabKey) {
-      const tabEl = document.querySelector(`#navTabs li[data-tab="${tabKey}"]`);
-      if (tabEl) tabEl.click();
-
-      setTimeout(() => {
-        const el = document.querySelector(`.doc-item[data-id='${entityId}']`);
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          const detail = document.getElementById(`detail-${entityId}`);
-          if (detail && detail.style.display === 'none') {
-            toggleRecordDetail(entityId, tabKey);
-          }
-        }
-      }, 600);
-    }
-
-    collapseGrayPart();
-  } catch (err) {
-    console.error('Notification click error:', err);
-  }
 }
 
 // =======================================================================
