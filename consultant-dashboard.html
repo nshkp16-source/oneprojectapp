@@ -3266,6 +3266,34 @@ function openActualProgressPage(savedSchedule) {
   if (activeId) selectMs(activeId, false);
 }
 
+// 
+
+// =======================================================================
+//  BOOTSTRAP — must run before anything else
+//  Calls /api/me using the JWT token to get userId + role,
+//  then starts the app, notification badge, and polling.
+// =======================================================================
+async function bootstrapUser() {
+  const token = localStorage.getItem('authToken');
+  if (!token) { window.location.href = '/login.html'; return; }
+  try {
+    const res = await fetch('https://oneprojectapp-backend.onrender.com/api/me', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (!res.ok) { window.location.href = '/login.html'; return; }
+    const data = await res.json();
+    window.currentUserId   = data.id;
+    window.currentUserRole = data.role;
+    // Now safe to render tabs and start notifications
+    loadHomeTabs();
+    updateNotificationBadge();
+    setInterval(updateNotificationBadge, 30000);
+  } catch (err) {
+    console.error('Bootstrap failed:', err);
+    window.location.href = '/login.html';
+  }
+}
+
 // =======================================================================
 //  TABS
 // =======================================================================
@@ -3485,14 +3513,6 @@ function isDecisionMaker(role) { return getSide(role) !== null; }
 
 // =======================================================================
 //  WORKFLOW LOGIC
-//
-//  Returns one of:
-//    'uploader'           — current user posted this record
-//    'team_member'        — non-decision-maker, not uploader
-//    'awaiting_step1'     — decision maker but step 1 not yet done by required party
-//    { step, label, action } — decision maker who can act now (label = 'Approve'|'Accept')
-//    'acted'              — decision maker already acted, next step = Add Notice
-//    'locked'             — record fully accepted, nothing more to do
 // =======================================================================
 function computeButtonState(doc) {
   const currentUserId   = window.currentUserId;
@@ -3501,25 +3521,17 @@ function computeButtonState(doc) {
   const reviewerSide    = getSide(currentUserRole);
   const isUploader      = String(doc.uploaded_by) === String(currentUserId);
 
-  // Uploader sees only delete
   if (isUploader) return 'uploader';
-
-  // Fully locked — accepted by final step
   if (isRecordFullyAccepted(doc)) return 'locked';
-
-  // Non-decision-maker (team member)
   if (!isDecisionMaker(currentUserRole)) return 'team_member';
 
-  // Decision maker — check if they've already acted
-  const reviews    = doc.reviews || [];
-  const myReview   = reviews.find(r => String(r.reviewer_id) === String(currentUserId));
+  const reviews         = doc.reviews || [];
+  const myReview        = reviews.find(r => String(r.reviewer_id) === String(currentUserId));
   const workflowActions = ['approved', 'accepted', 'rejected'];
-  const alreadyActed = myReview && workflowActions.includes(myReview.action);
+  const alreadyActed    = myReview && workflowActions.includes(myReview.action);
 
-  if (alreadyActed) return 'acted'; // show "Add Notice" only
+  if (alreadyActed) return 'acted';
 
-  // Determine which step this reviewer handles
-  // Step 1: first party to review; Step 2: second party to review
   const stepMap = {
     contractor: [
       { side: 'consultant', step: 1, label: 'Approve', action: 'approved' },
@@ -3538,11 +3550,9 @@ function computeButtonState(doc) {
   const steps = stepMap[uploaderSide];
   if (!steps) return 'none';
 
-  // Find which step the current reviewer belongs to
   const myStep = steps.find(s => s.side === reviewerSide);
   if (!myStep) return 'none';
 
-  // If this is step 2, check step 1 is done first
   if (myStep.step === 2) {
     const step1Side = steps.find(s => s.step === 1)?.side;
     const step1Done = reviews.some(r =>
@@ -3552,14 +3562,14 @@ function computeButtonState(doc) {
     if (!step1Done) return { state: 'awaiting_step1', pendingRole: step1Side };
   }
 
-  return myStep; // { step, label, action }
+  return myStep;
 }
 
 function isRecordFullyAccepted(doc) {
   if (doc.status === 'approved_record') return true;
   const uploaderSide = getSide(doc.uploader_role || doc.role);
   const step2SideMap = { contractor: 'client', consultant: 'contractor', client: 'contractor' };
-  const step2Side = step2SideMap[uploaderSide];
+  const step2Side    = step2SideMap[uploaderSide];
   return (doc.reviews||[]).some(r =>
     getSide(r.reviewer_role) === step2Side && r.action === 'accepted'
   );
@@ -3629,8 +3639,7 @@ function renderRecordsList(records, category) {
     const isLocked  = isRecordFullyAccepted(doc);
     const btnState  = computeButtonState(doc);
 
-    // Format posted date/time
-    const postedAt  = doc.date_recorded
+    const postedAt = doc.date_recorded
       ? new Date(doc.date_recorded).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' })
       : 'N/A';
 
@@ -3651,15 +3660,13 @@ function renderRecordsList(records, category) {
         </li>`;
     }).join('');
 
-    // ── Build action buttons based on role/state ──
+    // ── Action buttons ──
     let actionButtons = '';
 
     if (isLocked) {
-      // Fully accepted — nothing more to do
       actionButtons = `<span style="flex:1;padding:8px 12px;font-size:12px;color:#10b981;font-style:italic;text-align:center;font-weight:600;">🔒 Record Locked — Final Acceptance Issued</span>`;
 
     } else if (btnState === 'uploader') {
-      // Uploader: only delete (and only if no workflow actions taken yet)
       const hasWorkflowAction = (doc.reviews||[]).some(r => ['approved','accepted','rejected'].includes(r.action));
       if (!hasWorkflowAction) {
         actionButtons = `
@@ -3673,8 +3680,7 @@ function renderRecordsList(records, category) {
       }
 
     } else if (btnState === 'acted') {
-      // Decision maker already acted — show only "Add Notice" as next required step
-      const myReview   = (doc.reviews||[]).find(r => String(r.reviewer_id)===String(window.currentUserId));
+      const myReview    = (doc.reviews||[]).find(r => String(r.reviewer_id)===String(window.currentUserId));
       const wasRejected = myReview?.action === 'rejected';
       actionButtons = `
         <button onclick="openNoticeOfDetermination('${doc.id}','${category}',${wasRejected})"
@@ -3690,8 +3696,6 @@ function renderRecordsList(records, category) {
       actionButtons = `<span style="flex:1;padding:8px 12px;font-size:12px;color:#9ca3af;font-style:italic;text-align:center;">⏳ Awaiting ${btnState.pendingRole} Approval</span>`;
 
     } else if (typeof btnState === 'object' && btnState?.label) {
-      // Decision maker who can act: show their specific action + Reject
-      // Never show Approve and Accept together
       actionButtons = `
         <button onclick="handleDecisionMakerAction('${doc.id}','${category}','${btnState.action}')"
           style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
@@ -3705,7 +3709,6 @@ function renderRecordsList(records, category) {
         </button>`;
 
     } else if (btnState === 'team_member') {
-      // Team member: approve/reject (action col only) + comment (comment col only)
       const myReview = (doc.reviews||[]).find(r => String(r.reviewer_id)===String(window.currentUserId));
       const myAction = myReview?.action;
       const hasActed = myAction && myAction !== 'no_action';
@@ -3755,7 +3758,6 @@ function renderRecordsList(records, category) {
                box-shadow:${isUnread?'0 2px 8px rgba(59,130,246,0.10)':'0 1px 3px rgba(0,0,0,0.06)'};
                transition:background 0.3s,border 0.3s;">
 
-        <!-- ── Card header (click to expand) ── -->
         <div class="doc-item-header"
           onclick="toggleRecordDetail('${doc.id}','${category}')"
           style="display:flex;justify-content:space-between;align-items:center;
@@ -3770,7 +3772,6 @@ function renderRecordsList(records, category) {
               ${doc.record_kind==='rejection_notice'?`<span style="background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">REJECTION NOTICE</span>`:''}
               ${isLocked?`<span style="background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">🔒 LOCKED</span>`:''}
             </div>
-            <!-- Posted by + date/time always visible -->
             <div style="font-size:11px;color:#9ca3af;margin-top:3px;">
               Posted by <strong style="color:#6b7280;">${doc.uploader_role||'N/A'}</strong>
               &nbsp;•&nbsp; ${postedAt}
@@ -3782,25 +3783,20 @@ function renderRecordsList(records, category) {
           </div>
         </div>
 
-        <!-- ── Expanded detail ── -->
         <div class="doc-detail" id="detail-${doc.id}"
           style="display:none;padding:14px 16px;border-top:1px solid #f3f4f6;background:#fafafa;">
 
-          <!-- Description -->
           <div style="margin-bottom:12px;">
-            <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
-                        letter-spacing:.5px;margin-bottom:4px;">Description</div>
+            <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Description</div>
             <div style="font-size:13px;color:#374151;line-height:1.7;">${doc.description||'No description provided.'}</div>
           </div>
 
-          <!-- Tied notice reference -->
           ${(doc.record_kind==='notice'||doc.record_kind==='rejection_notice')&&doc.notice_tied_id?`
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Tied to Record</div>
             <div style="font-size:13px;color:#92400e;">📎 Record #${doc.notice_tied_id}</div>
           </div>`:''}
 
-          <!-- Attached file -->
           ${fileName?`
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Attached File</div>
@@ -3812,7 +3808,6 @@ function renderRecordsList(records, category) {
             </a>
           </div>`:''}
 
-          <!-- Review history -->
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Review History</div>
             ${reviewsHtml.length>0
@@ -3820,12 +3815,9 @@ function renderRecordsList(records, category) {
               : '<p style="font-size:12px;color:#9ca3af;margin:0;">No reviews yet.</p>'}
           </div>
 
-          <!-- Workflow steps (decision makers only) -->
           ${workflowHtml}
 
-          <!-- Action buttons -->
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;
-                      padding-top:12px;border-top:1px solid #e5e7eb;">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid #e5e7eb;">
             ${actionButtons}
           </div>
         </div>
@@ -3833,14 +3825,14 @@ function renderRecordsList(records, category) {
   }).join('');
 }
 
-// ── Workflow steps visual ──────────────────────────────────────────────────
+// ── Workflow steps visual ─────────────────────────────────────────────────
 function renderWorkflowSteps(doc, currentUserId, currentUserRole) {
   const uploaderSide = getSide(doc.uploader_role || doc.role);
   if (!uploaderSide) return '';
   const stepMap = {
-    contractor: [{ side:'consultant', label:'Consultant Approval' }, { side:'client',     label:'Client Acceptance'      }],
-    consultant: [{ side:'client',     label:'Client Approval'     }, { side:'contractor', label:'Contractor Acceptance'  }],
-    client:     [{ side:'consultant', label:'Consultant Approval' }, { side:'contractor', label:'Contractor Acceptance'  }],
+    contractor: [{ side:'consultant', label:'Consultant Approval' }, { side:'client',     label:'Client Acceptance'     }],
+    consultant: [{ side:'client',     label:'Client Approval'     }, { side:'contractor', label:'Contractor Acceptance' }],
+    client:     [{ side:'consultant', label:'Consultant Approval' }, { side:'contractor', label:'Contractor Acceptance' }],
   };
   const steps = stepMap[uploaderSide];
   if (!steps) return '';
@@ -3868,47 +3860,59 @@ function renderWorkflowSteps(doc, currentUserId, currentUserRole) {
   }).join('<div style="font-size:10px;color:#d1d5db;margin:0 4px;">→</div>');
 
   return `
-    <div style="margin-bottom:12px;padding:10px 12px;background:#f8fafc;
-                border:1px solid #e2e8f0;border-radius:8px;">
-      <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
-                  letter-spacing:.5px;margin-bottom:8px;">Approval Workflow</div>
+    <div style="margin-bottom:12px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+      <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Approval Workflow</div>
       <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">${stepsHtml}</div>
     </div>`;
 }
 
-// ── Toggle expand ─────────────────────────────────────────────────────────
+// ── Toggle expand + mark viewed ───────────────────────────────────────────
+// FIX: unread highlight is only removed AFTER the backend confirms success.
+//      If the backend call fails, the blue highlight stays intact.
+//      Mark-viewed is sent only once per record (backend uses ON CONFLICT DO NOTHING).
 function toggleRecordDetail(recordId, category) {
   const detail  = document.getElementById(`detail-${recordId}`);
   const chevron = document.querySelector(`.chevron-${recordId}`);
   const item    = document.querySelector(`.doc-item[data-id="${recordId}"]`);
   if (!detail) return;
+
   const isOpen = detail.style.display !== 'none';
   detail.style.display = isOpen ? 'none' : 'block';
   if (chevron) chevron.textContent = isOpen ? '▾' : '▴';
+
+  // Only fire mark-viewed when opening, not closing
   if (!isOpen) {
-    const isUploader = String(item?.dataset.uploadedBy) === String(window.currentUserId||'');
-    if (!isUploader) {
+    const isUploader = String(item?.dataset.uploadedBy) === String(window.currentUserId || '');
+    // Only non-uploaders who still see the unread highlight need to call the backend
+    const stillUnread = item && item.style.borderLeft.includes('#3b82f6');
+    if (!isUploader && stillUnread) {
       fetch('https://oneprojectapp-backend.onrender.com/api/mark-record-viewed', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
         body: JSON.stringify({ projectId: localStorage.getItem('activeProjectId'), recordId, category })
-      }).then(() => {
-        const dot = document.querySelector(`.unread-dot-${recordId}`);
-        if (dot) dot.remove();
-        if (item) {
-          item.style.background='#fff';
-          item.style.border='1px solid #e5e7eb';
-          item.style.borderLeft='4px solid #e5e7eb';
-          item.style.boxShadow='0 1px 3px rgba(0,0,0,0.06)';
+      })
+      .then(res => {
+        // Only remove the highlight if the backend confirmed success
+        if (res.ok) {
+          const dot = document.querySelector(`.unread-dot-${recordId}`);
+          if (dot) dot.remove();
+          if (item) {
+            item.style.background    = '#fff';
+            item.style.border        = '1px solid #e5e7eb';
+            item.style.borderLeft    = '4px solid #e5e7eb';
+            item.style.boxShadow     = '0 1px 3px rgba(0,0,0,0.06)';
+          }
         }
-      }).catch(err => console.error('Mark viewed error:', err));
+        // If not ok, highlight stays — user can see it's still unread
+      })
+      .catch(err => console.error('Mark viewed error:', err));
+      // Highlight stays on catch too — no change on failure
     }
   }
 }
 
 // =======================================================================
 //  DECISION MAKER ACTION
-//  Updates document_reviews.action AND record table status
 // =======================================================================
 async function handleDecisionMakerAction(recordId, category, action) {
   if (!isDecisionMaker(window.currentUserRole)) return;
@@ -3919,7 +3923,7 @@ async function handleDecisionMakerAction(recordId, category, action) {
       body: JSON.stringify({
         projectId: localStorage.getItem('activeProjectId'),
         recordId, category, action,
-        actorType: 'decision_maker'   // backend uses this to know it should update status
+        actorType: 'decision_maker'
       })
     });
     const data = await response.json();
@@ -3927,14 +3931,12 @@ async function handleDecisionMakerAction(recordId, category, action) {
     alert(data.message||`Record ${action} successfully.`);
     delete recordsCache[category];
     loadTabRecords(category);
-    // After acting, show notice prompt after short delay
     setTimeout(() => openNoticeOfDetermination(recordId, category, action === 'rejected'), 400);
   } catch(err) { console.error('Decision maker action error:', err); alert(`Failed to ${action} record.`); }
 }
 
 // =======================================================================
 //  TEAM MEMBER ACTION
-//  Updates document_reviews.action ONLY — does NOT change record status
 // =======================================================================
 async function handleTeamMemberAction(recordId, category, action) {
   try {
@@ -3944,7 +3946,7 @@ async function handleTeamMemberAction(recordId, category, action) {
       body: JSON.stringify({
         projectId: localStorage.getItem('activeProjectId'),
         recordId, category, action,
-        actorType: 'team_member'      // backend uses this to skip status update
+        actorType: 'team_member'
       })
     });
     const data = await response.json();
@@ -3956,44 +3958,31 @@ async function handleTeamMemberAction(recordId, category, action) {
 
 // =======================================================================
 //  TEAM MEMBER COMMENT
-//  Saves text to document_reviews.comment column only
-//  Does NOT change action column or record status
 // =======================================================================
 function openTeamMemberComment(recordId, category) {
   const existing = document.getElementById('commentModal');
   if (existing) existing.remove();
 
-  // Pre-fill existing comment if any
-  const cachedRecords = recordsCache[category] || [];
-  const doc = cachedRecords.find(r => String(r.id) === String(recordId));
-  const myReview = (doc?.reviews||[]).find(r => String(r.reviewer_id) === String(window.currentUserId));
+  const cachedRecords  = recordsCache[category] || [];
+  const doc            = cachedRecords.find(r => String(r.id) === String(recordId));
+  const myReview       = (doc?.reviews||[]).find(r => String(r.reviewer_id) === String(window.currentUserId));
   const existingComment = myReview?.comment || '';
 
   const modal = document.createElement('div');
   modal.id = 'commentModal';
   modal.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);';
   modal.innerHTML = `
-    <div style="background:#fff;border-radius:12px;padding:24px;width:min(420px,90vw);
-                box-shadow:0 20px 60px rgba(0,0,0,0.2);">
+    <div style="background:#fff;border-radius:12px;padding:24px;width:min(420px,90vw);box-shadow:0 20px 60px rgba(0,0,0,0.2);">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <h3 style="margin:0;font-size:16px;color:#1f2937;">💬 Add Comment</h3>
         <button id="closeCommentModal" style="background:none;border:none;font-size:20px;color:#9ca3af;cursor:pointer;">×</button>
       </div>
       <p style="font-size:12px;color:#9ca3af;margin:0 0 12px;">Your comment is stored alongside your review. It does not affect the record status.</p>
       <textarea id="commentText" placeholder="Enter your comment…"
-        style="width:100%;min-height:100px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
-               font-size:13px;color:#374151;resize:vertical;box-sizing:border-box;">${existingComment}</textarea>
+        style="width:100%;min-height:100px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;color:#374151;resize:vertical;box-sizing:border-box;">${existingComment}</textarea>
       <div style="display:flex;gap:8px;margin-top:14px;">
-        <button id="submitCommentBtn"
-          style="flex:1;padding:10px;font-size:13px;font-weight:600;background:#2563eb;color:#fff;
-                 border:none;border-radius:8px;cursor:pointer;">
-          Submit Comment
-        </button>
-        <button id="cancelCommentBtn"
-          style="flex:1;padding:10px;font-size:13px;font-weight:600;background:#f3f4f6;color:#374151;
-                 border:1px solid #d1d5db;border-radius:8px;cursor:pointer;">
-          Cancel
-        </button>
+        <button id="submitCommentBtn" style="flex:1;padding:10px;font-size:13px;font-weight:600;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;">Submit Comment</button>
+        <button id="cancelCommentBtn" style="flex:1;padding:10px;font-size:13px;font-weight:600;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;">Cancel</button>
       </div>
     </div>`;
   document.body.appendChild(modal);
@@ -4012,7 +4001,7 @@ function openTeamMemberComment(recordId, category) {
         body: JSON.stringify({
           projectId: localStorage.getItem('activeProjectId'),
           recordId, category,
-          action: 'comment',          // special signal — backend saves to comment col only
+          action: 'comment',
           comment,
           actorType: 'team_member'
         })
@@ -4047,8 +4036,7 @@ async function downloadFile(recordId, category, fileName) {
     const blob = await response.blob();
     if (!blob.size) { alert('File is empty.'); return; }
     const url = window.URL.createObjectURL(blob);
-    const a   = document.createElement('a');
-    a.href=url; a.download=fileName;
+    const a   = document.createElement('a'); a.href=url; a.download=fileName;
     document.body.appendChild(a); a.click(); a.remove();
     window.URL.revokeObjectURL(url);
   } catch(err) { console.error('Download error:', err); alert('Failed to download file.'); }
@@ -4072,7 +4060,6 @@ async function deleteRecord(recordId, category) {
 
 // =======================================================================
 //  NOTICE OF DETERMINATION / REJECTION NOTICE
-//  Decision makers only — opens add-record panel pre-configured as notice
 // =======================================================================
 function openNoticeOfDetermination(recordId, category, isRejection = false) {
   if (!isDecisionMaker(window.currentUserRole)) return;
@@ -4105,16 +4092,13 @@ function openAddRecordPanel(noticeConfig = null) {
   const noticeInfoBanner = isNotice ? `
     <div style="margin-bottom:18px;padding:14px 16px;
                 background:${recordKind==='rejection_notice'?'#fff1f2':'#fffbeb'};
-                border:1px solid ${recordKind==='rejection_notice'?'#fca5a5':'#fcd34d'};
-                border-radius:10px;">
-      <div style="font-size:13px;font-weight:700;
-                  color:${recordKind==='rejection_notice'?'#991b1b':'#92400e'};margin-bottom:4px;">
+                border:1px solid ${recordKind==='rejection_notice'?'#fca5a5':'#fcd34d'};border-radius:10px;">
+      <div style="font-size:13px;font-weight:700;color:${recordKind==='rejection_notice'?'#991b1b':'#92400e'};margin-bottom:4px;">
         ${recordKind==='rejection_notice'?'⚠️ Rejection Notice':'📋 Notice of Determination'}
       </div>
       <div style="font-size:12px;color:#555;line-height:1.6;">
         This notice will be tied to Record <strong>#${noticeTiedId}</strong>.
-        It will be saved as a <strong>${recordKind==='rejection_notice'?'Rejection Notice':'Notice of Determination'}</strong>
-        in the same category.
+        It will be saved as a <strong>${recordKind==='rejection_notice'?'Rejection Notice':'Notice of Determination'}</strong> in the same category.
       </div>
     </div>` : '';
 
@@ -4130,30 +4114,19 @@ function openAddRecordPanel(noticeConfig = null) {
         <h3 style="margin:0;color:#333;font-size:20px;">${panelTitle}</h3>
       </div>
       <div style="flex:1;overflow-y:auto;padding:16px 20px;">
-        ${noticeInfoBanner}
-        ${categoryInfo}
+        ${noticeInfoBanner}${categoryInfo}
         <form id="addRecordForm">
           <input type="hidden" id="recordCategory"    value="${category}"/>
           <input type="hidden" id="recordKindField"   value="${recordKind}"/>
           <input type="hidden" id="noticeTiedIdField" value="${noticeTiedId||''}"/>
-
           <div style="margin-bottom:20px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
-                          font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
-              ${isNotice?'Notice Title *':'Title *'}
-            </label>
-            <input type="text" id="recordTitle" required
-              placeholder="${isNotice?'e.g. Determination of Claim #12':'e.g. Foundation Agreement'}"
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">${isNotice?'Notice Title *':'Title *'}</label>
+            <input type="text" id="recordTitle" required placeholder="${isNotice?'e.g. Determination of Claim #12':'e.g. Foundation Agreement'}"
               style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;font-size:14px;box-sizing:border-box;"/>
           </div>
-
           <div style="margin-bottom:20px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
-                          font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
-              ${isNotice?'Notice Content *':'Description *'}
-            </label>
-            <div style="display:flex;flex-wrap:wrap;gap:4px;padding:8px;background:#f5f5f5;
-                        border:1px solid #ddd;border-bottom:none;border-radius:6px 6px 0 0;">
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">${isNotice?'Notice Content *':'Description *'}</label>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;padding:8px;background:#f5f5f5;border:1px solid #ddd;border-bottom:none;border-radius:6px 6px 0 0;">
               <button type="button" onclick="document.execCommand('bold')"      style="width:32px;height:32px;font-weight:bold;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">B</button>
               <button type="button" onclick="document.execCommand('italic')"    style="width:32px;height:32px;font-style:italic;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">I</button>
               <button type="button" onclick="document.execCommand('underline')" style="width:32px;height:32px;text-decoration:underline;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">U</button>
@@ -4164,21 +4137,13 @@ function openAddRecordPanel(noticeConfig = null) {
             </div>
             <div id="recordDescription" contenteditable="true"
               placeholder="${isNotice?'Provide the full notice content…':'Provide detailed description…'}"
-              style="width:100%;min-height:200px;padding:12px;border:1px solid #ddd;
-                     border-radius:0 0 6px 6px;font-size:14px;color:#333;line-height:1.7;
-                     background:#fff;outline:none;box-sizing:border-box;overflow-y:auto;">
-            </div>
+              style="width:100%;min-height:200px;padding:12px;border:1px solid #ddd;border-radius:0 0 6px 6px;font-size:14px;color:#333;line-height:1.7;background:#fff;outline:none;box-sizing:border-box;overflow-y:auto;"></div>
             <style>#recordDescription:empty:before{content:attr(placeholder);color:#aaa;pointer-events:none;}</style>
           </div>
-
           <div style="margin-bottom:24px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
-                          font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
-              Attach Document
-            </label>
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Attach Document</label>
             <div id="attachmentDropZone"
-              style="display:flex;align-items:center;gap:12px;padding:16px;
-                     border:2px dashed #ddd;border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
+              style="display:flex;align-items:center;gap:12px;padding:16px;border:2px dashed #ddd;border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
               <div style="font-size:24px;">📎</div>
               <div style="flex:1;">
                 <div style="font-weight:bold;color:#333;font-size:14px;">Click to upload or drag file</div>
@@ -4198,8 +4163,7 @@ function openAddRecordPanel(noticeConfig = null) {
           ${recordKind==='rejection_notice'?'📋 Issue Rejection Notice':recordKind==='notice'?'📋 Issue Notice':'✓ Save Record'}
         </button>
         <button type="button" onclick="collapseGrayPart()"
-          style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:#f5f5f5;
-                 color:#333;border:1px solid #ddd;border-radius:6px;cursor:pointer;">
+          style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:#f5f5f5;color:#333;border:1px solid #ddd;border-radius:6px;cursor:pointer;">
           ✕ Cancel
         </button>
       </div>
@@ -4207,9 +4171,9 @@ function openAddRecordPanel(noticeConfig = null) {
 
   expandGrayPart(html);
 
-  const dropZone    = document.getElementById('attachmentDropZone');
-  const attachInput = document.getElementById('recordAttachment');
-  const attachNameEl= document.getElementById('attachmentName');
+  const dropZone     = document.getElementById('attachmentDropZone');
+  const attachInput  = document.getElementById('recordAttachment');
+  const attachNameEl = document.getElementById('attachmentName');
   dropZone.addEventListener('click',    () => attachInput.click());
   dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.borderColor='#007B8A'; });
   dropZone.addEventListener('dragleave',()  => { dropZone.style.borderColor='#ddd'; });
@@ -4388,7 +4352,7 @@ notificationIcon.addEventListener('click', async () => {
     let html = `<h3 style='margin-bottom:16px;'>Notifications</h3>`;
     if (!data.success || !data.notifications.length) {
       html += `<p>No notifications.</p>`;
-      notificationBadge.textContent = "0";
+      notificationBadge.textContent = '0';
     } else {
       html += `<ul style='max-height:400px;overflow-y:auto;padding:0;list-style:none;'>`;
       data.notifications.forEach(n => {
@@ -4403,7 +4367,7 @@ notificationIcon.addEventListener('click', async () => {
     }
     html += `<div style='margin-top:16px;'><button class='btn primary' style='width:100%;' onclick='collapseGrayPart()'>Back</button></div>`;
     expandGrayPart(html);
-  } catch(err) { console.error("Notification error:", err); expandGrayPart("<p>Error loading notifications.</p>"); }
+  } catch(err) { console.error('Notification error:', err); expandGrayPart('<p>Error loading notifications.</p>'); }
 });
 
 async function handleNotificationClick(notificationId, recordType, recordId) {
@@ -4426,9 +4390,11 @@ async function handleNotificationClick(notificationId, recordType, recordId) {
       }, 300);
     }
     collapseGrayPart();
-  } catch(err) { console.error("Mark as read error:", err); }
+  } catch(err) { console.error('Mark as read error:', err); }
 }
 
+// FIX: badge now uses the authenticated /notifications/unreadCount endpoint
+//      which reads userId from the JWT on the backend — no userId param needed in URL.
 async function updateNotificationBadge() {
   try {
     const projectId = localStorage.getItem('activeProjectId');
@@ -4438,10 +4404,14 @@ async function updateNotificationBadge() {
       { headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` } }
     );
     const data = await res.json();
-    notificationBadge.textContent = data.count || "0";
-  } catch(err) { notificationBadge.textContent = "0"; }
+    notificationBadge.textContent = data.count ?? '0';
+  } catch(err) { notificationBadge.textContent = '0'; }
 }
 
+// =======================================================================
+//  INIT — call bootstrapUser() to start everything
+// =======================================================================
+bootstrapUser();
 </script>
 </body>
 </html>
