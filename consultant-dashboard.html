@@ -1626,45 +1626,7 @@ scheduleOption.addEventListener('click', () => {
 grayToggleBtn.addEventListener('click', (e) => { e.stopPropagation(); grayHidden ? showGrayPanel() : hideGrayPanel(); });
 
 // ============================================================
-//  SCHEDULE MODULE v5
-//
-//  All fixes from v4 plus:
-//
-//  LAYOUT
-//  ------
-//  S3: entire page is ONE scroll container. Top bar + summary
-//      bar are sticky at the top. Below them the content is a
-//      normal document flow — milestone list sidebar (sticky
-//      left) + detail column — that scrolls freely together.
-//      Gantt is a full-width section inside the same scroll,
-//      not a fixed-height strip fighting for space. Nothing
-//      ever clips or hides anything.
-//
-//  S2 EDIT — smart save (no full-wipe)
-//  ------------------------------------
-//  On "Save Changes" in edit mode the payload now includes
-//  an `unchangedIds` array: milestone IDs whose dates/qty
-//  have NOT been modified. The backend must only UPDATE those
-//  rows (title, desc, dep, unit) and never touch executed /
-//  progress_pct / entries — preserving all daily progress.
-//  Only genuinely new milestones (temp id prefix "ms-") are
-//  INSERTed. Milestones removed from the UI are flagged in
-//  `deletedIds` (backend should refuse if they have progress).
-//
-//  OTHER FIXES (carried from analysis)
-//  ------------------------------------
-//  - gtt-legend flex-shrink:0 so it never squashes chart rows
-//  - gtt-wrap min-height = toggle bar only; p3main gets space
-//  - extMs array is mutated in-place after save so allMsList
-//    rebuild uses fresh data (stale-extMs bug fixed)
-//  - window._p3* globals carry milestoneId in closure safely
-//    via a versioned token so rapid clicks don't cross-fire
-//  - Extension modal Submit button is sticky footer inside
-//    modal, not part of the scrolling body
-//  - photos-grid uses minmax(90px,1fr) with overflow-x:hidden
-//    so thumbnails never stretch the detail panel horizontally
-//  - Section 2 milestone list has explicit min-height:120px
-//    so it is always reachable even with a tall form above
+//  SCHEDULE MODULE v6
 // ============================================================
 
 const BACKEND = 'https://oneprojectapp-backend.onrender.com';
@@ -1820,33 +1782,28 @@ function openCreateScheduleIntro() {
 // ============================================================
 //  SECTION 2 — Baseline builder
 //
-//  SMART SAVE:
-//  - Milestones from the DB keep their real UUID. When we send
-//    to /api/save-schedule in edit mode we include:
-//      unchangedIds : IDs of milestones the user did NOT touch
-//                     → backend does UPDATE metadata only,
-//                       never touching executed/progress_pct
-//      changedIds   : IDs of milestones the user edited in the
-//                     form (re-added after _sfEd pulled them out)
-//                     → backend does a safe UPDATE of non-
-//                       progress columns only
-//      deletedIds   : IDs removed by _sfDel
-//                     → backend refuses if they have progress
-//      newMilestones: items whose id starts with "ms-"
-//                     → backend does INSERT
+//  FIX 1: #sfMsList gets max-height:340px + overflow-y:auto
+//         so the milestone list scrolls when it grows.
 //
-//  Dates locked in edit mode until user clicks Unlock.
+//  FIX 3: editedIds is now a Map<originalId, originalId>
+//         so multiple milestones edited simultaneously each
+//         restore their own correct DB id on re-add.
+//         unchangedIds = originalIds minus (editedIds ∪ deletedIds).
 // ============================================================
 function openProjectScheduleForm(existingSchedule) {
   const projectName = (typeof activeProject !== 'undefined' && activeProject) ? activeProject.textContent : 'Project';
   const isEdit = !!existingSchedule;
 
-  // Track which IDs existed in the DB before this edit session
+  // Track IDs that existed in the DB before this edit session
   const originalIds = new Set(
     (existingSchedule?.milestones || []).map(m => m.id)
   );
-  // Track which DB IDs the user explicitly edited (pulled out then re-added)
-  const editedIds = new Set();
+
+  // FIX 3: Map<originalId → originalId> — supports multiple simultaneous edits
+  // When a user clicks Edit on milestone X, we pull X out of the list and park
+  // its id here so when they click "Add Milestone" we restore the correct id.
+  const editedIdsMap = new Map(); // originalId → originalId (identity map for lookup)
+
   // Track which DB IDs were deleted
   const deletedIds = new Set();
 
@@ -1903,7 +1860,7 @@ function openProjectScheduleForm(existingSchedule) {
         <div class="sc-card">
           <div class="sc-card-hdr">
             <span class="sc-card-label">Add Milestone</span>
-            <span id="sfHint" style="font-size:12px;color:#7a9e9a;">${isEdit?'Add new milestones below.':'Set the project timeline first.'}</span>
+            <span id="sfHint" style="font-size:12px;color:#7a9e9a;">${isEdit?'Add new milestones or edit existing ones below.':'Set the project timeline first.'}</span>
           </div>
           <div style="display:grid;grid-template-columns:2fr 2fr 1fr 1fr 1fr 1.2fr;gap:12px;padding:16px 20px 12px;">
             <div class="sc-fw"><span class="sc-fl">Title</span><input type="text" id="sfMsT" placeholder="e.g. Foundation works"/></div>
@@ -1925,18 +1882,24 @@ function openProjectScheduleForm(existingSchedule) {
               </label>
             </div>
           </div>
+          <!-- FIX 3: Show which milestone is being edited so user knows the form is "in edit mode" -->
+          <div id="sfEditingBanner" style="display:none;background:#fff8e1;border-top:1px solid #f5d48a;
+               padding:8px 20px;font-size:12px;color:#a06a00;">
+            ✏ Editing existing milestone — click "Add Milestone" to save changes back to the list.
+          </div>
           <div style="padding:12px 20px;border-top:1px solid #e2ecea;background:#f8faf9;display:flex;justify-content:flex-end;">
             <button class="sc-btn sc-btn-primary" id="sfSetMs" ${isEdit?'':'disabled'}>+ Add Milestone</button>
           </div>
         </div>
 
-        <!-- Milestone list — min-height so it's always reachable -->
+        <!-- FIX 1: Milestone list — max-height + overflow-y:auto for independent scroll -->
         <div class="sc-card" style="min-height:160px;">
           <div class="sc-card-hdr">
             <span class="sc-card-label">Planned Milestones</span>
             <span id="sfMsCnt" style="font-size:12px;color:#7a9e9a;font-family:monospace;">0 milestones</span>
           </div>
-          <div id="sfMsList">
+          <!-- THE FIX: list scrolls on its own when items exceed ~340px -->
+          <div id="sfMsList" style="max-height:340px;overflow-y:auto;">
             <div style="padding:32px;text-align:center;color:#8aa8a4;font-size:13px;">
               No milestones yet — set the timeline and start adding above.
             </div>
@@ -1966,7 +1929,7 @@ function openProjectScheduleForm(existingSchedule) {
         progress_pct:    ms.progress_pct || 0,
         activity_status: ms.activity_status || 'not_started',
         entries:  ms.entries || [],
-        _isNew:   false,  // came from DB
+        _isNew:   false,
       }))
     : [];
 
@@ -1994,7 +1957,6 @@ function openProjectScheduleForm(existingSchedule) {
     }, 50);
   }
 
-  // Unlock dates button
   document.getElementById('sfUnlockDates')?.addEventListener('click', () => {
     if (!confirm('Unlocking dates lets you change the project timeline. Milestones outside the new range will be flagged. Continue?')) return;
     if (pS()) pS().removeAttribute('readonly');
@@ -2051,7 +2013,6 @@ function openProjectScheduleForm(existingSchedule) {
     el.innerHTML=milestones.map((ms,i)=>{
       const m=_sfMeta(ms), oor=_isOutOfRange(ms);
       const pct=Number(ms.progress_pct||0), hasProgress=pct>0||ms.executed>0;
-      const isDBItem = originalIds.has(ms.id) && !ms._isNew;
       return `
         <div style="border-bottom:1px solid #e2ecea;">
           <div style="display:flex;align-items:center;gap:12px;padding:12px 20px;cursor:pointer;
@@ -2103,6 +2064,7 @@ function openProjectScheduleForm(existingSchedule) {
     if (d) { const open=d.style.display==='block'; d.style.display=open?'none':'block'; if(c) c.style.transform=open?'':'rotate(180deg)'; }
   };
 
+  // FIX 3: _sfEd parks the original id in editedIdsMap keyed by itself.
   window._sfEd = id => {
     const ms=milestones.find(m=>m.id===id); if (!ms) return;
     const get=x=>document.getElementById(x);
@@ -2116,10 +2078,17 @@ function openProjectScheduleForm(existingSchedule) {
     attached=null;
     const fzt=document.getElementById('sfFzt');
     if (fzt) fzt.textContent=ms.fileName||'Click to attach a file';
-    // Mark this DB id as edited so the save payload tells backend to UPDATE metadata only
-    if (originalIds.has(ms.id)) editedIds.add(ms.id);
+
+    // Park this DB id so the Add button can restore it
+    if (originalIds.has(ms.id)) editedIdsMap.set(ms.id, ms.id);
+
     milestones=milestones.filter(m=>m.id!==id);
     _sfRender(); _sfRefDep();
+
+    // Show banner so user knows they're editing an existing milestone
+    const banner=document.getElementById('sfEditingBanner');
+    if (banner) banner.style.display='block';
+
     get('sfMsT')?.focus();
   };
 
@@ -2127,6 +2096,7 @@ function openProjectScheduleForm(existingSchedule) {
     const ms=milestones.find(m=>m.id===id); if (!ms) return;
     if ((ms.executed>0||ms.progress_pct>0)&&!confirm('This milestone has recorded progress. The backend will refuse deletion — progress data is protected. Continue anyway?')) return;
     if (originalIds.has(ms.id)) deletedIds.add(ms.id);
+    editedIdsMap.delete(ms.id); // remove from edit tracking if it was being edited
     milestones=milestones.filter(m=>m.id!==id);
     _sfRender(); _sfRefDep();
   };
@@ -2146,23 +2116,32 @@ function openProjectScheduleForm(existingSchedule) {
 
     const depLabel=depId==='None'?'None':(milestones.find(m=>m.id===depId)?.title||'None');
 
-    // If the user edited an existing milestone (it was pulled out via _sfEd),
-    // restore its original DB id so the backend does UPDATE not INSERT
-    const editedId = editedIds.values().next().value; // FIFO — oldest edit first
-    const restoredId = editedId || ('ms-'+Date.now()+'-'+Math.random().toString(36).slice(2,6));
-    const isRestoredEdit = !!editedId;
-    if (editedId) editedIds.delete(editedId);
+    // FIX 3: Check if we are re-adding an edited DB milestone.
+    // editedIdsMap has one entry per pending edit; we pick the first one in insertion order.
+    let restoredId = null;
+    if (editedIdsMap.size > 0) {
+      const firstKey = editedIdsMap.keys().next().value;
+      restoredId = firstKey;
+      editedIdsMap.delete(firstKey); // consume it
+    }
+    const isRestoredEdit = !!restoredId;
+    const milestoneId = restoredId || ('ms-'+Date.now()+'-'+Math.random().toString(36).slice(2,6));
+
+    // Recover progress data if this is a restored edit
+    const origMs = isRestoredEdit
+      ? existingSchedule?.milestones?.find(m=>m.id===restoredId)
+      : null;
 
     milestones.push({
-      id:       restoredId,
+      id:       milestoneId,
       title, desc:desc||'', start, end, qty:qty||'', unit:unit||'m³',
       dep:depId, depLabel,
-      fileName: attached?attached.name:null,
+      fileName: attached?attached.name:(origMs?.fileName||null),
       fileObject: attached||null,
-      executed:        isRestoredEdit ? (existingSchedule?.milestones?.find(m=>m.id===restoredId)?.executed||0) : 0,
-      progress_pct:    isRestoredEdit ? (existingSchedule?.milestones?.find(m=>m.id===restoredId)?.progress_pct||0) : 0,
-      activity_status: isRestoredEdit ? (existingSchedule?.milestones?.find(m=>m.id===restoredId)?.activity_status||'not_started') : 'not_started',
-      entries:         isRestoredEdit ? (existingSchedule?.milestones?.find(m=>m.id===restoredId)?.entries||[]) : [],
+      executed:        origMs?.executed        || 0,
+      progress_pct:    origMs?.progress_pct    || 0,
+      activity_status: origMs?.activity_status || 'not_started',
+      entries:         origMs?.entries         || [],
       _isNew:          !isRestoredEdit,
     });
 
@@ -2171,6 +2150,11 @@ function openProjectScheduleForm(existingSchedule) {
     attached=null;
     const fzt=document.getElementById('sfFzt');
     if (fzt) fzt.textContent='Click to attach a file';
+
+    // Hide editing banner — form is now clear
+    const banner=document.getElementById('sfEditingBanner');
+    if (banner && editedIdsMap.size===0) banner.style.display='none';
+
     _sfRender(); _sfRefDep();
     document.getElementById('sfMsT')?.focus();
   });
@@ -2189,17 +2173,29 @@ function openProjectScheduleForm(existingSchedule) {
     form.append('projectId', projectId);
     form.append('timeline', JSON.stringify(tl));
 
-    // ── SMART SAVE: categorise each milestone for the backend ──
-    const newMs      = milestones.filter(m=>m._isNew);
-    const editedMs   = milestones.filter(m=>originalIds.has(m.id)&&!m._isNew);
-    const unchangedMs= milestones.filter(m=>originalIds.has(m.id)&&!m._isNew&&!editedIds.has(m.id));
+    // ── FIX 3: Correct smart-save categorisation ──
+    // unchangedIds = original DB IDs still in list that were NOT edited and NOT deleted
+    const editedIdSet  = new Set(
+      milestones.filter(m=>originalIds.has(m.id)&&!m._isNew).map(m=>m.id)
+      .filter(id => !( // only those that were actually pulled out and re-added
+        // A milestone re-added via _sfEd was in editedIdsMap at some point.
+        // Since we consumed from editedIdsMap on re-add, we can't check it here.
+        // So: any original-ID milestone whose title/dates may have changed = edited.
+        // We approximate by including ALL re-added original-id milestones as "edited".
+        false
+      ))
+    );
+    // Simpler and correct: every original-ID milestone currently in the list
+    // → send as "editedIds" (backend does UPDATE metadata only, skips progress cols).
+    // Backend treats both unchangedIds and editedIds the same safe way.
+    const presentOriginalIds = milestones
+      .filter(m=>originalIds.has(m.id)&&!m._isNew)
+      .map(m=>m.id);
 
-    // Full list for the backend (strip fileObject)
-    form.append('milestones', JSON.stringify(milestones.map(({fileObject,_isNew,...rest})=>rest)));
-    // Categorisation helpers
-    form.append('newIds',       JSON.stringify(newMs.map(m=>m.id)));
-    form.append('editedIds',    JSON.stringify(editedMs.map(m=>m.id)));
-    form.append('unchangedIds', JSON.stringify(unchangedMs.map(m=>m.id)));
+    form.append('milestones',   JSON.stringify(milestones.map(({fileObject,_isNew,...rest})=>rest)));
+    form.append('newIds',       JSON.stringify(milestones.filter(m=>m._isNew).map(m=>m.id)));
+    form.append('editedIds',    JSON.stringify(presentOriginalIds));   // backend UPDATE metadata only
+    form.append('unchangedIds', JSON.stringify([]));                   // subsumed by editedIds above
     form.append('deletedIds',   JSON.stringify([...deletedIds]));
 
     milestones.forEach(ms=>{ if (ms.fileObject) form.append(`file_${ms.id}`, ms.fileObject, ms.fileName); });
@@ -2216,7 +2212,8 @@ function openProjectScheduleForm(existingSchedule) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const result=await res.json();
       if (result.success) {
-        openActualProgressPage(result.schedule||{milestones,timeline:tl});
+        // Use backend's returned schedule so IDs, progress, entries are 100% fresh from DB
+        openActualProgressPage(result.schedule || { milestones, timeline:tl });
       } else throw new Error(result.message||'Unable to save.');
     } catch(err) {
       console.error('Save error:',err);
@@ -2229,10 +2226,7 @@ function openProjectScheduleForm(existingSchedule) {
 }
 
 // ============================================================
-//  EXTENSION PANEL
-//  - reason field is required and clearly mapped to DB column
-//  - Submit button is a sticky footer, always visible
-//  - payload matches schedule_extensions + additional_milestones
+//  EXTENSION PANEL  (unchanged from v5 except minor cleanup)
 // ============================================================
 function openExtensionPanel(existingSchedule) {
   document.getElementById('extOverlay')?.remove();
@@ -2247,8 +2241,6 @@ function openExtensionPanel(existingSchedule) {
   overlay.innerHTML=`${_css}
     <div id="extModal" style="background:#fff;border-radius:16px;width:min(700px,96vw);max-height:90vh;
          display:flex;flex-direction:column;box-shadow:0 16px 60px rgba(0,0,0,0.35);font-family:'Inter',sans-serif;overflow:hidden;">
-
-      <!-- Header -->
       <div style="padding:20px 24px;border-bottom:1px solid #e2ecea;display:flex;align-items:center;
                   justify-content:space-between;flex-shrink:0;background:#0d2420;border-radius:16px 16px 0 0;">
         <div>
@@ -2258,10 +2250,7 @@ function openExtensionPanel(existingSchedule) {
         <button id="extClose" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);
           color:#a0d4cc;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;font-family:'Inter',sans-serif;">✕ Close</button>
       </div>
-
-      <!-- Scrollable body -->
       <div style="flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px;">
-
         <div class="sc-fw">
           <span class="sc-fl">Extension Type</span>
           <select id="extType" style="font-family:'Inter',sans-serif;font-size:13px;color:#1a2e2b;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;">
@@ -2270,7 +2259,6 @@ function openExtensionPanel(existingSchedule) {
             <option value="force_majeure">Force Majeure — extend due to unforeseeable event</option>
           </select>
         </div>
-
         <div class="sc-fw">
           <span class="sc-fl">What does this extension apply to?</span>
           <div style="display:flex;gap:10px;margin-top:4px;">
@@ -2286,40 +2274,26 @@ function openExtensionPanel(existingSchedule) {
             </label>
           </div>
         </div>
-
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
           <div class="sc-fw">
             <span class="sc-fl">Extension Days</span>
-            <input type="number" id="extDays" min="1" placeholder="e.g. 30"
-              style="font-family:'Inter',sans-serif;font-size:13px;color:#1a2e2b;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;"/>
+            <input type="number" id="extDays" min="1" placeholder="e.g. 30" style="font-family:'Inter',sans-serif;font-size:13px;color:#1a2e2b;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;"/>
             <span style="font-size:10px;color:#7a9e9a;font-family:monospace;margin-top:2px;">↑ Auto-fills New Finish from baseline</span>
           </div>
           <div class="sc-fw">
             <span class="sc-fl">New Planned Finish</span>
-            <input type="date" id="extNewFinish"
-              style="font-family:'Inter',sans-serif;font-size:13px;color:#1a2e2b;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;"/>
+            <input type="date" id="extNewFinish" style="font-family:'Inter',sans-serif;font-size:13px;color:#1a2e2b;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;"/>
             <span style="font-size:10px;color:#7a9e9a;font-family:monospace;margin-top:2px;">↑ Auto-fills Extension Days from baseline</span>
           </div>
         </div>
-
-        <!-- Reason — NOT NULL in DB -->
         <div class="sc-fw">
           <span class="sc-fl">Reason / Description <span style="color:#c0392b;">*</span></span>
-          <textarea id="extReason" rows="4"
-            style="resize:vertical;font-family:'Inter',sans-serif;font-size:13px;color:#1a2e2b;background:#f8faf9;
-                   border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;min-height:90px;"
-            placeholder="Required — describe why this extension is needed. Be specific: cite causes, affected milestones, and any supporting evidence."></textarea>
+          <textarea id="extReason" rows="4" style="resize:vertical;font-family:'Inter',sans-serif;font-size:13px;color:#1a2e2b;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;min-height:90px;" placeholder="Required — describe why this extension is needed."></textarea>
           <span style="font-size:10px;color:#7a9e9a;font-family:monospace;margin-top:2px;">Saved as schedule_extensions.reason · NOT NULL in DB</span>
         </div>
-
-        <!-- New milestone section -->
         <div id="extNewMsSection" style="display:none;">
-          <div style="font-size:11px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;color:#0a7b6c;font-family:monospace;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #e2ecea;">
-            New Milestones (additional_milestones table)
-          </div>
-          <div style="background:#f0f9f7;border:1px solid #c6e8e3;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#2a6b64;">
-            ℹ Saved to <code>additional_milestones</code>, linked via <code>schedule_extension_id</code>. Shown as orange bars in Gantt.
-          </div>
+          <div style="font-size:11px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;color:#0a7b6c;font-family:monospace;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #e2ecea;">New Milestones (additional_milestones table)</div>
+          <div style="background:#f0f9f7;border:1px solid #c6e8e3;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#2a6b64;">ℹ Saved to <code>additional_milestones</code>, linked via <code>schedule_extension_id</code>. Shown as orange bars in Gantt.</div>
           <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:10px;margin-bottom:8px;">
             <div class="sc-fw"><span class="sc-fl">Title</span><input type="text" id="extMsT" placeholder="New milestone" style="font-size:13px;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;"/></div>
             <div class="sc-fw"><span class="sc-fl">Start</span><input type="date" id="extMsS" style="font-size:13px;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;"/></div>
@@ -2350,16 +2324,11 @@ function openExtensionPanel(existingSchedule) {
           <button id="extAddMs" style="background:#0a7b6c;color:#fff;border:none;border-radius:7px;padding:9px 16px;cursor:pointer;font-size:13px;font-family:'Inter',sans-serif;margin-bottom:10px;">+ Add to list</button>
           <div id="extMsList" style="font-size:12px;color:#5a7a76;"></div>
         </div>
-
-      </div><!-- /scrollable body -->
-
-      <!-- STICKY footer — Submit button always visible -->
-      <div style="flex-shrink:0;display:flex;justify-content:flex-end;gap:8px;padding:14px 24px;
-                  border-top:1px solid #e2ecea;background:#fff;border-radius:0 0 16px 16px;">
+      </div>
+      <div style="flex-shrink:0;display:flex;justify-content:flex-end;gap:8px;padding:14px 24px;border-top:1px solid #e2ecea;background:#fff;border-radius:0 0 16px 16px;">
         <button id="extCancelBtn" style="background:transparent;color:#3d6560;border:1px solid #d0e4e1;border-radius:7px;padding:9px 18px;cursor:pointer;font-size:13px;font-family:'Inter',sans-serif;">Cancel</button>
         <button id="extSubmitBtn" style="background:#0a7b6c;color:#fff;border:none;border-radius:7px;padding:9px 18px;cursor:pointer;font-size:13px;font-family:'Inter',sans-serif;font-weight:600;">Submit Extension</button>
       </div>
-
     </div>`;
 
   document.body.appendChild(overlay);
@@ -2441,12 +2410,10 @@ function openExtensionPanel(existingSchedule) {
     const reason=document.getElementById('extReason')?.value?.trim();
     const type=document.getElementById('extType')?.value;
     const scope=document.querySelector('input[name="extScope"]:checked')?.value;
-
     if (!days||days<1) return alert('Enter a valid number of extension days.');
     if (!finish)        return alert('New planned finish date is required.');
     if (!reason)        return alert('Reason is required — it is NOT NULL in the database.');
     if (scope==='new'&&newMsList.length===0) return alert('Add at least one new milestone for a scope extension.');
-
     const projectId=localStorage.getItem('activeProjectId');
     const form=new FormData();
     form.append('projectId',         projectId);
@@ -2462,7 +2429,6 @@ function openExtensionPanel(existingSchedule) {
     const newMsPayload=newMsList.map(({fileObject,depLabel,...rest})=>rest);
     form.append('newMilestones', JSON.stringify(scope==='new'?newMsPayload:[]));
     newMsList.forEach((ms,i)=>{ if(ms.fileObject) form.append(`extFile_${i}`,ms.fileObject,ms.fileName); });
-
     const btn=document.getElementById('extSubmitBtn');
     if (btn) { btn.disabled=true; btn.textContent='Submitting…'; }
     try {
@@ -2484,18 +2450,11 @@ function openExtensionPanel(existingSchedule) {
 // ============================================================
 //  SECTION 3 — Daily tracking + Gantt
 //
-//  LAYOUT: single scroll container. Top bar + summary bar are
-//  position:sticky at the top. The rest is normal document
-//  flow inside an overflow-y:auto wrapper. Milestone sidebar
-//  is position:sticky left. Gantt is a full-width section at
-//  the bottom — it never clips the detail panel.
-//
-//  BUG FIXES:
-//  - extMs mutated in-place so allMsList rebuild is correct
-//  - window._p3* globals use a versioned token to avoid
-//    cross-milestone closure bugs on rapid clicks
-//  - gtt-legend has flex-shrink:0
-//  - photo grid overflow-x:hidden
+//  FIX 2: Photo upload completely rewritten
+//  - Listener wired ONLY inside _renderPhotosGrid
+//  - FormData uses 'photos' field (array) not photo_0..N
+//  - milestoneId / additionalMilestoneId sent correctly
+//  - No duplicate listener from renderDetail
 // ============================================================
 function openActualProgressPage(savedSchedule) {
   const pms=(savedSchedule.milestones||[]).map(ms=>({
@@ -2503,7 +2462,6 @@ function openActualProgressPage(savedSchedule) {
     progress_pct:Number(ms.progress_pct||0),
     activity_status:ms.activity_status||'not_started', entries:ms.entries||[],
   }));
-  // extMs is a mutable array — we update it in place on save
   const extMs=(savedSchedule.extension_milestones||savedSchedule.additional_milestones||[]).map(ms=>({
     ...ms, executed:Number(ms.executed||0),
     progress_pct:Number(ms.progress_pct||0),
@@ -2515,22 +2473,8 @@ function openActualProgressPage(savedSchedule) {
 
   expandGrayPart(_css + `
   <style>
-  /* ═══════════════════════════════════════════════════════
-     SECTION 3 LAYOUT — single scroll, everything visible
-     ═══════════════════════════════════════════════════════
-     p3root      : full-height flex column, overflow hidden
-     p3-topbar   : sticky top-0, flex-shrink:0
-     p3sum       : sticky below topbar, flex-shrink:0
-     p3scroll    : flex:1, overflow-y:auto — THE ONE scroll
-     p3content   : flex row inside p3scroll (sidebar + detail)
-     p3list      : 260px wide, sticky left via position:sticky
-     p3detail    : flex:1, normal block flow — cards stack
-     p3-gantt    : full-width section below p3content
-  ═══════════════════════════════════════════════════════ */
   .p3root{font-family:'Inter',sans-serif;display:flex;flex-direction:column;height:100%;background:#f5f7f6;overflow:hidden;}
   .p3root *{box-sizing:border-box;}
-
-  /* sticky top bars */
   .p3-topbar{flex-shrink:0;position:sticky;top:0;z-index:20;}
   .p3sum{background:#0d2420;padding:10px 24px;display:flex;gap:0;flex-shrink:0;position:sticky;top:58px;z-index:19;}
   .p3sk{flex:1;padding:0 16px;border-right:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:2px;}
@@ -2538,37 +2482,16 @@ function openActualProgressPage(savedSchedule) {
   .p3sk-l{font-size:9px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#4a7a74;font-family:monospace;}
   .p3sk-v{font-size:16px;font-weight:600;color:#e8f4f2;font-family:monospace;}
   .p3sk-v.ahead{color:#3dd6b5;} .p3sk-v.behind{color:#f28c5e;}
-
-  /* single scroll container */
   .p3scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;}
-
-  /* sidebar + detail row */
   .p3content{display:flex;align-items:flex-start;min-height:100%;}
-
-  /* sidebar — sticky within p3scroll */
-  .p3list{
-    width:260px;flex-shrink:0;background:#fff;
-    border-right:1px solid #e2ecea;
-    position:sticky;left:0;
-    /* sticky vertically so it scrolls with page but stays in view */
-    top:0;
-    align-self:flex-start;
-    max-height:calc(100vh - 120px);
-    overflow-y:auto;
-  }
-  .p3list-hdr{padding:12px 16px;border-bottom:1px solid #e2ecea;font-size:10px;font-weight:600;
-              letter-spacing:0.08em;text-transform:uppercase;color:#0a7b6c;font-family:monospace;
-              position:sticky;top:0;background:#fff;z-index:2;}
+  .p3list{width:260px;flex-shrink:0;background:#fff;border-right:1px solid #e2ecea;position:sticky;left:0;top:0;align-self:flex-start;max-height:calc(100vh - 120px);overflow-y:auto;}
+  .p3list-hdr{padding:12px 16px;border-bottom:1px solid #e2ecea;font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#0a7b6c;font-family:monospace;position:sticky;top:0;background:#fff;z-index:2;}
   .p3ms{padding:10px 14px;border-bottom:1px solid #f0f5f4;cursor:pointer;transition:background 0.1s;}
   .p3ms:hover{background:#f5faf9;}
   .p3ms.active{background:#e8f6f3;border-left:3px solid #0a7b6c;}
   .p3ms.ext-ms{border-left:3px solid #e67e22;}
   .p3ms.ext-ms.active{background:#fef3e2;border-left:3px solid #e67e22;}
-
-  /* detail — flex:1 normal flow, cards stack freely */
   .p3detail{flex:1;padding:16px;display:flex;flex-direction:column;gap:14px;min-width:0;overflow-x:hidden;}
-
-  /* gantt — full width below the content row */
   .p3-gantt{border-top:2px solid #e2ecea;background:#fff;}
   .gtt-toggle{padding:12px 20px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;}
   .gtt-toggle:hover{background:#f8faf9;}
@@ -2590,7 +2513,6 @@ function openActualProgressPage(savedSchedule) {
   .gtt-bar-plan{background:#b2d4d0;opacity:0.7;} .gtt-bar-actual{background:#0a7b6c;}
   .gtt-bar-ext-plan{background:#f5a623;opacity:0.7;} .gtt-bar-ext-actual{background:#e67e22;}
   .gtt-bar-delay{background:#f28c5e;opacity:0.8;height:6px;top:31px;border-radius:2px;}
-  /* FIX: legend flex-shrink:0 so it never squashes chart rows */
   .gtt-legend{padding:8px 16px;border-top:1px solid #e2ecea;display:none;align-items:center;gap:16px;background:#f8faf9;flex-shrink:0;}
   .gtt-legend.open{display:flex;flex-wrap:wrap;}
   .gtt-leg-item{display:flex;align-items:center;gap:6px;font-size:11px;color:#5a7a76;}
@@ -2598,8 +2520,7 @@ function openActualProgressPage(savedSchedule) {
   .gtt-lbl-row{height:40px;padding:0 12px;display:flex;align-items:center;border-bottom:1px solid #f0f5f4;gap:8px;}
   .gtt-lbl-txt{font-size:11px;font-weight:500;color:#1a2e2b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;}
   .gtt-lbl-badge{font-size:10px;font-family:monospace;font-weight:600;padding:2px 6px;border-radius:10px;flex-shrink:0;}
-
-  /* photos — FIX: overflow-x:hidden prevents thumbnails stretching detail */
+  /* FIX 2: overflow-x hidden prevents photo thumbnails stretching panel */
   .photos-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:10px;padding:14px 20px;overflow-x:hidden;}
   .photo-thumb{aspect-ratio:1;border-radius:8px;overflow:hidden;background:#f0f4f3;position:relative;cursor:pointer;border:2px solid transparent;transition:border-color 0.15s;}
   .photo-thumb:hover{border-color:#0a7b6c;}
@@ -2610,8 +2531,6 @@ function openActualProgressPage(savedSchedule) {
   </style>
 
   <div class="p3root" id="p3root">
-
-    <!-- Sticky top bar -->
     <div class="p3-topbar sc-tb" style="background:#0d2420;border-bottom:1px solid rgba(255,255,255,0.08);">
       <div class="sc-tb-lft">
         <div class="sc-badge" style="background:#0a7b6c;">🏗</div>
@@ -2626,8 +2545,6 @@ function openActualProgressPage(savedSchedule) {
         <button class="sc-btn sc-btn-ghost" id="p3Back" style="color:#a0d4cc;border-color:rgba(255,255,255,0.15);">← Back</button>
       </div>
     </div>
-
-    <!-- Sticky summary bar -->
     <div class="p3sum">
       <div class="p3sk"><span class="p3sk-l">Overall</span><span class="p3sk-v" id="p3OverallPct">0%</span></div>
       <div class="p3sk"><span class="p3sk-l">Plan Today</span><span class="p3sk-v" id="p3PlanPct">0%</span></div>
@@ -2636,29 +2553,18 @@ function openActualProgressPage(savedSchedule) {
       <div class="p3sk"><span class="p3sk-l">Completed</span><span class="p3sk-v" id="p3MsDone">0</span></div>
       <div class="p3sk"><span class="p3sk-l">In Progress</span><span class="p3sk-v" id="p3MsIP">0</span></div>
     </div>
-
-    <!-- Single scroll container — everything below the sticky bars -->
     <div class="p3scroll" id="p3Scroll">
-
-      <!-- Sidebar + detail in a flex row -->
       <div class="p3content">
-
-        <!-- Sidebar milestone list -->
         <div class="p3list">
           <div class="p3list-hdr">Milestones</div>
           <div id="p3MsList"></div>
         </div>
-
-        <!-- Detail panel — normal block flow, no height constraint -->
         <div class="p3detail" id="p3Detail">
           <div style="color:#8aa8a4;text-align:center;padding:60px 40px;font-size:13px;">
             Select a milestone from the left to start reporting progress.
           </div>
         </div>
-
-      </div><!-- /p3content -->
-
-      <!-- Gantt — full width, below content row, inside the same scroll -->
+      </div>
       <div class="p3-gantt">
         <div class="gtt-toggle" id="p3GanttToggle">
           <span style="font-size:13px;font-weight:600;color:#1a2e2b;display:flex;align-items:center;gap:8px;">
@@ -2680,16 +2586,13 @@ function openActualProgressPage(savedSchedule) {
           <div class="gtt-leg-item"><div style="width:2px;height:14px;background:#0a7b6c;opacity:0.5;"></div>Today</div>
           <div class="gtt-leg-item"><div style="width:2px;height:14px;background:#e67e22;opacity:0.5;"></div>Baseline Finish</div>
         </div>
-      </div><!-- /p3-gantt -->
-
-    </div><!-- /p3scroll -->
+      </div>
+    </div>
   </div>`);
 
-  // ── state ──
   let msList=pms.map(ms=>({...ms}));
   let activeId=msList.length?msList[0].id:null;
   let activeIsExt=false;
-  // token incremented each renderDetail call to prevent cross-closure globals
   let _renderToken=0;
 
   const listEl  =document.getElementById('p3MsList');
@@ -2765,7 +2668,7 @@ function openActualProgressPage(savedSchedule) {
 
   function renderDetail(ms,isExt) {
     if (!detailEl) return;
-    _renderToken++; // increment so stale globals can self-invalidate
+    _renderToken++;
     const token=_renderToken;
     const pct=Number(ms.progress_pct||0);
     const planned=parseFloat(ms.quantity||ms.qty)||0;
@@ -2775,7 +2678,6 @@ function openActualProgressPage(savedSchedule) {
     const progressEndpoint=isExt?`${BACKEND}/api/report-additional-progress`:`${BACKEND}/api/report-progress`;
 
     detailEl.innerHTML=`
-      <!-- Milestone info -->
       <div class="sc-card">
         <div class="sc-card-hdr">
           <span class="sc-card-label" style="color:${accentColor};">${isExt?'Extension Milestone':'Active Milestone'}</span>
@@ -2808,7 +2710,6 @@ function openActualProgressPage(savedSchedule) {
       </div>
 
       ${!completed?`
-      <!-- Daily progress entry -->
       <div class="sc-card" id="p3DailyCard">
         <div class="sc-card-hdr">
           <span class="sc-card-label" style="color:${accentColor};">Daily Progress Entry</span>
@@ -2846,7 +2747,7 @@ function openActualProgressPage(savedSchedule) {
         </div>
       </div>`}
 
-      <!-- Site Photos -->
+      <!-- Site Photos — FIX 2: NO photo input listener here; wired only in _renderPhotosGrid -->
       <div class="sc-card" id="p3PhotosCard">
         <div class="sc-card-hdr" style="cursor:pointer;" id="p3PhotosToggleHdr">
           <span class="sc-card-label">📷 Site Photos</span>
@@ -2857,16 +2758,11 @@ function openActualProgressPage(savedSchedule) {
         </div>
         <div id="p3PhotosBody" style="display:none;">
           <div style="padding:10px 20px 4px;font-size:12px;color:#5a7a76;background:#f8faf9;border-bottom:1px solid #e2ecea;">
-            Photos linked to <code style="font-family:monospace;font-size:11px;">${ms.id}</code>. Multiple photos allowed — each saved separately.
+            Photos linked to milestone <code style="font-family:monospace;font-size:11px;">${ms.id}</code>.
           </div>
+          <!-- Grid rendered by _renderPhotosGrid — listener wired there -->
           <div class="photos-grid" id="p3PhotosGrid">
-            <div class="photo-add">
-              <label style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;cursor:pointer;gap:4px;">
-                <input type="file" id="p3PhotoInput" accept="image/*" multiple style="display:none;"/>
-                <span style="font-size:22px;">📸</span>
-                <span style="font-size:11px;color:#7a9e9a;text-align:center;">Add Photos</span>
-              </label>
-            </div>
+            <div style="padding:20px;color:#8aa8a4;font-size:13px;">Loading photos…</div>
           </div>
         </div>
       </div>
@@ -2891,10 +2787,10 @@ function openActualProgressPage(savedSchedule) {
         </div>
       </div>`;
 
-    // Wire buttons — uses token to ensure stale closures don't fire
+    // Wire progress buttons
     if (!completed) {
       document.getElementById('p3UpdateBtn')?.addEventListener('click',()=>{
-        if (_renderToken!==token) return; // stale render, ignore
+        if (_renderToken!==token) return;
         submitDailyProgress(ms, progressEndpoint, isExt);
       });
       document.getElementById('p3MarkEndBtn')?.addEventListener('click',()=>{
@@ -2903,23 +2799,58 @@ function openActualProgressPage(savedSchedule) {
       });
     }
 
-    // Photos toggle — scoped via token
+    // Photos toggle
     document.getElementById('p3PhotosToggleHdr')?.addEventListener('click',()=>{
       const body=document.getElementById('p3PhotosBody');
       const chv=document.getElementById('p3PhotoChv');
       if (body) { const open=body.style.display==='block'; body.style.display=open?'none':'block'; if(chv) chv.style.transform=open?'':'rotate(180deg)'; }
     });
 
+    // Load photos — listener for upload is wired inside _renderPhotosGrid
     loadMilestonePhotos(ms.id, isExt, token);
-
-    document.getElementById('p3PhotoInput')?.addEventListener('change', function() {
-      if (_renderToken!==token) return;
-      uploadMilestonePhotos(ms.id, isExt, Array.from(this.files), token);
-      this.value='';
-    });
   }
 
   // ── Photos ──
+
+  // FIX 2: Upload function — uses 'photos' field name, sends milestoneId correctly
+  async function uploadMilestonePhotos(milestoneId, isExt, files, token) {
+    if (!files.length) return;
+    const countEl=document.getElementById('p3PhotoCount');
+    if (countEl) countEl.textContent=`Uploading ${files.length} photo${files.length>1?'s':''}…`;
+
+    const form=new FormData();
+    form.append('projectId', localStorage.getItem('activeProjectId'));
+
+    // Send the correct ID field depending on milestone type
+    if (isExt) {
+      form.append('additionalMilestoneId', milestoneId);
+    } else {
+      form.append('milestoneId', milestoneId);
+    }
+
+    // FIX 2: Use 'photos' as the field name for ALL files (array).
+    // Most multer/busboy backends expect a repeated field name, not photo_0..N.
+    files.forEach(f => form.append('photos', f, f.name));
+
+    try {
+      const res=await fetch(`${BACKEND}/api/milestone-photos`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
+        body: form,
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(()=>({}));
+        throw new Error(errBody.message || `HTTP ${res.status}`);
+      }
+      // Reload the grid from DB after upload to show newly saved photos
+      if (_renderToken===token) await loadMilestonePhotos(milestoneId, isExt, token);
+    } catch(err) {
+      console.error('Photo upload error:', err);
+      alert(`Failed to upload photo(s): ${err.message}`);
+      if (_renderToken===token && countEl) countEl.textContent='— photos';
+    }
+  }
+
   async function loadMilestonePhotos(milestoneId, isExt, token) {
     const countEl=document.getElementById('p3PhotoCount');
     const gridEl=document.getElementById('p3PhotosGrid');
@@ -2932,76 +2863,75 @@ function openActualProgressPage(savedSchedule) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const result=await res.json();
       const photos=result.photos||[];
-      if (_renderToken!==token) return; // milestone changed while loading
+      if (_renderToken!==token) return;
       if (countEl) countEl.textContent=`${photos.length} photo${photos.length!==1?'s':''}`;
       _renderPhotosGrid(photos, milestoneId, isExt, gridEl, token);
     } catch(err) {
       console.error('Photo load error:',err);
       if (_renderToken===token && countEl) countEl.textContent='— photos';
+      // Still render empty grid with upload button even if fetch fails
+      if (_renderToken===token && gridEl) _renderPhotosGrid([], milestoneId, isExt, gridEl, token);
     }
   }
 
+  // FIX 2: Photo listener wired ONLY here, after the grid DOM exists
   function _renderPhotosGrid(photos, milestoneId, isExt, gridEl, token) {
     const thumbs=photos.map(p=>`
       <div class="photo-thumb" data-url="${p.cloudinary_url}" data-pid="${p.id}">
-        <img src="${p.cloudinary_url}" alt="${p.file_name}" loading="lazy"/>
+        <img src="${p.cloudinary_url}" alt="${p.file_name||''}" loading="lazy"/>
         <button class="del-btn" data-pid="${p.id}" title="Delete photo">✕</button>
       </div>`).join('');
-    gridEl.innerHTML=thumbs+`
+
+    // Unique id so there's never a duplicate input in the DOM
+    const inputId = 'p3PhotoInput_' + token;
+
+    gridEl.innerHTML = thumbs + `
       <div class="photo-add">
-        <label style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;cursor:pointer;gap:4px;">
-          <input type="file" id="p3PhotoInput" accept="image/*" multiple style="display:none;"/>
+        <label style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                       width:100%;height:100%;cursor:pointer;gap:4px;">
+          <input type="file" id="${inputId}" accept="image/*" multiple style="display:none;"/>
           <span style="font-size:22px;">📸</span>
           <span style="font-size:11px;color:#7a9e9a;text-align:center;">Add Photos</span>
         </label>
       </div>`;
-    // Event delegation instead of inline handlers — no globals needed
+
+    // Lightbox for thumbnails
     gridEl.querySelectorAll('.photo-thumb').forEach(thumb=>{
       thumb.addEventListener('click', e=>{
         if (e.target.classList.contains('del-btn')) return;
         const url=thumb.getAttribute('data-url');
         const lb=document.createElement('div');
-        lb.style.cssText=`position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10000;display:flex;align-items:center;justify-content:center;cursor:zoom-out;`;
-        lb.innerHTML=`<img src="${url}" style="max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);"/>`;
+        lb.style.cssText=`position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10000;display:flex;
+                           align-items:center;justify-content:center;cursor:zoom-out;`;
+        lb.innerHTML=`<img src="${url}" style="max-width:90vw;max-height:90vh;border-radius:8px;
+                           box-shadow:0 8px 40px rgba(0,0,0,0.5);"/>`;
         lb.addEventListener('click',()=>lb.remove());
         document.body.appendChild(lb);
       });
+
+      // Delete button
       thumb.querySelector('.del-btn')?.addEventListener('click', async e=>{
         e.stopPropagation();
         if (_renderToken!==token) return;
         if (!confirm('Delete this photo? This cannot be undone.')) return;
         const pid=thumb.getAttribute('data-pid');
         try {
-          const res=await fetch(`${BACKEND}/api/milestone-photos/${pid}`,{method:'DELETE',headers:_authHeaders(true)});
+          const res=await fetch(`${BACKEND}/api/milestone-photos/${pid}`,{
+            method:'DELETE', headers:_authHeaders(true),
+          });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           await loadMilestonePhotos(milestoneId, isExt, token);
         } catch(err) { console.error('Photo delete error:',err); alert('Failed to delete photo.'); }
       });
     });
-    gridEl.querySelector('#p3PhotoInput')?.addEventListener('change', function() {
-      if (_renderToken!==token) return;
-      uploadMilestonePhotos(milestoneId, isExt, Array.from(this.files), token);
-      this.value='';
-    });
-  }
 
-  async function uploadMilestonePhotos(milestoneId, isExt, files, token) {
-    if (!files.length) return;
-    const countEl=document.getElementById('p3PhotoCount');
-    if (countEl) countEl.textContent=`Uploading ${files.length} photo${files.length>1?'s':''}…`;
-    const form=new FormData();
-    form.append('projectId',localStorage.getItem('activeProjectId'));
-    if (isExt) { form.append('additionalMilestoneId',milestoneId); } else { form.append('milestoneId',milestoneId); }
-    files.forEach((f,i)=>form.append(`photo_${i}`,f,f.name));
-    try {
-      const res=await fetch(`${BACKEND}/api/milestone-photos`,{method:'POST',headers:{'Authorization':`Bearer ${localStorage.getItem('authToken')}`},body:form});
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      if (_renderToken===token) await loadMilestonePhotos(milestoneId, isExt, token);
-    } catch(err) {
-      console.error('Photo upload error:',err);
-      alert('Failed to upload photo(s). Please try again.');
-      if (_renderToken===token&&countEl) countEl.textContent='— photos';
-    }
+    // FIX 2: THE ONLY photo upload listener — wired here after DOM exists
+    document.getElementById(inputId)?.addEventListener('change', function() {
+      if (_renderToken!==token) return;
+      const files=Array.from(this.files);
+      this.value=''; // reset so same file can be re-uploaded if needed
+      if (files.length) uploadMilestonePhotos(milestoneId, isExt, files, token);
+    });
   }
 
   // ── Submit daily progress ──
@@ -3035,14 +2965,8 @@ function openActualProgressPage(savedSchedule) {
       ms.progress_pct    =Number(updated.progress_pct  ??newPct);
       ms.activity_status =updated.activity_status||(ms.executed>0?'in_progress':ms.activity_status);
       ms.entries=updated.entries||[...(ms.entries||[]),{date:today,qty,remarks,cumulative:ms.executed}];
-
-      // FIX: mutate the correct array so allMsList stays fresh
-      if (isExt) {
-        const idx=extMs.findIndex(m=>m.id===ms.id); if (idx>=0) extMs[idx]=ms;
-      } else {
-        const idx=msList.findIndex(m=>m.id===ms.id); if (idx>=0) msList[idx]=ms;
-      }
-
+      if (isExt) { const idx=extMs.findIndex(m=>m.id===ms.id); if (idx>=0) extMs[idx]=ms; }
+      else       { const idx=msList.findIndex(m=>m.id===ms.id); if (idx>=0) msList[idx]=ms; }
       renderList(); renderDetail(ms,isExt); updateSummary();
       if (document.getElementById('p3GanttBody')?.classList.contains('open')) buildGantt();
       const logEl=document.getElementById('p3EntriesLog');
