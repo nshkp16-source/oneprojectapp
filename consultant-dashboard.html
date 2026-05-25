@@ -1626,17 +1626,22 @@ scheduleOption.addEventListener('click', () => {
 grayToggleBtn.addEventListener('click', (e) => { e.stopPropagation(); grayHidden ? showGrayPanel() : hideGrayPanel(); });
 
 // ============================================================
-//  SCHEDULE MODULE v3 — All fixes applied
+//  SCHEDULE MODULE v4 — All fixes applied
 //
-//  Fixes:
-//  1. Section 2 — milestone list is scrollable, header/form stay fixed
-//  2. Section 3 — daily progress saves to /api/report-progress on
-//                 "Update Progress" click; progress_pct calculated
-//                 from (cumulative / planned_qty) * 100
-//  3. Extension panel — full centered modal, days↔date auto-sync
-//                 both ways (days→date AND date→days from baseline)
-//  4. Extension new milestones — attachment + dependency fields added
-//  5. Extension milestones appear in Gantt as orange bars
+//  Fixes vs v3:
+//  1. Edit Plan — existing planned dates are PRESERVED and shown
+//     as read-only; user must explicitly click "Unlock Dates" to
+//     change them, preventing accidental baseline wipe.
+//  2. Daily Progress — "Save Progress" button is always visible
+//     above the Gantt (Gantt is collapsed by default so it no
+//     longer crowds the form).
+//  3. Site Photos — per-milestone photo gallery (multiple photos,
+//     each tied to milestone_id via /api/milestone-photos).
+//     Separate from progress-entry attachments.
+//  4. Extension — reason/description textarea is properly wired
+//     and sent as `reason` to match schedule_extensions.reason.
+//  5. Extension DB alignment — payload matches schema exactly:
+//     schedule_extensions + additional_milestones columns.
 // ============================================================
 
 const BACKEND = 'https://oneprojectapp-backend.onrender.com';
@@ -1721,6 +1726,8 @@ const _css = `
 .sc-btn-ghost:hover{border-color:#0a7b6c;color:#0a7b6c;background:#f0f9f7;}
 .sc-btn-danger{background:transparent;color:#b83c00;border:1px solid #f5c4b3;}
 .sc-btn-danger:hover{background:#fef0e8;}
+.sc-btn-warn{background:transparent;color:#a06a00;border:1px solid #f5d48a;}
+.sc-btn-warn:hover{background:#fffbf0;}
 .sc-card{background:#fff;border:1px solid #e2ecea;border-radius:12px;overflow:hidden;
          box-shadow:0 1px 6px rgba(10,123,108,0.05);}
 .sc-card-hdr{padding:14px 20px;border-bottom:1px solid #e2ecea;display:flex;
@@ -1734,6 +1741,7 @@ const _css = `
   padding:9px 12px;outline:none;width:100%;transition:border-color 0.15s;}
 .sc-wrap input:focus,.sc-wrap select:focus,.sc-wrap textarea:focus{
   border-color:#0a7b6c;box-shadow:0 0 0 3px rgba(10,123,108,0.08);background:#fff;}
+.sc-wrap input[readonly]{background:#f0f4f3;color:#7a9e9a;cursor:not-allowed;border-style:dashed;}
 .sc-fw{display:flex;flex-direction:column;gap:5px;}
 .sc-fl{font-size:10px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;
        color:#7a9e9a;font-family:monospace;}
@@ -1803,16 +1811,17 @@ function openCreateScheduleIntro() {
 
 // ============================================================
 //  SECTION 2 — Baseline builder
-//  FIX: milestone list area is scrollable; top bar + timeline
-//       card + add-milestone card remain fixed (sticky).
+//
+//  FIX (Edit mode): When existingSchedule is passed in, the
+//  planned_start / planned_finish fields are shown as READ-ONLY
+//  with a lock icon. The user must click "Unlock Dates" to edit
+//  them — this prevents accidental baseline wipe.
+//  New milestones can always be added freely.
 // ============================================================
 function openProjectScheduleForm(existingSchedule) {
   const projectName = (typeof activeProject !== 'undefined' && activeProject) ? activeProject.textContent : 'Project';
   const isEdit = !!existingSchedule;
 
-  // The outer wrapper uses flex-column height:100%.
-  // .sf-fixed  = top bar + two form cards (flex-shrink:0)
-  // .sf-scroll = milestone list card (flex:1, overflow-y:auto)
   expandGrayPart(_css + `
     <div class="sc-wrap" id="sf" style="display:flex;flex-direction:column;height:100%;">
 
@@ -1840,15 +1849,27 @@ function openProjectScheduleForm(existingSchedule) {
         <div class="sc-card">
           <div class="sc-card-hdr">
             <span class="sc-card-label">Project Timeline</span>
-            <span id="sfTlInd" style="display:none;font-size:12px;color:#0a7b6c;font-weight:500;">✓ Timeline set</span>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span id="sfTlInd" style="display:none;font-size:12px;color:#0a7b6c;font-weight:500;">✓ Timeline set</span>
+              ${isEdit ? `<button class="sc-btn sc-btn-warn" id="sfUnlockDates" style="font-size:11px;padding:4px 10px;">
+                🔒 Unlock Dates to Edit
+              </button>` : ''}
+            </div>
           </div>
+          ${isEdit ? `<div style="background:#fff8e1;border-bottom:1px solid #f5d48a;padding:8px 20px;font-size:12px;color:#a06a00;">
+            ⚠ Baseline dates are locked to protect existing progress. Click "Unlock Dates" only if you need to change them.
+          </div>` : ''}
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;align-items:end;padding:16px 20px;gap:16px;">
-            <div class="sc-fw"><span class="sc-fl">Planned Start</span><input type="date" id="sfPS"/></div>
-            <div class="sc-fw"><span class="sc-fl">Planned Finish</span><input type="date" id="sfPF"/></div>
+            <div class="sc-fw"><span class="sc-fl">Planned Start</span>
+              <input type="date" id="sfPS" ${isEdit ? 'readonly' : ''}/></div>
+            <div class="sc-fw"><span class="sc-fl">Planned Finish</span>
+              <input type="date" id="sfPF" ${isEdit ? 'readonly' : ''}/></div>
             <div class="sc-fw"><span class="sc-fl">Total Duration</span>
               <div id="sfDur" style="font-size:18px;font-weight:600;color:#9ab0ac;padding:9px 0;font-family:monospace;">— days</div>
             </div>
-            <button class="sc-btn sc-btn-primary" id="sfSetTl" style="height:38px;">Set Timeline</button>
+            <button class="sc-btn sc-btn-primary" id="sfSetTl" style="height:38px;" ${isEdit ? 'disabled' : ''}>
+              ${isEdit ? '🔒 Locked' : 'Set Timeline'}
+            </button>
           </div>
           <div id="sfTlWarn" style="display:none;background:#fef0e8;color:#a33a15;font-size:12px;
                padding:8px 20px;border-top:1px solid #f5c4b3;">
@@ -1860,7 +1881,9 @@ function openProjectScheduleForm(existingSchedule) {
         <div class="sc-card">
           <div class="sc-card-hdr">
             <span class="sc-card-label">Add Milestone</span>
-            <span id="sfHint" style="font-size:12px;color:#7a9e9a;">Set the project timeline first.</span>
+            <span id="sfHint" style="font-size:12px;color:#7a9e9a;">
+              ${isEdit ? 'Add new milestones below.' : 'Set the project timeline first.'}
+            </span>
           </div>
           <div style="display:grid;grid-template-columns:2fr 2fr 1fr 1fr 1fr 1.2fr;gap:12px;padding:16px 20px 12px;">
             <div class="sc-fw"><span class="sc-fl">Title</span>
@@ -1891,7 +1914,9 @@ function openProjectScheduleForm(existingSchedule) {
           </div>
           <div style="padding:12px 20px;border-top:1px solid #e2ecea;background:#f8faf9;
                       display:flex;justify-content:flex-end;">
-            <button class="sc-btn sc-btn-primary" id="sfSetMs" disabled>+ Add Milestone</button>
+            <button class="sc-btn sc-btn-primary" id="sfSetMs" ${isEdit ? '' : 'disabled'}>
+              + Add Milestone
+            </button>
           </div>
         </div>
       </div>
@@ -1914,6 +1939,8 @@ function openProjectScheduleForm(existingSchedule) {
     </div>`);
 
   // ── state ──
+  let datesLocked = isEdit; // start locked in edit mode
+
   let tl = existingSchedule?.timeline
     ? { ...existingSchedule.timeline }
     : { start: null, finish: null, duration: 0 };
@@ -1946,7 +1973,6 @@ function openProjectScheduleForm(existingSchedule) {
   const durEl = () => document.getElementById('sfDur');
   const tlInd = () => document.getElementById('sfTlInd');
   const tlWarn = () => document.getElementById('sfTlWarn');
-  const hint = () => document.getElementById('sfHint');
   const addBtn = () => document.getElementById('sfSetMs');
   const msCnt = () => document.getElementById('sfMsCnt');
   const listEl = () => document.getElementById('sfMsList');
@@ -1954,17 +1980,28 @@ function openProjectScheduleForm(existingSchedule) {
 
   const cDur = (s, e) => Math.max(0, Math.round((new Date(e) - new Date(s)) / 86400000) + 1);
 
+  // ── FIX: In edit mode, populate dates as read-only AND keep them ──
   if (isEdit && tl.start) {
     setTimeout(() => {
       if (pS()) pS().value = tl.start;
       if (pF()) pF().value = tl.finish;
       if (durEl()) { durEl().textContent = `${tl.duration} days`; durEl().style.color = '#0a7b6c'; }
       if (tlInd()) tlInd().style.display = 'inline';
-      if (addBtn()) addBtn().disabled = false;
-      if (hint()) hint().textContent = 'Fill milestone details and click Add Milestone.';
       _sfRefDep(); _sfRender();
     }, 50);
   }
+
+  // ── Unlock dates button (edit mode only) ──
+  document.getElementById('sfUnlockDates')?.addEventListener('click', () => {
+    if (!confirm('Unlocking dates means you can change the project timeline. Milestones outside the new range will be flagged. Continue?')) return;
+    datesLocked = false;
+    if (pS()) pS().removeAttribute('readonly');
+    if (pF()) pF().removeAttribute('readonly');
+    const setTlBtn = document.getElementById('sfSetTl');
+    if (setTlBtn) { setTlBtn.disabled = false; setTlBtn.textContent = 'Set Timeline'; }
+    const unlockBtn = document.getElementById('sfUnlockDates');
+    if (unlockBtn) { unlockBtn.textContent = '🔓 Dates Unlocked'; unlockBtn.disabled = true; }
+  });
 
   document.getElementById('sfMsFile')?.addEventListener('change', function() {
     attached = this.files[0] || null;
@@ -1982,7 +2019,6 @@ function openProjectScheduleForm(existingSchedule) {
     durEl().style.color = '#0a7b6c';
     tlInd().style.display = 'inline';
     addBtn().disabled = false;
-    hint().textContent = 'Fill milestone details and click Add Milestone.';
     _sfRefDep(); _sfRender();
   });
 
@@ -2197,25 +2233,24 @@ function openProjectScheduleForm(existingSchedule) {
 }
 
 // ============================================================
-//  EXTENSION PANEL — FIX: centered modal overlay, bidirectional
-//  days↔date sync, new milestone with attachment + dependency,
-//  extension milestones stored for Gantt rendering.
+//  EXTENSION PANEL
+//  FIX: reason textarea is wired + clearly labelled.
+//  FIX: payload matches DB schema exactly —
+//       schedule_extensions (extension_type, reason, extension_days,
+//       new_planned_finish) + additional_milestones columns.
 // ============================================================
 function openExtensionPanel(existingSchedule) {
-  // Remove any existing overlay first
   document.getElementById('extOverlay')?.remove();
 
   const baselineFinish = existingSchedule?.timeline?.finish || null;
   const baselineMilestones = existingSchedule?.milestones || [];
 
-  // Build dependency options for new extension milestones
   const depOptions = baselineMilestones.map(ms =>
     `<option value="${ms.id}">${ms.title}</option>`
   ).join('');
 
   const overlay = document.createElement('div');
   overlay.id = 'extOverlay';
-  // Full-screen fixed overlay — always centered regardless of parent
   overlay.style.cssText = `
     position:fixed;inset:0;background:rgba(10,30,28,0.60);
     z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;`;
@@ -2265,7 +2300,7 @@ function openExtensionPanel(existingSchedule) {
               <input type="radio" name="extScope" value="existing" checked style="width:auto;"/>
               <div>
                 <div style="font-weight:500;color:#1a2e2b;">Existing milestones</div>
-                <div style="font-size:11px;color:#6b9490;">Extend the duration of work already in the plan</div>
+                <div style="font-size:11px;color:#6b9490;">Extend duration of work already in plan</div>
               </div>
             </label>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;
@@ -2279,7 +2314,7 @@ function openExtensionPanel(existingSchedule) {
           </div>
         </div>
 
-        <!-- Duration + new finish — BIDIRECTIONAL SYNC FIX -->
+        <!-- Duration + new finish — bidirectional sync -->
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
           <div class="sc-fw">
             <span class="sc-fl">Extension Days</span>
@@ -2301,22 +2336,31 @@ function openExtensionPanel(existingSchedule) {
           </div>
         </div>
 
-        <!-- Reason -->
+        <!-- ── FIX: Reason for extension — maps to schedule_extensions.reason (NOT NULL) ── -->
         <div class="sc-fw">
-          <span class="sc-fl">Reason for Extension</span>
-          <textarea id="extReason" style="resize:vertical;min-height:70px;font-family:'Inter',sans-serif;
+          <span class="sc-fl">Reason / Description for Extension <span style="color:#c0392b;">*</span></span>
+          <textarea id="extReason" rows="4" style="resize:vertical;font-family:'Inter',sans-serif;
             font-size:13px;color:#1a2e2b;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;
-            padding:9px 12px;outline:none;width:100%;"
-            placeholder="Describe why this extension is needed…"></textarea>
+            padding:9px 12px;outline:none;width:100%;min-height:90px;"
+            placeholder="Required — describe why this extension is needed. This maps to schedule_extensions.reason in the database. Be specific: cite causes, affected milestones, and any supporting evidence."></textarea>
+          <span style="font-size:10px;color:#7a9e9a;font-family:monospace;margin-top:2px;">
+            Saved as <code>schedule_extensions.reason</code> · NOT NULL in DB
+          </span>
         </div>
 
         <!-- New milestone section -->
         <div id="extNewMsSection" style="display:none;">
           <div style="font-size:11px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;
                color:#0a7b6c;font-family:monospace;margin-bottom:10px;padding-bottom:8px;
-               border-bottom:1px solid #e2ecea;">New Milestones to Add</div>
+               border-bottom:1px solid #e2ecea;">New Milestones to Add (additional_milestones table)</div>
 
-          <!-- Row 1: title + dates + qty + unit -->
+          <div style="background:#f0f9f7;border:1px solid #c6e8e3;border-radius:8px;padding:10px 14px;
+               margin-bottom:12px;font-size:12px;color:#2a6b64;">
+            ℹ These will be saved to <code>additional_milestones</code> and linked via
+            <code>schedule_extension_id</code>. They appear as orange bars in the Gantt.
+          </div>
+
+          <!-- Row 1 -->
           <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:10px;margin-bottom:8px;">
             <div class="sc-fw"><span class="sc-fl">Title</span>
               <input type="text" id="extMsT" placeholder="New milestone"
@@ -2341,7 +2385,7 @@ function openExtensionPanel(existingSchedule) {
           <!-- Row 2: dependency + attachment -->
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
             <div class="sc-fw">
-              <span class="sc-fl">Depends On (baseline milestone)</span>
+              <span class="sc-fl">Depends On (baseline milestone → depends_on_baseline)</span>
               <select id="extMsDep" style="font-size:13px;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;">
                 <option value="None">None</option>
                 ${depOptions}
@@ -2386,7 +2430,7 @@ function openExtensionPanel(existingSchedule) {
   let newMsList = [];
   let extMsAttached = null;
 
-  // ── BIDIRECTIONAL SYNC: days → date ──
+  // Bidirectional sync: days → date
   document.getElementById('extDays')?.addEventListener('input', function() {
     const days = parseInt(this.value);
     if (!days || days < 1 || !baselineFinish) return;
@@ -2396,7 +2440,7 @@ function openExtensionPanel(existingSchedule) {
     if (nf) nf.value = fin.toISOString().slice(0,10);
   });
 
-  // ── BIDIRECTIONAL SYNC: date → days ──
+  // Bidirectional sync: date → days
   document.getElementById('extNewFinish')?.addEventListener('input', function() {
     const newDate = this.value;
     if (!newDate || !baselineFinish) return;
@@ -2407,7 +2451,7 @@ function openExtensionPanel(existingSchedule) {
     if (daysEl && days > 0) daysEl.value = days;
   });
 
-  // ── Show/hide new milestone section ──
+  // Show/hide new milestone section
   document.querySelectorAll('input[name="extScope"]').forEach(r => {
     r.addEventListener('change', function() {
       const sec = document.getElementById('extNewMsSection');
@@ -2415,14 +2459,33 @@ function openExtensionPanel(existingSchedule) {
     });
   });
 
-  // ── Attachment for new extension milestone ──
+  // Attachment for new extension milestone
   document.getElementById('extMsFile')?.addEventListener('change', function() {
     extMsAttached = this.files[0] || null;
     const txt = document.getElementById('extMsFileTxt');
     if (txt) txt.textContent = extMsAttached ? extMsAttached.name : 'Click to attach';
   });
 
-  // ── Add extension milestone to list ──
+  function renderExtMsList() {
+    const listEl = document.getElementById('extMsList');
+    if (!listEl) return;
+    listEl.innerHTML = newMsList.map((m, idx) => `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;
+                  background:#f8faf9;border-radius:8px;margin-bottom:6px;border:1px solid #e2ecea;">
+        <div>
+          <strong style="color:#1a2e2b;">${m.title}</strong>
+          <span style="color:#7a9e9a;font-size:11px;font-family:monospace;margin-left:8px;">
+            ${m.planned_start} → ${m.planned_end} · ${m.quantity} ${m.unit}
+          </span>
+          ${m.depLabel !== 'None' ? `<span style="font-size:11px;color:#0a7b6c;margin-left:6px;">⤷ ${m.depLabel}</span>` : ''}
+          ${m.fileName ? `<span style="font-size:11px;color:#5a7a76;margin-left:6px;">📎 ${m.fileName}</span>` : ''}
+        </div>
+        <button onclick="window._extDelMs(${idx})"
+          style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:14px;padding:4px 8px;">✕</button>
+      </div>`).join('');
+  }
+
+  // Add extension milestone
   document.getElementById('extAddMs')?.addEventListener('click', () => {
     const t = document.getElementById('extMsT')?.value.trim();
     const s = document.getElementById('extMsS')?.value;
@@ -2435,89 +2498,70 @@ function openExtensionPanel(existingSchedule) {
     if (!t || !s || !e) return alert('Title, start and end are required for new milestone.');
     if (new Date(e) < new Date(s)) return alert('End must be after start.');
 
+    // ── FIX: column names match additional_milestones schema ──
     newMsList.push({
-      title: t, start: s, end: e, qty: q||0, unit: u,
-      dep, depLabel,
+      title: t,
+      planned_start: s,
+      planned_end: e,
+      duration_days: Math.max(1, Math.round((new Date(e) - new Date(s)) / 86400000) + 1),
+      quantity: parseFloat(q) || 0,
+      unit: u,
+      depends_on_baseline: dep === 'None' ? null : dep,
+      depLabel,
       fileName: extMsAttached ? extMsAttached.name : null,
       fileObject: extMsAttached || null,
     });
 
-    const listEl = document.getElementById('extMsList');
-    if (listEl) {
-      listEl.innerHTML = newMsList.map((m, i) => `
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;
-                    background:#f8faf9;border-radius:8px;margin-bottom:6px;border:1px solid #e2ecea;">
-          <div>
-            <strong style="color:#1a2e2b;">${m.title}</strong>
-            <span style="color:#7a9e9a;font-size:11px;font-family:monospace;margin-left:8px;">
-              ${m.start} → ${m.end} · ${m.qty} ${m.unit}
-            </span>
-            ${m.depLabel !== 'None' ? `<span style="font-size:11px;color:#0a7b6c;margin-left:6px;">⤷ ${m.depLabel}</span>` : ''}
-            ${m.fileName ? `<span style="font-size:11px;color:#5a7a76;margin-left:6px;">📎 ${m.fileName}</span>` : ''}
-          </div>
-          <button onclick="window._extDelMs(${i})"
-            style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:14px;padding:4px 8px;">✕</button>
-        </div>`).join('');
-    }
-
-    // clear inputs
     ['extMsT','extMsS','extMsE','extMsQ'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
     extMsAttached = null;
     const txt = document.getElementById('extMsFileTxt');
     if (txt) txt.textContent = 'Click to attach';
+    renderExtMsList();
   });
 
   window._extDelMs = (i) => {
     newMsList.splice(i, 1);
-    document.getElementById('extAddMs')?.click(); // re-render by triggering, harmless
-    const listEl = document.getElementById('extMsList');
-    if (listEl) {
-      listEl.innerHTML = newMsList.map((m, idx) => `
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;
-                    background:#f8faf9;border-radius:8px;margin-bottom:6px;border:1px solid #e2ecea;">
-          <div>
-            <strong style="color:#1a2e2b;">${m.title}</strong>
-            <span style="color:#7a9e9a;font-size:11px;font-family:monospace;margin-left:8px;">
-              ${m.start} → ${m.end}
-            </span>
-          </div>
-          <button onclick="window._extDelMs(${idx})"
-            style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:14px;padding:4px 8px;">✕</button>
-        </div>`).join('');
-    }
+    renderExtMsList();
   };
 
   const closeOverlay = () => { overlay.remove(); };
   document.getElementById('extClose')?.addEventListener('click', closeOverlay);
   document.getElementById('extCancelBtn')?.addEventListener('click', closeOverlay);
-  // Click outside modal to close
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeOverlay(); });
 
+  // ── FIX: Submit — payload matches DB schema exactly ──
   document.getElementById('extSubmitBtn')?.addEventListener('click', async () => {
     const days    = parseInt(document.getElementById('extDays')?.value);
     const finish  = document.getElementById('extNewFinish')?.value;
-    const reason  = document.getElementById('extReason')?.value.trim();
+    // FIX: read reason from the correct textarea ID
+    const reason  = document.getElementById('extReason')?.value?.trim();
     const type    = document.getElementById('extType')?.value;
     const scope   = document.querySelector('input[name="extScope"]:checked')?.value;
 
-    if (!days || days < 1) return alert('Enter a valid number of extension days.');
-    if (!finish) return alert('New planned finish date is required.');
-    if (!reason) return alert('Please provide a reason for the extension.');
+    if (!days || days < 1)  return alert('Enter a valid number of extension days.');
+    if (!finish)             return alert('New planned finish date is required.');
+    // FIX: reason is NOT NULL in schedule_extensions — enforce in UI
+    if (!reason)             return alert('Reason / description is required — it is stored as NOT NULL in the database.');
     if (scope === 'new' && newMsList.length === 0)
       return alert('Add at least one new milestone for a scope extension.');
 
     const projectId = localStorage.getItem('activeProjectId');
-
-    // Build FormData to support file attachments on new milestones
     const form = new FormData();
-    form.append('projectId', projectId);
-    form.append('extensionDays', days);
-    form.append('newPlannedFinish', finish);
-    form.append('reason', reason);
-    form.append('extensionType', type);
-    form.append('scopeType', scope);
-    // Strip fileObject from JSON payload, send files separately
-    const newMsPayload = newMsList.map(({ fileObject, ...rest }) => rest);
+
+    // ── schedule_extensions columns ──
+    form.append('projectId',       projectId);
+    form.append('extension_days',  days);           // schedule_extensions.extension_days
+    form.append('extensionDays',   days);           // alias for older backend
+    form.append('new_planned_finish', finish);      // schedule_extensions.new_planned_finish
+    form.append('newPlannedFinish',   finish);      // alias
+    form.append('reason',          reason);         // schedule_extensions.reason (NOT NULL)
+    form.append('extension_type',  type);           // schedule_extensions.extension_type
+    form.append('extensionType',   type);           // alias
+    form.append('scope_type',      scope);          // used server-side to decide flow
+    form.append('scopeType',       scope);
+
+    // ── additional_milestones columns (strip fileObject from JSON) ──
+    const newMsPayload = newMsList.map(({ fileObject, depLabel, ...rest }) => rest);
     form.append('newMilestones', JSON.stringify(scope === 'new' ? newMsPayload : []));
     newMsList.forEach((ms, i) => {
       if (ms.fileObject) form.append(`extFile_${i}`, ms.fileObject, ms.fileName);
@@ -2541,7 +2585,7 @@ function openExtensionPanel(existingSchedule) {
       } else throw new Error(result.message || 'Failed to submit extension.');
     } catch (err) {
       console.error('Extension submit error:', err);
-      alert('Failed to submit extension. Please try again.');
+      alert('Failed to submit extension: ' + err.message);
       if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Submit Extension'; }
     }
   });
@@ -2549,9 +2593,13 @@ function openExtensionPanel(existingSchedule) {
 
 // ============================================================
 //  SECTION 3 — Daily tracking + Gantt
-//  FIX: daily progress saves to /api/report-progress and
-//       progress_pct = (cumulative / planned_qty) * 100.
-//  FIX: extension milestones shown in Gantt as orange bars.
+//
+//  FIX 1: Layout restructured so Save Progress button is ALWAYS
+//          visible. Gantt is collapsed by default and lives at the
+//          very bottom — it no longer pushes the form out of view.
+//  FIX 2: Site Photos panel — multiple photos per milestone, each
+//          tied to milestone_id. Stored via /api/milestone-photos.
+//          Separate from progress-entry attachments.
 // ============================================================
 function openActualProgressPage(savedSchedule) {
   const pms = (savedSchedule.milestones || []).map(ms => ({
@@ -2561,7 +2609,6 @@ function openActualProgressPage(savedSchedule) {
     activity_status: ms.activity_status || 'not_started',
     entries:         ms.entries || [],
   }));
-  // Extension milestones (additional_milestones from backend)
   const extMs = (savedSchedule.extension_milestones || savedSchedule.additional_milestones || []).map(ms => ({
     ...ms,
     executed:        Number(ms.executed || 0),
@@ -2578,47 +2625,42 @@ function openActualProgressPage(savedSchedule) {
     <style>
       .p3wrap{font-family:'Inter',sans-serif;display:flex;flex-direction:column;height:100%;background:#f5f7f6;}
       .p3wrap *{box-sizing:border-box;}
+      /* ── Summary bar ── */
       .p3sum{background:#0d2420;padding:10px 24px;display:flex;gap:0;flex-shrink:0;}
-      .p3sk{flex:1;padding:0 16px;border-right:1px solid rgba(255,255,255,0.08);
-            display:flex;flex-direction:column;gap:2px;}
+      .p3sk{flex:1;padding:0 16px;border-right:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:2px;}
       .p3sk:first-child{padding-left:0;}
       .p3sk:last-child{border-right:none;}
-      .p3sk-l{font-size:9px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;
-               color:#4a7a74;font-family:monospace;}
+      .p3sk-l{font-size:9px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#4a7a74;font-family:monospace;}
       .p3sk-v{font-size:16px;font-weight:600;color:#e8f4f2;font-family:monospace;}
       .p3sk-v.ahead{color:#3dd6b5;}
       .p3sk-v.behind{color:#f28c5e;}
-      .p3main{flex:1;overflow:hidden;display:flex;}
-      .p3list{width:280px;flex-shrink:0;background:#fff;border-right:1px solid #e2ecea;overflow-y:auto;}
+      /* ── Main area: sidebar + detail ── */
+      .p3main{flex:1;overflow:hidden;display:flex;min-height:0;}
+      .p3list{width:260px;flex-shrink:0;background:#fff;border-right:1px solid #e2ecea;overflow-y:auto;}
       .p3list-hdr{padding:12px 16px;border-bottom:1px solid #e2ecea;font-size:10px;font-weight:600;
-                  letter-spacing:0.08em;text-transform:uppercase;color:#0a7b6c;font-family:monospace;}
+                  letter-spacing:0.08em;text-transform:uppercase;color:#0a7b6c;font-family:monospace;position:sticky;top:0;background:#fff;z-index:2;}
       .p3ms{padding:10px 14px;border-bottom:1px solid #f0f5f4;cursor:pointer;transition:background 0.1s;}
       .p3ms:hover{background:#f5faf9;}
       .p3ms.active{background:#e8f6f3;border-left:3px solid #0a7b6c;}
       .p3ms.ext-ms{border-left:3px solid #e67e22;}
       .p3ms.ext-ms.active{background:#fef3e2;border-left:3px solid #e67e22;}
-      .p3detail{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:14px;}
+      /* ── Detail panel: scrollable column ── */
+      .p3detail{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px;}
+      /* ── Gantt ── */
       .gtt-wrap{flex-shrink:0;background:#fff;border-top:1px solid #e2ecea;}
-      .gtt-toggle{padding:12px 20px;display:flex;align-items:center;justify-content:space-between;
-                  cursor:pointer;user-select:none;}
+      .gtt-toggle{padding:10px 20px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;}
       .gtt-toggle:hover{background:#f8faf9;}
-      .gtt-body{display:none;}
-      .gtt-body.open{display:flex;height:340px;}
+      .gtt-body{display:none;height:320px;}
+      .gtt-body.open{display:flex;}
       .gtt-labels{width:200px;flex-shrink:0;border-right:1px solid #e2ecea;overflow-y:auto;}
       .gtt-scroll{flex:1;overflow:auto;}
       .gtt-inner{position:relative;min-width:max-content;}
       .gtt-hdr-month{height:26px;position:sticky;top:0;z-index:5;background:#1a3530;display:flex;}
       .gtt-hdr-week{height:20px;position:sticky;top:26px;z-index:4;background:#1e3f38;display:flex;}
       .gtt-hdr-day{height:20px;position:sticky;top:46px;z-index:4;background:#204039;display:flex;}
-      .gtt-month-cell{height:26px;display:flex;align-items:center;justify-content:center;
-                      font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;
-                      color:#7dd3c4;font-family:monospace;border-right:1px solid rgba(255,255,255,0.1);flex-shrink:0;}
-      .gtt-week-cell{height:20px;display:flex;align-items:center;justify-content:center;
-                     font-size:9px;color:#5aafa5;font-family:monospace;
-                     border-right:1px solid rgba(255,255,255,0.06);flex-shrink:0;}
-      .gtt-day-cell-hdr{height:20px;display:flex;align-items:center;justify-content:center;
-                        font-size:9px;font-family:monospace;
-                        border-right:1px solid rgba(255,255,255,0.05);flex-shrink:0;}
+      .gtt-month-cell{height:26px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7dd3c4;font-family:monospace;border-right:1px solid rgba(255,255,255,0.1);flex-shrink:0;}
+      .gtt-week-cell{height:20px;display:flex;align-items:center;justify-content:center;font-size:9px;color:#5aafa5;font-family:monospace;border-right:1px solid rgba(255,255,255,0.06);flex-shrink:0;}
+      .gtt-day-cell-hdr{height:20px;display:flex;align-items:center;justify-content:center;font-size:9px;font-family:monospace;border-right:1px solid rgba(255,255,255,0.05);flex-shrink:0;}
       .gtt-row{height:40px;display:flex;position:relative;border-bottom:1px solid #f0f5f4;}
       .gtt-cell{flex-shrink:0;border-right:1px solid #f5faf9;}
       .gtt-cell.weekend{background:#f8fcfb;}
@@ -2626,27 +2668,35 @@ function openActualProgressPage(savedSchedule) {
       .gtt-bar{position:absolute;height:14px;top:13px;border-radius:3px;z-index:2;}
       .gtt-bar-plan{background:#b2d4d0;opacity:0.7;}
       .gtt-bar-actual{background:#0a7b6c;}
-      .gtt-bar-ext-plan{background:#f5a623;opacity:0.7;}   /* orange — extension planned */
-      .gtt-bar-ext-actual{background:#e67e22;}              /* darker orange — extension actual */
+      .gtt-bar-ext-plan{background:#f5a623;opacity:0.7;}
+      .gtt-bar-ext-actual{background:#e67e22;}
       .gtt-bar-delay{background:#f28c5e;opacity:0.8;height:6px;top:31px;border-radius:2px;}
       .gtt-legend{padding:8px 16px;border-top:1px solid #e2ecea;display:none;align-items:center;gap:16px;background:#f8faf9;}
       .gtt-legend.open{display:flex;flex-wrap:wrap;}
       .gtt-leg-item{display:flex;align-items:center;gap:6px;font-size:11px;color:#5a7a76;}
-      .gtt-lbl-hdr{height:66px;position:sticky;top:0;z-index:6;background:#1a3530;
-                   display:flex;align-items:flex-end;padding:0 12px 8px;
-                   font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;
-                   color:#7dd3c4;font-family:monospace;border-right:1px solid rgba(255,255,255,0.1);
-                   border-bottom:1px solid #e2ecea;}
-      .gtt-lbl-row{height:40px;padding:0 12px;display:flex;align-items:center;
-                   border-bottom:1px solid #f0f5f4;gap:8px;}
-      .gtt-lbl-txt{font-size:11px;font-weight:500;color:#1a2e2b;white-space:nowrap;
-                   overflow:hidden;text-overflow:ellipsis;flex:1;}
-      .gtt-lbl-badge{font-size:10px;font-family:monospace;font-weight:600;
-                     padding:2px 6px;border-radius:10px;flex-shrink:0;}
+      .gtt-lbl-hdr{height:66px;position:sticky;top:0;z-index:6;background:#1a3530;display:flex;align-items:flex-end;padding:0 12px 8px;font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7dd3c4;font-family:monospace;border-right:1px solid rgba(255,255,255,0.1);border-bottom:1px solid #e2ecea;}
+      .gtt-lbl-row{height:40px;padding:0 12px;display:flex;align-items:center;border-bottom:1px solid #f0f5f4;gap:8px;}
+      .gtt-lbl-txt{font-size:11px;font-weight:500;color:#1a2e2b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;}
+      .gtt-lbl-badge{font-size:10px;font-family:monospace;font-weight:600;padding:2px 6px;border-radius:10px;flex-shrink:0;}
+      /* ── Site photos grid ── */
+      .photos-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:10px;padding:14px 20px;}
+      .photo-thumb{aspect-ratio:1;border-radius:8px;overflow:hidden;background:#f0f4f3;
+                   position:relative;cursor:pointer;border:2px solid transparent;transition:border-color 0.15s;}
+      .photo-thumb:hover{border-color:#0a7b6c;}
+      .photo-thumb img{width:100%;height:100%;object-fit:cover;}
+      .photo-thumb .del-btn{position:absolute;top:4px;right:4px;background:rgba(0,0,0,0.55);
+                            color:#fff;border:none;border-radius:50%;width:20px;height:20px;
+                            font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+      .photo-add{aspect-ratio:1;border-radius:8px;border:2px dashed #d0e4e1;background:#f8faf9;
+                 display:flex;align-items:center;justify-content:center;flex-direction:column;
+                 cursor:pointer;gap:4px;transition:all 0.15s;}
+      .photo-add:hover{border-color:#0a7b6c;background:#f0f9f7;}
+      .photo-add input[type=file]{display:none;}
     </style>
 
     <div class="p3wrap" id="p3root">
-      <div class="sc-tb" style="background:#0d2420;border-bottom:1px solid rgba(255,255,255,0.08);">
+      <!-- Top bar -->
+      <div class="sc-tb" style="background:#0d2420;border-bottom:1px solid rgba(255,255,255,0.08);flex-shrink:0;">
         <div class="sc-tb-lft">
           <div class="sc-badge" style="background:#0a7b6c;">🏗</div>
           <div>
@@ -2655,16 +2705,14 @@ function openActualProgressPage(savedSchedule) {
           </div>
         </div>
         <div style="display:flex;gap:8px;">
-          <button class="sc-btn sc-btn-ghost" id="p3EditPlan"
-            style="color:#a0d4cc;border-color:rgba(255,255,255,0.15);">✏ Edit Plan</button>
-          <button class="sc-btn sc-btn-ghost" id="p3Extension"
-            style="color:#a0d4cc;border-color:rgba(255,255,255,0.15);">+ Extension</button>
-          <button class="sc-btn sc-btn-ghost" id="p3Back"
-            style="color:#a0d4cc;border-color:rgba(255,255,255,0.15);">← Back</button>
+          <button class="sc-btn sc-btn-ghost" id="p3EditPlan" style="color:#a0d4cc;border-color:rgba(255,255,255,0.15);">✏ Edit Plan</button>
+          <button class="sc-btn sc-btn-ghost" id="p3Extension" style="color:#a0d4cc;border-color:rgba(255,255,255,0.15);">+ Extension</button>
+          <button class="sc-btn sc-btn-ghost" id="p3Back" style="color:#a0d4cc;border-color:rgba(255,255,255,0.15);">← Back</button>
         </div>
       </div>
 
-      <div class="p3sum">
+      <!-- Summary bar -->
+      <div class="p3sum" style="flex-shrink:0;">
         <div class="p3sk"><span class="p3sk-l">Overall</span><span class="p3sk-v" id="p3OverallPct">0%</span></div>
         <div class="p3sk"><span class="p3sk-l">Plan Today</span><span class="p3sk-v" id="p3PlanPct">0%</span></div>
         <div class="p3sk"><span class="p3sk-l">Variance</span><span class="p3sk-v" id="p3Var">0%</span></div>
@@ -2673,60 +2721,55 @@ function openActualProgressPage(savedSchedule) {
         <div class="p3sk"><span class="p3sk-l">In Progress</span><span class="p3sk-v" id="p3MsIP">0</span></div>
       </div>
 
-      <div style="flex:1;overflow:hidden;display:flex;flex-direction:column;">
-        <div class="p3main">
-          <div class="p3list">
-            <div class="p3list-hdr">Milestones</div>
-            <div id="p3MsList"></div>
-          </div>
-          <div class="p3detail" id="p3Detail"></div>
+      <!-- Main content: sidebar + detail (takes all remaining height except Gantt) -->
+      <div class="p3main">
+        <div class="p3list">
+          <div class="p3list-hdr">Milestones</div>
+          <div id="p3MsList"></div>
         </div>
+        <!-- FIX: detail is its own scrollable column; Gantt is outside this flex row -->
+        <div class="p3detail" id="p3Detail">
+          <div style="color:#8aa8a4;text-align:center;padding:40px;font-size:13px;">
+            Select a milestone from the left to start reporting progress.
+          </div>
+        </div>
+      </div>
 
-        <!-- Gantt -->
-        <div class="gtt-wrap">
-          <div class="gtt-toggle" id="p3GanttToggle">
-            <span style="font-size:13px;font-weight:600;color:#1a2e2b;display:flex;align-items:center;gap:8px;">
-              📊 Gantt Chart — Timeline Overview
-            </span>
-            <span id="p3GanttChv" style="color:#7a9e9a;font-size:11px;transition:transform 0.2s;">▼</span>
+      <!-- Gantt — COLLAPSED by default so it does NOT hide the save button -->
+      <div class="gtt-wrap" style="flex-shrink:0;">
+        <div class="gtt-toggle" id="p3GanttToggle">
+          <span style="font-size:13px;font-weight:600;color:#1a2e2b;display:flex;align-items:center;gap:8px;">
+            📊 Gantt Chart — Timeline Overview
+            <span style="font-size:11px;font-weight:400;color:#7a9e9a;">(click to expand)</span>
+          </span>
+          <span id="p3GanttChv" style="color:#7a9e9a;font-size:11px;transition:transform 0.2s;">▼</span>
+        </div>
+        <div class="gtt-body" id="p3GanttBody">
+          <div class="gtt-labels">
+            <div class="gtt-lbl-hdr">Activity</div>
+            <div id="p3GttLabels"></div>
           </div>
-          <div class="gtt-body" id="p3GanttBody">
-            <div class="gtt-labels">
-              <div class="gtt-lbl-hdr">Activity</div>
-              <div id="p3GttLabels"></div>
-            </div>
-            <div class="gtt-scroll" id="p3GttScroll">
-              <div class="gtt-inner" id="p3GttInner"></div>
-            </div>
+          <div class="gtt-scroll" id="p3GttScroll">
+            <div class="gtt-inner" id="p3GttInner"></div>
           </div>
-          <div class="gtt-legend" id="p3GttLegend">
-            <div class="gtt-leg-item">
-              <div style="width:16px;height:8px;border-radius:2px;background:#b2d4d0;opacity:0.8;"></div>Planned
-            </div>
-            <div class="gtt-leg-item">
-              <div style="width:16px;height:8px;border-radius:2px;background:#0a7b6c;"></div>Actual
-            </div>
-            <div class="gtt-leg-item">
-              <div style="width:16px;height:8px;border-radius:2px;background:#f5a623;opacity:0.7;"></div>Ext. Planned
-            </div>
-            <div class="gtt-leg-item">
-              <div style="width:16px;height:8px;border-radius:2px;background:#e67e22;"></div>Ext. Actual
-            </div>
-            <div class="gtt-leg-item">
-              <div style="width:16px;height:6px;border-radius:2px;background:#f28c5e;"></div>Delay
-            </div>
-            <div class="gtt-leg-item">
-              <div style="width:2px;height:14px;background:#0a7b6c;opacity:0.5;"></div>Today
-            </div>
-          </div>
+        </div>
+        <div class="gtt-legend" id="p3GttLegend">
+          <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:#b2d4d0;opacity:0.8;"></div>Planned</div>
+          <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:#0a7b6c;"></div>Actual</div>
+          <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:#f5a623;opacity:0.7;"></div>Ext. Planned</div>
+          <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:#e67e22;"></div>Ext. Actual</div>
+          <div class="gtt-leg-item"><div style="width:16px;height:6px;border-radius:2px;background:#f28c5e;"></div>Delay</div>
+          <div class="gtt-leg-item"><div style="width:2px;height:14px;background:#0a7b6c;opacity:0.5;"></div>Today</div>
+          <div class="gtt-leg-item"><div style="width:2px;height:14px;background:#e67e22;opacity:0.5;"></div>Baseline Finish</div>
         </div>
       </div>
     </div>`);
 
   // ── state ──
   let msList = pms.map(ms => ({ ...ms }));
-  let allMsList = [...msList, ...extMs]; // baseline + extension combined for Gantt
+  let allMsList = [...msList, ...extMs];
   let activeId = msList.length ? msList[0].id : null;
+  let activeIsExt = false;
   let dailyAttached = null;
 
   const listEl   = document.getElementById('p3MsList');
@@ -2736,6 +2779,7 @@ function openActualProgressPage(savedSchedule) {
   document.getElementById('p3Extension')?.addEventListener('click', () => openExtensionPanel(savedSchedule));
   document.getElementById('p3Back')?.addEventListener('click', () => collapseGrayPart());
 
+  // ── Summary ──
   function updateSummary() {
     const total = allMsList.length;
     const done  = allMsList.filter(m => m.activity_status === 'completed').length;
@@ -2762,9 +2806,9 @@ function openActualProgressPage(savedSchedule) {
     document.getElementById('p3MsIP').textContent   = ip;
   }
 
+  // ── Milestone sidebar list ──
   function renderList() {
     if (!listEl) return;
-    // Show baseline milestones + extension milestones in sidebar
     const combined = [
       ...msList.map(ms => ({ ...ms, isExtension: false })),
       ...extMs.map(ms => ({ ...ms, isExtension: true })),
@@ -2784,8 +2828,7 @@ function openActualProgressPage(savedSchedule) {
         : '';
       return `<div class="p3ms ${ms.isExtension ? 'ext-ms' : ''} ${ms.id === activeId ? 'active' : ''}" data-id="${ms.id}" data-ext="${ms.isExtension}">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
-          <div style="font-size:12px;font-weight:600;color:#1a2e2b;white-space:nowrap;
-               overflow:hidden;text-overflow:ellipsis;max-width:155px;">
+          <div style="font-size:12px;font-weight:600;color:#1a2e2b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:155px;">
             ${extBadge}${ms.title || 'Untitled'}
           </div>
           <span class="sc-tag ${stCls}" style="font-size:9px;padding:2px 6px;">${stLbl}</span>
@@ -2796,9 +2839,7 @@ function openActualProgressPage(savedSchedule) {
         <div class="sc-pbar" style="height:4px;">
           <div class="sc-pfill" style="width:${pct}%;background:${fillColor};"></div>
         </div>
-        <div style="font-size:10px;font-family:monospace;font-weight:600;color:${fillColor};margin-top:2px;">
-          ${pct.toFixed(1)}%
-        </div>
+        <div style="font-size:10px;font-family:monospace;font-weight:600;color:${fillColor};margin-top:2px;">${pct.toFixed(1)}%</div>
       </div>`;
     }).join('');
 
@@ -2813,34 +2854,33 @@ function openActualProgressPage(savedSchedule) {
 
   function selectMs(id, isExt = false) {
     activeId = id;
-    const ms = isExt
-      ? extMs.find(m => m.id === id)
-      : msList.find(m => m.id === id);
+    activeIsExt = isExt;
+    const ms = isExt ? extMs.find(m => m.id === id) : msList.find(m => m.id === id);
     if (!ms) return;
     renderList();
-    renderDetail(ms);
+    renderDetail(ms, isExt);
     updateSummary();
   }
 
-  // ── detail panel ──
-  function renderDetail(ms) {
+  // ── Detail panel ──
+  function renderDetail(ms, isExt) {
     if (!detailEl) return;
     const pct = Number(ms.progress_pct || 0);
     const planned = parseFloat(ms.quantity || ms.qty) || 0;
     const exec = Number(ms.executed || 0);
     const completed = ms.activity_status === 'completed';
-    const isExt = ms.isExtension || false;
+    const accentColor = isExt ? '#e67e22' : '#0a7b6c';
 
-    // Endpoint: extension milestones report to separate endpoint
     const progressEndpoint = isExt
       ? `${BACKEND}/api/report-additional-progress`
       : `${BACKEND}/api/report-progress`;
 
     detailEl.innerHTML = `
+      <!-- ── Milestone info card ── -->
       <div class="sc-card">
         <div class="sc-card-hdr">
-          <span class="sc-card-label">
-            ${isExt ? '<span style="color:#e67e22;">Extension</span> Milestone' : 'Active Milestone'}
+          <span class="sc-card-label" style="color:${accentColor};">
+            ${isExt ? 'Extension Milestone' : 'Active Milestone'}
           </span>
           <span class="sc-tag ${completed ? 'sc-tag-ok' : ms.activity_status === 'in_progress' ? 'sc-tag-ok' : 'sc-tag-ns'}">
             ${completed ? 'Completed' : ms.activity_status === 'in_progress' ? 'In Progress' : 'Not Started'}
@@ -2848,7 +2888,7 @@ function openActualProgressPage(savedSchedule) {
         </div>
         <div style="padding:16px 20px;">
           <div style="font-size:16px;font-weight:600;color:#1a2e2b;margin-bottom:4px;">
-            ${isExt ? '<span style="font-size:12px;background:#fef0da;color:#e67e22;border-radius:4px;padding:2px 6px;margin-right:6px;font-family:monospace;font-weight:700;">EXT</span>' : ''}
+            ${isExt ? `<span style="font-size:12px;background:#fef0da;color:#e67e22;border-radius:4px;padding:2px 6px;margin-right:6px;font-family:monospace;font-weight:700;">EXT</span>` : ''}
             ${ms.title || 'Untitled'}
           </div>
           <div style="font-size:12px;color:#7a9e9a;margin-bottom:14px;">${ms.description || ms.desc || '—'}</div>
@@ -2858,15 +2898,14 @@ function openActualProgressPage(savedSchedule) {
                ['Planned Qty',   `${planned} ${ms.unit||''}`],
                ['Executed',      `${exec} ${ms.unit||''}`]
               ].map(([l,v]) => `<div style="background:#f5f7f6;border-radius:8px;padding:10px;">
-                <div style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;
-                     color:#7a9e9a;font-family:monospace;margin-bottom:4px;">${l}</div>
+                <div style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:#7a9e9a;font-family:monospace;margin-bottom:4px;">${l}</div>
                 <div style="font-size:14px;font-weight:600;color:#1a2e2b;font-family:monospace;">${v}</div>
               </div>`).join('')}
           </div>
           <div style="display:flex;align-items:center;gap:12px;">
             <div style="font-size:12px;color:#7a9e9a;min-width:70px;">${pct.toFixed(1)}% done</div>
             <div class="sc-pbar" style="flex:1;height:10px;">
-              <div class="sc-pfill" style="width:${pct}%;background:${isExt ? '#e67e22' : '#0a7b6c'};"></div>
+              <div class="sc-pfill" style="width:${pct}%;background:${accentColor};"></div>
             </div>
             <div style="font-size:11px;color:#7a9e9a;min-width:90px;text-align:right;font-family:monospace;">
               ${exec} / ${planned} ${ms.unit||''}
@@ -2876,98 +2915,94 @@ function openActualProgressPage(savedSchedule) {
       </div>
 
       ${!completed ? `
-      <!-- ── Daily progress entry form ── -->
-      <div class="sc-card">
+      <!-- ── FIX: Daily progress entry — always visible, compact, above photos ── -->
+      <div class="sc-card" id="p3DailyCard">
         <div class="sc-card-hdr">
-          <span class="sc-card-label">Daily Progress Entry</span>
-          <span style="font-size:11px;color:#7a9e9a;font-family:monospace;">
-            ${new Date().toISOString().slice(0,10)}
-          </span>
+          <span class="sc-card-label" style="color:${accentColor};">Daily Progress Entry</span>
+          <span style="font-size:11px;color:#7a9e9a;font-family:monospace;">${new Date().toISOString().slice(0,10)}</span>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px 20px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px 20px 12px;">
           <div class="sc-fw">
             <span class="sc-fl">Executed Qty Today (${ms.unit||'unit'})</span>
             <input type="number" id="p3ExecQty" min="0.01" step="any" placeholder="e.g. 50"/>
+            <span style="font-size:10px;color:#7a9e9a;font-family:monospace;margin-top:2px;">
+              Remaining: <strong style="color:${accentColor};">${Math.max(0, planned - exec).toFixed(3)} ${ms.unit||''}</strong>
+            </span>
           </div>
           <div class="sc-fw">
             <span class="sc-fl">Remarks / Notes</span>
-            <textarea id="p3Remarks" style="min-height:60px;resize:vertical;"
-              placeholder="Site conditions, issues, notes…"></textarea>
-          </div>
-          <div class="sc-fw">
-            <span class="sc-fl">Attachment (optional)</span>
-            <label class="sc-fzone">
-              <input type="file" id="p3DailyFile" accept="*/*"/>
-              <span>📎</span>
-              <span id="p3DailyFzt" style="font-size:12px;color:#7a9e9a;">Attach site photo or document</span>
-            </label>
-          </div>
-          <div style="display:flex;flex-direction:column;justify-content:flex-end;">
-            <div style="font-size:11px;color:#7a9e9a;font-family:monospace;background:#f5f7f6;
-                 border-radius:6px;padding:8px 10px;">
-              Remaining: <strong style="color:${isExt?'#e67e22':'#0a7b6c'};">
-                ${Math.max(0, planned - exec).toFixed(3)} ${ms.unit||''}
-              </strong>
-            </div>
+            <textarea id="p3Remarks" style="min-height:60px;resize:vertical;" placeholder="Site conditions, issues, weather…"></textarea>
           </div>
         </div>
-        <div style="padding:12px 20px;border-top:1px solid #e2ecea;background:#f8faf9;
-                    display:flex;align-items:center;justify-content:space-between;gap:8px;">
-          <div style="font-size:11px;color:#6b8f8a;">
-            Progress = Cumulative ÷ Planned × 100
+        <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;
+             padding:10px 20px 14px;border-top:1px solid #e2ecea;background:#f8faf9;">
+          <div style="font-size:11px;color:#6b8f8a;font-family:monospace;">
+            Progress = Cumulative ÷ Planned × 100 &nbsp;·&nbsp; Formula: (${exec} + today_qty) / ${planned} × 100
           </div>
-          <div style="display:flex;gap:8px;">
+          <div style="display:flex;gap:8px;flex-shrink:0;">
             <button class="sc-btn sc-btn-ghost" id="p3MarkEndBtn"
-              ${exec < planned ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>
-              ✓ Mark Activity Ended
+              ${Number(ms.executed||0) < planned ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : ''}>
+              ✓ Mark Ended
             </button>
-            <button class="sc-btn sc-btn-primary" id="p3UpdateBtn"
-              style="background:${isExt ? '#e67e22' : '#0a7b6c'};">
+            <!-- FIX: Save Progress button is prominently displayed here, never hidden by Gantt -->
+            <button class="sc-btn sc-btn-primary" id="p3UpdateBtn" style="background:${accentColor};font-size:14px;padding:10px 22px;">
               💾 Save Progress
             </button>
           </div>
         </div>
       </div>` : `
       <div class="sc-card">
-        <div style="padding:20px;text-align:center;color:${isExt?'#e67e22':'#0a7b6c'};font-weight:500;font-size:14px;">
+        <div style="padding:20px;text-align:center;color:${accentColor};font-weight:500;font-size:14px;">
           ✅ Milestone completed — ${exec} ${ms.unit||''} executed in total.
         </div>
       </div>`}
+
+      <!-- ── FIX: Site Photos — multiple photos per milestone, tied to milestone_id ── -->
+      <div class="sc-card" id="p3PhotosCard">
+        <div class="sc-card-hdr" style="cursor:pointer;" onclick="window._p3TogglePhotos()">
+          <span class="sc-card-label">📷 Site Photos</span>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span id="p3PhotoCount" style="font-size:12px;color:#7a9e9a;font-family:monospace;">Loading…</span>
+            <span id="p3PhotoChv" style="color:#aac4c0;font-size:11px;">▼</span>
+          </div>
+        </div>
+        <div id="p3PhotosBody" style="display:none;">
+          <div style="padding:10px 20px 4px;font-size:12px;color:#5a7a76;background:#f8faf9;border-bottom:1px solid #e2ecea;">
+            Photos are linked to this milestone (<code style="font-family:monospace;font-size:11px;">milestone_id: ${ms.id}</code>).
+            You can upload multiple photos. Each one is saved separately — the latest becomes the cover photo for this milestone.
+          </div>
+          <div class="photos-grid" id="p3PhotosGrid">
+            <div class="photo-add" id="p3PhotoAddBtn">
+              <input type="file" id="p3PhotoInput" accept="image/*" multiple/>
+              <span style="font-size:22px;">📸</span>
+              <span style="font-size:11px;color:#7a9e9a;text-align:center;">Add Photos</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- ── Progress log ── -->
       <div class="sc-card">
         <div class="sc-card-hdr">
           <span class="sc-card-label">Progress Log</span>
-          <span style="font-size:11px;color:#7a9e9a;font-family:monospace;">
-            ${(ms.entries||[]).length} entries
-          </span>
+          <span style="font-size:11px;color:#7a9e9a;font-family:monospace;">${(ms.entries||[]).length} entries</span>
         </div>
         <div id="p3EntriesLog">
           ${(ms.entries||[]).length === 0
             ? '<div style="padding:20px;text-align:center;color:#8aa8a4;font-size:13px;">No entries yet.</div>'
             : [...(ms.entries||[])].reverse().map(e => `
-              <div style="display:flex;align-items:center;gap:12px;padding:10px 20px;
-                          border-bottom:1px solid #f0f5f4;">
-                <div style="font-size:11px;font-family:monospace;color:${isExt?'#e67e22':'#0a7b6c'};
-                     font-weight:500;min-width:90px;">${e.date}</div>
-                <div style="font-size:13px;font-weight:600;color:#1a2e2b;min-width:80px;">
-                  +${e.qty} ${ms.unit||''}</div>
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 20px;border-bottom:1px solid #f0f5f4;">
+                <div style="font-size:11px;font-family:monospace;color:${accentColor};font-weight:500;min-width:90px;">${e.date}</div>
+                <div style="font-size:13px;font-weight:600;color:#1a2e2b;min-width:80px;">+${e.qty} ${ms.unit||''}</div>
                 <div style="font-size:12px;color:#6b8f8a;flex:1;">${e.remarks||'—'}</div>
-                <div style="font-size:11px;font-family:monospace;color:#9ab0ac;">
-                  ${e.cumulative} ${ms.unit||''} total</div>
+                <div style="font-size:11px;font-family:monospace;color:#9ab0ac;">${e.cumulative} ${ms.unit||''} total</div>
               </div>`).join('')
           }
         </div>
       </div>`;
 
     if (!completed) {
-      document.getElementById('p3DailyFile')?.addEventListener('change', function() {
-        dailyAttached = this.files[0] || null;
-        const fzt = document.getElementById('p3DailyFzt');
-        if (fzt) fzt.textContent = dailyAttached ? dailyAttached.name : 'Attach site photo or document';
-      });
-
-      // ── FIX: Wire up the Save Progress button ──
+      // Wire up Save Progress
       document.getElementById('p3UpdateBtn')?.addEventListener('click',
         () => submitDailyProgress(ms, progressEndpoint, isExt)
       );
@@ -2975,9 +3010,131 @@ function openActualProgressPage(savedSchedule) {
         () => markEnded(ms, isExt)
       );
     }
+
+    // Load site photos for this milestone
+    loadMilestonePhotos(ms.id, isExt);
+
+    // Photo upload handler
+    document.getElementById('p3PhotoInput')?.addEventListener('change', function() {
+      uploadMilestonePhotos(ms.id, isExt, Array.from(this.files));
+      this.value = ''; // reset so same file can be re-added
+    });
   }
 
-  // ── FIX: Daily progress save — posts to backend + calculates progress_pct ──
+  // ── Site Photos: load from backend ──
+  async function loadMilestonePhotos(milestoneId, isExt) {
+    const countEl = document.getElementById('p3PhotoCount');
+    const gridEl  = document.getElementById('p3PhotosGrid');
+    if (!gridEl) return;
+
+    try {
+      const endpoint = isExt
+        ? `${BACKEND}/api/milestone-photos?additionalMilestoneId=${encodeURIComponent(milestoneId)}`
+        : `${BACKEND}/api/milestone-photos?milestoneId=${encodeURIComponent(milestoneId)}`;
+
+      const res = await fetch(endpoint, { headers: _authHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const result = await res.json();
+      const photos = result.photos || [];
+
+      if (countEl) countEl.textContent = `${photos.length} photo${photos.length !== 1 ? 's' : ''}`;
+      _renderPhotosGrid(photos, milestoneId, isExt, gridEl);
+    } catch (err) {
+      console.error('Photo load error:', err);
+      if (countEl) countEl.textContent = '— photos';
+    }
+  }
+
+  function _renderPhotosGrid(photos, milestoneId, isExt, gridEl) {
+    const thumbs = photos.map((p, i) => `
+      <div class="photo-thumb" onclick="window._p3ViewPhoto('${p.cloudinary_url}')">
+        <img src="${p.cloudinary_url}" alt="${p.file_name}" loading="lazy"/>
+        <button class="del-btn" onclick="event.stopPropagation();window._p3DelPhoto('${p.id}','${milestoneId}',${isExt})" title="Delete photo">✕</button>
+      </div>`).join('');
+
+    gridEl.innerHTML = thumbs + `
+      <div class="photo-add" id="p3PhotoAddBtn">
+        <label style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;cursor:pointer;gap:4px;">
+          <input type="file" id="p3PhotoInput" accept="image/*" multiple style="display:none;"/>
+          <span style="font-size:22px;">📸</span>
+          <span style="font-size:11px;color:#7a9e9a;text-align:center;">Add Photos</span>
+        </label>
+      </div>`;
+
+    document.getElementById('p3PhotoInput')?.addEventListener('change', function() {
+      uploadMilestonePhotos(milestoneId, isExt, Array.from(this.files));
+      this.value = '';
+    });
+  }
+
+  // ── Site Photos: upload ──
+  async function uploadMilestonePhotos(milestoneId, isExt, files) {
+    if (!files.length) return;
+    const countEl = document.getElementById('p3PhotoCount');
+    if (countEl) countEl.textContent = `Uploading ${files.length} photo${files.length > 1 ? 's' : ''}…`;
+
+    const form = new FormData();
+    form.append('projectId', localStorage.getItem('activeProjectId'));
+    if (isExt) {
+      form.append('additionalMilestoneId', milestoneId);
+    } else {
+      form.append('milestoneId', milestoneId);
+    }
+    files.forEach((f, i) => form.append(`photo_${i}`, f, f.name));
+
+    try {
+      const res = await fetch(`${BACKEND}/api/milestone-photos`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
+        body: form,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // Reload photos after upload
+      await loadMilestonePhotos(milestoneId, isExt);
+    } catch (err) {
+      console.error('Photo upload error:', err);
+      alert('Failed to upload photo(s). Please try again.');
+      if (countEl) countEl.textContent = '— photos';
+    }
+  }
+
+  // ── Site Photos: view lightbox ──
+  window._p3ViewPhoto = (url) => {
+    const lb = document.createElement('div');
+    lb.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10000;display:flex;align-items:center;justify-content:center;cursor:zoom-out;`;
+    lb.innerHTML = `<img src="${url}" style="max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);" />`;
+    lb.addEventListener('click', () => lb.remove());
+    document.body.appendChild(lb);
+  };
+
+  // ── Site Photos: delete ──
+  window._p3DelPhoto = async (photoId, milestoneId, isExt) => {
+    if (!confirm('Delete this photo? This cannot be undone.')) return;
+    try {
+      const res = await fetch(`${BACKEND}/api/milestone-photos/${photoId}`, {
+        method: 'DELETE',
+        headers: _authHeaders(true),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await loadMilestonePhotos(milestoneId, isExt);
+    } catch (err) {
+      console.error('Photo delete error:', err);
+      alert('Failed to delete photo. Please try again.');
+    }
+  };
+
+  // ── Site Photos: toggle panel ──
+  window._p3TogglePhotos = () => {
+    const body = document.getElementById('p3PhotosBody');
+    const chv  = document.getElementById('p3PhotoChv');
+    if (body) {
+      const open = body.style.display === 'block';
+      body.style.display = open ? 'none' : 'block';
+      if (chv) chv.style.transform = open ? '' : 'rotate(180deg)';
+    }
+  };
+
+  // ── Daily progress submit ──
   async function submitDailyProgress(ms, endpoint, isExt) {
     const qty = parseFloat(document.getElementById('p3ExecQty')?.value);
     const remarks = document.getElementById('p3Remarks')?.value || '';
@@ -2990,17 +3147,18 @@ function openActualProgressPage(savedSchedule) {
     }
 
     const today = new Date().toISOString().slice(0,10);
+    const newPct = planned > 0 ? Math.min(100, (newTotal / planned) * 100) : 0;
 
     const form = new FormData();
-    form.append('projectId',   localStorage.getItem('activeProjectId'));
-    form.append('milestoneId', ms.id);
-    form.append('reportDate',  today);
-    form.append('qtyExecuted', qty);
-    form.append('remarks',     remarks);
-    // ── FIX: include calculated progress_pct so backend can validate / store ──
-    const newPct = planned > 0 ? Math.min(100, (newTotal / planned) * 100) : 0;
-    form.append('progressPct', newPct.toFixed(2));
-    if (dailyAttached) form.append('attachment', dailyAttached, dailyAttached.name);
+    form.append('projectId',    localStorage.getItem('activeProjectId'));
+    form.append('milestoneId',  ms.id);
+    form.append('reportDate',   today);
+    form.append('qtyExecuted',  qty);
+    form.append('remarks',      remarks);
+    // ── matches milestone_progress_entries columns ──
+    form.append('progressPct',  newPct.toFixed(2));
+    form.append('cumulativeAfterEntry', newTotal.toFixed(3));
+    form.append('progressPctAfterEntry', newPct.toFixed(2));
 
     const btn = document.getElementById('p3UpdateBtn');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
@@ -3018,34 +3176,32 @@ function openActualProgressPage(savedSchedule) {
       const result = await res.json();
       const updated = result.milestone || {};
 
-      // ── FIX: update local state with backend response or calculate locally ──
       ms.executed        = Number(updated.executed      ?? newTotal);
       ms.progress_pct    = Number(updated.progress_pct  ?? newPct);
       ms.activity_status = updated.activity_status       || (ms.executed > 0 ? 'in_progress' : ms.activity_status);
-      ms.entries         = updated.entries               || [
+      ms.entries = updated.entries || [
         ...(ms.entries || []),
         { date: today, qty, remarks, cumulative: ms.executed }
       ];
 
       dailyAttached = null;
 
-      // Update allMsList reference for Gantt
       allMsList = [
         ...msList.map(m => m.id === ms.id ? ms : m),
         ...extMs.map(m => m.id === ms.id ? ms : m),
       ];
 
       renderList();
-      renderDetail(ms);
+      renderDetail(ms, isExt);
       updateSummary();
-      buildGantt();
+      if (document.getElementById('p3GanttBody')?.classList.contains('open')) buildGantt();
 
-      // Flash success feedback on the form
+      // Flash confirmation
       const logEl = document.getElementById('p3EntriesLog');
       if (logEl) {
         const flash = document.createElement('div');
         flash.style.cssText = 'padding:10px 20px;background:#e0f4ee;color:#0a6b5e;font-size:12px;font-weight:600;';
-        flash.textContent = `✓ Saved — ${qty} ${ms.unit||''} recorded. Cumulative: ${ms.executed} ${ms.unit||''} (${ms.progress_pct.toFixed(1)}%)`;
+        flash.textContent = `✓ Saved — +${qty} ${ms.unit||''} recorded. Cumulative: ${ms.executed} ${ms.unit||''} (${ms.progress_pct.toFixed(1)}%)`;
         logEl.prepend(flash);
         setTimeout(() => flash.remove(), 4000);
       }
@@ -3079,15 +3235,16 @@ function openActualProgressPage(savedSchedule) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       ms.activity_status = 'completed';
       ms.completed_at = new Date().toISOString();
-      renderList(); renderDetail(ms); updateSummary(); buildGantt();
+      renderList(); renderDetail(ms, isExt); updateSummary();
+      if (document.getElementById('p3GanttBody')?.classList.contains('open')) buildGantt();
     } catch (err) {
       console.error('Complete error:', err);
       alert('Failed to mark as completed. Please try again.');
-      if (btn) { btn.disabled = false; btn.textContent = '✓ Mark Activity Ended'; }
+      if (btn) { btn.disabled = false; btn.textContent = '✓ Mark Ended'; }
     }
   }
 
-  // ── Gantt chart — FIX: include extension milestones as orange bars ──
+  // ── Gantt chart ──
   function buildGantt() {
     const allForGantt = [
       ...msList.map(ms => ({ ...ms, isExtension: false })),
@@ -3098,7 +3255,6 @@ function openActualProgressPage(savedSchedule) {
     const DAY_W = 20;
     const ganttStart = new Date(tl.start);
 
-    // Extend gantt end to cover extension milestones
     let ganttEndDate = new Date(tl.finish);
     allForGantt.forEach(ms => {
       const msEnd = new Date(ms.end || ms.planned_end || tl.finish);
@@ -3111,7 +3267,6 @@ function openActualProgressPage(savedSchedule) {
       days.push(new Date(d));
     }
 
-    // Month grouping
     const months = [];
     let curM = null;
     days.forEach(d => {
@@ -3123,7 +3278,6 @@ function openActualProgressPage(savedSchedule) {
     });
     if (curM) months.push(curM);
 
-    // Week grouping
     const weeks = [];
     let curW = null;
     days.forEach(d => {
@@ -3140,47 +3294,26 @@ function openActualProgressPage(savedSchedule) {
     const totalW = days.length * DAY_W;
     const today  = new Date(); today.setHours(0,0,0,0);
 
-    const monthHdr = `<div class="gtt-hdr-month" style="width:${totalW}px;">` +
-      months.map(m => `<div class="gtt-month-cell" style="width:${m.count*DAY_W}px;">${m.label}</div>`).join('') +
-      '</div>';
-
-    const weekHdr = `<div class="gtt-hdr-week" style="width:${totalW}px;">` +
-      weeks.map(w => `<div class="gtt-week-cell" style="width:${w.count*DAY_W}px;">${w.label}</div>`).join('') +
-      '</div>';
-
-    const dayHdr = `<div class="gtt-hdr-day" style="width:${totalW}px;">` +
-      days.map(d => {
-        const isW = d.getDay() === 0 || d.getDay() === 6;
-        const color = isW ? '#3a6a64' : '#4a8a84';
-        const txt = d.getDate() % 5 === 0 || d.getDate() === 1 ? d.getDate() : '';
-        return `<div class="gtt-day-cell-hdr" style="width:${DAY_W}px;color:${color};">${txt}</div>`;
-      }).join('') +
-      '</div>';
+    const monthHdr = `<div class="gtt-hdr-month" style="width:${totalW}px;">${months.map(m=>`<div class="gtt-month-cell" style="width:${m.count*DAY_W}px;">${m.label}</div>`).join('')}</div>`;
+    const weekHdr  = `<div class="gtt-hdr-week" style="width:${totalW}px;">${weeks.map(w=>`<div class="gtt-week-cell" style="width:${w.count*DAY_W}px;">${w.label}</div>`).join('')}</div>`;
+    const dayHdr   = `<div class="gtt-hdr-day" style="width:${totalW}px;">${days.map(d=>{const isW=d.getDay()===0||d.getDay()===6;const color=isW?'#3a6a64':'#4a8a84';const txt=d.getDate()%5===0||d.getDate()===1?d.getDate():'';return`<div class="gtt-day-cell-hdr" style="width:${DAY_W}px;color:${color};">${txt}</div>`;}).join('')}</div>`;
 
     const rows = allForGantt.map(ms => {
       const pStart = new Date(ms.start || ms.planned_start);
       const pEnd   = new Date(ms.end   || ms.planned_end);
       const pct = Number(ms.progress_pct || 0) / 100;
-      let planBar='', actualBar='', delayBar='';
       const isExt = ms.isExtension;
+      let planBar='', actualBar='', delayBar='';
 
       if (pStart && pEnd) {
         const ps = Math.round((pStart - ganttStart) / 86400000);
         const pe = Math.round((pEnd   - ganttStart) / 86400000);
         const pw = Math.max(1, pe - ps + 1) * DAY_W;
-
-        // Plan bar — teal for baseline, orange for extension
-        planBar = `<div class="gtt-bar ${isExt ? 'gtt-bar-ext-plan' : 'gtt-bar-plan'}"
-          style="left:${ps*DAY_W}px;width:${pw}px;"
-          title="${ms.title}: ${ms.start||ms.planned_start} → ${ms.end||ms.planned_end}"></div>`;
-
+        planBar = `<div class="gtt-bar ${isExt ? 'gtt-bar-ext-plan' : 'gtt-bar-plan'}" style="left:${ps*DAY_W}px;width:${pw}px;" title="${ms.title}: ${ms.start||ms.planned_start} → ${ms.end||ms.planned_end}"></div>`;
         if (pct > 0) {
           const aw = Math.max(6, Math.round(pw * pct));
-          actualBar = `<div class="gtt-bar ${isExt ? 'gtt-bar-ext-actual' : 'gtt-bar-actual'}"
-            style="left:${ps*DAY_W}px;width:${aw}px;"
-            title="${ms.title}: ${(pct*100).toFixed(1)}% done"></div>`;
+          actualBar = `<div class="gtt-bar ${isExt ? 'gtt-bar-ext-actual' : 'gtt-bar-actual'}" style="left:${ps*DAY_W}px;width:${aw}px;" title="${ms.title}: ${(pct*100).toFixed(1)}% done"></div>`;
         }
-
         if (today > pEnd && ms.activity_status !== 'completed') {
           const ds = pe + 1;
           const de = Math.max(ds, Math.round((today - ganttStart) / 86400000));
@@ -3190,47 +3323,32 @@ function openActualProgressPage(savedSchedule) {
       }
 
       const cells = days.map(d => {
-        const isW = d.getDay() === 0 || d.getDay() === 6;
-        const isT = d.getTime() === today.getTime();
+        const isW = d.getDay()===0||d.getDay()===6;
+        const isT = d.getTime()===today.getTime();
         return `<div class="gtt-cell${isW?' weekend':''}${isT?' today-col':''}" style="width:${DAY_W}px;height:40px;"></div>`;
       }).join('');
 
       return `<div class="gtt-row" style="width:${totalW}px;">${cells}${planBar}${actualBar}${delayBar}</div>`;
     }).join('');
 
-    // Today vertical line
     const todayOff = Math.round((today - ganttStart) / 86400000);
     const todayLine = (todayOff >= 0 && todayOff < days.length)
-      ? `<div style="position:absolute;left:${todayOff*DAY_W+10}px;top:66px;bottom:0;
-           width:2px;background:#0a7b6c;opacity:0.6;z-index:4;pointer-events:none;"></div>`
-      : '';
+      ? `<div style="position:absolute;left:${todayOff*DAY_W+10}px;top:66px;bottom:0;width:2px;background:#0a7b6c;opacity:0.6;z-index:4;pointer-events:none;"></div>` : '';
 
-    // Vertical line at baseline finish
-    const baselineOff = tl.finish
-      ? Math.round((new Date(tl.finish) - ganttStart) / 86400000)
-      : -1;
+    const baselineOff = tl.finish ? Math.round((new Date(tl.finish) - ganttStart) / 86400000) : -1;
     const baselineLine = (baselineOff >= 0 && baselineOff < days.length)
-      ? `<div style="position:absolute;left:${baselineOff*DAY_W+10}px;top:66px;bottom:0;
-           width:2px;background:#e67e22;opacity:0.5;z-index:4;pointer-events:none;" title="Baseline Finish"></div>`
-      : '';
+      ? `<div style="position:absolute;left:${baselineOff*DAY_W+10}px;top:66px;bottom:0;width:2px;background:#e67e22;opacity:0.5;z-index:4;pointer-events:none;" title="Baseline Finish"></div>` : '';
 
     document.getElementById('p3GttInner').innerHTML =
       `<div style="position:relative;">${monthHdr}${weekHdr}${dayHdr}${rows}${todayLine}${baselineLine}</div>`;
 
-    // Labels
     document.getElementById('p3GttLabels').innerHTML = allForGantt.map(ms => {
       const pct = Number(ms.progress_pct || 0);
       const isExt = ms.isExtension;
-      const isDelay = (ms.end || ms.planned_end) && today > new Date(ms.end || ms.planned_end) && ms.activity_status !== 'completed';
-      const badgeBg = ms.activity_status === 'completed' ? '#e0f4ee' :
-                      isDelay ? '#fde8e0' :
-                      isExt   ? '#fef0da' :
-                      ms.activity_status === 'in_progress' ? '#e0f4ee' : '#f0f4f3';
-      const badgeColor = ms.activity_status === 'completed' ? '#0a6b5e' :
-                         isDelay ? '#a33a15' :
-                         isExt   ? '#e67e22' :
-                         ms.activity_status === 'in_progress' ? '#0a6b5e' : '#5a7a76';
-      const badgeTxt = ms.activity_status === 'completed' ? '✓' : isDelay ? '!' : pct.toFixed(0)+'%';
+      const isDelay = (ms.end||ms.planned_end) && today > new Date(ms.end||ms.planned_end) && ms.activity_status !== 'completed';
+      const badgeBg = ms.activity_status==='completed' ? '#e0f4ee' : isDelay ? '#fde8e0' : isExt ? '#fef0da' : ms.activity_status==='in_progress' ? '#e0f4ee' : '#f0f4f3';
+      const badgeColor = ms.activity_status==='completed' ? '#0a6b5e' : isDelay ? '#a33a15' : isExt ? '#e67e22' : ms.activity_status==='in_progress' ? '#0a6b5e' : '#5a7a76';
+      const badgeTxt = ms.activity_status==='completed' ? '✓' : isDelay ? '!' : pct.toFixed(0)+'%';
       return `<div class="gtt-lbl-row" style="border-left:3px solid ${isExt ? '#e67e22' : 'transparent'};">
         <div class="gtt-lbl-txt" title="${ms.title||''}">${ms.title||'Untitled'}</div>
         <span class="gtt-lbl-badge" style="background:${badgeBg};color:${badgeColor};">${badgeTxt}</span>
@@ -3243,13 +3361,11 @@ function openActualProgressPage(savedSchedule) {
     return Math.ceil(((d - jan1) / 86400000 + jan1.getDay() + 1) / 7);
   }
 
-  // Sync label scroll with gantt scroll
   document.getElementById('p3GttScroll')?.addEventListener('scroll', function() {
     const labels = document.querySelector('.gtt-labels');
     if (labels) labels.scrollTop = this.scrollTop;
   });
 
-  // Gantt toggle
   document.getElementById('p3GanttToggle')?.addEventListener('click', () => {
     const body = document.getElementById('p3GanttBody');
     const chv  = document.getElementById('p3GanttChv');
