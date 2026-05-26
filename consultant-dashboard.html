@@ -1667,14 +1667,13 @@ async function loadSummaryPanelData() {
 
   try {
     const res = await fetch(
-      `${BACKEND}/api/get-schedule?projectId=${encodeURIComponent(projectId)}`,
+      `${BACKEND}/api/project-summary?projectId=${encodeURIComponent(projectId)}`,
       { headers: _authHeaders(true) }
     );
     if (!res.ok) return;
-    const result   = await res.json();
-    const schedule = result.schedule;
+    const data = await res.json();
 
-    if (!schedule || !schedule.milestones?.length) {
+    if (!data.hasSchedule) {
       ['summaryProgress', 'summaryVariance', 'summaryLastMs'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.textContent = 'No schedule yet.';
@@ -1686,133 +1685,85 @@ async function loadSummaryPanelData() {
       return;
     }
 
-    const milestones = schedule.milestones.map(ms => ({
-      ...ms,
-      progress_pct: Number(ms.progress_pct || 0),
-      executed:     Number(ms.executed     || 0),
-      weight_pct:   Number(ms.weight_pct   || 0),
-    }));
+    const { progress, timeline, chart_milestones, photos } = data;
 
-    // ── Overall progress (weight-aware if weights exist, else simple average) ──
-    const totalWeight = milestones.reduce((s, m) => s + m.weight_pct, 0);
-    const overallPct  = totalWeight > 0
-      ? milestones.reduce((s, m) => s + m.weight_pct * m.progress_pct, 0) / totalWeight
-      : milestones.reduce((s, m) => s + m.progress_pct, 0) / milestones.length;
-
+    // ── Overall progress ──
     const pctEl = document.getElementById('summaryProgress');
     const barEl = document.getElementById('summaryProgressBar');
-    if (pctEl) pctEl.textContent = overallPct.toFixed(1) + '%';
+    if (pctEl) pctEl.textContent = progress.overall_pct.toFixed(1) + '%';
     if (barEl) {
-      barEl.style.width      = overallPct.toFixed(1) + '%';
-      barEl.style.background = overallPct >= 100 ? '#007B8A' : '#28a745';
+      barEl.style.width      = progress.overall_pct.toFixed(1) + '%';
+      barEl.style.background = progress.overall_pct >= 100 ? '#007B8A' : '#28a745';
     }
 
-    // ── Planned % today (linear over project timeline) ──
-    const tl = schedule.timeline || {};
-    let plannedPct = 0;
-    if (tl.start && tl.finish) {
-      const elapsed  = Math.max(0, (Date.now() - new Date(tl.start)) / 86400000);
-      const dur      = Math.max(1, (new Date(tl.finish) - new Date(tl.start)) / 86400000);
-      plannedPct     = Math.min(100, (elapsed / dur) * 100);
-    }
-    const variance = overallPct - plannedPct;
-    const varEl    = document.getElementById('summaryVariance');
+    // ── Variance ──
+    const varEl = document.getElementById('summaryVariance');
     if (varEl) {
-      const sign        = variance >= 0 ? '+' : '';
-      varEl.textContent = `${sign}${variance.toFixed(1)}% vs plan today (plan: ${plannedPct.toFixed(1)}%)`;
-      varEl.style.color = variance >= 0 ? '#28a745' : '#dc3545';
+      const sign        = progress.variance_pct >= 0 ? '+' : '';
+      varEl.textContent = `${sign}${progress.variance_pct.toFixed(1)}% vs plan today (plan: ${progress.planned_pct.toFixed(1)}%)`;
+      varEl.style.color = progress.variance_pct >= 0 ? '#28a745' : '#dc3545';
     }
 
     // ── Last completed milestone ──
-    const completed = milestones.filter(m => m.activity_status === 'completed');
-    const lastMsEl  = document.getElementById('summaryLastMs');
+    const lastMsEl = document.getElementById('summaryLastMs');
     if (lastMsEl) {
-      lastMsEl.textContent = completed.length
-        ? '✓ ' + completed[completed.length - 1].title
+      lastMsEl.textContent = progress.last_completed
+        ? '✓ ' + progress.last_completed
         : 'No milestones completed yet.';
-      lastMsEl.style.color = completed.length ? '#28a745' : '#888';
+      lastMsEl.style.color = progress.last_completed ? '#28a745' : '#888';
     }
 
-    // ── Progress chart: planned vs actual per milestone (max 7) ──
+    // ── Progress chart ──
     const chartEl  = document.getElementById('summaryChart');
     const labelsEl = document.getElementById('summaryChartLabels');
-    if (chartEl) {
-      const shown  = milestones.slice(0, 7);
-      const today  = new Date(); today.setHours(0, 0, 0, 0);
+    if (chartEl && chart_milestones.length) {
       const chartH = 124;
-
-      const barsHtml = shown.map(ms => {
-        const msStart = new Date(ms.start || ms.planned_start || tl.start || today);
-        const msEnd   = new Date(ms.end   || ms.planned_end   || tl.finish || today);
-        let msPlan = 0;
-        if (today >= msEnd)       msPlan = 100;
-        else if (today > msStart) msPlan = Math.min(100, ((today - msStart) / Math.max(1, msEnd - msStart)) * 100);
-
-        const actual      = ms.progress_pct;
-        const isLate      = actual < msPlan - 5 && msPlan > 0;
-        const actualColor = ms.activity_status === 'completed' ? '#007B8A' : isLate ? '#dc3545' : '#28a745';
-        const planH       = Math.round((msPlan  / 100) * chartH);
-        const actualH     = Math.round((actual  / 100) * chartH);
-
+      chartEl.innerHTML = chart_milestones.map(ms => {
+        const isLate      = ms.actual_pct < ms.planned_pct - 5 && ms.planned_pct > 0;
+        const actualColor = ms.activity_status === 'completed' ? '#007B8A'
+                          : isLate ? '#dc3545' : '#28a745';
+        const planH   = Math.round((ms.planned_pct / 100) * chartH);
+        const actualH = Math.round((ms.actual_pct  / 100) * chartH);
         return `<div style="flex:1; display:flex; flex-direction:row; align-items:flex-end;
                   justify-content:center; height:${chartH}px; gap:2px;">
           <div style="width:44%; height:${Math.max(planH,1)}px; background:#007B8A; opacity:0.35;
-               border-radius:3px 3px 0 0;" title="Planned: ${msPlan.toFixed(1)}%"></div>
+               border-radius:3px 3px 0 0;" title="Planned: ${ms.planned_pct.toFixed(1)}%"></div>
           <div style="width:44%; height:${Math.max(actualH,1)}px; background:${actualColor};
-               border-radius:3px 3px 0 0;" title="${ms.title}: ${actual.toFixed(1)}% actual"></div>
+               border-radius:3px 3px 0 0;" title="${ms.title}: ${ms.actual_pct.toFixed(1)}% actual"></div>
         </div>`;
       }).join('');
-
-      chartEl.innerHTML      = barsHtml;
-      chartEl.style.display  = 'flex';
-      chartEl.style.alignItems = 'flex-end';
-      chartEl.style.gap      = '3px';
-      chartEl.style.padding  = '8px 8px 0';
+      chartEl.style.cssText += 'display:flex;align-items:flex-end;gap:3px;padding:8px 8px 0;';
 
       if (labelsEl) {
-        labelsEl.innerHTML = shown.map(ms =>
-          `<div style="flex:1; font-size:9px; color:#888; text-align:center;
-             overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${ms.title}">
-            ${(ms.title || '').length > 7 ? ms.title.slice(0, 6) + '…' : ms.title}
+        labelsEl.innerHTML = chart_milestones.map(ms =>
+          `<div style="flex:1;font-size:9px;color:#888;text-align:center;overflow:hidden;
+             text-overflow:ellipsis;white-space:nowrap;" title="${ms.title}">
+            ${ms.title.length > 7 ? ms.title.slice(0, 6) + '…' : ms.title}
           </div>`
         ).join('');
       }
+    } else if (chartEl) {
+      chartEl.innerHTML = '<div style="font-size:11px;color:#bbb;padding:12px;width:100%;text-align:center;">No milestones yet</div>';
     }
 
-    // ── Photos: fetch from milestone_photos for all milestones in parallel ──
+    // ── Photos ──
     const photosEl  = document.getElementById('summaryPhotos');
     const counterEl = document.getElementById('summaryPhotoCounter');
     if (!photosEl) return;
 
-    photosEl.innerHTML = '<div style="font-size:12px;color:#bbb;text-align:center;padding:16px;">Loading photos…</div>';
-
-    const photoResults = await Promise.all(
-      milestones.map(ms =>
-        fetch(
-          `${BACKEND}/api/milestone-photos?milestoneId=${encodeURIComponent(ms.id)}`,
-          { headers: _authHeaders() }
-        )
-        .then(r => r.ok ? r.json() : { photos: [] })
-        .then(d => (d.photos || []).map(p => ({ ...p, msTitle: ms.title })))
-        .catch(() => [])
-      )
-    );
-    const allPhotos = photoResults.flat();
-
-    if (!allPhotos.length) {
+    if (!photos.length) {
       photosEl.innerHTML = '<div style="font-size:12px;color:#bbb;text-align:center;padding:16px;">No site photos yet.</div>';
       if (counterEl) counterEl.textContent = '';
       return;
     }
 
     if (counterEl) {
-      const activeMs = milestones.filter(m => m.activity_status === 'completed' || m.activity_status === 'in_progress').length;
-      counterEl.textContent = `${allPhotos.length} photo${allPhotos.length !== 1 ? 's' : ''} across ${activeMs} milestone${activeMs !== 1 ? 's' : ''}`;
+      counterEl.textContent = `${photos.length} photo${photos.length !== 1 ? 's' : ''} · ${progress.completed_count + progress.in_progress_count} active milestone${progress.completed_count + progress.in_progress_count !== 1 ? 's' : ''}`;
     }
 
-    photosEl.innerHTML = allPhotos.map((p, i) => `
-      <div style="flex-shrink:0; width:100%; scroll-snap-align:start; position:relative;
-           border-radius:8px; overflow:hidden; cursor:zoom-in; margin-bottom:2px;"
+    photosEl.innerHTML = photos.map((p, i) => `
+      <div style="flex-shrink:0;width:100%;scroll-snap-align:start;position:relative;
+           border-radius:8px;overflow:hidden;cursor:zoom-in;margin-bottom:2px;"
            onclick="(function(){
              var lb=document.createElement('div');
              lb.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10000;display:flex;align-items:center;justify-content:center;cursor:zoom-out;';
@@ -1822,16 +1773,17 @@ async function loadSummaryPanelData() {
            })()">
         <img src="${p.cloudinary_url}"
              alt="${p.file_name || 'Site photo'}"
-             style="width:100%; height:180px; object-fit:cover; display:block; border-radius:8px;"
+             style="width:100%;height:180px;object-fit:cover;display:block;border-radius:8px;"
              loading="lazy"/>
-        <div style="position:absolute; bottom:0; left:0; right:0; padding:5px 10px;
-             background:linear-gradient(transparent, rgba(0,0,0,0.55));
-             font-size:11px; color:#fff; border-radius:0 0 8px 8px;">
-          ${p.msTitle || ''}${p.file_name ? ' · ' + p.file_name : ''}
+        <div style="position:absolute;bottom:0;left:0;right:0;padding:5px 10px;
+             background:linear-gradient(transparent,rgba(0,0,0,0.55));
+             font-size:11px;color:#fff;border-radius:0 0 8px 8px;">
+          ${p.ms_title || ''}${p.file_name ? ' · ' + p.file_name : ''}
+          ${p.is_extension ? ' <span style="background:#e67e22;padding:1px 5px;border-radius:3px;font-size:9px;">EXT</span>' : ''}
         </div>
-        <div style="position:absolute; top:6px; right:8px; font-size:10px;
-             background:rgba(0,0,0,0.45); color:#fff; padding:2px 6px; border-radius:10px;">
-          ${i + 1} / ${allPhotos.length}
+        <div style="position:absolute;top:6px;right:8px;font-size:10px;
+             background:rgba(0,0,0,0.45);color:#fff;padding:2px 6px;border-radius:10px;">
+          ${i + 1} / ${photos.length}
         </div>
       </div>`
     ).join('');
