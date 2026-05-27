@@ -3953,6 +3953,8 @@ function renderRecordsList(records, tabKey) {
       ? new Date(doc.issued_date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
       : 'N/A';
 
+    // ── FIX: show ALL reviews — decision makers AND no_action viewers ──
+    // Split into decision makers (approved/rejected/accepted) and viewers (no_action)
     const decisionMakerReviews = (doc.reviews || []).filter(r => r.is_decision_maker === true);
     const teamMemberReviews    = (doc.reviews || []).filter(r => r.is_decision_maker !== true);
 
@@ -3972,6 +3974,22 @@ function renderRecordsList(records, tabKey) {
             background:#f9fafb;border-radius:4px;border-left:2px solid #d1d5db;">💬 ${r.comment}</div>` : ''}
         </li>`;
     }).join('');
+
+    // ── FIX: also include no_action decision makers as viewers in review history ──
+    // Collect any decision maker rows whose action is no_action (viewed only)
+    const decisionViewersHtml = decisionMakerReviews
+      .filter(r => r.action === 'no_action')
+      .map(r => `
+        <li style="padding:8px 0;border-bottom:1px solid #f7f7f7;font-size:12px;color:#555;">
+          <span style="font-weight:600;color:#374151;">${r.reviewer_role || 'Decision Maker'}</span>
+          ${r.reviewer_email ? `<span style="font-size:11px;color:#9ca3af;">(${r.reviewer_email})</span>` : ''}
+          <span style="color:#9ca3af;font-weight:600;margin-left:8px;">(viewed)</span>
+          <span style="color:#9ca3af;font-size:11px;margin-left:8px;">
+            ${new Date(r.action_date).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
+          </span>
+          ${r.comment ? `<div style="margin-top:4px;color:#6b7280;font-style:italic;padding:4px 8px;
+            background:#f9fafb;border-radius:4px;border-left:2px solid #d1d5db;">💬 ${r.comment}</div>` : ''}
+        </li>`).join('');
 
     const teamMemberViewersHtml = teamMemberReviews.length ? `
       <div style="margin-top:10px;">
@@ -4020,7 +4038,6 @@ function renderRecordsList(records, tabKey) {
     } else if (btnState === 'acted') {
       const isRej = myReview.action === 'rejected';
 
-      // ── If notice already issued — hide button, show what was issued ──
       if (doc.my_issued_notice) {
         actionButtons = `
           <span style="flex:1;padding:8px 12px;font-size:12px;color:#6b7280;
@@ -4094,7 +4111,6 @@ function renderRecordsList(records, tabKey) {
     const workflowHtml = doc.is_decision_maker === true && !isLocked
       ? renderWorkflowSteps(doc) : '';
 
-    // ── Tied record info for notices ──
     const tiedRecordHtml = (doc.record_kind === 'notice' || doc.record_kind === 'rejection_notice') && doc.notice_tied_id
       ? `<div style="margin-bottom:12px;padding:10px 12px;
           background:${doc.record_kind === 'rejection_notice' ? '#fff1f2' : '#fffbeb'};
@@ -4109,6 +4125,43 @@ function renderRecordsList(records, tabKey) {
             #${doc.notice_tied_id}${doc.tied_record_title ? ': "' + doc.tied_record_title + '"' : ''}
           </div>
          </div>` : '';
+
+    // ── Build review history section ──
+    // Shows: decision maker actions + decision maker viewers + team member viewers
+    const hasDecisionActions = decisionMakerReviews.filter(r => r.action !== 'no_action').length > 0;
+    const hasAnyReview = (doc.reviews || []).length > 0;
+
+    const reviewHistoryHtml = hasAnyReview ? `
+      ${hasDecisionActions
+        ? `<ul style="margin:0;padding:0;list-style:none;">
+            ${decisionMakerReviews.filter(r => r.action !== 'no_action').map(r => {
+              const actionColor = (r.action === 'approved' || r.action === 'accepted')
+                ? '#10b981' : r.action === 'rejected' ? '#ef4444' : '#9ca3af';
+              return `
+                <li style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555;">
+                  <span style="font-weight:600;">${r.reviewer_role}</span>
+                  <span style="color:${actionColor};font-weight:600;margin-left:8px;text-transform:capitalize;">
+                    ${r.action}
+                  </span>
+                  <span style="color:#9ca3af;margin-left:8px;">
+                    ${new Date(r.action_date).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
+                  </span>
+                  ${r.comment ? `<div style="margin-top:4px;color:#6b7280;font-style:italic;padding:4px 8px;
+                    background:#f9fafb;border-radius:4px;border-left:2px solid #d1d5db;">💬 ${r.comment}</div>` : ''}
+                </li>`;
+            }).join('')}
+           </ul>`
+        : '<p style="font-size:12px;color:#9ca3af;margin:0;">No decision-maker reviews yet.</p>'}
+
+      ${decisionViewersHtml ? `
+        <div style="margin-top:10px;">
+          <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+            letter-spacing:.5px;margin-bottom:6px;">👁️ Viewed (Decision Makers)</div>
+          <ul style="margin:0;padding:0;list-style:none;">${decisionViewersHtml}</ul>
+        </div>` : ''}
+
+      ${teamMemberViewersHtml}
+    ` : '<p style="font-size:12px;color:#9ca3af;margin:0;">No reviews yet.</p>';
 
     return `
       <li class="doc-item"
@@ -4181,10 +4234,7 @@ function renderRecordsList(records, tabKey) {
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
               letter-spacing:.5px;margin-bottom:6px;">Review History</div>
-            ${decisionReviewsHtml.length > 0
-              ? `<ul style="margin:0;padding:0;list-style:none;">${decisionReviewsHtml}</ul>`
-              : '<p style="font-size:12px;color:#9ca3af;margin:0;">No decision-maker reviews yet.</p>'}
-            ${teamMemberViewersHtml}
+            ${reviewHistoryHtml}
           </div>
 
           ${workflowHtml}
@@ -4253,7 +4303,13 @@ bottomContent.addEventListener('click', (e) => {
   const tabKey   = item.getAttribute('data-tab-key');
 
   switch (action) {
-    case 'approve':      handleDecisionMakerAction(recordId, tabKey, 'approved'); break;
+    case 'approve': {
+      // ── FIX: send 'accepted' when button label says Accept, else 'approved' ──
+      const btnText    = actionEl.textContent || '';
+      const reviewAction = btnText.toLowerCase().includes('accept') ? 'accepted' : 'approved';
+      handleDecisionMakerAction(recordId, tabKey, reviewAction);
+      break;
+    }
     case 'reject':       handleDecisionMakerAction(recordId, tabKey, 'rejected'); break;
     case 'tm-approve':   handleTeamMemberAction(recordId, tabKey, 'approved');    break;
     case 'tm-reject':    handleTeamMemberAction(recordId, tabKey, 'rejected');    break;
@@ -4288,8 +4344,6 @@ function toggleRecordDetail(recordId, tabKey) {
 
 // =======================================================================
 //  DECISION MAKER ACTION
-//  ── FIX: no longer auto-opens notice panel after action ──
-//     Notice panel only opens when user explicitly clicks the button
 // =======================================================================
 async function handleDecisionMakerAction(recordId, tabKey, action) {
   try {
@@ -4311,7 +4365,6 @@ async function handleDecisionMakerAction(recordId, tabKey, action) {
     const data = await res.json();
     if (!res.ok) { alert(data.error || `Failed to ${action} record.`); return; }
     alert(data.message || `Record ${action} successfully.`);
-    // ── Refresh list — notice button will appear automatically via btn_state ──
     delete recordsCache[tabKey];
     await loadTabRecords(tabKey);
   } catch (err) {
