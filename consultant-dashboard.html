@@ -3581,6 +3581,7 @@ const CATEGORY_TABLE_MAP = {
   safety:         'safety_records',
   operational:    'operational_records',
   financial:      'financial_records',
+  'planning-execution': 'planning_execution',
 };
 
 function tabToTable(tabKey) {
@@ -3725,7 +3726,7 @@ function setTabContent(tabKey) {
     return;
   }
   renderBottomContent(desc, 'No data available in this category.');
-  const dbTabs = ['contractual','administrative','safety','operational','financial'];
+  const dbTabs = ['contractual','administrative','safety','operational','financial','planning-execution'];
   if (dbTabs.includes(tabKey)) loadTabRecords(tabKey);
 }
 
@@ -3745,7 +3746,8 @@ function renderBottomContent(description, placeholder) {
   document.getElementById('addRecordBtnRendered').addEventListener('click', () => {
     const activeTab = getNavTabs()?.querySelector('li.active');
     const tab = activeTab?.getAttribute('data-tab') || 'contractual';
-    if (tab === 'work-centel') openWorkCenterForm(null, tab);
+    if (tab === 'planning-execution') openPlanningExecutionForm(null, tab);
+    else if (tab === 'work-centel') openWorkCenterForm(null, tab);
     else openAddRecordPanel(null, tab);
   });
 }
@@ -4235,7 +4237,8 @@ bottomContent.addEventListener('click', (e) => {
   if (e.target.closest('.add-doc-btn')) {
     const activeTab = getNavTabs()?.querySelector('li.active');
     const tab = activeTab?.getAttribute('data-tab') || 'contractual';
-    if (tab === 'work-centel') { openWorkCenterForm(null, tab); }
+    if (tab === 'planning-execution') { openPlanningExecutionForm(null, tab); }
+    else if (tab === 'work-centel') { openWorkCenterForm(null, tab); }
     else { openAddRecordPanel(null, tab); }
     return;
   }
@@ -4276,8 +4279,9 @@ bottomContent.addEventListener('click', (e) => {
 //  TOGGLE RECORD DETAIL
 // =======================================================================
 function toggleRecordDetail(recordId, tabKey) {
-  // For work-centel records open the dedicated two-part form instead
+  // For special report tabs open dedicated forms instead of details
   if (tabKey === 'work-centel') { openWorkCenterForm(recordId, tabKey); return; }
+  if (tabKey === 'planning-execution') { openPlanningExecutionForm(recordId, tabKey); return; }
   const detail  = document.getElementById(`detail-${recordId}`);
   const chevron = document.querySelector(`.chevron-${recordId}`);
   if (!detail) return;
@@ -4642,7 +4646,205 @@ function openWorkCenterForm(recordId = null, tabKey = 'work-centel') {
     } catch (err) { console.error('Submit progress error:', err); alert('Failed to submit progress.'); }
   });
 }
-window.openWorkCenterForm = openWorkCenterForm;
+
+
+// =======================================================================
+//  PLANNING & EXECUTION — two-part form for plan and actual data
+// =======================================================================
+async function openPlanningExecutionForm(recordId = null, tabKey = 'planning-execution') {
+  const cached = recordId ? (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId)) : null;
+  const isNew = !cached;
+  if (cached && !cached.is_uploader && !cached.is_viewed) markRecordViewed(cached.id, tabKey);
+  const leaderRoles = ['ContractorPM','ConsultantPM','ClientPM','PM','Leader'];
+  const isLeader = leaderRoles.includes(window.currentUserRole) || (cached && String(cached.creator_id) === String(window.currentUserId));
+  const inputReadOnly = isLeader ? '' : 'readonly';
+  const selectDisabled = isLeader ? '' : 'disabled';
+  const buttonDisabled = isLeader ? '' : 'disabled';
+
+  let trackingEntries = [];
+  if (cached) {
+    try {
+      const res = await authFetch(
+        `https://oneprojectapp-backend.onrender.com/api/planning-execution-tracking?activityId=${cached.id}`
+      );
+      if (res && res.ok) {
+        const data = await res.json();
+        trackingEntries = Array.isArray(data.entries) ? data.entries : data.tracking || [];
+      }
+    } catch (err) {
+      console.error('Planning execution tracking fetch error:', err);
+    }
+  }
+
+  const panelTitle = isNew ? '➕ Plan & Execute Activity' : `Activity: ${cached.title || 'Untitled'}`;
+  const recordTitle = cached?.title || '';
+  const recordDescription = cached?.description || '';
+  const milestoneId = cached?.milestone_id || '';
+  const plannedQuantity = cached?.planned_quantity || '';
+  const unit = cached?.unit || '';
+  const plannedWork = cached?.planned_work || '';
+  const plannedManpower = cached?.planned_manpower || '';
+  const plannedEquipment = cached?.planned_equipment || '';
+  const plannedMaterials = cached?.planned_materials || '';
+  const status = cached?.status || 'ongoing';
+  const linkedFile = cached?.linked_file_name || '';
+  const comments = isLeader ? 'Only leaders can edit this activity.' : 'Review-only mode: you can view activity plan and actual execution.';
+
+  const html = `
+    <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
+      <div style="padding:14px 16px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:18px;font-weight:700;color:#1f2937;">${panelTitle}</div>
+          <div style="font-size:12px;color:#4b5563;margin-top:4px;">${isNew ? 'Fill the activity plan on the left and actual execution details on the right.' : 'Review or update activity plan and execution data.'}</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <span style="font-size:11px;color:#475569;background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:6px 12px;">Status: ${status}</span>
+          <button class="btn" onclick="collapseGrayPart()" style="background:#f3f4f6;color:#1f2937;">✕ Close</button>
+        </div>
+      </div>
+      <div style="flex:1;overflow:auto;padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:14px;box-sizing:border-box;min-height:0;">
+
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:14px;">
+          <div style="font-weight:700;color:#007B8A;font-size:14px;">A. Planned Activity (Leader / PM)</div>
+          <div class="form-group"><label>Milestone ID</label><input id="peMilestoneId" type="text" value="${milestoneId}" ${inputReadOnly} /></div>
+          <div class="form-group"><label>Activity Title</label><input id="peTitle" type="text" value="${recordTitle}" ${inputReadOnly} /></div>
+          <div class="form-group"><label>Description</label><textarea id="peDescription" ${inputReadOnly}>${recordDescription}</textarea></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div class="form-group"><label>Start Date</label><input id="peStartDate" type="date" value="${cached?.start_date || ''}" ${inputReadOnly} /></div>
+            <div class="form-group"><label>End Date</label><input id="peEndDate" type="date" value="${cached?.end_date || ''}" ${inputReadOnly} /></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div class="form-group"><label>Planned Quantity</label><input id="pePlannedQuantity" type="number" value="${plannedQuantity}" ${inputReadOnly} /></div>
+            <div class="form-group"><label>Unit</label><input id="peUnit" type="text" value="${unit}" ${inputReadOnly} /></div>
+          </div>
+          <div class="form-group"><label>Planned Work</label><textarea id="pePlannedWork" ${inputReadOnly}>${plannedWork}</textarea></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div class="form-group"><label>Planned Manpower</label><input id="pePlannedManpower" type="text" value="${plannedManpower}" ${inputReadOnly} /></div>
+            <div class="form-group"><label>Planned Equipment</label><input id="pePlannedEquipment" type="text" value="${plannedEquipment}" ${inputReadOnly} /></div>
+          </div>
+          <div class="form-group"><label>Planned Materials</label><input id="pePlannedMaterials" type="text" value="${plannedMaterials}" ${inputReadOnly} /></div>
+          <div class="form-group"><label>Linked File</label><input id="peLinkedFile" type="file" ${selectDisabled} /></div>
+          <div style="font-size:12px;color:#4b5563;padding:10px 12px;background:#f8fafc;border:1px solid #dbeafe;border-radius:10px;">${comments}</div>
+          <button id="peSavePlan" class="btn primary" ${buttonDisabled}>💾 Save Plan</button>
+        </div>
+
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:14px;">
+          <div style="font-weight:700;color:#007B8A;font-size:14px;">B. Actual Execution Tracking</div>
+          <div class="form-group"><label>Report Date</label><input id="peReportDate" type="date" value="${new Date().toISOString().slice(0,10)}" ${inputReadOnly} /></div>
+          <div class="form-group"><label>Actual Quantity</label><input id="peActualQuantity" type="number" value="" ${inputReadOnly} /></div>
+          <div class="form-group"><label>Unit</label><input id="peActualUnit" type="text" value="${unit}" readonly /></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div class="form-group"><label>Manpower Used</label><input id="peManpowerUsed" type="text" ${inputReadOnly} /></div>
+            <div class="form-group"><label>Equipment Used</label><input id="peEquipmentUsed" type="text" ${inputReadOnly} /></div>
+          </div>
+          <div class="form-group"><label>Materials Used</label><input id="peMaterialsUsed" type="text" ${inputReadOnly} /></div>
+          <div class="form-group"><label>Progress %</label><input id="peProgressPct" type="number" min="0" max="100" value="0" ${inputReadOnly} /></div>
+          <div class="form-group"><label>Issues</label><textarea id="peIssues" ${inputReadOnly}></textarea></div>
+          <div class="form-group"><label>Notes</label><textarea id="peNotes" ${inputReadOnly}></textarea></div>
+          <div class="form-group"><label>Remark</label><textarea id="peRemark" ${inputReadOnly}></textarea></div>
+          <div class="form-group"><label>Delay Days</label><input id="peDelayDays" type="number" min="0" value="${cached?.delay_days || 0}" readonly /></div>
+          <div class="form-group"><label>Delay Reason</label><textarea id="peDelayReason" ${inputReadOnly}>${cached?.delay_reason || ''}</textarea></div>
+          <div class="form-group"><label>Attachment</label><input id="peAttachment" type="file" ${selectDisabled} /></div>
+          <button id="peSaveActual" class="btn primary" ${buttonDisabled}>✅ Save Actual</button>
+          <div style="font-size:12px;color:#475569;">Existing tracking entries</div>
+          <div id="peTrackingList" style="max-height:220px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:#f8fafc;">${trackingEntries.length ? trackingEntries.map(entry => `
+              <div style="margin-bottom:10px;padding:10px;background:#fff;border:1px solid #dbeafe;border-radius:8px;">
+                <div style="font-size:12px;font-weight:700;color:#1f2937;">${new Date(entry.report_date).toLocaleDateString()}</div>
+                <div style="font-size:12px;color:#475569;">Qty: ${entry.actual_quantity} ${entry.unit}</div>
+                <div style="font-size:12px;color:#475569;">Progress: ${entry.progress_pct}%</div>
+                <div style="font-size:12px;color:#475569;">Remark: ${entry.remark || '—'}</div>
+              </div>`).join('') : '<div style="font-size:12px;color:#6b7280;">No actual tracking entries yet.</div>'}</div>
+        </div>
+
+      </div>
+    </div>`;
+
+  expandGrayPart(html);
+
+  document.getElementById('peSavePlan')?.addEventListener('click', async () => {
+    if (!isLeader) return alert('Only Contractor/PM roles can edit plan and actual data.');
+    try {
+      const payload = {
+        projectId: localStorage.getItem('activeProjectId'),
+        milestone_id: document.getElementById('peMilestoneId').value.trim(),
+        title: document.getElementById('peTitle').value.trim(),
+        description: document.getElementById('peDescription').value.trim(),
+        start_date: document.getElementById('peStartDate').value,
+        end_date: document.getElementById('peEndDate').value,
+        planned_quantity: document.getElementById('pePlannedQuantity').value,
+        unit: document.getElementById('peUnit').value.trim(),
+        planned_work: document.getElementById('pePlannedWork').value.trim(),
+        planned_manpower: document.getElementById('pePlannedManpower').value.trim(),
+        planned_equipment: document.getElementById('pePlannedEquipment').value.trim(),
+        planned_materials: document.getElementById('pePlannedMaterials').value.trim(),
+        status,
+      };
+      if (!payload.title) return alert('Activity title is required.');
+      if (!payload.start_date || !payload.end_date) return alert('Start and end dates are required.');
+      const form = new FormData();
+      Object.entries(payload).forEach(([k,v]) => { if (v !== undefined) form.append(k, v); });
+      if (!isNew) form.append('id', cached.id);
+      const attach = document.getElementById('peLinkedFile')?.files?.[0];
+      if (attach) form.append('linked_file', attach);
+      const method = isNew ? 'POST' : 'PUT';
+      const res = await fetch('https://oneprojectapp-backend.onrender.com/api/planning-execution', {
+        method,
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || 'Unable to save plan');
+      alert('Plan saved.');
+      delete recordsCache[tabKey];
+      loadTabRecords(tabKey);
+      collapseGrayPart();
+    } catch (err) {
+      console.error('Save plan error:', err);
+      alert('Failed to save plan.');
+    }
+  });
+
+  document.getElementById('peSaveActual')?.addEventListener('click', async () => {
+    if (!isLeader) return alert('Only Contractor/PM roles can edit plan and actual data.');
+    try {
+      if (!cached) return alert('Please save the activity plan first.');
+      const payload = {
+        activity_id: cached.id,
+        report_date: document.getElementById('peReportDate').value,
+        actual_quantity: document.getElementById('peActualQuantity').value,
+        unit: document.getElementById('peActualUnit').value.trim(),
+        manpower_used: document.getElementById('peManpowerUsed').value.trim(),
+        equipment_used: document.getElementById('peEquipmentUsed').value.trim(),
+        materials_used: document.getElementById('peMaterialsUsed').value.trim(),
+        progress_pct: document.getElementById('peProgressPct').value,
+        issues: document.getElementById('peIssues').value.trim(),
+        notes: document.getElementById('peNotes').value.trim(),
+        remark: document.getElementById('peRemark').value.trim(),
+      };
+      if (!payload.actual_quantity) return alert('Actual quantity is required.');
+      const form = new FormData();
+      Object.entries(payload).forEach(([k,v]) => { if (v !== undefined) form.append(k, v); });
+      const attach = document.getElementById('peAttachment')?.files?.[0];
+      if (attach) form.append('attachment', attach);
+      const res = await fetch('https://oneprojectapp-backend.onrender.com/api/planning-execution-tracking', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || 'Unable to save actual execution');
+      alert('Actual execution saved.');
+      delete recordsCache[tabKey];
+      loadTabRecords(tabKey);
+      collapseGrayPart();
+    } catch (err) {
+      console.error('Save actual execution error:', err);
+      alert('Failed to save actual execution.');
+    }
+  });
+}
+window.openPlanningExecutionForm = openPlanningExecutionForm;
+
 
 // =======================================================================
 //  ADD RECORD PANEL
@@ -5103,3 +5305,4 @@ bootstrapUser();
 </script>
 </body>
 </html>
+
