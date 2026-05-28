@@ -3582,6 +3582,8 @@ const CATEGORY_TABLE_MAP = {
   operational:    'operational_records',
   financial:      'financial_records',
   'planning-execution': 'planning_execution',
+  'document-approval':  'workspace_documents',
+  'control-reports':    'control_reports',
 };
 
 function tabToTable(tabKey) {
@@ -3725,19 +3727,40 @@ function setTabContent(tabKey) {
     console.warn('Unknown tab key:', tabKey);
     return;
   }
-  renderBottomContent(desc, 'No data available in this category.');
-  const dbTabs = ['contractual','administrative','safety','operational','financial','planning-execution'];
+  renderBottomContent(desc, 'No data available in this category.', tabKey);
+  const dbTabs = ['contractual','administrative','safety','operational','financial','planning-execution','document-approval','control-reports'];
   if (dbTabs.includes(tabKey)) loadTabRecords(tabKey);
 }
 
 // =======================================================================
 //  BOTTOM CONTENT SHELL
 // =======================================================================
-function renderBottomContent(description, placeholder) {
+function renderBottomContent(description, placeholder, tabKey = 'contractual') {
+  const leaderRoles = ['ContractorPM','ConsultantPM','ClientPM','PM','Leader'];
+  const isLeader = leaderRoles.includes(window.currentUserRole);
+  const addLabel = tabKey === 'document-approval'
+      ? '➕ Draft Report'
+      : tabKey === 'control-reports'
+        ? '➕ Consolidate'
+        : '➕ Add';
+  const buttonDisabled = tabKey === 'control-reports' && !isLeader ? 'disabled' : '';
+  const buttonTitle = tabKey === 'control-reports' && !isLeader
+      ? 'Only leaders can add consolidated control reports.'
+      : '';
+  const noteText = tabKey === 'document-approval'
+      ? 'Draft reports here; leader review is required before official filing.'
+      : tabKey === 'control-reports'
+        ? 'Control reports are leader-led consolidation notes; members may monitor validated information.'
+        : '';
+
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
-      <button class="btn primary add-doc-btn" type="button" id="addRecordBtnRendered">➕ Add</button>
-      <div class="bottom-description"><p>${description}</p></div>
+      <button class="btn primary add-doc-btn" type="button" id="addRecordBtnRendered" ${buttonDisabled}
+        title="${buttonTitle}">${addLabel}</button>
+      <div class="bottom-description">
+        <p>${description}</p>
+        ${noteText ? `<p class="tab-note" style="margin-top:6px;font-size:12px;color:#6b7280;">${noteText}</p>` : ''}
+      </div>
     </div>
     <div class="bottom-scroll-area">
       <ul class="doc-list" id="recordsList"></ul>
@@ -3952,6 +3975,13 @@ function renderRecordsList(records, tabKey) {
     const isLocked   = doc.is_locked === true;
     const btnState   = doc.btn_state;
     const myReview   = doc.my_review || {};
+    const leaderRoles = ['ContractorPM','ConsultantPM','ClientPM','PM','Leader'];
+    const isLeader   = leaderRoles.includes(window.currentUserRole);
+    const workflowHint = tabKey === 'document-approval'
+      ? 'Document drafts are authored by team members and require leader review before they move forward.'
+      : tabKey === 'control-reports'
+        ? 'Control reports are consolidated by leaders after draft approval; members may monitor validated information.'
+        : '';
 
     const postedAt = doc.issued_date
       ? new Date(doc.issued_date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
@@ -4167,6 +4197,13 @@ function renderRecordsList(records, tabKey) {
             <div style="font-size:13px;color:#374151;line-height:1.7;">
               ${doc.description || 'No description provided.'}</div>
           </div>
+
+          ${workflowHint ? `
+            <div style="margin-bottom:14px;padding:12px 14px;background:#eff6ff;
+              border:1px solid #bfdbfe;border-radius:10px;color:#1d4ed8;font-size:13px;">
+              ${workflowHint}
+            </div>
+          ` : ''}
 
           ${tiedRecordHtml}
 
@@ -4863,6 +4900,9 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
     safety:         'Safety & Compliance',
     operational:    'Operational & Performance',
     financial:      'Financial',
+    'planning-execution': 'Planning & Execution',
+    'document-approval':  'Document & Approval',
+    'control-reports':    'Control & Report',
   };
   const tabLabel = tabLabels[resolvedTab] || resolvedTab;
 
@@ -5099,7 +5139,7 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
         throw new Error('File size must not exceed 10MB.');
 
       const formData = new FormData();
-      formData.append('recordType',  rType);
+          formData.append('recordType',  rType);
       formData.append('title',       title);
       formData.append('description', descHtml);
       formData.append('projectId',   localStorage.getItem('activeProjectId'));
@@ -5140,6 +5180,20 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
   });
 }
 window.openAddRecordPanel = openAddRecordPanel;
+
+function isCurrentUserLeader() {
+  return ['ContractorPM','ConsultantPM','ClientPM','PM','Leader'].includes(window.currentUserRole);
+}
+
+function getApprovalWorkflowHint(tabKey) {
+  if (tabKey === 'document-approval') {
+    return 'Document drafts are created by members and require leader review before they are promoted to official records.';
+  }
+  if (tabKey === 'control-reports') {
+    return 'Control reports are consolidated by leaders after draft approval; members may monitor validated information.';
+  }
+  return '';
+}
 
 // =======================================================================
 //  NOTIFICATIONS
