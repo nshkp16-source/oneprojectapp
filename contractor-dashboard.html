@@ -3824,7 +3824,6 @@ async function updateMeetingView(activeView = 'minutes') {
 async function displayMeetingList(type = 'minutes') {
   const container = document.getElementById('meetingListContainer');
   try {
-    // Placeholder implementation - can be connected to backend
     container.innerHTML = `<p style="text-align:center; color:#999;">No ${type} yet. Create one to get started!</p>`;
   } catch (err) {
     console.error(`Error loading ${type}:`, err);
@@ -3953,30 +3952,9 @@ function renderRecordsList(records, tabKey) {
       ? new Date(doc.issued_date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
       : 'N/A';
 
-    // ── FIX: show ALL reviews — decision makers AND no_action viewers ──
-    // Split into decision makers (approved/rejected/accepted) and viewers (no_action)
     const decisionMakerReviews = (doc.reviews || []).filter(r => r.is_decision_maker === true);
     const teamMemberReviews    = (doc.reviews || []).filter(r => r.is_decision_maker !== true);
 
-    const decisionReviewsHtml = decisionMakerReviews.map(r => {
-      const actionColor = (r.action === 'approved' || r.action === 'accepted')
-        ? '#10b981' : r.action === 'rejected' ? '#ef4444' : '#9ca3af';
-      return `
-        <li style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555;">
-          <span style="font-weight:600;">${r.reviewer_role}</span>
-          <span style="color:${actionColor};font-weight:600;margin-left:8px;text-transform:capitalize;">
-            ${r.action === 'no_action' ? '(viewed)' : r.action}
-          </span>
-          <span style="color:#9ca3af;margin-left:8px;">
-            ${new Date(r.action_date).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
-          </span>
-          ${r.comment ? `<div style="margin-top:4px;color:#6b7280;font-style:italic;padding:4px 8px;
-            background:#f9fafb;border-radius:4px;border-left:2px solid #d1d5db;">💬 ${r.comment}</div>` : ''}
-        </li>`;
-    }).join('');
-
-    // ── FIX: also include no_action decision makers as viewers in review history ──
-    // Collect any decision maker rows whose action is no_action (viewed only)
     const decisionViewersHtml = decisionMakerReviews
       .filter(r => r.action === 'no_action')
       .map(r => `
@@ -4062,11 +4040,15 @@ function renderRecordsList(records, tabKey) {
         ⏳ Awaiting ${doc.pending_role || 'prior'} Approval</span>`;
 
     } else if (btnState === 'can_approve') {
+      // ── FIX: resolve the action at render time using doc.approve_label ──
+      const approveLabel  = doc.approve_label || 'Approve';
+      const approveAction = approveLabel.toLowerCase().includes('accept') ? 'accepted' : 'approved';
+
       actionButtons = `
-        <button data-action="approve"
+        <button data-action="approve" data-review-action="${approveAction}"
           style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
           background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">
-          ✅ ${doc.approve_label || 'Approve'}
+          ✅ ${approveLabel}
         </button>
         <button data-action="reject"
           style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
@@ -4126,8 +4108,6 @@ function renderRecordsList(records, tabKey) {
           </div>
          </div>` : '';
 
-    // ── Build review history section ──
-    // Shows: decision maker actions + decision maker viewers + team member viewers
     const hasDecisionActions = decisionMakerReviews.filter(r => r.action !== 'no_action').length > 0;
     const hasAnyReview = (doc.reviews || []).length > 0;
 
@@ -4304,9 +4284,8 @@ bottomContent.addEventListener('click', (e) => {
 
   switch (action) {
     case 'approve': {
-      // ── FIX: send 'accepted' when button label says Accept, else 'approved' ──
-      const btnText    = actionEl.textContent || '';
-      const reviewAction = btnText.toLowerCase().includes('accept') ? 'accepted' : 'approved';
+      // ── FIX: read the action directly from data-review-action — no text parsing ──
+      const reviewAction = actionEl.getAttribute('data-review-action') || 'approved';
       handleDecisionMakerAction(recordId, tabKey, reviewAction);
       break;
     }
