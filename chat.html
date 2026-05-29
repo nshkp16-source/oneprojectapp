@@ -412,6 +412,10 @@
     </div>
 
     <script>
+        const API_BASE = window.location.protocol.startsWith('http')
+            ? window.location.origin
+            : 'http://localhost:3000';
+
         function parseJwt(token) {
             try {
                 const base64Url = token.split('.')[1];
@@ -452,18 +456,13 @@
         }
 
         const jwt = parseJwt(authToken);
-        const currentUserEmail = jwt?.email || jwt?.company_email || jwt?.companyEmail || '';
+        const currentUserId = jwt ? Number(jwt.sub) : null;
         const currentUserRole = jwt?.role || 'Unknown role';
+        const currentUserEmail = jwt?.email || jwt?.company_email || jwt?.companyEmail || '';
         const currentUserName = jwt?.representative || jwt?.name || currentUserEmail.split('@')[0] || 'You';
 
         const projectLabel = document.getElementById('projectLabel');
-        projectLabel.textContent = activeProjectName
-            ? `Project: ${activeProjectName}`
-            : `Project ID: ${activeProjectId}`;
-
         const currentUserLabel = document.getElementById('currentUserLabel');
-        currentUserLabel.textContent = `${currentUserName} · ${currentUserRole}`;
-
         const chatAvatar = document.getElementById('chatAvatar');
         const chatName = document.getElementById('chatName');
         const chatStatus = document.getElementById('chatStatus');
@@ -477,6 +476,12 @@
 
         let currentChat = null;
         let contacts = [];
+
+        projectLabel.textContent = activeProjectName
+            ? `Project: ${activeProjectName}`
+            : `Project ID: ${activeProjectId}`;
+
+        currentUserLabel.textContent = `${currentUserName} · ${currentUserRole}`;
 
         function getInitialFromEmail(email) {
             return email ? email.trim().charAt(0).toUpperCase() : '?';
@@ -518,7 +523,6 @@
             });
 
             visible.forEach(contact => contactsList.appendChild(createContactItem(contact)));
-
             if (visible.length === 0) {
                 const empty = document.createElement('div');
                 empty.className = 'contact-item';
@@ -527,134 +531,137 @@
             }
         }
 
-        function getSavedChatState() {
-            try {
-                const saved = localStorage.getItem(`projectChatState_${activeProjectId}`);
-                return saved ? JSON.parse(saved) : null;
-            } catch (err) {
-                console.warn('Failed to parse saved chat state', err);
-                return null;
+        async function apiRequest(path, options = {}) {
+            const headers = { 'Authorization': `Bearer ${authToken}` };
+            let body = null;
+            if (options.body != null && !(options.body instanceof FormData)) {
+                headers['Content-Type'] = 'application/json';
+                body = JSON.stringify(options.body);
+            } else {
+                body = options.body;
+            }
+
+            const response = await fetch(path.startsWith('http') ? path : `${API_BASE}${path}`, {
+                method: options.method || 'GET',
+                headers,
+                body,
+            });
+            if (response.status === 401 || response.status === 403) {
+                localStorage.removeItem('authToken');
+                window.location.href = 'home.html';
+                return;
+            }
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data?.error || 'Request failed');
+            }
+            return data;
+        }
+
+        function normalizeMember(member) {
+            return {
+                id: `${member.role}-${member.role_id}`,
+                name: member.display_name || member.email || member.role,
+                email: member.email || '',
+                role: member.role,
+                title: member.company_name || member.title || member.role,
+                position: member.position || '',
+                pictureUrl: member.profile_picture || null,
+                initial: member.display_name ? member.display_name.trim().charAt(0).toUpperCase() : getInitialFromEmail(member.email),
+                online: true,
+                isGroup: false,
+                recipientRole: member.role,
+                recipientId: member.role_id,
+                lastMessage: 'Tap to chat',
+                time: '',
+                messages: [],
+            };
+        }
+
+        async function fetchMessagesFor(contact) {
+            if (!contact) return;
+            const endpoint = contact.isGroup
+                ? `/chat/messages?projectId=${encodeURIComponent(activeProjectId)}&isGroup=true`
+                : `/chat/messages?projectId=${encodeURIComponent(activeProjectId)}&recipientRole=${encodeURIComponent(contact.recipientRole)}&recipientId=${encodeURIComponent(contact.recipientId)}`;
+            const data = await apiRequest(endpoint);
+            if (!data) return;
+            contact.messages = data.messages.map(message => ({
+                text: message.content,
+                sent: message.sender_role === currentUserRole && Number(message.sender_id) === currentUserId,
+                time: new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            }));
+            if (contact.messages.length) {
+                const last = contact.messages[contact.messages.length - 1];
+                contact.lastMessage = last.text;
+                contact.time = last.time;
             }
         }
 
-        function saveChatState() {
-            const state = {
-                contacts: contacts.map(contact => ({ id: contact.id, messages: contact.messages, lastMessage: contact.lastMessage, time: contact.time })),
-                selectedContactId: currentChat?.id
-            };
-            localStorage.setItem(`projectChatState_${activeProjectId}`, JSON.stringify(state));
-        }
-
-        function renderMessages() {
-            chatMessages.innerHTML = '';
-            if (!currentChat) return;
-
-            currentChat.messages.forEach(msg => {
-                const messageEl = document.createElement('div');
-                messageEl.className = `message ${msg.sent ? 'sent' : 'received'}`;
-
-                const bubble = document.createElement('div');
-                bubble.className = 'message-bubble';
-                bubble.textContent = msg.text;
-
-                const time = document.createElement('div');
-                time.className = 'message-time';
-                time.textContent = msg.time;
-
-                messageEl.appendChild(bubble);
-                messageEl.appendChild(time);
-                chatMessages.appendChild(messageEl);
-            });
-
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-        }
-
-        function selectChat(contact) {
+        async function selectChat(contact) {
             currentChat = contact;
             chatName.textContent = contact.name;
-            chatStatus.textContent = contact.isGroup ? `Group chat · ${contact.membersCount || contacts.length - 1} members` : `${contact.title || ''} · ${contact.role} · ${contact.position || 'No position'}`;
+            chatStatus.textContent = contact.isGroup
+                ? `Group chat · ${contact.membersCount || contacts.length - 1} members`
+                : `${contact.title || ''}${contact.position ? ' · ' + contact.position : ''}`;
             chatAvatar.innerHTML = buildAvatar(contact);
+            await fetchMessagesFor(contact);
             renderContacts(searchInput.value);
             renderMessages();
             messageInput.focus();
-            saveChatState();
         }
 
-        function getTimeNow() {
-            return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
-
-        function sendMessage() {
+        async function sendMessage() {
             const text = messageInput.value.trim();
             if (!text || !currentChat) return;
 
-            const message = { text, sent: true, time: getTimeNow() };
+            const payload = {
+                projectId: activeProjectId,
+                content: text,
+                isGroup: currentChat.isGroup,
+            };
+            if (!currentChat.isGroup) {
+                payload.recipientRole = currentChat.recipientRole;
+                payload.recipientId = currentChat.recipientId;
+            }
+
+            const data = await apiRequest('/chat/messages', { method: 'POST', body: payload });
+            if (!data) return;
+
+            const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const message = { text, sent: true, time: now };
             currentChat.messages.push(message);
             currentChat.lastMessage = text;
-            currentChat.time = message.time;
+            currentChat.time = now;
             messageInput.value = '';
-            renderMessages();
             renderContacts(searchInput.value);
-            saveChatState();
-
-            setTimeout(() => {
-                const responseText = currentChat.isGroup ? 'Thanks team, let’s sync later.' : 'Got it, I’ll send you an update soon.';
-                const reply = { text: responseText, sent: false, time: getTimeNow() };
-                currentChat.messages.push(reply);
-                currentChat.lastMessage = reply.text;
-                currentChat.time = reply.time;
-                renderMessages();
-                renderContacts(searchInput.value);
-                saveChatState();
-            }, 800);
+            renderMessages();
         }
 
         async function loadProjectContacts() {
-            const savedState = getSavedChatState();
+            const data = await apiRequest(`/chat/members?projectId=${encodeURIComponent(activeProjectId)}`);
+            if (!data) return;
+
             const groupContact = {
                 id: `group-${activeProjectId}`,
                 name: activeProjectName ? `${activeProjectName} Group` : 'Project Group',
-                email: 'project-group@chat.local',
-                title: 'Project Group',
-                role: 'Group',
-                position: 'All Project Members',
+                email: 'group-chat@project.local',
+                role: 'Project Group',
+                title: 'Group conversation',
+                position: '',
                 pictureUrl: null,
+                initial: 'G',
                 online: true,
                 isGroup: true,
-                membersCount: 5,
-                lastMessage: 'Group chat for all project participants',
-                time: getTimeNow(),
-                messages: [{ text: 'Start group discussion for this project.', sent: false, time: getTimeNow() }]
+                membersCount: data.members.length,
+                lastMessage: 'Group chat for the project',
+                time: '',
+                messages: [],
             };
 
-            const defaultContacts = [
-                { id: 1, name: 'James Walker', email: 'james.walker@contractor.com', title: 'Mr. James Walker', role: 'Contractor', position: 'Site Supervisor', pictureUrl: '', online: true, lastMessage: 'I have the latest drawings.', time: '09:20 AM', messages: [{ text: 'Please check the drawings before lunch.', sent: false, time: '09:12 AM' }] },
-                { id: 2, name: 'Nina Patel', email: 'nina.patel@consultant.com', title: 'Ms. Nina Patel', role: 'Consultant', position: 'Structural Engineer', pictureUrl: '', online: true, lastMessage: 'Approval is ready.', time: '08:45 AM', messages: [{ text: 'The plan is approved by the design team.', sent: false, time: '08:40 AM' }] },
-                { id: 3, name: 'Michael Reed', email: 'michael.reed@teammember.com', title: 'Mr. Michael Reed', role: 'TeamMember', position: 'Field Coordinator', pictureUrl: '', online: false, lastMessage: 'On site now.', time: '07:52 AM', messages: [{ text: 'Arrived on site and checking the perimeter.', sent: false, time: '07:50 AM' }] },
-                { id: 4, name: 'Olivia Green', email: 'olivia.green@clientpm.com', title: 'Ms. Olivia Green', role: 'ClientPM', position: 'Client Project Manager', pictureUrl: '', online: true, lastMessage: 'Need the update by noon.', time: '06:37 AM', messages: [{ text: 'Please send the progress report today.', sent: false, time: '06:30 AM' }] },
-                { id: 5, name: 'Daniel Kim', email: 'daniel.kim@consultantpm.com', title: 'Mr. Daniel Kim', role: 'ConsultantPM', position: 'Consultant Project Manager', pictureUrl: '', online: true, lastMessage: 'We are tracking schedule.', time: '05:15 AM', messages: [{ text: 'Schedule looks good; I will share notes.', sent: false, time: '05:10 AM' }] }
-            ];
-
-            contacts = [groupContact, ...defaultContacts];
-
-            if (savedState) {
-                const savedMap = new Map(savedState.contacts.map(item => [item.id, item]));
-                contacts = contacts.map(contact => {
-                    const saved = savedMap.get(contact.id);
-                    return saved ? { ...contact, messages: saved.messages || contact.messages, lastMessage: saved.lastMessage || contact.lastMessage, time: saved.time || contact.time } : contact;
-                });
-                if (savedState.selectedContactId) {
-                    const selected = contacts.find(c => c.id === savedState.selectedContactId);
-                    if (selected) currentChat = selected;
-                }
-            }
-
-            if (!currentChat) {
-                currentChat = contacts[0];
-            }
-
+            contacts = [groupContact, ...data.members.map(normalizeMember)];
+            currentChat = contacts[0];
+            await selectChat(currentChat);
             renderContacts();
-            selectChat(currentChat);
         }
 
         backBtn.addEventListener('click', goBack);
@@ -671,7 +678,10 @@
         });
         searchInput.addEventListener('input', (event) => renderContacts(event.target.value));
 
-        loadProjectContacts();
+        loadProjectContacts().catch(err => {
+            console.error('Failed to load chat contacts', err);
+            chatStatus.textContent = 'Unable to load chat. Please refresh.';
+        });
     </script>
 </body>
 </html>
