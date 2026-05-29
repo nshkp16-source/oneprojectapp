@@ -429,10 +429,10 @@
             }
         }
 
-        const authToken = localStorage.getItem('authToken');
+        let authToken = localStorage.getItem('authToken');
+        let refreshToken = localStorage.getItem('refreshToken');
         const activeProjectId = localStorage.getItem('activeProjectId');
         const activeProjectName = localStorage.getItem('activeProjectName');
-        const redirectSource = sessionStorage.getItem('redirectSource');
 
         const routes = {
             'client-dashboard': 'client-dashboard.html',
@@ -443,11 +443,31 @@
             'consultant-project-manager': 'consultant-project-manager.html'
         };
 
-        function goBack() {
-            window.location.href = routes[redirectSource] || 'home.html';
+        function getRedirectSource() {
+            return sessionStorage.getItem('redirectSource');
         }
 
-        if (!authToken) {
+        function goBack() {
+            const source = getRedirectSource();
+            if (source && routes[source]) {
+                window.location.href = routes[source];
+                return;
+            }
+
+            if (document.referrer && !document.referrer.includes('chat.html')) {
+                window.location.href = document.referrer;
+                return;
+            }
+
+            if (window.history.length > 1) {
+                window.history.back();
+                return;
+            }
+
+            window.location.href = 'home.html';
+        }
+
+        if (!authToken && !refreshToken) {
             window.location.href = 'home.html';
         }
 
@@ -531,8 +551,34 @@
             }
         }
 
+        async function refreshAuthToken() {
+            const currentRefreshToken = localStorage.getItem('refreshToken');
+            if (!currentRefreshToken) return null;
+
+            const response = await fetch(`${API_BASE}/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refreshToken: currentRefreshToken }),
+            });
+
+            if (!response.ok) {
+                return null;
+            }
+
+            const data = await response.json();
+            if (!data?.accessToken) return null;
+
+            authToken = data.accessToken;
+            localStorage.setItem('authToken', authToken);
+            if (data.refreshToken) {
+                refreshToken = data.refreshToken;
+                localStorage.setItem('refreshToken', refreshToken);
+            }
+            return authToken;
+        }
+
         async function apiRequest(path, options = {}) {
-            const headers = { 'Authorization': `Bearer ${authToken}` };
+            const headers = { 'Authorization': `Bearer ${authToken || localStorage.getItem('authToken')}` };
             let body = null;
             if (options.body != null && !(options.body instanceof FormData)) {
                 headers['Content-Type'] = 'application/json';
@@ -546,11 +592,18 @@
                 headers,
                 body,
             });
-            if (response.status === 401 || response.status === 403) {
+
+            if ((response.status === 401 || response.status === 403) && !options._retry) {
+                const newToken = await refreshAuthToken();
+                if (newToken) {
+                    return apiRequest(path, { ...options, _retry: true });
+                }
                 localStorage.removeItem('authToken');
+                localStorage.removeItem('refreshToken');
                 window.location.href = 'home.html';
                 return;
             }
+
             const data = await response.json();
             if (!response.ok) {
                 throw new Error(data?.error || 'Request failed');
