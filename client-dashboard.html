@@ -1106,7 +1106,6 @@
 </div>
 
 <script>
-
 // =========================
 // Decode JWT helper
 // =========================
@@ -1169,7 +1168,6 @@ async function refreshAccessToken() {
 const token = localStorage.getItem("authToken");
 const decoded = parseJwt(token);
 const clientId    = decoded?.sub;
-const clientEmail = decoded?.companyEmail || decoded?.email;
 const clientRole  = decoded?.role;
 
 // DOM elements
@@ -1192,32 +1190,14 @@ const activeProject     = document.getElementById("activeProject");
 // =========================
 document.addEventListener("DOMContentLoaded", async () => {
 
-  // 1. Display email + role from JWT
-  if (profileEmail) profileEmail.textContent = clientEmail;
-  if (profileRole)  profileRole.textContent  = `Role: ${clientRole}`;
-
-  // 2. Fetch user identity from backend
-  const storedToken = localStorage.getItem('authToken');
-  if (storedToken) {
-    try {
-      const res = await fetch('https://oneprojectapp-backend.onrender.com/api/me', {
-        headers: { 'Authorization': `Bearer ${storedToken}` }
-      });
-      if (res.ok) {
-        const user = await res.json();
-        window.currentUserId   = user.id;
-        window.currentUserRole = user.role;
-      } else {
-        console.error('Failed to fetch user info:', res.status);
-      }
-    } catch (err) {
-      console.error('Error fetching user info:', err);
-    }
-  }
-
-  // 3. Fetch client profile picture
+  // 1. Fetch client profile from backend
   try {
     const client = await apiRequest("https://oneprojectapp-backend.onrender.com/client/profile", { method: "GET" });
+    const clientEmail = client.email || decoded?.companyEmail || decoded?.email;
+
+    if (profileEmail) profileEmail.textContent = clientEmail;
+    if (profileRole)  profileRole.textContent  = `Role: ${client.role}`;
+
     if (client.profile_picture && client.profile_picture.trim() !== "") {
       profileIcon.style.backgroundImage      = `url("${client.profile_picture}")`;
       profileIconLarge.style.backgroundImage = `url("${client.profile_picture}")`;
@@ -1232,9 +1212,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     console.error("Client profile fetch error:", err);
   }
 
-  // 4. Fetch projects owned by client
+  // 2. Fetch projects owned by client
   try {
-    const data     = await apiRequest("https://oneprojectapp-backend.onrender.com/client/projects", {
+    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/client/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ clientId })
@@ -1266,7 +1246,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     activeProject.textContent = "Error loading projects";
   }
 
-  // 5. Load tabs + records
+  // 3. Load tabs + records
   loadHomeTabs();
   initializeSummaryPanel();
   loadSummaryWeather();
@@ -1302,17 +1282,6 @@ window.ProjectContext = {
   getName(){ return localStorage.getItem("activeProjectName"); },
   clear()  { localStorage.removeItem("activeProjectId"); localStorage.removeItem("activeProjectName"); }
 };
-
-// =========================
-// Project selector toggle
-// =========================
-projectSelector.addEventListener("click", (e) => {
-  e.stopPropagation();
-  const rect = projectSelector.getBoundingClientRect();
-  projectDialog.style.display = "block";
-  projectDialog.style.top     = rect.bottom + "px";
-  projectDialog.style.left    = rect.left   + "px";
-});
 
 // =========================
 // Profile dialog
@@ -1371,14 +1340,23 @@ profileUpload.addEventListener('change', async (e) => {
 // Delete picture
 deletePictureBtn.addEventListener('click', async () => {
   try {
-    await apiRequest("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
+    const result = await apiRequest("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
       method: "POST"
     });
-    const ch = (clientEmail || "?").charAt(0).toUpperCase();
-    profileIcon.style.backgroundImage      = "";
-    profileIcon.textContent                = ch;
-    profileIconLarge.style.backgroundImage = "";
-    profileIconLarge.textContent           = ch;
+
+    if (result.success) {
+      // Use backend email if available, fallback to JWT
+      const client = await apiRequest("https://oneprojectapp-backend.onrender.com/client/profile", { method: "GET" });
+      const clientEmail = client.email || decoded?.companyEmail || decoded?.email;
+
+      const ch = (clientEmail || "?").charAt(0).toUpperCase();
+      profileIcon.style.backgroundImage      = "";
+      profileIcon.textContent                = ch;
+      profileIconLarge.style.backgroundImage = "";
+      profileIconLarge.textContent           = ch;
+    } else {
+      alert("Failed to delete profile picture.");
+    }
   } catch (err) {
     console.error("Delete error:", err);
     alert("Failed to delete profile picture.");
