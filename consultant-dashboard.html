@@ -3592,30 +3592,6 @@ function tabToTable(tabKey) {
 }
 
 // =======================================================================
-//  WORK CENTER HELPERS
-// =======================================================================
-function getSide(role) {
-  if (['Contractor', 'ContractorPM'].includes(role))  return 'Contractor';
-  if (['Consultant', 'ConsultantPM'].includes(role))  return 'Consultant';
-  if (['Client',     'ClientPM'].includes(role))      return 'Client';
-  return null;
-}
-
-function isWCLeader(role) {
-  return ['Contractor','ContractorPM','Consultant','ConsultantPM','Client','ClientPM'].includes(role);
-}
-
-function priorityBadge(priority) {
-  const map = { low: '#10b981', normal: '#f59e0b', high: '#ef4444' };
-  const p   = priority || 'normal';
-  const color = map[p] || '#6b7280';
-  const label = p.charAt(0).toUpperCase() + p.slice(1);
-  return `<span style="background:${color}20;color:${color};border:1px solid ${color}60;
-    border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;white-space:nowrap;">
-    ${label} Priority</span>`;
-}
-
-// =======================================================================
 //  AUTH-AWARE FETCH
 // =======================================================================
 async function authFetch(url, options = {}) {
@@ -3678,7 +3654,7 @@ function statusBadge(status) {
 }
 
 // =======================================================================
-//  TABS
+//  TABS  — ORIGINAL (home tabs only, NO work-center logic here)
 // =======================================================================
 const bottomContent = document.getElementById('bottomContent');
 
@@ -3725,6 +3701,11 @@ function loadReportTabs() {
   setTabContent('work-centel');
 }
 
+// -----------------------------------------------------------------------
+//  setTabContent — ORIGINAL home-tab descriptions only.
+//  Report tabs (work-centel, planning-execution, etc.) are handled by
+//  their own setReportTabContent called from loadReportTabs flow.
+// -----------------------------------------------------------------------
 function setTabContent(tabKey) {
   const map = {
     contractual:              'Contract agreements, amendments, change orders, permits, insurance, tender docs.',
@@ -3733,33 +3714,57 @@ function setTabContent(tabKey) {
     operational:              'Daily site reports, progress reports, BoQ, technical specs, submittals, drawings.',
     financial:                'Interim payment certificates, contractor claims, final account reports.',
     meeting:                  null,
+    // Report tabs — handled here too when called from report nav
     'work-centel':            'Leader assigns tasks to team members; members execute and report daily progress for validation.',
     'planning-execution':     'Leader sets planned milestones, members log actual execution for comparison.',
     'document-approval':      'Members draft reports, leader reviews and approves before records move forward.',
     'control-reports':        'Leader consolidates approved drafts, members monitor validated information.',
     'communication-meetings': null,
   };
+
   if (tabKey === 'meeting' || tabKey === 'communication-meetings') {
     renderMeetingContent();
     return;
   }
+  if (tabKey === 'planning-execution') {
+    // Planning & Execution uses its own panel flow
+    renderBottomContent(map[tabKey], 'No activities yet.', tabKey);
+    loadTabRecords(tabKey);
+    return;
+  }
+
   const desc = map[tabKey];
   if (desc === undefined) { console.warn('Unknown tab key:', tabKey); return; }
-  renderBottomContent(desc, 'No data available in this category.', tabKey);
-  const dbTabs = ['contractual','administrative','safety','operational','financial',
-                  'work-centel','planning-execution','document-approval','control-reports'];
-  if (dbTabs.includes(tabKey)) loadTabRecords(tabKey);
+
+  // Home tabs — ORIGINAL simple shell (no leader-role logic needed here)
+  const isReportTab = ['work-centel','document-approval','control-reports'].includes(tabKey);
+  if (isReportTab) {
+    renderBottomContent(desc, 'No data available in this category.', tabKey);
+    loadTabRecords(tabKey);
+  } else {
+    // Original home tabs: simple shell, original signature
+    renderBottomContent(desc, 'No data available in this category.', tabKey);
+    const dbTabs = ['contractual','administrative','safety','operational','financial'];
+    if (dbTabs.includes(tabKey)) loadTabRecords(tabKey);
+  }
 }
 
 // =======================================================================
 //  BOTTOM CONTENT SHELL
+//  Only adds role-aware logic for report tabs; home tabs behave as original
 // =======================================================================
 function renderBottomContent(description, placeholder, tabKey = 'contractual') {
+  const reportTabs = ['work-centel','planning-execution','document-approval','control-reports'];
+  const isReportTab = reportTabs.includes(tabKey);
+
+  // Role checks only apply to report tabs
   const wcLeaderRoles  = ['Contractor','ContractorPM','Consultant','ConsultantPM','Client','ClientPM'];
   const genLeaderRoles = ['ContractorPM','ConsultantPM','ClientPM','PM','Leader'];
-  const isLeader = tabKey === 'work-centel'
-    ? wcLeaderRoles.includes(window.currentUserRole)
-    : genLeaderRoles.includes(window.currentUserRole);
+  const isLeader = isReportTab
+    ? (tabKey === 'work-centel'
+        ? wcLeaderRoles.includes(window.currentUserRole)
+        : genLeaderRoles.includes(window.currentUserRole))
+    : true; // home tabs: always show add button (original behaviour)
 
   const addLabel = tabKey === 'document-approval' ? '➕ Draft Report'
     : tabKey === 'control-reports'               ? '➕ Consolidate'
@@ -3810,7 +3815,7 @@ function renderBottomContent(description, placeholder, tabKey = 'contractual') {
 }
 
 // =======================================================================
-//  MEETING CONTENT (unchanged)
+//  MEETING CONTENT (original — unchanged)
 // =======================================================================
 function renderMeetingContent(activeView = 'minutes') {
   bottomContent.innerHTML = `
@@ -3903,6 +3908,8 @@ const recordsCache = {};
 
 // =======================================================================
 //  LOAD TAB RECORDS
+//  FIX: uses activeProjectId for home tabs (original), activeProjectName
+//       only for work-center / report tabs that the backend expects it
 // =======================================================================
 async function loadTabRecords(tabKey) {
   const recordsList    = document.getElementById('recordsList');
@@ -3914,7 +3921,12 @@ async function loadTabRecords(tabKey) {
     return;
   }
 
-  const projectId = localStorage.getItem('activeProjectName');
+  // Home tabs use activeProjectId; report tabs use activeProjectName
+  const homeTabs = ['contractual','administrative','safety','operational','financial'];
+  const projectId = homeTabs.includes(tabKey)
+    ? localStorage.getItem('activeProjectId')
+    : localStorage.getItem('activeProjectName');
+
   if (!projectId) {
     placeholderDiv.style.display = 'block';
     placeholderDiv.innerHTML = '<p>⚠️ No Project Selected</p>';
@@ -3958,7 +3970,11 @@ async function loadTabRecords(tabKey) {
 //  MARK RECORD VIEWED
 // =======================================================================
 function markRecordViewed(recordId, tabKey) {
-  const projectId = localStorage.getItem('activeProjectName');
+  const homeTabs  = ['contractual','administrative','safety','operational','financial'];
+  const projectId = homeTabs.includes(tabKey)
+    ? localStorage.getItem('activeProjectId')
+    : localStorage.getItem('activeProjectName');
+
   authFetch('https://oneprojectapp-backend.onrender.com/api/mark-record-viewed', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -3983,7 +3999,7 @@ function markRecordViewed(recordId, tabKey) {
 }
 
 // =======================================================================
-//  RENDER RECORDS LIST
+//  RENDER RECORDS LIST  (original — unchanged)
 // =======================================================================
 function renderRecordsList(records, tabKey) {
   const recordsList    = document.getElementById('recordsList');
@@ -4003,18 +4019,14 @@ function renderRecordsList(records, tabKey) {
   placeholderDiv.style.display = 'none';
 
   recordsList.innerHTML = records.map(doc => {
-    // ── Work Center gets its own card template ──
     if (tabKey === 'work-centel') return renderWorkCenterCard(doc, tabKey);
 
-    // ── All other tabs: existing card logic ──
     const isUploader = doc.is_uploader === true;
     const isUnread   = !doc.is_viewed && !isUploader;
     const fileName   = doc.file_path ? doc.file_path.split('/').pop() : null;
     const isLocked   = doc.is_locked === true;
     const btnState   = doc.btn_state;
     const myReview   = doc.my_review || {};
-    const leaderRoles = ['ContractorPM','ConsultantPM','ClientPM','PM','Leader'];
-    const isLeader   = leaderRoles.includes(window.currentUserRole);
     const workflowHint = tabKey === 'document-approval'
       ? 'Document drafts are authored by team members and require leader review before they move forward.'
       : tabKey === 'control-reports'
@@ -4233,7 +4245,1018 @@ function renderRecordsList(records, tabKey) {
 }
 
 // =======================================================================
-//  WORK CENTER CARD — collapsed (minimal)
+//  WORKFLOW STEPS VISUAL (original — unchanged)
+// =======================================================================
+function renderWorkflowSteps(doc) {
+  const steps = doc.workflow_steps;
+  if (!steps || !steps.length) return '';
+  const stepsHtml = steps.map((step, idx) => {
+    let icon, color, label = `Step ${idx + 1}: ${step.label}`;
+    switch (step.status) {
+      case 'done':     icon = '✅'; color = '#10b981'; label += ' — Done';     break;
+      case 'rejected': icon = '❌'; color = '#ef4444'; label += ' — Rejected'; break;
+      case 'pending':  icon = '⏳'; color = '#f59e0b';                          break;
+      default:         icon = '🔒'; color = '#d1d5db';                          break;
+    }
+    return `<div style="display:flex;align-items:center;gap:6px;">
+      <span>${icon}</span>
+      <span style="font-size:11px;font-weight:600;color:${color};">${label}</span>
+    </div>`;
+  }).join('<div style="font-size:10px;color:#d1d5db;margin:0 4px;">→</div>');
+  return `
+    <div style="margin-bottom:12px;padding:10px 12px;background:#f8fafc;
+      border:1px solid #e2e8f0;border-radius:8px;">
+      <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+        letter-spacing:.5px;margin-bottom:8px;">Approval Workflow</div>
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">${stepsHtml}</div>
+    </div>`;
+}
+
+// =======================================================================
+//  EVENT DELEGATE — bottomContent (original, + work-center actions)
+// =======================================================================
+bottomContent.addEventListener('click', (e) => {
+  if (e.target.closest('.add-doc-btn')) {
+    const activeTab = getNavTabs()?.querySelector('li.active');
+    const tab = activeTab?.getAttribute('data-tab') || 'contractual';
+    if (tab === 'planning-execution') openPlanningExecutionForm(null, tab);
+    else if (tab === 'work-centel')   openWorkCenterCreateForm();
+    else openAddRecordPanel(null, tab);
+    return;
+  }
+
+  const actionEl = e.target.closest('[data-action]');
+  if (!actionEl) return;
+  const action = actionEl.getAttribute('data-action');
+
+  if (action === 'toggle') {
+    const item     = actionEl.closest('.doc-item');
+    const tabKey   = item.getAttribute('data-tab-key');
+    const recordId = item.getAttribute('data-id');
+    toggleRecordDetail(recordId, tabKey);
+    return;
+  }
+
+  const item = actionEl.closest('.doc-item');
+  if (!item) return;
+  const recordId = item.getAttribute('data-id');
+  const tabKey   = item.getAttribute('data-tab-key');
+
+  // Work Center specific
+  if (action === 'wc-update')          { handleWCUpdateTask(actionEl.getAttribute('data-task-id'), tabKey); return; }
+  if (action === 'wc-delete')          { handleWCDeleteTask(actionEl.getAttribute('data-task-id'), tabKey); return; }
+  if (action === 'wc-submit-progress') { handleWCSubmitProgress(actionEl.getAttribute('data-task-id'), tabKey); return; }
+  if (action === 'wc-validate') {
+    handleWCValidateProgress(recordId, tabKey,
+      actionEl.getAttribute('data-progress-id'),
+      actionEl.getAttribute('data-validate-action'));
+    return;
+  }
+  if (action === 'wc-download-task') {
+    downloadFile(actionEl.getAttribute('data-task-id'), tabKey, actionEl.getAttribute('data-filename'));
+    return;
+  }
+  if (action === 'wc-download-progress') {
+    const progressId = actionEl.getAttribute('data-progress-id');
+    const filename   = actionEl.getAttribute('data-filename');
+    authFetch(`https://oneprojectapp-backend.onrender.com/api/work-center-progress/download/${progressId}`, { method: 'GET' })
+      .then(async res => {
+        if (!res || !res.ok) { alert('Failed to download.'); return; }
+        const blob = await res.blob();
+        const url  = window.URL.createObjectURL(blob);
+        const a    = document.createElement('a'); a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); a.remove();
+        window.URL.revokeObjectURL(url);
+      });
+    return;
+  }
+
+  // Original general actions
+  switch (action) {
+    case 'approve':     handleDecisionMakerAction(recordId, tabKey, 'approved'); break;
+    case 'reject':      handleDecisionMakerAction(recordId, tabKey, 'rejected'); break;
+    case 'tm-approve':  handleTeamMemberAction(recordId, tabKey, 'approved');    break;
+    case 'tm-reject':   handleTeamMemberAction(recordId, tabKey, 'rejected');    break;
+    case 'comment':     openTeamMemberComment(recordId, tabKey);                 break;
+    case 'open-notice': {
+      const isRejection = actionEl.getAttribute('data-is-rejection') === 'true';
+      openNoticeOfDetermination(recordId, tabKey, isRejection);
+      break;
+    }
+    case 'delete':   deleteRecord(recordId, tabKey);                                        break;
+    case 'download': downloadFile(recordId, tabKey, actionEl.getAttribute('data-filename')); break;
+  }
+});
+
+// =======================================================================
+//  TOGGLE RECORD DETAIL (original + work-center lazy load)
+// =======================================================================
+function toggleRecordDetail(recordId, tabKey) {
+  if (tabKey === 'planning-execution') { openPlanningExecutionForm(recordId, tabKey); return; }
+
+  const detail  = document.getElementById(`detail-${recordId}`);
+  const chevron = document.querySelector(`.chevron-${recordId}`);
+  if (!detail) return;
+
+  const isOpen = detail.style.display !== 'none';
+
+  if (!isOpen) {
+    const cached = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
+    if (cached && !cached.is_viewed) {
+      const isCreator = String(cached.creator_id) === String(window.currentUserId);
+      if (!isCreator) markRecordViewed(recordId, tabKey);
+    }
+    if (tabKey === 'work-centel') loadWorkCenterDetail(recordId, tabKey);
+  }
+
+  detail.style.display = isOpen ? 'none' : 'block';
+  if (chevron) chevron.textContent = isOpen ? '▾' : '▴';
+}
+
+// =======================================================================
+//  DECISION MAKER ACTION (original — unchanged)
+// =======================================================================
+async function handleDecisionMakerAction(recordId, tabKey, action) {
+  const homeTabs  = ['contractual','administrative','safety','operational','financial'];
+  const projectId = homeTabs.includes(tabKey)
+    ? localStorage.getItem('activeProjectId')
+    : localStorage.getItem('activeProjectName');
+  try {
+    const res = await authFetch(
+      'https://oneprojectapp-backend.onrender.com/api/review-record',
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId, recordId, recordType: tabToTable(tabKey), action, actorType: 'decision_maker' })
+      }
+    );
+    if (!res) return;
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || `Failed to ${action} record.`); return; }
+    alert(data.message || `Record ${action} successfully.`);
+    delete recordsCache[tabKey];
+    await loadTabRecords(tabKey);
+  } catch (err) {
+    console.error('Decision maker action error:', err);
+    alert(`Failed to ${action} record.`);
+  }
+}
+
+// =======================================================================
+//  TEAM MEMBER ACTION (original — unchanged)
+// =======================================================================
+async function handleTeamMemberAction(recordId, tabKey, action) {
+  const homeTabs  = ['contractual','administrative','safety','operational','financial'];
+  const projectId = homeTabs.includes(tabKey)
+    ? localStorage.getItem('activeProjectId')
+    : localStorage.getItem('activeProjectName');
+  try {
+    const res = await authFetch(
+      'https://oneprojectapp-backend.onrender.com/api/review-record',
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId, recordId, recordType: tabToTable(tabKey), action, actorType: 'team_member' })
+      }
+    );
+    if (!res) return;
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || 'Failed to record your action.'); return; }
+    delete recordsCache[tabKey];
+    loadTabRecords(tabKey);
+  } catch (err) {
+    console.error('Team member action error:', err);
+    alert('Failed to record your action.');
+  }
+}
+
+// =======================================================================
+//  TEAM MEMBER COMMENT (original — unchanged)
+// =======================================================================
+function openTeamMemberComment(recordId, tabKey) {
+  document.getElementById('commentModal')?.remove();
+  const cached          = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
+  const existingComment = cached?.my_review?.comment || '';
+  const homeTabs        = ['contractual','administrative','safety','operational','financial'];
+  const projectId       = homeTabs.includes(tabKey)
+    ? localStorage.getItem('activeProjectId')
+    : localStorage.getItem('activeProjectName');
+
+  const modal = document.createElement('div');
+  modal.id = 'commentModal';
+  modal.style.cssText =
+    'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;' +
+    'justify-content:center;background:rgba(0,0,0,0.45);';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:24px;width:min(420px,90vw);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h3 style="margin:0;font-size:16px;color:#1f2937;">💬 Add Comment</h3>
+        <button id="closeCommentModal" style="background:none;border:none;font-size:20px;color:#9ca3af;cursor:pointer;">×</button>
+      </div>
+      <p style="font-size:12px;color:#9ca3af;margin:0 0 12px;">
+        Your comment is stored alongside your review and does not affect record status.</p>
+      <textarea id="commentText" placeholder="Enter your comment…"
+        style="width:100%;min-height:100px;padding:10px 12px;border:1px solid #d1d5db;
+        border-radius:8px;font-size:13px;color:#374151;resize:vertical;
+        box-sizing:border-box;">${existingComment}</textarea>
+      <div style="display:flex;gap:8px;margin-top:14px;">
+        <button id="submitCommentBtn"
+          style="flex:1;padding:10px;font-size:13px;font-weight:600;
+          background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+          Submit Comment</button>
+        <button id="cancelCommentBtn"
+          style="flex:1;padding:10px;font-size:13px;font-weight:600;
+          background:#f3f4f6;color:#374151;border:1px solid #d1d5db;
+          border-radius:8px;cursor:pointer;">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  document.getElementById('closeCommentModal').addEventListener('click', () => modal.remove());
+  document.getElementById('cancelCommentBtn').addEventListener('click',  () => modal.remove());
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+  document.getElementById('submitCommentBtn').addEventListener('click', async () => {
+    const comment = document.getElementById('commentText').value.trim();
+    if (!comment) { alert('Please enter a comment.'); return; }
+    try {
+      const res = await authFetch(
+        'https://oneprojectapp-backend.onrender.com/api/review-record',
+        {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            projectId, recordId, recordType: tabToTable(tabKey),
+            action: 'no_action', comment, actorType: 'team_member'
+          })
+        }
+      );
+      if (!res) return;
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || 'Failed to submit comment.'); return; }
+      modal.remove();
+      delete recordsCache[tabKey];
+      loadTabRecords(tabKey);
+    } catch (err) {
+      console.error('Comment error:', err);
+      alert('Failed to submit comment.');
+    }
+  });
+}
+
+// =======================================================================
+//  DOWNLOAD FILE (original — unchanged)
+// =======================================================================
+async function downloadFile(recordId, tabKey, fileName) {
+  try {
+    const res = await authFetch(
+      `https://oneprojectapp-backend.onrender.com/api/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}`,
+      { method: 'GET' }
+    );
+    if (!res || !res.ok) { alert('Failed to download.'); return; }
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      if (data.url) {
+        const a = document.createElement('a');
+        a.href = data.url; a.download = fileName; a.target = '_blank';
+        document.body.appendChild(a); a.click(); a.remove();
+      } else alert(data.error || 'File not available.');
+      return;
+    }
+    const blob = await res.blob();
+    if (!blob.size) { alert('File is empty.'); return; }
+    const url = window.URL.createObjectURL(blob);
+    const a   = document.createElement('a'); a.href = url; a.download = fileName;
+    document.body.appendChild(a); a.click(); a.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (err) { console.error('Download error:', err); alert('Failed to download file.'); }
+}
+
+// =======================================================================
+//  DELETE RECORD (original — unchanged)
+// =======================================================================
+async function deleteRecord(recordId, tabKey) {
+  if (!confirm('Are you sure you want to delete this record? This cannot be undone.')) return;
+  const homeTabs  = ['contractual','administrative','safety','operational','financial'];
+  const projectId = homeTabs.includes(tabKey)
+    ? localStorage.getItem('activeProjectId')
+    : localStorage.getItem('activeProjectName');
+  try {
+    const res = await authFetch(
+      'https://oneprojectapp-backend.onrender.com/api/delete-record',
+      {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ projectId, recordId, recordType: tabToTable(tabKey) })
+      }
+    );
+    if (!res) return;
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || 'Failed to delete record.'); return; }
+    alert('Record deleted successfully.');
+    delete recordsCache[tabKey];
+    loadTabRecords(tabKey);
+  } catch (err) { console.error('Delete error:', err); alert('Failed to delete record.'); }
+}
+
+// =======================================================================
+//  NOTICE OF DETERMINATION / REJECTION NOTICE (original — unchanged)
+// =======================================================================
+function openNoticeOfDetermination(recordId, tabKey, isRejection = false) {
+  openAddRecordPanel({
+    recordKind:   isRejection ? 'rejection_notice' : 'notice',
+    noticeTiedId: recordId,
+    tabKey,
+  }, tabKey);
+}
+
+// =======================================================================
+//  ADD RECORD PANEL (original — unchanged)
+// =======================================================================
+function openAddRecordPanel(noticeConfig = null, tabKey = null) {
+  const isNotice     = noticeConfig !== null;
+  const recordKind   = isNotice ? noticeConfig.recordKind   : 'new';
+  const noticeTiedId = isNotice ? noticeConfig.noticeTiedId : null;
+  const resolvedTab  = tabKey || (isNotice ? noticeConfig.tabKey : null) || 'contractual';
+
+  const tabLabels = {
+    contractual:    'Contractual & Legal',
+    administrative: 'Administrative & Instructional',
+    safety:         'Safety & Compliance',
+    operational:    'Operational & Performance',
+    financial:      'Financial',
+    'planning-execution': 'Planning & Execution',
+    'document-approval':  'Document & Approval',
+    'control-reports':    'Control & Report',
+  };
+  const tabLabel = tabLabels[resolvedTab] || resolvedTab;
+
+  const panelTitle = recordKind === 'rejection_notice' ? '📋 Issue Rejection Notice'
+    : recordKind === 'notice' ? '📋 Issue Notice of Determination'
+    : `➕ Add Record — ${tabLabel}`;
+
+  const noticeInfoBanner = isNotice ? `
+    <div style="margin-bottom:18px;padding:14px 16px;
+      background:${recordKind === 'rejection_notice' ? '#fff1f2' : '#fffbeb'};
+      border:1px solid ${recordKind === 'rejection_notice' ? '#fca5a5' : '#fcd34d'};border-radius:10px;">
+      <div style="font-size:13px;font-weight:700;
+        color:${recordKind === 'rejection_notice' ? '#991b1b' : '#92400e'};margin-bottom:4px;">
+        ${recordKind === 'rejection_notice' ? '⚠️ Rejection Notice' : '📋 Notice of Determination'}
+      </div>
+      <div style="font-size:12px;color:#555;line-height:1.6;">
+        This notice is tied to Record <strong>#${noticeTiedId}</strong> in
+        <strong>${tabLabel}</strong>.
+      </div>
+    </div>` : '';
+
+  const categoryInfo = !isNotice ? `
+    <div style="margin-bottom:18px;padding:16px;background:#f7fbfd;
+      border:1px solid #d8eef7;border-radius:10px;">
+      <div style="font-size:14px;font-weight:bold;color:#007B8A;margin-bottom:6px;">Category</div>
+      <div style="font-size:15px;color:#333;">${tabLabel}</div>
+    </div>` : '';
+
+  const html = `
+    <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
+      <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
+        <h3 style="margin:0;color:#333;font-size:20px;">${panelTitle}</h3>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:16px 20px;">
+        ${noticeInfoBanner}${categoryInfo}
+        <form id="addRecordForm">
+          <input type="hidden" id="formTabKey"        value="${resolvedTab}"/>
+          <input type="hidden" id="formRecordType"    value="${tabToTable(resolvedTab)}"/>
+          <input type="hidden" id="recordKindField"   value="${recordKind}"/>
+          <input type="hidden" id="noticeTiedIdField" value="${noticeTiedId || ''}"/>
+          <div style="margin-bottom:20px;">
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
+              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
+              ${isNotice ? 'Notice Title *' : 'Title *'}</label>
+            <input type="text" id="recordTitle" required
+              placeholder="${isNotice ? 'e.g. Determination of Claim #12' : 'e.g. Foundation Agreement'}"
+              style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;
+              font-size:14px;box-sizing:border-box;"/>
+          </div>
+          <div style="margin-bottom:20px;">
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
+              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
+              ${isNotice ? 'Notice Content *' : 'Description *'}</label>
+            <div id="editorToolbar" style="display:flex;flex-wrap:wrap;gap:4px;padding:8px;
+              background:#f5f5f5;border:1px solid #ddd;border-bottom:none;border-radius:6px 6px 0 0;">
+              <button type="button" data-cmd="bold"
+                style="width:32px;height:32px;font-weight:bold;background:#fff;
+                border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">B</button>
+              <button type="button" data-cmd="italic"
+                style="width:32px;height:32px;font-style:italic;background:#fff;
+                border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">I</button>
+              <button type="button" data-cmd="underline"
+                style="width:32px;height:32px;text-decoration:underline;background:#fff;
+                border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">U</button>
+              <button type="button" data-cmd="strikeThrough"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
+                border-radius:4px;cursor:pointer;font-size:13px;text-decoration:line-through;">S</button>
+              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
+              <button type="button" data-cmd="insertUnorderedList"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
+                border-radius:4px;cursor:pointer;font-size:14px;">☰</button>
+              <button type="button" data-cmd="insertOrderedList"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
+                border-radius:4px;cursor:pointer;font-size:13px;">1.</button>
+              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
+              <button type="button" data-cmd="justifyLeft"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
+                border-radius:4px;cursor:pointer;font-size:13px;">⬅</button>
+              <button type="button" data-cmd="justifyCenter"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
+                border-radius:4px;cursor:pointer;font-size:13px;">↔</button>
+              <button type="button" data-cmd="justifyRight"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
+                border-radius:4px;cursor:pointer;font-size:13px;">➡</button>
+              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
+              <button type="button" data-cmd="undo"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
+                border-radius:4px;cursor:pointer;font-size:13px;">↩</button>
+              <button type="button" data-cmd="redo"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
+                border-radius:4px;cursor:pointer;font-size:13px;">↪</button>
+              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
+              <button type="button" data-cmd="removeFormat"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
+                border-radius:4px;cursor:pointer;font-size:11px;color:#e53e3e;">✕F</button>
+            </div>
+            <div id="recordDescription" contenteditable="true"
+              style="width:100%;min-height:220px;padding:12px;border:1px solid #ddd;
+              border-radius:0 0 6px 6px;font-size:14px;color:#333;line-height:1.7;
+              background:#fff;outline:none;box-sizing:border-box;overflow-y:auto;"
+              placeholder="${isNotice ? 'Provide the full notice content…' : 'Provide detailed description…'}">
+            </div>
+            <style>
+              #recordDescription:empty:before {
+                content: attr(placeholder); color:#aaa; pointer-events:none; display:block; }
+              #editorToolbar button[data-cmd].active {
+                background:#e0f0ff; border-color:#4299e1; }
+            </style>
+          </div>
+          <div style="margin-bottom:24px;">
+            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
+              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Attach Document</label>
+            <div id="attachmentDropZone"
+              style="display:flex;align-items:center;gap:12px;padding:16px;
+              border:2px dashed #ddd;border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
+              <div style="font-size:24px;">📎</div>
+              <div style="flex:1;">
+                <div style="font-weight:bold;color:#333;font-size:14px;">
+                  Click to upload or drag &amp; drop</div>
+                <div style="font-size:12px;color:#999;margin-top:4px;">
+                  PDF, DOC, DOCX, XLS, XLSX, JPG, PNG (Max 10MB)</div>
+                <input type="file" id="recordAttachment" style="display:none;"
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"/>
+              </div>
+            </div>
+            <div id="attachmentName"
+              style="margin-top:8px;font-size:12px;color:#28a745;font-weight:bold;display:none;"></div>
+          </div>
+        </form>
+      </div>
+      <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
+        background:#fff;display:flex;gap:12px;">
+        <button type="button" id="saveRecordBtn"
+          style="flex:1;padding:12px;font-size:14px;font-weight:bold;
+          background:${recordKind === 'rejection_notice' ? '#dc2626'
+            : recordKind === 'notice' ? '#d97706' : '#28a745'};
+          color:#fff;border:none;border-radius:6px;cursor:pointer;">
+          ${recordKind === 'rejection_notice' ? '📋 Issue Rejection Notice'
+            : recordKind === 'notice' ? '📋 Issue Notice' : '✓ Save Record'}</button>
+        <button type="button" onclick="collapseGrayPart()"
+          style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:#f5f5f5;
+          color:#333;border:1px solid #ddd;border-radius:6px;cursor:pointer;">✕ Cancel</button>
+      </div>
+    </div>`;
+
+  expandGrayPart(html);
+
+  document.getElementById('editorToolbar')?.addEventListener('mousedown', (e) => {
+    const btn = e.target.closest('button[data-cmd]');
+    if (!btn) return;
+    e.preventDefault();
+    document.execCommand(btn.getAttribute('data-cmd'), false, null);
+    document.querySelectorAll('#editorToolbar button[data-cmd]').forEach(b => {
+      try { b.classList.toggle('active', document.queryCommandState(b.getAttribute('data-cmd'))); }
+      catch(_) {}
+    });
+  });
+
+  const updateToolbarState = () => {
+    document.querySelectorAll('#editorToolbar button[data-cmd]').forEach(b => {
+      try { b.classList.toggle('active', document.queryCommandState(b.getAttribute('data-cmd'))); }
+      catch(_) {}
+    });
+  };
+  document.getElementById('recordDescription')?.addEventListener('keyup',  updateToolbarState);
+  document.getElementById('recordDescription')?.addEventListener('mouseup', updateToolbarState);
+
+  const dropZone     = document.getElementById('attachmentDropZone');
+  const attachInput  = document.getElementById('recordAttachment');
+  const attachNameEl = document.getElementById('attachmentName');
+  const updateAttachDisplay = () => {
+    if (attachInput.files.length > 0) {
+      const f = attachInput.files[0];
+      attachNameEl.textContent   = `✓ ${f.name} (${(f.size/1024/1024).toFixed(2)} MB)`;
+      attachNameEl.style.display = 'block';
+      dropZone.style.borderColor = '#28a745';
+    } else {
+      attachNameEl.style.display = 'none';
+      dropZone.style.borderColor = '#ddd';
+    }
+  };
+  dropZone.addEventListener('click',     () => attachInput.click());
+  dropZone.addEventListener('dragover',  (e) => { e.preventDefault(); dropZone.style.borderColor = '#007B8A'; });
+  dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = '#ddd'; });
+  dropZone.addEventListener('drop', (e) => {
+    e.preventDefault(); dropZone.style.borderColor = '#ddd';
+    if (e.dataTransfer.files.length > 0) {
+      const dt = new DataTransfer(); dt.items.add(e.dataTransfer.files[0]);
+      attachInput.files = dt.files; updateAttachDisplay();
+    }
+  });
+  attachInput.addEventListener('change', updateAttachDisplay);
+
+  document.getElementById('saveRecordBtn').addEventListener('click', async () => {
+    try {
+      const title    = document.getElementById('recordTitle').value.trim();
+      const descEl   = document.getElementById('recordDescription');
+      const descHtml = descEl ? descEl.innerHTML.trim() : '';
+      const descText = descEl ? (descEl.innerText || descEl.textContent || '').trim() : '';
+      const fileInput = document.getElementById('recordAttachment');
+      const rType    = document.getElementById('formRecordType').value;
+      const rTabKey  = document.getElementById('formTabKey').value;
+      const rKind    = document.getElementById('recordKindField').value;
+      const tiedId   = document.getElementById('noticeTiedIdField').value;
+
+      if (!title)               throw new Error('Title is required.');
+      if (title.length < 3)     throw new Error('Title must be at least 3 characters.');
+      if (!descText)            throw new Error('Content is required.');
+      if (descText.length < 10) throw new Error('Content must be at least 10 characters.');
+      if (fileInput.files[0] && fileInput.files[0].size > 10*1024*1024)
+        throw new Error('File size must not exceed 10MB.');
+
+      const homeTabs  = ['contractual','administrative','safety','operational','financial'];
+      const projectId = homeTabs.includes(rTabKey)
+        ? localStorage.getItem('activeProjectId')
+        : localStorage.getItem('activeProjectName');
+
+      const formData = new FormData();
+      formData.append('recordType',  rType);
+      formData.append('title',       title);
+      formData.append('description', descHtml);
+      formData.append('projectId',   projectId);
+      formData.append('recordKind',  rKind);
+      if (tiedId) formData.append('noticeTiedId', tiedId);
+      if (fileInput.files.length > 0) formData.append('attachment', fileInput.files[0]);
+
+      const saveBtn = document.getElementById('saveRecordBtn');
+      if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+
+      const res = await authFetch(
+        'https://oneprojectapp-backend.onrender.com/api/add-record',
+        { method: 'POST', body: formData }
+      );
+      if (!res) return;
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      const data = await res.json();
+
+      if (data.success) {
+        alert(rKind === 'rejection_notice' ? `✓ Rejection Notice "${title}" issued.`
+          : rKind === 'notice' ? `✓ Notice of Determination "${title}" issued.`
+          : `✓ Record "${title}" saved.`);
+        delete recordsCache[rTabKey];
+        loadTabRecords(rTabKey);
+        collapseGrayPart();
+      } else throw new Error(data.message || 'Failed to save.');
+    } catch (err) {
+      console.error('Form submission error:', err);
+      alert('Error: ' + err.message);
+      const saveBtn = document.getElementById('saveRecordBtn');
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = recordKind === 'rejection_notice' ? '📋 Issue Rejection Notice'
+          : recordKind === 'notice' ? '📋 Issue Notice' : '✓ Save Record';
+      }
+    }
+  });
+}
+window.openAddRecordPanel = openAddRecordPanel;
+
+// =======================================================================
+//  PLANNING & EXECUTION (original — unchanged)
+// =======================================================================
+async function openPlanningExecutionForm(recordId = null, tabKey = 'planning-execution') {
+  const cached = recordId ? (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId)) : null;
+  const isNew = !cached;
+  if (cached && !cached.is_uploader && !cached.is_viewed) markRecordViewed(cached.id, tabKey);
+  const leaderRoles = ['ContractorPM','ConsultantPM','ClientPM','PM','Leader'];
+  const isLeader = leaderRoles.includes(window.currentUserRole) ||
+    (cached && String(cached.creator_id) === String(window.currentUserId));
+  const inputReadOnly  = isLeader ? '' : 'readonly';
+  const selectDisabled = isLeader ? '' : 'disabled';
+  const buttonDisabled = isLeader ? '' : 'disabled';
+
+  let trackingEntries = [];
+  if (cached) {
+    try {
+      const res = await authFetch(
+        `https://oneprojectapp-backend.onrender.com/api/planning-execution-tracking?activityId=${cached.id}`
+      );
+      if (res && res.ok) {
+        const data = await res.json();
+        trackingEntries = Array.isArray(data.entries) ? data.entries : data.tracking || [];
+      }
+    } catch (err) { console.error('Planning execution tracking fetch error:', err); }
+  }
+
+  const panelTitle        = isNew ? '➕ Plan & Execute Activity' : `Activity: ${cached.title || 'Untitled'}`;
+  const recordTitle       = cached?.title             || '';
+  const recordDescription = cached?.description       || '';
+  const milestoneId       = cached?.milestone_id      || '';
+  const plannedQuantity   = cached?.planned_quantity  || '';
+  const unit              = cached?.unit              || '';
+  const plannedWork       = cached?.planned_work      || '';
+  const plannedManpower   = cached?.planned_manpower  || '';
+  const plannedEquipment  = cached?.planned_equipment || '';
+  const plannedMaterials  = cached?.planned_materials || '';
+  const status            = cached?.status            || 'ongoing';
+  const comments = isLeader
+    ? 'Only leaders can edit this activity.'
+    : 'Review-only mode: you can view activity plan and actual execution.';
+
+  const html = `
+    <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
+      <div style="padding:14px 16px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;
+        display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:18px;font-weight:700;color:#1f2937;">${panelTitle}</div>
+          <div style="font-size:12px;color:#4b5563;margin-top:4px;">
+            ${isNew ? 'Fill the activity plan on the left and actual execution details on the right.'
+              : 'Review or update activity plan and execution data.'}</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <span style="font-size:11px;color:#475569;background:#eff6ff;border:1px solid #bfdbfe;
+            border-radius:999px;padding:6px 12px;">Status: ${status}</span>
+          <button class="btn" onclick="collapseGrayPart()"
+            style="background:#f3f4f6;color:#1f2937;">✕ Close</button>
+        </div>
+      </div>
+      <div style="flex:1;overflow:auto;padding:16px;display:grid;grid-template-columns:1fr 1fr;
+        gap:14px;box-sizing:border-box;min-height:0;">
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px;
+          display:flex;flex-direction:column;gap:14px;">
+          <div style="font-weight:700;color:#007B8A;font-size:14px;">A. Planned Activity (Leader / PM)</div>
+          <div class="form-group"><label>Milestone ID</label>
+            <input id="peMilestoneId" type="text" value="${milestoneId}" ${inputReadOnly}/></div>
+          <div class="form-group"><label>Activity Title</label>
+            <input id="peTitle" type="text" value="${recordTitle}" ${inputReadOnly}/></div>
+          <div class="form-group"><label>Description</label>
+            <textarea id="peDescription" ${inputReadOnly}>${recordDescription}</textarea></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div class="form-group"><label>Start Date</label>
+              <input id="peStartDate" type="date" value="${cached?.start_date||''}" ${inputReadOnly}/></div>
+            <div class="form-group"><label>End Date</label>
+              <input id="peEndDate" type="date" value="${cached?.end_date||''}" ${inputReadOnly}/></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div class="form-group"><label>Planned Quantity</label>
+              <input id="pePlannedQuantity" type="number" value="${plannedQuantity}" ${inputReadOnly}/></div>
+            <div class="form-group"><label>Unit</label>
+              <input id="peUnit" type="text" value="${unit}" ${inputReadOnly}/></div>
+          </div>
+          <div class="form-group"><label>Planned Work</label>
+            <textarea id="pePlannedWork" ${inputReadOnly}>${plannedWork}</textarea></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div class="form-group"><label>Planned Manpower</label>
+              <input id="pePlannedManpower" type="text" value="${plannedManpower}" ${inputReadOnly}/></div>
+            <div class="form-group"><label>Planned Equipment</label>
+              <input id="pePlannedEquipment" type="text" value="${plannedEquipment}" ${inputReadOnly}/></div>
+          </div>
+          <div class="form-group"><label>Planned Materials</label>
+            <input id="pePlannedMaterials" type="text" value="${plannedMaterials}" ${inputReadOnly}/></div>
+          <div class="form-group"><label>Linked File</label>
+            <input id="peLinkedFile" type="file" ${selectDisabled}/></div>
+          <div style="font-size:12px;color:#4b5563;padding:10px 12px;background:#f8fafc;
+            border:1px solid #dbeafe;border-radius:10px;">${comments}</div>
+          <button id="peSavePlan" class="btn primary" ${buttonDisabled}>💾 Save Plan</button>
+        </div>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px;
+          display:flex;flex-direction:column;gap:14px;">
+          <div style="font-weight:700;color:#007B8A;font-size:14px;">B. Actual Execution Tracking</div>
+          <div class="form-group"><label>Report Date</label>
+            <input id="peReportDate" type="date" value="${new Date().toISOString().slice(0,10)}" ${inputReadOnly}/></div>
+          <div class="form-group"><label>Actual Quantity</label>
+            <input id="peActualQuantity" type="number" value="" ${inputReadOnly}/></div>
+          <div class="form-group"><label>Unit</label>
+            <input id="peActualUnit" type="text" value="${unit}" readonly/></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div class="form-group"><label>Manpower Used</label>
+              <input id="peManpowerUsed" type="text" ${inputReadOnly}/></div>
+            <div class="form-group"><label>Equipment Used</label>
+              <input id="peEquipmentUsed" type="text" ${inputReadOnly}/></div>
+          </div>
+          <div class="form-group"><label>Materials Used</label>
+            <input id="peMaterialsUsed" type="text" ${inputReadOnly}/></div>
+          <div class="form-group"><label>Progress %</label>
+            <input id="peProgressPct" type="number" min="0" max="100" value="0" ${inputReadOnly}/></div>
+          <div class="form-group"><label>Issues</label>
+            <textarea id="peIssues" ${inputReadOnly}></textarea></div>
+          <div class="form-group"><label>Notes</label>
+            <textarea id="peNotes" ${inputReadOnly}></textarea></div>
+          <div class="form-group"><label>Remark</label>
+            <textarea id="peRemark" ${inputReadOnly}></textarea></div>
+          <div class="form-group"><label>Delay Days</label>
+            <input id="peDelayDays" type="number" min="0" value="${cached?.delay_days||0}" readonly/></div>
+          <div class="form-group"><label>Delay Reason</label>
+            <textarea id="peDelayReason" ${inputReadOnly}>${cached?.delay_reason||''}</textarea></div>
+          <div class="form-group"><label>Attachment</label>
+            <input id="peAttachment" type="file" ${selectDisabled}/></div>
+          <button id="peSaveActual" class="btn primary" ${buttonDisabled}>✅ Save Actual</button>
+          <div style="font-size:12px;color:#475569;">Existing tracking entries</div>
+          <div id="peTrackingList" style="max-height:220px;overflow:auto;border:1px solid #e5e7eb;
+            border-radius:10px;padding:10px;background:#f8fafc;">
+            ${trackingEntries.length
+              ? trackingEntries.map(entry => `
+                  <div style="margin-bottom:10px;padding:10px;background:#fff;
+                    border:1px solid #dbeafe;border-radius:8px;">
+                    <div style="font-size:12px;font-weight:700;color:#1f2937;">
+                      ${new Date(entry.report_date).toLocaleDateString()}</div>
+                    <div style="font-size:12px;color:#475569;">Qty: ${entry.actual_quantity} ${entry.unit}</div>
+                    <div style="font-size:12px;color:#475569;">Progress: ${entry.progress_pct}%</div>
+                    <div style="font-size:12px;color:#475569;">Remark: ${entry.remark || '—'}</div>
+                  </div>`).join('')
+              : '<div style="font-size:12px;color:#6b7280;">No actual tracking entries yet.</div>'}
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  expandGrayPart(html);
+
+  document.getElementById('peSavePlan')?.addEventListener('click', async () => {
+    if (!isLeader) return alert('Only Contractor/PM roles can edit plan and actual data.');
+    try {
+      const projectName = localStorage.getItem('activeProjectName');
+      const payload = {
+        projectId:         projectName,
+        milestone_id:      document.getElementById('peMilestoneId').value.trim(),
+        title:             document.getElementById('peTitle').value.trim(),
+        description:       document.getElementById('peDescription').value.trim(),
+        start_date:        document.getElementById('peStartDate').value,
+        end_date:          document.getElementById('peEndDate').value,
+        planned_quantity:  document.getElementById('pePlannedQuantity').value,
+        unit:              document.getElementById('peUnit').value.trim(),
+        planned_work:      document.getElementById('pePlannedWork').value.trim(),
+        planned_manpower:  document.getElementById('pePlannedManpower').value.trim(),
+        planned_equipment: document.getElementById('pePlannedEquipment').value.trim(),
+        planned_materials: document.getElementById('pePlannedMaterials').value.trim(),
+        status,
+      };
+      if (!payload.title) return alert('Activity title is required.');
+      if (!payload.start_date || !payload.end_date) return alert('Start and end dates are required.');
+      const form = new FormData();
+      Object.entries(payload).forEach(([k,v]) => { if (v !== undefined) form.append(k, v); });
+      if (!isNew) form.append('id', cached.id);
+      const attach = document.getElementById('peLinkedFile')?.files?.[0];
+      if (attach) form.append('linked_file', attach);
+      const res = await authFetch('https://oneprojectapp-backend.onrender.com/api/planning-execution', {
+        method: isNew ? 'POST' : 'PUT', body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || 'Unable to save plan');
+      alert('Plan saved.');
+      delete recordsCache[tabKey];
+      loadTabRecords(tabKey);
+      collapseGrayPart();
+    } catch (err) { console.error('Save plan error:', err); alert('Failed to save plan.'); }
+  });
+
+  document.getElementById('peSaveActual')?.addEventListener('click', async () => {
+    if (!isLeader) return alert('Only Contractor/PM roles can edit plan and actual data.');
+    try {
+      if (!cached) return alert('Please save the activity plan first.');
+      const payload = {
+        activity_id:     cached.id,
+        report_date:     document.getElementById('peReportDate').value,
+        actual_quantity: document.getElementById('peActualQuantity').value,
+        unit:            document.getElementById('peActualUnit').value.trim(),
+        manpower_used:   document.getElementById('peManpowerUsed').value.trim(),
+        equipment_used:  document.getElementById('peEquipmentUsed').value.trim(),
+        materials_used:  document.getElementById('peMaterialsUsed').value.trim(),
+        progress_pct:    document.getElementById('peProgressPct').value,
+        issues:          document.getElementById('peIssues').value.trim(),
+        notes:           document.getElementById('peNotes').value.trim(),
+        remark:          document.getElementById('peRemark').value.trim(),
+      };
+      if (!payload.actual_quantity) return alert('Actual quantity is required.');
+      const form = new FormData();
+      Object.entries(payload).forEach(([k,v]) => { if (v !== undefined) form.append(k, v); });
+      const attach = document.getElementById('peAttachment')?.files?.[0];
+      if (attach) form.append('attachment', attach);
+      const res = await authFetch('https://oneprojectapp-backend.onrender.com/api/planning-execution-tracking', {
+        method: 'POST', body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || 'Unable to save actual execution');
+      alert('Actual execution saved.');
+      delete recordsCache[tabKey];
+      loadTabRecords(tabKey);
+      collapseGrayPart();
+    } catch (err) { console.error('Save actual execution error:', err); alert('Failed to save actual execution.'); }
+  });
+}
+window.openPlanningExecutionForm = openPlanningExecutionForm;
+
+// =======================================================================
+//  NOTIFICATIONS  (original — unchanged, projectId restored)
+// =======================================================================
+const notificationIcon  = document.getElementById('notificationIcon');
+const notificationBadge = document.getElementById('notificationBadge');
+
+async function updateNotificationBadge() {
+  try {
+    const projectId = localStorage.getItem('activeProjectId');   // ← original key
+    const token     = localStorage.getItem('authToken');
+    if (!projectId || !token) return;
+    const res = await authFetch(
+      `https://oneprojectapp-backend.onrender.com/notifications/unread-count?projectId=${projectId}`
+    );
+    if (!res) return;
+    const data  = await res.json();
+    const count = data.count ?? 0;
+    notificationBadge.textContent   = count;
+    notificationBadge.style.display = count > 0 ? 'inline-block' : 'none';
+  } catch (err) {
+    notificationBadge.textContent   = '0';
+    notificationBadge.style.display = 'none';
+  }
+}
+
+notificationIcon.addEventListener('click', async () => {
+  const projectId = localStorage.getItem('activeProjectId');     // ← original key
+  if (!projectId) { expandGrayPart('<p>Please select a project first.</p>'); return; }
+  notificationBadge.textContent   = '0';
+  notificationBadge.style.display = 'none';
+  try {
+    const res = await authFetch(
+      `https://oneprojectapp-backend.onrender.com/notifications?projectId=${projectId}`
+    );
+    if (!res) return;
+    const data          = await res.json();
+    const notifications = data.notifications || [];
+    if (notifications.length > 0) {
+      await authFetch(
+        'https://oneprojectapp-backend.onrender.com/notifications/mark-all-read',
+        {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ notificationIds: notifications.map(n => n.id) })
+        }
+      );
+    }
+    renderNotificationPanel(notifications);
+  } catch (err) {
+    expandGrayPart(`<p style="color:#ef4444;">⚠️ Error loading notifications.</p>
+      <button class="btn" onclick="collapseGrayPart()">← Back</button>`);
+  }
+});
+
+function renderNotificationPanel(notifications) {
+  let html = `
+    <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;">
+      <h3 style="margin:0;color:#333;font-size:18px;">🔔 Notifications</h3>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:16px 20px;">`;
+
+  if (!notifications.length) {
+    html += `<div style="text-align:center;padding:40px 0;color:#9ca3af;">
+      <div style="font-size:32px;margin-bottom:8px;">🔔</div>
+      <p style="margin:0;">No notifications yet.</p></div>`;
+  } else {
+    html += `<ul style="padding:0;margin:0;list-style:none;">`;
+    notifications.forEach(n => {
+      const isUnread  = !n.is_read;
+      const typeLabel = (n.entity_type || '').replace('_records','').replace(/_/g,'-');
+      html += `
+        <li data-notif-entity-type="${n.entity_type}"
+            data-notif-entity-id="${n.entity_id}"
+            data-action="notif-click"
+            style="padding:14px 16px;border-radius:8px;margin-bottom:8px;cursor:pointer;
+            background:${isUnread ? '#eff6ff' : '#fff'};
+            border:1px solid ${isUnread ? '#bfdbfe' : '#e5e7eb'};
+            border-left:4px solid ${isUnread ? '#3b82f6' : '#e5e7eb'};">
+          <div style="font-weight:${isUnread ? '700' : '600'};font-size:13px;color:#1f2937;
+            margin-bottom:4px;display:flex;align-items:center;gap:6px;">
+            ${isUnread
+              ? '<span style="display:inline-block;width:7px;height:7px;background:#3b82f6;border-radius:50%;"></span>'
+              : ''}
+            ${typeLabel} Record
+          </div>
+          <div style="font-size:12px;color:#6b7280;line-height:1.5;">${n.message || ''}</div>
+          <div style="font-size:11px;color:#9ca3af;margin-top:6px;">
+            By <strong>${n.added_by_role || 'Unknown'}</strong> &nbsp;•&nbsp;
+            ${new Date(n.created_at).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}
+          </div>
+        </li>`;
+    });
+    html += `</ul>`;
+  }
+  html += `</div>
+    <div style="padding:16px 20px;border-top:1px solid #e5e7eb;flex-shrink:0;">
+      <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
+    </div>`;
+
+  expandGrayPart(`<div style="display:flex;flex-direction:column;height:100%;">${html}</div>`);
+
+  setTimeout(() => {
+    document.getElementById('grayContent')?.addEventListener('click', (e) => {
+      const li = e.target.closest('[data-action="notif-click"]');
+      if (!li) return;
+      handleNotificationClick(
+        li.getAttribute('data-notif-entity-type'),
+        li.getAttribute('data-notif-entity-id')
+      );
+    });
+  }, 50);
+}
+
+async function handleNotificationClick(entityType, entityId) {
+  const TABLE_TAB_MAP = {
+    contractual_records:    'contractual',
+    administrative_records: 'administrative',
+    safety_records:         'safety',
+    operational_records:    'operational',
+    financial_records:      'financial',
+    workspace_work_center:  'work-centel',
+  };
+  const tabKey = TABLE_TAB_MAP[entityType];
+  if (!tabKey) return;
+
+  collapseGrayPart();
+  const tabEl = document.querySelector(`#navTabs li[data-tab="${tabKey}"]`);
+  if (tabEl) tabEl.click();
+
+  const waitForRecord = () => new Promise((resolve) => {
+    const check = () => {
+      const cached = recordsCache[tabKey];
+      if (cached && cached.some(r => String(r.id) === String(entityId))) resolve();
+      else setTimeout(check, 100);
+    };
+    check();
+  });
+
+  await Promise.race([
+    waitForRecord(),
+    new Promise(resolve => setTimeout(resolve, 5000))
+  ]);
+
+  const el = document.querySelector(`.doc-item[data-id='${entityId}']`);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const detail = document.getElementById(`detail-${entityId}`);
+    if (detail && detail.style.display === 'none') toggleRecordDetail(entityId, tabKey);
+  }
+}
+
+// =======================================================================
+//  ─────────────────────────────────────────────────────────────────────
+//  WORK CENTER — ALL CODE BELOW THIS LINE
+//  Completely isolated from home tabs and notification code above
+//  ─────────────────────────────────────────────────────────────────────
+// =======================================================================
+
+// =======================================================================
+//  WORK CENTER HELPERS
+// =======================================================================
+function getSide(role) {
+  if (['Contractor', 'ContractorPM'].includes(role))  return 'Contractor';
+  if (['Consultant', 'ConsultantPM'].includes(role))  return 'Consultant';
+  if (['Client',     'ClientPM'].includes(role))      return 'Client';
+  return null;
+}
+
+function isWCLeader(role) {
+  return ['Contractor','ContractorPM','Consultant','ConsultantPM','Client','ClientPM'].includes(role);
+}
+
+function priorityBadge(priority) {
+  const map = { low: '#10b981', normal: '#f59e0b', high: '#ef4444' };
+  const p   = priority || 'normal';
+  const color = map[p] || '#6b7280';
+  const label = p.charAt(0).toUpperCase() + p.slice(1);
+  return `<span style="background:${color}20;color:${color};border:1px solid ${color}60;
+    border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;white-space:nowrap;">
+    ${label} Priority</span>`;
+}
+
+// =======================================================================
+//  WORK CENTER CARD — collapsed
 // =======================================================================
 function renderWorkCenterCard(doc, tabKey) {
   const isCreator = String(doc.creator_id) === String(window.currentUserId);
@@ -4252,7 +5275,6 @@ function renderWorkCenterCard(doc, tabKey) {
              border-radius:10px;margin-bottom:10px;overflow:hidden;
              box-shadow:${isUnread ? '0 2px 8px rgba(59,130,246,0.10)' : '0 1px 3px rgba(0,0,0,0.06)'};
              transition:background 0.3s,border 0.3s;">
-
       <div class="doc-item-header" data-action="toggle"
         style="display:flex;justify-content:space-between;align-items:center;
                padding:12px 16px;cursor:pointer;gap:12px;">
@@ -4275,7 +5297,6 @@ function renderWorkCenterCard(doc, tabKey) {
           <span style="color:#9ca3af;font-size:16px;" class="chevron-${doc.id}">▾</span>
         </div>
       </div>
-
       <div class="doc-detail" id="detail-${doc.id}"
         style="display:none;border-top:1px solid #e5e7eb;">
         <div id="wc-detail-content-${doc.id}" style="padding:16px;background:#f8fafc;">
@@ -4300,14 +5321,14 @@ async function loadWorkCenterDetail(recordId, tabKey) {
     return;
   }
 
-  const role           = window.currentUserRole;
-  const leaderView     = isWCLeader(role);
+  const role            = window.currentUserRole;
+  const leaderView      = isWCLeader(role);
   const assignedMembers = Array.isArray(cached.assigned_members) ? cached.assigned_members : [];
-  const isAssigned     = role === 'TeamMember' &&
+  const isAssigned      = role === 'TeamMember' &&
     assignedMembers.some(m => String(m.id) === String(window.currentUserId));
 
   try {
-    const projectName = localStorage.getItem('activeProjectName');
+    const projectName = localStorage.getItem('activeProjectName');  // ← declared here, used locally
     const res = await authFetch(
       `https://oneprojectapp-backend.onrender.com/api/work-center-progress/${recordId}?projectName=${projectName}`
     );
@@ -4371,8 +5392,7 @@ function renderWCDetailForPM(task, progressEntries) {
                         ${entry.member_position}</span>` : ''}
                 </div>
                 <div style="font-size:11px;color:#9ca3af;margin-top:2px;">
-                  📅 ${entry.report_date
-                    ? new Date(entry.report_date).toLocaleDateString() : '—'}
+                  📅 ${entry.report_date ? new Date(entry.report_date).toLocaleDateString() : '—'}
                   &nbsp;•&nbsp; Submitted ${entry.submitted_at
                     ? new Date(entry.submitted_at).toLocaleString(undefined,
                         { dateStyle: 'short', timeStyle: 'short' }) : '—'}
@@ -4444,8 +5464,6 @@ function renderWCDetailForPM(task, progressEntries) {
 
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-
-      <!-- Section A: Task Header (editable for PM) -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
           padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
@@ -4502,12 +5520,8 @@ function renderWCDetailForPM(task, progressEntries) {
         <div class="form-group" style="margin-bottom:12px;">
           <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
             letter-spacing:.5px;display:block;margin-bottom:6px;">Assigned Members</label>
-          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
-            ${assignedChips}
-          </div>
-          <div style="font-size:11px;color:#6b7280;margin-bottom:6px;">
-            Update assignments (your side's team members):
-          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">${assignedChips}</div>
+          <div style="font-size:11px;color:#6b7280;margin-bottom:6px;">Update assignments:</div>
           <div id="wc-members-container-${task.id}"
             style="max-height:180px;overflow-y:auto;border:1px solid #e5e7eb;
             border-radius:8px;padding:8px;background:#f9fafb;">
@@ -4518,8 +5532,7 @@ function renderWCDetailForPM(task, progressEntries) {
         <div class="form-group" style="margin-bottom:14px;">
           <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
             letter-spacing:.5px;display:block;margin-bottom:4px;">Replace Linked File</label>
-          <input id="wc-edit-file-${task.id}" type="file"
-            style="font-size:12px;color:#374151;"/>
+          <input id="wc-edit-file-${task.id}" type="file" style="font-size:12px;color:#374151;"/>
           ${task.linked_file_name
             ? `<div style="font-size:11px;color:#6b7280;margin-top:4px;">
                 Current: <strong>${task.linked_file_name}</strong></div>` : ''}
@@ -4535,8 +5548,6 @@ function renderWCDetailForPM(task, progressEntries) {
             border-radius:8px;cursor:pointer;">🗑️</button>
         </div>
       </div>
-
-      <!-- Section B: Progress Tracking (read-only for PM, with validate) -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
           padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
@@ -4544,11 +5555,8 @@ function renderWCDetailForPM(task, progressEntries) {
           <span style="font-size:11px;font-weight:500;color:#6b7280;margin-left:8px;">
             ${progressEntries.length} entr${progressEntries.length === 1 ? 'y' : 'ies'}</span>
         </div>
-        <div style="max-height:520px;overflow-y:auto;">
-          ${progressHtml}
-        </div>
+        <div style="max-height:520px;overflow-y:auto;">${progressHtml}</div>
       </div>
-
     </div>`;
 }
 
@@ -4573,15 +5581,12 @@ function renderWCDetailForMember(task, myEntries) {
                 📅 ${entry.report_date ? new Date(entry.report_date).toLocaleDateString() : '—'}
               </div>
               <span style="background:${color}20;color:${color};border:1px solid ${color}60;
-                border-radius:12px;padding:1px 8px;font-size:11px;font-weight:600;">
-                ${vLabel}</span>
+                border-radius:12px;padding:1px 8px;font-size:11px;font-weight:600;">${vLabel}</span>
             </div>
-            <div style="font-size:12px;color:#374151;display:grid;
-              grid-template-columns:1fr 1fr;gap:6px;">
+            <div style="font-size:12px;color:#374151;display:grid;grid-template-columns:1fr 1fr;gap:6px;">
               <div><strong>Work Done:</strong><br/>${entry.work_done || '—'}</div>
               <div><strong>Progress:</strong><br/>
-                <span style="font-weight:700;color:#10b981;">${entry.progress_pct || 0}%</span>
-              </div>
+                <span style="font-weight:700;color:#10b981;">${entry.progress_pct || 0}%</span></div>
               <div><strong>Manpower:</strong><br/>${entry.manpower || '—'}</div>
               <div><strong>Equipment:</strong><br/>${entry.equipment || '—'}</div>
             </div>
@@ -4596,8 +5601,6 @@ function renderWCDetailForMember(task, myEntries) {
 
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-
-      <!-- Section A: Task Plan read-only -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
           padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
@@ -4613,11 +5616,9 @@ function renderWCDetailForMember(task, myEntries) {
             <span style="margin-left:6px;">${task.work_package || '—'}</span></div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div><span style="font-weight:700;color:#6b7280;">Start:</span>
-              <span style="margin-left:6px;">${task.start_date
-                ? new Date(task.start_date).toLocaleDateString() : '—'}</span></div>
+              <span style="margin-left:6px;">${task.start_date ? new Date(task.start_date).toLocaleDateString() : '—'}</span></div>
             <div><span style="font-weight:700;color:#6b7280;">End:</span>
-              <span style="margin-left:6px;">${task.end_date
-                ? new Date(task.end_date).toLocaleDateString() : '—'}</span></div>
+              <span style="margin-left:6px;">${task.end_date ? new Date(task.end_date).toLocaleDateString() : '—'}</span></div>
           </div>
           <div><span style="font-weight:700;color:#6b7280;">Priority:</span>
             <span style="margin-left:6px;">${priorityBadge(task.priority)}</span></div>
@@ -4647,15 +5648,12 @@ function renderWCDetailForMember(task, myEntries) {
             </div>` : ''}
         </div>
       </div>
-
-      <!-- Section B: My Progress Entry -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;
         display:flex;flex-direction:column;gap:12px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:2px;
           padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
           ✏️ Section B — Submit My Progress
         </div>
-
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
           <div class="form-group">
             <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
@@ -4673,89 +5671,70 @@ function renderWCDetailForMember(task, myEntries) {
               font-size:13px;box-sizing:border-box;"/>
           </div>
         </div>
-
         <div class="form-group">
           <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
             letter-spacing:.5px;display:block;margin-bottom:4px;">Work Done *</label>
-          <textarea id="wc-prog-work-${task.id}"
-            placeholder="Describe the work performed today…"
+          <textarea id="wc-prog-work-${task.id}" placeholder="Describe the work performed today…"
             style="width:100%;min-height:80px;padding:8px 10px;border:1px solid #d1d5db;
             border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
         </div>
-
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
           <div class="form-group">
             <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
               letter-spacing:.5px;display:block;margin-bottom:4px;">Manpower</label>
-            <input id="wc-prog-manpower-${task.id}" type="text"
-              placeholder="e.g. 5 workers"
+            <input id="wc-prog-manpower-${task.id}" type="text" placeholder="e.g. 5 workers"
               style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;
               font-size:13px;box-sizing:border-box;"/>
           </div>
           <div class="form-group">
             <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
               letter-spacing:.5px;display:block;margin-bottom:4px;">Equipment</label>
-            <input id="wc-prog-equipment-${task.id}" type="text"
-              placeholder="e.g. excavator"
+            <input id="wc-prog-equipment-${task.id}" type="text" placeholder="e.g. excavator"
               style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;
               font-size:13px;box-sizing:border-box;"/>
           </div>
         </div>
-
         <div class="form-group">
           <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
             letter-spacing:.5px;display:block;margin-bottom:4px;">Materials</label>
-          <input id="wc-prog-materials-${task.id}" type="text"
-            placeholder="e.g. 20 bags cement"
+          <input id="wc-prog-materials-${task.id}" type="text" placeholder="e.g. 20 bags cement"
             style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;
             font-size:13px;box-sizing:border-box;"/>
         </div>
-
         <div class="form-group">
           <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
             letter-spacing:.5px;display:block;margin-bottom:4px;">Issues</label>
-          <input id="wc-prog-issues-${task.id}" type="text"
-            placeholder="Any blockers or problems"
+          <input id="wc-prog-issues-${task.id}" type="text" placeholder="Any blockers or problems"
             style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;
             font-size:13px;box-sizing:border-box;"/>
         </div>
-
         <div class="form-group">
           <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
             letter-spacing:.5px;display:block;margin-bottom:4px;">Notes</label>
-          <textarea id="wc-prog-notes-${task.id}"
-            placeholder="Additional notes…"
+          <textarea id="wc-prog-notes-${task.id}" placeholder="Additional notes…"
             style="width:100%;min-height:60px;padding:8px 10px;border:1px solid #d1d5db;
             border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
         </div>
-
         <div class="form-group">
           <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
             letter-spacing:.5px;display:block;margin-bottom:4px;">Attachment</label>
-          <input id="wc-prog-attachment-${task.id}" type="file"
-            style="font-size:12px;color:#374151;"/>
+          <input id="wc-prog-attachment-${task.id}" type="file" style="font-size:12px;color:#374151;"/>
         </div>
-
         <button data-action="wc-submit-progress" data-task-id="${task.id}"
           style="width:100%;padding:10px 14px;font-size:13px;font-weight:600;
           background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
           ✅ Submit Progress Report</button>
-
-        <!-- My previous submissions -->
         <div style="border-top:1px solid #e5e7eb;padding-top:12px;">
           <div style="font-size:12px;font-weight:700;color:#6b7280;margin-bottom:8px;">
             My Previous Submissions</div>
-          <div style="max-height:200px;overflow-y:auto;">
-            ${myProgressHtml}
-          </div>
+          <div style="max-height:200px;overflow-y:auto;">${myProgressHtml}</div>
         </div>
       </div>
-
     </div>`;
 }
 
 // =======================================================================
-//  SECTION VIEW — Read-only (non-assigned viewer)
+//  SECTION VIEW — Read-only
 // =======================================================================
 function renderWCDetailReadOnly(task) {
   return `
@@ -4782,12 +5761,12 @@ function renderWCDetailReadOnly(task) {
 }
 
 // =======================================================================
-//  WIRE PM EVENTS (fetch team members + wire buttons)
+//  WIRE PM EVENTS
+//  FIX: uses locally declared projectName (not a bare undefined variable)
 // =======================================================================
 async function wireWCPMEvents(recordId, tabKey, task, currentAssigned) {
-  // Fetch team members for the assignment checklist
   try {
-    const projectName = localStorage.getItem('activeProjectName');
+    const projectName = localStorage.getItem('activeProjectName');  // ← declared here
     const res = await authFetch(
       `https://oneprojectapp-backend.onrender.com/api/work-center/team-members?projectName=${projectName}`
     );
@@ -4813,11 +5792,9 @@ async function wireWCPMEvents(recordId, tabKey, task, currentAssigned) {
                 style="width:16px;height:16px;accent-color:#007B8A;"/>
               <div style="flex:1;min-width:0;">
                 <div style="font-size:13px;font-weight:600;color:#1f2937;
-                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                  ${m.email}</div>
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${m.email}</div>
                 <div style="font-size:11px;color:#6b7280;">
-                  ${m.position || 'No position'}
-                  ${m.title ? ' · ' + m.title : ''}</div>
+                  ${m.position || 'No position'}${m.title ? ' · ' + m.title : ''}</div>
               </div>
             </label>`;
         }).join('');
@@ -4828,9 +5805,6 @@ async function wireWCPMEvents(recordId, tabKey, task, currentAssigned) {
   }
 }
 
-// =======================================================================
-//  WIRE MEMBER EVENTS  (submit progress button wired via event delegate)
-// =======================================================================
 function wireWCMemberEvents(recordId, tabKey) {
   // Buttons use data-action="wc-submit-progress" — caught by bottomContent delegate
 }
@@ -4840,19 +5814,18 @@ function wireWCMemberEvents(recordId, tabKey) {
 // =======================================================================
 async function handleWCUpdateTask(recordId, tabKey) {
   try {
-    const title      = document.getElementById(`wc-edit-title-${recordId}`)?.value.trim();
-    const desc       = document.getElementById(`wc-edit-desc-${recordId}`)?.value.trim();
-    const pkg        = document.getElementById(`wc-edit-pkg-${recordId}`)?.value.trim();
-    const startDate  = document.getElementById(`wc-edit-start-${recordId}`)?.value;
-    const endDate    = document.getElementById(`wc-edit-end-${recordId}`)?.value;
-    const priority   = document.getElementById(`wc-edit-priority-${recordId}`)?.value;
-    const fileInput  = document.getElementById(`wc-edit-file-${recordId}`);
-    const container  = document.getElementById(`wc-members-container-${recordId}`);
+    const title     = document.getElementById(`wc-edit-title-${recordId}`)?.value.trim();
+    const desc      = document.getElementById(`wc-edit-desc-${recordId}`)?.value.trim();
+    const pkg       = document.getElementById(`wc-edit-pkg-${recordId}`)?.value.trim();
+    const startDate = document.getElementById(`wc-edit-start-${recordId}`)?.value;
+    const endDate   = document.getElementById(`wc-edit-end-${recordId}`)?.value;
+    const priority  = document.getElementById(`wc-edit-priority-${recordId}`)?.value;
+    const fileInput = document.getElementById(`wc-edit-file-${recordId}`);
+    const container = document.getElementById(`wc-members-container-${recordId}`);
 
-    if (!title)              return alert('Title is required.');
-    if (!startDate || !endDate) return alert('Start and end dates are required.');
+    if (!title)                   return alert('Title is required.');
+    if (!startDate || !endDate)   return alert('Start and end dates are required.');
 
-    // Collect checked members
     const assignedMembers = [];
     container?.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
       assignedMembers.push({
@@ -4945,14 +5918,16 @@ async function handleWCSubmitProgress(taskId, tabKey) {
 async function handleWCValidateProgress(taskId, tabKey, progressId, validateAction) {
   try {
     const notes = document.getElementById(`wc-val-notes-${progressId}`)?.value.trim() || '';
-    const projectId = localStorage.getItem('activeProjectName');
-
     const res = await authFetch(
       `https://oneprojectapp-backend.onrender.com/api/work-center-progress/${progressId}/validate`,
       {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ validation_status: validateAction, validation_notes: notes, projectName: localStorage.getItem('activeProjectName') })
+        body:    JSON.stringify({
+          validation_status: validateAction,
+          validation_notes:  notes,
+          projectName:       localStorage.getItem('activeProjectName')
+        })
       }
     );
     if (!res) return;
@@ -4994,7 +5969,8 @@ async function handleWCDeleteTask(taskId, tabKey) {
 }
 
 // =======================================================================
-//  OPEN WORK CENTER CREATE FORM (gray panel — PM/leader only)
+//  OPEN WORK CENTER CREATE FORM
+//  FIX: projectName declared as const before use (was undefined bare variable)
 // =======================================================================
 async function openWorkCenterCreateForm() {
   if (!isWCLeader(window.currentUserRole)) {
@@ -5010,9 +5986,7 @@ async function openWorkCenterCreateForm() {
         <p style="margin:4px 0 0;font-size:12px;color:#6b7280;">
           Tasks will be visible only to your side's assigned team members.</p>
       </div>
-
       <div style="flex:1;overflow-y:auto;padding:16px 20px;">
-
         <div style="margin-bottom:16px;">
           <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
             font-size:11px;letter-spacing:.5px;margin-bottom:6px;">Title *</label>
@@ -5021,25 +5995,20 @@ async function openWorkCenterCreateForm() {
             style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
             font-size:14px;box-sizing:border-box;"/>
         </div>
-
         <div style="margin-bottom:16px;">
           <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
             font-size:11px;letter-spacing:.5px;margin-bottom:6px;">Description</label>
-          <textarea id="wc-new-desc"
-            placeholder="Describe the task scope and objectives…"
+          <textarea id="wc-new-desc" placeholder="Describe the task scope and objectives…"
             style="width:100%;min-height:100px;padding:10px 12px;border:1px solid #d1d5db;
             border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box;"></textarea>
         </div>
-
         <div style="margin-bottom:16px;">
           <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
             font-size:11px;letter-spacing:.5px;margin-bottom:6px;">Work Package</label>
-          <input type="text" id="wc-new-pkg"
-            placeholder="e.g. WP-03 Civil Works"
+          <input type="text" id="wc-new-pkg" placeholder="e.g. WP-03 Civil Works"
             style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
             font-size:14px;box-sizing:border-box;"/>
         </div>
-
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;">
           <div>
             <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
@@ -5067,7 +6036,6 @@ async function openWorkCenterCreateForm() {
             </select>
           </div>
         </div>
-
         <div style="margin-bottom:16px;">
           <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
             font-size:11px;letter-spacing:.5px;margin-bottom:6px;">
@@ -5082,16 +6050,12 @@ async function openWorkCenterCreateForm() {
               ⏳ Loading team members...</p>
           </div>
         </div>
-
         <div style="margin-bottom:16px;">
           <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
             font-size:11px;letter-spacing:.5px;margin-bottom:6px;">Linked File</label>
-          <input type="file" id="wc-new-file"
-            style="font-size:13px;color:#374151;"/>
+          <input type="file" id="wc-new-file" style="font-size:13px;color:#374151;"/>
         </div>
-
       </div>
-
       <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
         background:#fff;display:flex;gap:12px;">
         <button type="button" id="wc-create-save-btn"
@@ -5107,10 +6071,11 @@ async function openWorkCenterCreateForm() {
 
   expandGrayPart(html);
 
-  // Fetch and render team members
+  // FIX: declare projectName as const before using it in the URL
+  const projectName = localStorage.getItem('activeProjectName');
+
   try {
-    const projectId = localStorage.getItem('activeProjectName');
-    const res       = await authFetch(
+    const res = await authFetch(
       `https://oneprojectapp-backend.onrender.com/api/work-center/team-members?projectName=${projectName}`
     );
     const members = res && res.ok ? (await res.json()).members || [] : [];
@@ -5133,11 +6098,9 @@ async function openWorkCenterCreateForm() {
               style="width:16px;height:16px;accent-color:#007B8A;flex-shrink:0;"/>
             <div style="flex:1;min-width:0;">
               <div style="font-size:13px;font-weight:600;color:#1f2937;
-                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                ${m.email}</div>
+                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${m.email}</div>
               <div style="font-size:11px;color:#6b7280;">
-                ${m.position || 'No position listed'}
-                ${m.title ? ' · ' + m.title : ''}</div>
+                ${m.position || 'No position listed'}${m.title ? ' · ' + m.title : ''}</div>
             </div>
           </label>`).join('');
       }
@@ -5149,7 +6112,6 @@ async function openWorkCenterCreateForm() {
       `<p style="font-size:12px;color:#ef4444;text-align:center;">⚠️ Could not load team members.</p>`;
   }
 
-  // Wire save button
   document.getElementById('wc-create-save-btn').addEventListener('click', async () => {
     try {
       const title     = document.getElementById('wc-new-title')?.value.trim();
@@ -5163,7 +6125,6 @@ async function openWorkCenterCreateForm() {
       if (!title)                  throw new Error('Title is required.');
       if (!startDate || !endDate)  throw new Error('Start and end dates are required.');
 
-      // Collect checked members
       const assignedMembers = [];
       document.getElementById('wc-new-members-container')
         ?.querySelectorAll('input[type="checkbox"]:checked')
@@ -5178,7 +6139,7 @@ async function openWorkCenterCreateForm() {
       if (!assignedMembers.length) throw new Error('Please assign at least one team member.');
 
       const form = new FormData();
-      form.append('projectName',      localStorage.getItem('activeProjectName'));
+      form.append('projectName',      projectName);   // ← uses the const declared above
       form.append('title',            title);
       form.append('description',      desc);
       form.append('work_package',     pkg);
@@ -5214,1020 +6175,8 @@ async function openWorkCenterCreateForm() {
 window.openWorkCenterCreateForm = openWorkCenterCreateForm;
 
 // =======================================================================
-//  WORKFLOW STEPS VISUAL (unchanged)
-// =======================================================================
-function renderWorkflowSteps(doc) {
-  const steps = doc.workflow_steps;
-  if (!steps || !steps.length) return '';
-  const stepsHtml = steps.map((step, idx) => {
-    let icon, color, label = `Step ${idx + 1}: ${step.label}`;
-    switch (step.status) {
-      case 'done':     icon = '✅'; color = '#10b981'; label += ' — Done';     break;
-      case 'rejected': icon = '❌'; color = '#ef4444'; label += ' — Rejected'; break;
-      case 'pending':  icon = '⏳'; color = '#f59e0b';                          break;
-      default:         icon = '🔒'; color = '#d1d5db';                          break;
-    }
-    return `<div style="display:flex;align-items:center;gap:6px;">
-      <span>${icon}</span>
-      <span style="font-size:11px;font-weight:600;color:${color};">${label}</span>
-    </div>`;
-  }).join('<div style="font-size:10px;color:#d1d5db;margin:0 4px;">→</div>');
-  return `
-    <div style="margin-bottom:12px;padding:10px 12px;background:#f8fafc;
-      border:1px solid #e2e8f0;border-radius:8px;">
-      <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
-        letter-spacing:.5px;margin-bottom:8px;">Approval Workflow</div>
-      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">${stepsHtml}</div>
-    </div>`;
-}
-
-// =======================================================================
-//  EVENT DELEGATE — bottomContent
-// =======================================================================
-bottomContent.addEventListener('click', (e) => {
-  if (e.target.closest('.add-doc-btn')) {
-    const activeTab = getNavTabs()?.querySelector('li.active');
-    const tab = activeTab?.getAttribute('data-tab') || 'contractual';
-    if (tab === 'planning-execution') openPlanningExecutionForm(null, tab);
-    else if (tab === 'work-centel')   openWorkCenterCreateForm();
-    else openAddRecordPanel(null, tab);
-    return;
-  }
-
-  const actionEl = e.target.closest('[data-action]');
-  if (!actionEl) return;
-  const action = actionEl.getAttribute('data-action');
-
-  if (action === 'toggle') {
-    const item     = actionEl.closest('.doc-item');
-    const tabKey   = item.getAttribute('data-tab-key');
-    const recordId = item.getAttribute('data-id');
-    toggleRecordDetail(recordId, tabKey);
-    return;
-  }
-
-  const item = actionEl.closest('.doc-item');
-  if (!item) return;
-  const recordId = item.getAttribute('data-id');
-  const tabKey   = item.getAttribute('data-tab-key');
-
-  // ── Work Center specific actions ──
-  if (action === 'wc-update') {
-    const taskId = actionEl.getAttribute('data-task-id');
-    handleWCUpdateTask(taskId, tabKey);
-    return;
-  }
-  if (action === 'wc-delete') {
-    const taskId = actionEl.getAttribute('data-task-id');
-    handleWCDeleteTask(taskId, tabKey);
-    return;
-  }
-  if (action === 'wc-submit-progress') {
-    const taskId = actionEl.getAttribute('data-task-id');
-    handleWCSubmitProgress(taskId, tabKey);
-    return;
-  }
-  if (action === 'wc-validate') {
-    const progressId     = actionEl.getAttribute('data-progress-id');
-    const validateAction = actionEl.getAttribute('data-validate-action');
-    handleWCValidateProgress(recordId, tabKey, progressId, validateAction);
-    return;
-  }
-  if (action === 'wc-download-task') {
-    const taskId   = actionEl.getAttribute('data-task-id');
-    const filename = actionEl.getAttribute('data-filename');
-    downloadFile(taskId, tabKey, filename);
-    return;
-  }
-  if (action === 'wc-download-progress') {
-    const progressId = actionEl.getAttribute('data-progress-id');
-    const filename   = actionEl.getAttribute('data-filename');
-    // Download from progress endpoint
-    authFetch(
-      `https://oneprojectapp-backend.onrender.com/api/work-center-progress/download/${progressId}`,
-      { method: 'GET' }
-    ).then(async res => {
-      if (!res || !res.ok) { alert('Failed to download.'); return; }
-      const blob = await res.blob();
-      const url  = window.URL.createObjectURL(blob);
-      const a    = document.createElement('a'); a.href = url; a.download = filename;
-      document.body.appendChild(a); a.click(); a.remove();
-      window.URL.revokeObjectURL(url);
-    });
-    return;
-  }
-
-  // ── General record actions ──
-  switch (action) {
-    case 'approve':     handleDecisionMakerAction(recordId, tabKey, 'approved'); break;
-    case 'reject':      handleDecisionMakerAction(recordId, tabKey, 'rejected'); break;
-    case 'tm-approve':  handleTeamMemberAction(recordId, tabKey, 'approved');    break;
-    case 'tm-reject':   handleTeamMemberAction(recordId, tabKey, 'rejected');    break;
-    case 'comment':     openTeamMemberComment(recordId, tabKey);                 break;
-    case 'open-notice': {
-      const isRejection = actionEl.getAttribute('data-is-rejection') === 'true';
-      openNoticeOfDetermination(recordId, tabKey, isRejection);
-      break;
-    }
-    case 'delete':   deleteRecord(recordId, tabKey);                                       break;
-    case 'download': downloadFile(recordId, tabKey, actionEl.getAttribute('data-filename')); break;
-  }
-});
-
-// =======================================================================
-//  TOGGLE RECORD DETAIL
-// =======================================================================
-function toggleRecordDetail(recordId, tabKey) {
-  if (tabKey === 'planning-execution') { openPlanningExecutionForm(recordId, tabKey); return; }
-
-  const detail  = document.getElementById(`detail-${recordId}`);
-  const chevron = document.querySelector(`.chevron-${recordId}`);
-  if (!detail) return;
-
-  const isOpen = detail.style.display !== 'none';
-
-  if (!isOpen) {
-    // Mark as viewed
-    const cached = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
-    if (cached && !cached.is_viewed) {
-      const isCreator = String(cached.creator_id) === String(window.currentUserId);
-      if (!isCreator) markRecordViewed(recordId, tabKey);
-    }
-    // Work Center: load detail async on open
-    if (tabKey === 'work-centel') {
-      loadWorkCenterDetail(recordId, tabKey);
-    }
-  }
-
-  detail.style.display = isOpen ? 'none' : 'block';
-  if (chevron) chevron.textContent = isOpen ? '▾' : '▴';
-}
-
-// =======================================================================
-//  DECISION MAKER ACTION (unchanged)
-// =======================================================================
-async function handleDecisionMakerAction(recordId, tabKey, action) {
-  try {
-    const res = await authFetch(
-      'https://oneprojectapp-backend.onrender.com/api/review-record',
-      {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          projectId:  localStorage.getItem('activeProjectName'),
-          recordId, recordType: tabToTable(tabKey), action, actorType: 'decision_maker'
-        })
-      }
-    );
-    if (!res) return;
-    const data = await res.json();
-    if (!res.ok) { alert(data.error || `Failed to ${action} record.`); return; }
-    alert(data.message || `Record ${action} successfully.`);
-    delete recordsCache[tabKey];
-    await loadTabRecords(tabKey);
-  } catch (err) {
-    console.error('Decision maker action error:', err);
-    alert(`Failed to ${action} record.`);
-  }
-}
-
-// =======================================================================
-//  TEAM MEMBER ACTION (unchanged)
-// =======================================================================
-async function handleTeamMemberAction(recordId, tabKey, action) {
-  try {
-    const res = await authFetch(
-      'https://oneprojectapp-backend.onrender.com/api/review-record',
-      {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          projectId:  localStorage.getItem('activeProjectName'),
-          recordId, recordType: tabToTable(tabKey), action, actorType: 'team_member'
-        })
-      }
-    );
-    if (!res) return;
-    const data = await res.json();
-    if (!res.ok) { alert(data.error || 'Failed to record your action.'); return; }
-    delete recordsCache[tabKey];
-    loadTabRecords(tabKey);
-  } catch (err) {
-    console.error('Team member action error:', err);
-    alert('Failed to record your action.');
-  }
-}
-
-// =======================================================================
-//  TEAM MEMBER COMMENT (unchanged)
-// =======================================================================
-function openTeamMemberComment(recordId, tabKey) {
-  document.getElementById('commentModal')?.remove();
-  const cached          = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
-  const existingComment = cached?.my_review?.comment || '';
-
-  const modal = document.createElement('div');
-  modal.id = 'commentModal';
-  modal.style.cssText =
-    'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;' +
-    'justify-content:center;background:rgba(0,0,0,0.45);';
-  modal.innerHTML = `
-    <div style="background:#fff;border-radius:12px;padding:24px;width:min(420px,90vw);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <h3 style="margin:0;font-size:16px;color:#1f2937;">💬 Add Comment</h3>
-        <button id="closeCommentModal"
-          style="background:none;border:none;font-size:20px;color:#9ca3af;cursor:pointer;">×</button>
-      </div>
-      <p style="font-size:12px;color:#9ca3af;margin:0 0 12px;">
-        Your comment is stored alongside your review and does not affect record status.</p>
-      <textarea id="commentText" placeholder="Enter your comment…"
-        style="width:100%;min-height:100px;padding:10px 12px;border:1px solid #d1d5db;
-        border-radius:8px;font-size:13px;color:#374151;resize:vertical;
-        box-sizing:border-box;">${existingComment}</textarea>
-      <div style="display:flex;gap:8px;margin-top:14px;">
-        <button id="submitCommentBtn"
-          style="flex:1;padding:10px;font-size:13px;font-weight:600;
-          background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;">
-          Submit Comment</button>
-        <button id="cancelCommentBtn"
-          style="flex:1;padding:10px;font-size:13px;font-weight:600;
-          background:#f3f4f6;color:#374151;border:1px solid #d1d5db;
-          border-radius:8px;cursor:pointer;">Cancel</button>
-      </div>
-    </div>`;
-  document.body.appendChild(modal);
-
-  document.getElementById('closeCommentModal').addEventListener('click', () => modal.remove());
-  document.getElementById('cancelCommentBtn').addEventListener('click',  () => modal.remove());
-  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
-
-  document.getElementById('submitCommentBtn').addEventListener('click', async () => {
-    const comment = document.getElementById('commentText').value.trim();
-    if (!comment) { alert('Please enter a comment.'); return; }
-    try {
-      const res = await authFetch(
-        'https://oneprojectapp-backend.onrender.com/api/review-record',
-        {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({
-            projectId:  localStorage.getItem('activeProjectName'),
-            recordId, recordType: tabToTable(tabKey),
-            action: 'no_action', comment, actorType: 'team_member'
-          })
-        }
-      );
-      if (!res) return;
-      const data = await res.json();
-      if (!res.ok) { alert(data.error || 'Failed to submit comment.'); return; }
-      modal.remove();
-      delete recordsCache[tabKey];
-      loadTabRecords(tabKey);
-    } catch (err) {
-      console.error('Comment error:', err);
-      alert('Failed to submit comment.');
-    }
-  });
-}
-
-// =======================================================================
-//  DOWNLOAD FILE (unchanged)
-// =======================================================================
-async function downloadFile(recordId, tabKey, fileName) {
-  try {
-    const res = await authFetch(
-      `https://oneprojectapp-backend.onrender.com/api/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}`,
-      { method: 'GET' }
-    );
-    if (!res || !res.ok) { alert('Failed to download.'); return; }
-    const contentType = res.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      const data = await res.json();
-      if (data.url) {
-        const a = document.createElement('a');
-        a.href = data.url; a.download = fileName; a.target = '_blank';
-        document.body.appendChild(a); a.click(); a.remove();
-      } else alert(data.error || 'File not available.');
-      return;
-    }
-    const blob = await res.blob();
-    if (!blob.size) { alert('File is empty.'); return; }
-    const url = window.URL.createObjectURL(blob);
-    const a   = document.createElement('a'); a.href = url; a.download = fileName;
-    document.body.appendChild(a); a.click(); a.remove();
-    window.URL.revokeObjectURL(url);
-  } catch (err) { console.error('Download error:', err); alert('Failed to download file.'); }
-}
-
-// =======================================================================
-//  DELETE RECORD (unchanged)
-// =======================================================================
-async function deleteRecord(recordId, tabKey) {
-  if (!confirm('Are you sure you want to delete this record? This cannot be undone.')) return;
-  try {
-    const res = await authFetch(
-      'https://oneprojectapp-backend.onrender.com/api/delete-record',
-      {
-        method:  'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          projectId:  localStorage.getItem('activeProjectName'),
-          recordId, recordType: tabToTable(tabKey)
-        })
-      }
-    );
-    if (!res) return;
-    const data = await res.json();
-    if (!res.ok) { alert(data.error || 'Failed to delete record.'); return; }
-    alert('Record deleted successfully.');
-    delete recordsCache[tabKey];
-    loadTabRecords(tabKey);
-  } catch (err) { console.error('Delete error:', err); alert('Failed to delete record.'); }
-}
-
-// =======================================================================
-//  NOTICE OF DETERMINATION / REJECTION NOTICE (unchanged)
-// =======================================================================
-function openNoticeOfDetermination(recordId, tabKey, isRejection = false) {
-  openAddRecordPanel({
-    recordKind:   isRejection ? 'rejection_notice' : 'notice',
-    noticeTiedId: recordId,
-    tabKey,
-  }, tabKey);
-}
-
-// =======================================================================
-//  ADD RECORD PANEL (unchanged)
-// =======================================================================
-function openAddRecordPanel(noticeConfig = null, tabKey = null) {
-  const isNotice     = noticeConfig !== null;
-  const recordKind   = isNotice ? noticeConfig.recordKind   : 'new';
-  const noticeTiedId = isNotice ? noticeConfig.noticeTiedId : null;
-  const resolvedTab  = tabKey || (isNotice ? noticeConfig.tabKey : null) || 'contractual';
-
-  const tabLabels = {
-    contractual:    'Contractual & Legal',
-    administrative: 'Administrative & Instructional',
-    safety:         'Safety & Compliance',
-    operational:    'Operational & Performance',
-    financial:      'Financial',
-    'planning-execution': 'Planning & Execution',
-    'document-approval':  'Document & Approval',
-    'control-reports':    'Control & Report',
-  };
-  const tabLabel = tabLabels[resolvedTab] || resolvedTab;
-
-  const panelTitle = recordKind === 'rejection_notice' ? '📋 Issue Rejection Notice'
-    : recordKind === 'notice' ? '📋 Issue Notice of Determination'
-    : `➕ Add Record — ${tabLabel}`;
-
-  const noticeInfoBanner = isNotice ? `
-    <div style="margin-bottom:18px;padding:14px 16px;
-      background:${recordKind === 'rejection_notice' ? '#fff1f2' : '#fffbeb'};
-      border:1px solid ${recordKind === 'rejection_notice' ? '#fca5a5' : '#fcd34d'};border-radius:10px;">
-      <div style="font-size:13px;font-weight:700;
-        color:${recordKind === 'rejection_notice' ? '#991b1b' : '#92400e'};margin-bottom:4px;">
-        ${recordKind === 'rejection_notice' ? '⚠️ Rejection Notice' : '📋 Notice of Determination'}
-      </div>
-      <div style="font-size:12px;color:#555;line-height:1.6;">
-        This notice is tied to Record <strong>#${noticeTiedId}</strong> in
-        <strong>${tabLabel}</strong>.
-      </div>
-    </div>` : '';
-
-  const categoryInfo = !isNotice ? `
-    <div style="margin-bottom:18px;padding:16px;background:#f7fbfd;
-      border:1px solid #d8eef7;border-radius:10px;">
-      <div style="font-size:14px;font-weight:bold;color:#007B8A;margin-bottom:6px;">Category</div>
-      <div style="font-size:15px;color:#333;">${tabLabel}</div>
-    </div>` : '';
-
-  const html = `
-    <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
-      <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
-        <h3 style="margin:0;color:#333;font-size:20px;">${panelTitle}</h3>
-      </div>
-      <div style="flex:1;overflow-y:auto;padding:16px 20px;">
-        ${noticeInfoBanner}${categoryInfo}
-        <form id="addRecordForm">
-          <input type="hidden" id="formTabKey"        value="${resolvedTab}"/>
-          <input type="hidden" id="formRecordType"    value="${tabToTable(resolvedTab)}"/>
-          <input type="hidden" id="recordKindField"   value="${recordKind}"/>
-          <input type="hidden" id="noticeTiedIdField" value="${noticeTiedId || ''}"/>
-
-          <div style="margin-bottom:20px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
-              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
-              ${isNotice ? 'Notice Title *' : 'Title *'}</label>
-            <input type="text" id="recordTitle" required
-              placeholder="${isNotice ? 'e.g. Determination of Claim #12' : 'e.g. Foundation Agreement'}"
-              style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;
-              font-size:14px;box-sizing:border-box;"/>
-          </div>
-
-          <div style="margin-bottom:20px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
-              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
-              ${isNotice ? 'Notice Content *' : 'Description *'}</label>
-            <div id="editorToolbar" style="display:flex;flex-wrap:wrap;gap:4px;padding:8px;
-              background:#f5f5f5;border:1px solid #ddd;border-bottom:none;border-radius:6px 6px 0 0;">
-              <button type="button" data-cmd="bold"
-                style="width:32px;height:32px;font-weight:bold;background:#fff;
-                border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">B</button>
-              <button type="button" data-cmd="italic"
-                style="width:32px;height:32px;font-style:italic;background:#fff;
-                border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">I</button>
-              <button type="button" data-cmd="underline"
-                style="width:32px;height:32px;text-decoration:underline;background:#fff;
-                border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">U</button>
-              <button type="button" data-cmd="strikeThrough"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:13px;text-decoration:line-through;">S</button>
-              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
-              <button type="button" data-cmd="insertUnorderedList"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:14px;">☰</button>
-              <button type="button" data-cmd="insertOrderedList"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:13px;">1.</button>
-              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
-              <button type="button" data-cmd="justifyLeft"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:13px;">⬅</button>
-              <button type="button" data-cmd="justifyCenter"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:13px;">↔</button>
-              <button type="button" data-cmd="justifyRight"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:13px;">➡</button>
-              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
-              <button type="button" data-cmd="undo"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:13px;">↩</button>
-              <button type="button" data-cmd="redo"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:13px;">↪</button>
-              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
-              <button type="button" data-cmd="removeFormat"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;color:#e53e3e;">✕F</button>
-            </div>
-            <div id="recordDescription" contenteditable="true"
-              style="width:100%;min-height:220px;padding:12px;border:1px solid #ddd;
-              border-radius:0 0 6px 6px;font-size:14px;color:#333;line-height:1.7;
-              background:#fff;outline:none;box-sizing:border-box;overflow-y:auto;"
-              placeholder="${isNotice ? 'Provide the full notice content…' : 'Provide detailed description…'}">
-            </div>
-            <style>
-              #recordDescription:empty:before {
-                content: attr(placeholder); color:#aaa; pointer-events:none; display:block; }
-              #editorToolbar button[data-cmd].active {
-                background:#e0f0ff; border-color:#4299e1; }
-            </style>
-          </div>
-
-          <div style="margin-bottom:24px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
-              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Attach Document</label>
-            <div id="attachmentDropZone"
-              style="display:flex;align-items:center;gap:12px;padding:16px;
-              border:2px dashed #ddd;border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
-              <div style="font-size:24px;">📎</div>
-              <div style="flex:1;">
-                <div style="font-weight:bold;color:#333;font-size:14px;">
-                  Click to upload or drag &amp; drop</div>
-                <div style="font-size:12px;color:#999;margin-top:4px;">
-                  PDF, DOC, DOCX, XLS, XLSX, JPG, PNG (Max 10MB)</div>
-                <input type="file" id="recordAttachment" style="display:none;"
-                  accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"/>
-              </div>
-            </div>
-            <div id="attachmentName"
-              style="margin-top:8px;font-size:12px;color:#28a745;font-weight:bold;display:none;"></div>
-          </div>
-        </form>
-      </div>
-
-      <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
-        background:#fff;display:flex;gap:12px;">
-        <button type="button" id="saveRecordBtn"
-          style="flex:1;padding:12px;font-size:14px;font-weight:bold;
-          background:${recordKind === 'rejection_notice' ? '#dc2626'
-            : recordKind === 'notice' ? '#d97706' : '#28a745'};
-          color:#fff;border:none;border-radius:6px;cursor:pointer;">
-          ${recordKind === 'rejection_notice' ? '📋 Issue Rejection Notice'
-            : recordKind === 'notice' ? '📋 Issue Notice' : '✓ Save Record'}</button>
-        <button type="button" onclick="collapseGrayPart()"
-          style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:#f5f5f5;
-          color:#333;border:1px solid #ddd;border-radius:6px;cursor:pointer;">✕ Cancel</button>
-      </div>
-    </div>`;
-
-  expandGrayPart(html);
-
-  document.getElementById('editorToolbar')?.addEventListener('mousedown', (e) => {
-    const btn = e.target.closest('button[data-cmd]');
-    if (!btn) return;
-    e.preventDefault();
-    document.execCommand(btn.getAttribute('data-cmd'), false, null);
-    document.querySelectorAll('#editorToolbar button[data-cmd]').forEach(b => {
-      try { b.classList.toggle('active', document.queryCommandState(b.getAttribute('data-cmd'))); }
-      catch(_) {}
-    });
-  });
-
-  const updateToolbarState = () => {
-    document.querySelectorAll('#editorToolbar button[data-cmd]').forEach(b => {
-      try { b.classList.toggle('active', document.queryCommandState(b.getAttribute('data-cmd'))); }
-      catch(_) {}
-    });
-  };
-  document.getElementById('recordDescription')?.addEventListener('keyup',   updateToolbarState);
-  document.getElementById('recordDescription')?.addEventListener('mouseup',  updateToolbarState);
-
-  const dropZone     = document.getElementById('attachmentDropZone');
-  const attachInput  = document.getElementById('recordAttachment');
-  const attachNameEl = document.getElementById('attachmentName');
-
-  const updateAttachDisplay = () => {
-    if (attachInput.files.length > 0) {
-      const f = attachInput.files[0];
-      attachNameEl.textContent   = `✓ ${f.name} (${(f.size/1024/1024).toFixed(2)} MB)`;
-      attachNameEl.style.display = 'block';
-      dropZone.style.borderColor = '#28a745';
-    } else {
-      attachNameEl.style.display = 'none';
-      dropZone.style.borderColor = '#ddd';
-    }
-  };
-  dropZone.addEventListener('click',     () => attachInput.click());
-  dropZone.addEventListener('dragover',  (e) => { e.preventDefault(); dropZone.style.borderColor = '#007B8A'; });
-  dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = '#ddd'; });
-  dropZone.addEventListener('drop', (e) => {
-    e.preventDefault(); dropZone.style.borderColor = '#ddd';
-    if (e.dataTransfer.files.length > 0) {
-      const dt = new DataTransfer(); dt.items.add(e.dataTransfer.files[0]);
-      attachInput.files = dt.files; updateAttachDisplay();
-    }
-  });
-  attachInput.addEventListener('change', updateAttachDisplay);
-
-  document.getElementById('saveRecordBtn').addEventListener('click', async () => {
-    try {
-      const title    = document.getElementById('recordTitle').value.trim();
-      const descEl   = document.getElementById('recordDescription');
-      const descHtml = descEl ? descEl.innerHTML.trim() : '';
-      const descText = descEl ? (descEl.innerText || descEl.textContent || '').trim() : '';
-      const fileInput = document.getElementById('recordAttachment');
-      const rType    = document.getElementById('formRecordType').value;
-      const rTabKey  = document.getElementById('formTabKey').value;
-      const rKind    = document.getElementById('recordKindField').value;
-      const tiedId   = document.getElementById('noticeTiedIdField').value;
-
-      if (!title)               throw new Error('Title is required.');
-      if (title.length < 3)     throw new Error('Title must be at least 3 characters.');
-      if (!descText)            throw new Error('Content is required.');
-      if (descText.length < 10) throw new Error('Content must be at least 10 characters.');
-      if (fileInput.files[0] && fileInput.files[0].size > 10*1024*1024)
-        throw new Error('File size must not exceed 10MB.');
-
-      const formData = new FormData();
-      formData.append('recordType',  rType);
-      formData.append('title',       title);
-      formData.append('description', descHtml);
-      formData.append('projectId',   localStorage.getItem('activeProjectName'));
-      formData.append('recordKind',  rKind);
-      if (tiedId) formData.append('noticeTiedId', tiedId);
-      if (fileInput.files.length > 0) formData.append('attachment', fileInput.files[0]);
-
-      const saveBtn = document.getElementById('saveRecordBtn');
-      if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
-
-      const res = await authFetch(
-        'https://oneprojectapp-backend.onrender.com/api/add-record',
-        { method: 'POST', body: formData }
-      );
-      if (!res) return;
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-      const data = await res.json();
-
-      if (data.success) {
-        alert(rKind === 'rejection_notice' ? `✓ Rejection Notice "${title}" issued.`
-          : rKind === 'notice' ? `✓ Notice of Determination "${title}" issued.`
-          : `✓ Record "${title}" saved.`);
-        delete recordsCache[rTabKey];
-        loadTabRecords(rTabKey);
-        collapseGrayPart();
-      } else throw new Error(data.message || 'Failed to save.');
-    } catch (err) {
-      console.error('Form submission error:', err);
-      alert('Error: ' + err.message);
-      const saveBtn = document.getElementById('saveRecordBtn');
-      if (saveBtn) {
-        saveBtn.disabled = false;
-        saveBtn.textContent = recordKind === 'rejection_notice' ? '📋 Issue Rejection Notice'
-          : recordKind === 'notice' ? '📋 Issue Notice' : '✓ Save Record';
-      }
-    }
-  });
-}
-window.openAddRecordPanel = openAddRecordPanel;
-
-// =======================================================================
-//  PLANNING & EXECUTION (unchanged)
-// =======================================================================
-async function openPlanningExecutionForm(recordId = null, tabKey = 'planning-execution') {
-  const cached = recordId ? (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId)) : null;
-  const isNew = !cached;
-  if (cached && !cached.is_uploader && !cached.is_viewed) markRecordViewed(cached.id, tabKey);
-  const leaderRoles = ['ContractorPM','ConsultantPM','ClientPM','PM','Leader'];
-  const isLeader = leaderRoles.includes(window.currentUserRole) ||
-    (cached && String(cached.creator_id) === String(window.currentUserId));
-  const inputReadOnly  = isLeader ? '' : 'readonly';
-  const selectDisabled = isLeader ? '' : 'disabled';
-  const buttonDisabled = isLeader ? '' : 'disabled';
-
-  let trackingEntries = [];
-  if (cached) {
-    try {
-      const res = await authFetch(
-        `https://oneprojectapp-backend.onrender.com/api/planning-execution-tracking?activityId=${cached.id}`
-      );
-      if (res && res.ok) {
-        const data = await res.json();
-        trackingEntries = Array.isArray(data.entries) ? data.entries : data.tracking || [];
-      }
-    } catch (err) { console.error('Planning execution tracking fetch error:', err); }
-  }
-
-  const panelTitle           = isNew ? '➕ Plan & Execute Activity' : `Activity: ${cached.title || 'Untitled'}`;
-  const recordTitle          = cached?.title             || '';
-  const recordDescription    = cached?.description       || '';
-  const milestoneId          = cached?.milestone_id      || '';
-  const plannedQuantity      = cached?.planned_quantity  || '';
-  const unit                 = cached?.unit              || '';
-  const plannedWork          = cached?.planned_work      || '';
-  const plannedManpower      = cached?.planned_manpower  || '';
-  const plannedEquipment     = cached?.planned_equipment || '';
-  const plannedMaterials     = cached?.planned_materials || '';
-  const status               = cached?.status            || 'ongoing';
-  const comments = isLeader
-    ? 'Only leaders can edit this activity.'
-    : 'Review-only mode: you can view activity plan and actual execution.';
-
-  const html = `
-    <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
-      <div style="padding:14px 16px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;
-        display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-        <div>
-          <div style="font-size:18px;font-weight:700;color:#1f2937;">${panelTitle}</div>
-          <div style="font-size:12px;color:#4b5563;margin-top:4px;">
-            ${isNew ? 'Fill the activity plan on the left and actual execution details on the right.'
-              : 'Review or update activity plan and execution data.'}</div>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-          <span style="font-size:11px;color:#475569;background:#eff6ff;border:1px solid #bfdbfe;
-            border-radius:999px;padding:6px 12px;">Status: ${status}</span>
-          <button class="btn" onclick="collapseGrayPart()"
-            style="background:#f3f4f6;color:#1f2937;">✕ Close</button>
-        </div>
-      </div>
-      <div style="flex:1;overflow:auto;padding:16px;display:grid;grid-template-columns:1fr 1fr;
-        gap:14px;box-sizing:border-box;min-height:0;">
-
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px;
-          display:flex;flex-direction:column;gap:14px;">
-          <div style="font-weight:700;color:#007B8A;font-size:14px;">A. Planned Activity (Leader / PM)</div>
-          <div class="form-group"><label>Milestone ID</label>
-            <input id="peMilestoneId" type="text" value="${milestoneId}" ${inputReadOnly}/></div>
-          <div class="form-group"><label>Activity Title</label>
-            <input id="peTitle" type="text" value="${recordTitle}" ${inputReadOnly}/></div>
-          <div class="form-group"><label>Description</label>
-            <textarea id="peDescription" ${inputReadOnly}>${recordDescription}</textarea></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-            <div class="form-group"><label>Start Date</label>
-              <input id="peStartDate" type="date" value="${cached?.start_date||''}" ${inputReadOnly}/></div>
-            <div class="form-group"><label>End Date</label>
-              <input id="peEndDate" type="date" value="${cached?.end_date||''}" ${inputReadOnly}/></div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-            <div class="form-group"><label>Planned Quantity</label>
-              <input id="pePlannedQuantity" type="number" value="${plannedQuantity}" ${inputReadOnly}/></div>
-            <div class="form-group"><label>Unit</label>
-              <input id="peUnit" type="text" value="${unit}" ${inputReadOnly}/></div>
-          </div>
-          <div class="form-group"><label>Planned Work</label>
-            <textarea id="pePlannedWork" ${inputReadOnly}>${plannedWork}</textarea></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-            <div class="form-group"><label>Planned Manpower</label>
-              <input id="pePlannedManpower" type="text" value="${plannedManpower}" ${inputReadOnly}/></div>
-            <div class="form-group"><label>Planned Equipment</label>
-              <input id="pePlannedEquipment" type="text" value="${plannedEquipment}" ${inputReadOnly}/></div>
-          </div>
-          <div class="form-group"><label>Planned Materials</label>
-            <input id="pePlannedMaterials" type="text" value="${plannedMaterials}" ${inputReadOnly}/></div>
-          <div class="form-group"><label>Linked File</label>
-            <input id="peLinkedFile" type="file" ${selectDisabled}/></div>
-          <div style="font-size:12px;color:#4b5563;padding:10px 12px;background:#f8fafc;
-            border:1px solid #dbeafe;border-radius:10px;">${comments}</div>
-          <button id="peSavePlan" class="btn primary" ${buttonDisabled}>💾 Save Plan</button>
-        </div>
-
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px;
-          display:flex;flex-direction:column;gap:14px;">
-          <div style="font-weight:700;color:#007B8A;font-size:14px;">B. Actual Execution Tracking</div>
-          <div class="form-group"><label>Report Date</label>
-            <input id="peReportDate" type="date" value="${new Date().toISOString().slice(0,10)}" ${inputReadOnly}/></div>
-          <div class="form-group"><label>Actual Quantity</label>
-            <input id="peActualQuantity" type="number" value="" ${inputReadOnly}/></div>
-          <div class="form-group"><label>Unit</label>
-            <input id="peActualUnit" type="text" value="${unit}" readonly/></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-            <div class="form-group"><label>Manpower Used</label>
-              <input id="peManpowerUsed" type="text" ${inputReadOnly}/></div>
-            <div class="form-group"><label>Equipment Used</label>
-              <input id="peEquipmentUsed" type="text" ${inputReadOnly}/></div>
-          </div>
-          <div class="form-group"><label>Materials Used</label>
-            <input id="peMaterialsUsed" type="text" ${inputReadOnly}/></div>
-          <div class="form-group"><label>Progress %</label>
-            <input id="peProgressPct" type="number" min="0" max="100" value="0" ${inputReadOnly}/></div>
-          <div class="form-group"><label>Issues</label>
-            <textarea id="peIssues" ${inputReadOnly}></textarea></div>
-          <div class="form-group"><label>Notes</label>
-            <textarea id="peNotes" ${inputReadOnly}></textarea></div>
-          <div class="form-group"><label>Remark</label>
-            <textarea id="peRemark" ${inputReadOnly}></textarea></div>
-          <div class="form-group"><label>Delay Days</label>
-            <input id="peDelayDays" type="number" min="0" value="${cached?.delay_days||0}" readonly/></div>
-          <div class="form-group"><label>Delay Reason</label>
-            <textarea id="peDelayReason" ${inputReadOnly}>${cached?.delay_reason||''}</textarea></div>
-          <div class="form-group"><label>Attachment</label>
-            <input id="peAttachment" type="file" ${selectDisabled}/></div>
-          <button id="peSaveActual" class="btn primary" ${buttonDisabled}>✅ Save Actual</button>
-          <div style="font-size:12px;color:#475569;">Existing tracking entries</div>
-          <div id="peTrackingList" style="max-height:220px;overflow:auto;border:1px solid #e5e7eb;
-            border-radius:10px;padding:10px;background:#f8fafc;">
-            ${trackingEntries.length
-              ? trackingEntries.map(entry => `
-                  <div style="margin-bottom:10px;padding:10px;background:#fff;
-                    border:1px solid #dbeafe;border-radius:8px;">
-                    <div style="font-size:12px;font-weight:700;color:#1f2937;">
-                      ${new Date(entry.report_date).toLocaleDateString()}</div>
-                    <div style="font-size:12px;color:#475569;">
-                      Qty: ${entry.actual_quantity} ${entry.unit}</div>
-                    <div style="font-size:12px;color:#475569;">
-                      Progress: ${entry.progress_pct}%</div>
-                    <div style="font-size:12px;color:#475569;">
-                      Remark: ${entry.remark || '—'}</div>
-                  </div>`).join('')
-              : '<div style="font-size:12px;color:#6b7280;">No actual tracking entries yet.</div>'}
-          </div>
-        </div>
-
-      </div>
-    </div>`;
-
-  expandGrayPart(html);
-
-  document.getElementById('peSavePlan')?.addEventListener('click', async () => {
-    if (!isLeader) return alert('Only Contractor/PM roles can edit plan and actual data.');
-    try {
-      const payload = {
-        projectId:        localStorage.getItem('activeProjectName'),
-        milestone_id:     document.getElementById('peMilestoneId').value.trim(),
-        title:            document.getElementById('peTitle').value.trim(),
-        description:      document.getElementById('peDescription').value.trim(),
-        start_date:       document.getElementById('peStartDate').value,
-        end_date:         document.getElementById('peEndDate').value,
-        planned_quantity: document.getElementById('pePlannedQuantity').value,
-        unit:             document.getElementById('peUnit').value.trim(),
-        planned_work:     document.getElementById('pePlannedWork').value.trim(),
-        planned_manpower: document.getElementById('pePlannedManpower').value.trim(),
-        planned_equipment:document.getElementById('pePlannedEquipment').value.trim(),
-        planned_materials:document.getElementById('pePlannedMaterials').value.trim(),
-        status,
-      };
-      if (!payload.title) return alert('Activity title is required.');
-      if (!payload.start_date || !payload.end_date) return alert('Start and end dates are required.');
-      const form = new FormData();
-      Object.entries(payload).forEach(([k,v]) => { if (v !== undefined) form.append(k, v); });
-      if (!isNew) form.append('id', cached.id);
-      const attach = document.getElementById('peLinkedFile')?.files?.[0];
-      if (attach) form.append('linked_file', attach);
-      const res = await fetch('https://oneprojectapp-backend.onrender.com/api/planning-execution', {
-        method: isNew ? 'POST' : 'PUT',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
-        body: form,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || 'Unable to save plan');
-      alert('Plan saved.');
-      delete recordsCache[tabKey];
-      loadTabRecords(tabKey);
-      collapseGrayPart();
-    } catch (err) { console.error('Save plan error:', err); alert('Failed to save plan.'); }
-  });
-
-  document.getElementById('peSaveActual')?.addEventListener('click', async () => {
-    if (!isLeader) return alert('Only Contractor/PM roles can edit plan and actual data.');
-    try {
-      if (!cached) return alert('Please save the activity plan first.');
-      const payload = {
-        activity_id:    cached.id,
-        report_date:    document.getElementById('peReportDate').value,
-        actual_quantity:document.getElementById('peActualQuantity').value,
-        unit:           document.getElementById('peActualUnit').value.trim(),
-        manpower_used:  document.getElementById('peManpowerUsed').value.trim(),
-        equipment_used: document.getElementById('peEquipmentUsed').value.trim(),
-        materials_used: document.getElementById('peMaterialsUsed').value.trim(),
-        progress_pct:   document.getElementById('peProgressPct').value,
-        issues:         document.getElementById('peIssues').value.trim(),
-        notes:          document.getElementById('peNotes').value.trim(),
-        remark:         document.getElementById('peRemark').value.trim(),
-      };
-      if (!payload.actual_quantity) return alert('Actual quantity is required.');
-      const form = new FormData();
-      Object.entries(payload).forEach(([k,v]) => { if (v !== undefined) form.append(k, v); });
-      const attach = document.getElementById('peAttachment')?.files?.[0];
-      if (attach) form.append('attachment', attach);
-      const res = await fetch('https://oneprojectapp-backend.onrender.com/api/planning-execution-tracking', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` },
-        body: form,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || 'Unable to save actual execution');
-      alert('Actual execution saved.');
-      delete recordsCache[tabKey];
-      loadTabRecords(tabKey);
-      collapseGrayPart();
-    } catch (err) {
-      console.error('Save actual execution error:', err);
-      alert('Failed to save actual execution.');
-    }
-  });
-}
-window.openPlanningExecutionForm = openPlanningExecutionForm;
-//  NOTIFICATIONS
-// =======================================================================
-const notificationIcon  = document.getElementById('notificationIcon');
-const notificationBadge = document.getElementById('notificationBadge');
-
-async function updateNotificationBadge() {
-  try {
-    const projectId = localStorage.getItem('activeProjectName');
-    const token     = localStorage.getItem('authToken');
-    if (!projectId || !token) return;
-    const res = await authFetch(
-      `https://oneprojectapp-backend.onrender.com/notifications/unread-count?projectName=${projectName}`
-    );
-    if (!res) return;
-    const data  = await res.json();
-    const count = data.count ?? 0;
-    notificationBadge.textContent   = count;
-    notificationBadge.style.display = count > 0 ? 'inline-block' : 'none';
-  } catch (err) {
-    notificationBadge.textContent   = '0';
-    notificationBadge.style.display = 'none';
-  }
-}
-
-notificationIcon.addEventListener('click', async () => {
-  const projectId = localStorage.getItem('activeProjectName');
-  if (!projectId) { expandGrayPart('<p>Please select a project first.</p>'); return; }
-  notificationBadge.textContent   = '0';
-  notificationBadge.style.display = 'none';
-  try {
-    const res = await authFetch(
-      `https://oneprojectapp-backend.onrender.com/notifications?projectName=${projectName}`
-    );
-    if (!res) return;
-    const data          = await res.json();
-    const notifications = data.notifications || [];
-    if (notifications.length > 0) {
-      await authFetch(
-        'https://oneprojectapp-backend.onrender.com/notifications/mark-all-read',
-        {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ notificationIds: notifications.map(n => n.id) })
-        }
-      );
-    }
-    renderNotificationPanel(notifications);
-  } catch (err) {
-    expandGrayPart(`<p style="color:#ef4444;">⚠️ Error loading notifications.</p>
-      <button class="btn" onclick="collapseGrayPart()">← Back</button>`);
-  }
-});
-
-function renderNotificationPanel(notifications) {
-  let html = `
-    <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;">
-      <h3 style="margin:0;color:#333;font-size:18px;">🔔 Notifications</h3>
-    </div>
-    <div style="flex:1;overflow-y:auto;padding:16px 20px;">`;
-
-  if (!notifications.length) {
-    html += `<div style="text-align:center;padding:40px 0;color:#9ca3af;">
-      <div style="font-size:32px;margin-bottom:8px;">🔔</div>
-      <p style="margin:0;">No notifications yet.</p></div>`;
-  } else {
-    html += `<ul style="padding:0;margin:0;list-style:none;">`;
-    notifications.forEach(n => {
-      const isUnread  = !n.is_read;
-      const typeLabel = (n.entity_type || '').replace('_records','').replace(/_/g,'-');
-      html += `
-        <li data-notif-entity-type="${n.entity_type}"
-            data-notif-entity-id="${n.entity_id}"
-            data-action="notif-click"
-            style="padding:14px 16px;border-radius:8px;margin-bottom:8px;cursor:pointer;
-            background:${isUnread ? '#eff6ff' : '#fff'};
-            border:1px solid ${isUnread ? '#bfdbfe' : '#e5e7eb'};
-            border-left:4px solid ${isUnread ? '#3b82f6' : '#e5e7eb'};">
-          <div style="font-weight:${isUnread ? '700' : '600'};font-size:13px;color:#1f2937;
-            margin-bottom:4px;display:flex;align-items:center;gap:6px;">
-            ${isUnread
-              ? '<span style="display:inline-block;width:7px;height:7px;background:#3b82f6;border-radius:50%;"></span>'
-              : ''}
-            ${typeLabel} Record
-          </div>
-          <div style="font-size:12px;color:#6b7280;line-height:1.5;">${n.message || ''}</div>
-          <div style="font-size:11px;color:#9ca3af;margin-top:6px;">
-            By <strong>${n.added_by_role || 'Unknown'}</strong> &nbsp;•&nbsp;
-            ${new Date(n.created_at).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}
-          </div>
-        </li>`;
-    });
-    html += `</ul>`;
-  }
-  html += `</div>
-    <div style="padding:16px 20px;border-top:1px solid #e5e7eb;flex-shrink:0;">
-      <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
-    </div>`;
-
-  expandGrayPart(`<div style="display:flex;flex-direction:column;height:100%;">${html}</div>`);
-
-  setTimeout(() => {
-    document.getElementById('grayContent')?.addEventListener('click', (e) => {
-      const li = e.target.closest('[data-action="notif-click"]');
-      if (!li) return;
-      handleNotificationClick(
-        li.getAttribute('data-notif-entity-type'),
-        li.getAttribute('data-notif-entity-id')
-      );
-    });
-  }, 50);
-}
-
-// =======================================================================
-//  NOTIFICATION CLICK (unchanged)
-// =======================================================================
-async function handleNotificationClick(entityType, entityId) {
-  const TABLE_TAB_MAP = {
-    contractual_records:    'contractual',
-    administrative_records: 'administrative',
-    safety_records:         'safety',
-    operational_records:    'operational',
-    financial_records:      'financial',
-    workspace_work_center:  'work-centel',
-  };
-  const tabKey = TABLE_TAB_MAP[entityType];
-  if (!tabKey) return;
-
-  collapseGrayPart();
-  const tabEl = document.querySelector(`#navTabs li[data-tab="${tabKey}"]`);
-  if (tabEl) tabEl.click();
-
-  const waitForRecord = () => new Promise((resolve) => {
-    const check = () => {
-      const cached = recordsCache[tabKey];
-      if (cached && cached.some(r => String(r.id) === String(entityId))) resolve();
-      else setTimeout(check, 100);
-    };
-    check();
-  });
-
-  await Promise.race([
-    waitForRecord(),
-    new Promise(resolve => setTimeout(resolve, 5000))
-  ]);
-
-  const el = document.querySelector(`.doc-item[data-id='${entityId}']`);
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    const detail = document.getElementById(`detail-${entityId}`);
-    if (detail && detail.style.display === 'none') toggleRecordDetail(entityId, tabKey);
-  }
-}
-
-// =======================================================================
-
-// =======================================================================
 //  INIT
 // =======================================================================
 bootstrapUser();
-</script>
 </body>
 </html>
