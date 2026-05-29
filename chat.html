@@ -407,6 +407,8 @@
             <div class="message-input-wrapper">
                 <input type="text" class="message-input" id="messageInput" placeholder="Type a message...">
             </div>
+            <input type="file" id="attachmentInput" style="display:none" />
+            <button class="icon-btn" id="attachBtn" title="Attach file">📎</button>
             <button class="send-btn" id="sendBtn">➤</button>
         </div>
     </div>
@@ -491,9 +493,12 @@
         const searchInput = document.getElementById('searchInput');
         const backBtn = document.getElementById('backBtn');
         const groupBtn = document.getElementById('groupBtn');
+        const attachBtn = document.getElementById('attachBtn');
+        const attachmentInput = document.getElementById('attachmentInput');
 
         let currentChat = null;
         let contacts = [];
+        let pendingAttachment = null;
 
         projectLabel.textContent = activeProjectName
             ? `Project: ${activeProjectName}`
@@ -647,15 +652,70 @@
             const data = await apiRequest(endpoint);
             if (!data) return;
             contact.messages = data.messages.map(message => ({
+                id: message.id,
+                raw: message,
                 text: message.content,
-                sent: message.sender_role === currentUserRole && Number(message.sender_id) === currentUserId,
+                attachmentUrl: message.attachment_url || null,
+                attachmentName: message.attachment_name || null,
+                sent: String(message.sender_id) === String(currentUserId),
                 time: new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                readBy: Array.isArray(message.read_by) ? message.read_by : (message.read_by ? JSON.parse(message.read_by) : []),
             }));
             if (contact.messages.length) {
                 const last = contact.messages[contact.messages.length - 1];
                 contact.lastMessage = last.text;
                 contact.time = last.time;
             }
+
+            // mark unread messages as read for this user
+            const toMark = contact.messages.filter(m => !m.sent && !m.readBy.includes(currentUserId)).map(m => m.id);
+            if (toMark.length) {
+                apiRequest('/chat/mark-read', { method: 'POST', body: { messageIds: toMark, projectId: activeProjectId } }).catch(()=>{});
+            }
+        }
+
+        function renderMessages() {
+            chatMessages.innerHTML = '';
+            if (!currentChat) return;
+            for (const m of currentChat.messages) {
+                const el = document.createElement('div');
+                el.className = `message ${m.sent ? 'sent' : 'received'}`;
+                const bubble = document.createElement('div');
+                bubble.className = 'message-bubble';
+                bubble.innerHTML = `<div>${escapeHtml(m.text || '')}</div>`;
+                if (m.attachmentUrl) {
+                    const a = document.createElement('a');
+                    a.href = m.attachmentUrl;
+                    a.target = '_blank';
+                    a.rel = 'noopener noreferrer';
+                    a.textContent = m.attachmentName || 'Attachment';
+                    a.style.display = 'block';
+                    a.style.marginTop = '8px';
+                    bubble.appendChild(a);
+                }
+                const timeEl = document.createElement('div');
+                timeEl.className = 'message-time';
+                timeEl.textContent = m.time || '';
+                el.appendChild(bubble);
+                el.appendChild(timeEl);
+
+                if (m.sent) {
+                    const status = document.createElement('div');
+                    status.style.fontSize = '12px';
+                    status.style.color = '#6b7280';
+                    status.style.marginLeft = '8px';
+                    // show double-tick when read by recipient(s)
+                    if (Array.isArray(m.readBy) && m.readBy.length > 0) status.textContent = '✓✓';
+                    else status.textContent = '✓';
+                    el.appendChild(status);
+                }
+                chatMessages.appendChild(el);
+            }
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            return (text || '').replace(/[&<>"]+/g, function (s) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[s]; });
         }
 
         async function selectChat(contact) {
@@ -685,6 +745,11 @@
                 payload.recipientId = currentChat.recipientId;
             }
 
+            if (pendingAttachment && pendingAttachment.url) {
+                payload.attachmentUrl = pendingAttachment.url;
+                payload.attachmentName = pendingAttachment.name || '';
+            }
+
             const data = await apiRequest('/chat/messages', { method: 'POST', body: payload });
             if (!data) return;
 
@@ -694,6 +759,8 @@
             currentChat.lastMessage = text;
             currentChat.time = now;
             messageInput.value = '';
+            pendingAttachment = null;
+            messageInput.placeholder = 'Type a message...';
             renderContacts(searchInput.value);
             renderMessages();
         }
@@ -732,6 +799,23 @@
         groupBtn.addEventListener('click', () => {
             const group = contacts.find(contact => contact.isGroup);
             if (group) selectChat(group);
+        });
+        attachBtn.addEventListener('click', () => attachmentInput.click());
+        attachmentInput.addEventListener('change', async (e) => {
+            const f = e.target.files && e.target.files[0];
+            if (!f) return;
+            const fd = new FormData();
+            fd.append('attachment', f);
+            try {
+                const res = await fetch(`${API_BASE}/api/upload-attachment`, { method: 'POST', body: fd });
+                const d = await res.json();
+                if (d && d.url) {
+                    pendingAttachment = { url: d.url, name: f.name };
+                    messageInput.placeholder = `Attached: ${f.name}`;
+                } else {
+                    alert('Attachment upload failed');
+                }
+            } catch (err) { console.error('Attach upload error', err); alert('Attachment upload failed'); }
         });
         sendBtn.addEventListener('click', sendMessage);
         messageInput.addEventListener('keypress', (event) => {
