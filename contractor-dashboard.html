@@ -3587,9 +3587,10 @@ function tabToTable(tabKey) {
   return CATEGORY_TABLE_MAP[tabKey] || tabKey;
 }
 
+const API = 'https://oneprojectapp-backend.onrender.com/api';
+
 // =======================================================================
-//  AUTH-AWARE FETCH — always uses refresh token if needed
-//  Use this instead of raw fetch everywhere
+//  AUTH-AWARE FETCH
 // =======================================================================
 async function authFetch(url, options = {}) {
   let token = localStorage.getItem('authToken');
@@ -3620,7 +3621,7 @@ async function bootstrapUser() {
   const token = localStorage.getItem('authToken');
   if (!token) { window.location.href = '/login.html'; return; }
   try {
-    const res = await authFetch('https://oneprojectapp-backend.onrender.com/api/me');
+    const res = await authFetch(`${API}/me`);
     if (!res || !res.ok) { window.location.href = '/login.html'; return; }
     loadHomeTabs();
     updateNotificationBadge();
@@ -3703,22 +3704,20 @@ function loadReportTabs() {
 
 function setTabContent(tabKey) {
   const map = {
-    contractual:    'Contract agreements, amendments, change orders, permits, insurance, tender docs.',
-    administrative: 'RFAs, consultant instructions, meeting minutes, correspondence, schedule updates.',
-    safety:         'Safety inspections, incident reports, NCRs, QC tests, risk assessments.',
-    operational:    'Daily site reports, progress reports, BoQ, technical specs, submittals, drawings.',
-    financial:      'Interim payment certificates, contractor claims, final account reports.',
-    meeting:        null,
-    'work-centel':             'Leader assigns tasks, members execute and report progress for validation.',
+    contractual:              'Contract agreements, amendments, change orders, permits, insurance, tender docs.',
+    administrative:           'RFAs, consultant instructions, meeting minutes, correspondence, schedule updates.',
+    safety:                   'Safety inspections, incident reports, NCRs, QC tests, risk assessments.',
+    operational:              'Daily site reports, progress reports, BoQ, technical specs, submittals, drawings.',
+    financial:                'Interim payment certificates, contractor claims, final account reports.',
+    meeting:                  null,
+    'work-centel':            'Leader assigns tasks, members execute and report progress for validation.',
     'planning-execution':     'Leader sets planned milestones, members log actual execution for comparison.',
     'document-approval':      'Members draft reports, leader reviews and approves before records move forward.',
     'control-reports':        'Leader consolidates approved drafts, members monitor validated information.',
     'communication-meetings': null,
   };
-  if (tabKey === 'meeting' || tabKey === 'communication-meetings') {
-    renderMeetingContent();
-    return;
-  }
+  if (tabKey === 'meeting')                { renderMeetingContent('minutes', 'global'); return; }
+  if (tabKey === 'communication-meetings') { renderMeetingContent('minutes', 'side');   return; }
   const desc = map[tabKey];
   if (desc === undefined) {
     console.warn('Unknown tab key:', tabKey);
@@ -3748,92 +3747,345 @@ function renderBottomContent(description, placeholder) {
   });
 }
 
-function renderMeetingContent(activeView = 'minutes') {
+// =======================================================================
+//  MEETING SYSTEM
+// =======================================================================
+async function getCurrentUser() {
+  const res = await authFetch(`${API}/me`);
+  if (!res || !res.ok) return {};
+  return await res.json();
+}
+
+async function getMeetingScope(context) {
+  if (context === 'global') return { scope: 'global', scopeValue: null };
+  const user = await getCurrentUser();
+  return { scope: 'side', scopeValue: user.role || null };
+}
+
+function renderMeetingContent(activeView = 'minutes', context = 'global') {
   bottomContent.innerHTML = `
     <div class="meeting-options">
-      <button class="meeting-btn ${activeView === 'minutes' ? 'active' : ''}" data-meeting-view="minutes">📋 Meeting Minutes</button>
-      <button class="meeting-btn ${activeView === 'scheduled' ? 'active' : ''}" data-meeting-view="scheduled">📅 Scheduled Meeting</button>
-      <button class="meeting-btn ${activeView === 'plan' ? 'active' : ''}" data-meeting-view="plan">✏️ Plan Meeting</button>
+      <button class="meeting-btn ${activeView === 'minutes'   ? 'active' : ''}" data-view="minutes">📋 Meeting Minutes</button>
+      <button class="meeting-btn ${activeView === 'scheduled' ? 'active' : ''}" data-view="scheduled">📅 Scheduled Meetings</button>
+      <button class="meeting-btn ${activeView === 'plan'      ? 'active' : ''}" data-view="plan">✏️ Plan Meeting</button>
     </div>
     <div class="bottom-scroll-area" id="meetingViewContainer"></div>
   `;
-
-  const controls = bottomContent.querySelectorAll('.meeting-options button[data-meeting-view]');
-  controls.forEach(button => {
-    button.addEventListener('click', () => {
-      const view = button.getAttribute('data-meeting-view');
-      renderMeetingContent(view);
-    });
+  bottomContent.querySelectorAll('.meeting-btn[data-view]').forEach(btn => {
+    btn.addEventListener('click', () => renderMeetingContent(btn.getAttribute('data-view'), context));
   });
-
-  updateMeetingView(activeView);
+  updateMeetingView(activeView, context);
 }
 
-function switchMeetingView(view) {
-  renderMeetingContent(view);
-}
-
-async function updateMeetingView(activeView = 'minutes') {
+async function updateMeetingView(activeView = 'minutes', context = 'global') {
   const container = document.getElementById('meetingViewContainer');
+  const { scope, scopeValue } = await getMeetingScope(context);
 
-  switch(activeView) {
+  switch (activeView) {
     case 'minutes':
-      container.innerHTML = `
-        <div style='display:flex; justify-content:flex-end; gap:12px; padding:12px;'>
-          <button class='btn primary' style='padding:10px 14px; font-size:13px;' onclick='openAddMeetingMinutesPanel()'>➕ Add Meeting Minute</button>
-        </div>
-        <div id="meetingListContainer" style="padding:12px;"><p style="text-align:center; color:#999;">Loading meeting minutes...</p></div>
-      `;
-      await displayMeetingList('minutes');
+      container.innerHTML = `<div id="meetingListContainer" style="padding:12px;"><p style="text-align:center;color:#999;">Loading…</p></div>`;
+      await displayMeetingList('minutes', scope, scopeValue, context);
       break;
     case 'scheduled':
-      container.innerHTML = '<div id="meetingListContainer" style="padding:12px;"><p style="text-align:center; color:#999;">Loading scheduled meetings...</p></div>';
-      await displayMeetingList('scheduled');
+      container.innerHTML = `<div id="meetingListContainer" style="padding:12px;"><p style="text-align:center;color:#999;">Loading…</p></div>`;
+      await displayMeetingList('scheduled', scope, scopeValue, context);
       break;
     case 'plan':
-      container.innerHTML = `
-        <div style='padding:12px;'>
-          <h3 style='margin-bottom:16px; color:#333;'>📅 Schedule a New Meeting</h3>
-          <div class='form-group'><label>Meeting Title:</label><input type='text' id='meetingTitle' placeholder='e.g., Site Meeting - Week 2' /></div>
-          <div class='form-group'><label>Date & Time:</label><input type='datetime-local' id='meetingDateTime' /></div>
-          <div class='form-group'><label>Participants:</label><textarea id='meetingParticipants' placeholder='Enter participant names (comma-separated)' style='min-height:60px;'></textarea></div>
-          <div class='form-group'><label>Agenda:</label><textarea id='meetingAgenda' placeholder='Enter meeting agenda' style='min-height:80px;'></textarea></div>
-          <div class='form-group'><label>Attachments:</label><input type='file' id='meetingAttachments' multiple /></div>
-          <div style='display:flex; gap:8px; margin-top:12px;'>
-            <button class='btn primary' id='scheduleMeetingBtn' style='flex:1; padding:10px;'>📅 Schedule Meeting</button>
-            <button class='btn' style='flex:1; padding:10px;' onclick='collapseGrayPart()'>Cancel</button>
-          </div>
-        </div>
-      `;
-      document.getElementById('scheduleMeetingBtn').addEventListener('click', async () => {
-        const title        = document.getElementById('meetingTitle').value.trim();
-        const dateTime     = document.getElementById('meetingDateTime').value;
-        const participants = document.getElementById('meetingParticipants').value.trim();
-        const agenda       = document.getElementById('meetingAgenda').value.trim();
-        if (!title || !dateTime || !participants || !agenda) {
-          alert('Please fill in all required fields.');
-          return;
-        }
-        alert('Meeting scheduled successfully!');
-        renderMeetingContent('scheduled');
-      });
+      renderPlanMeetingForm(context, scope, scopeValue);
       break;
   }
 }
 
-async function displayMeetingList(type = 'minutes') {
+async function displayMeetingList(view, scope, scopeValue, context) {
   const container = document.getElementById('meetingListContainer');
   try {
-    // Placeholder implementation - can be connected to backend
-    container.innerHTML = `<p style="text-align:center; color:#999;">No ${type} yet. Create one to get started!</p>`;
+    const projectId = localStorage.getItem('activeProjectId');
+    const params = new URLSearchParams({ view, scope, project_id: projectId });
+    if (scopeValue) params.append('scope_value', scopeValue);
+
+    const res = await authFetch(`${API}/meetings?${params}`);
+    if (!res || !res.ok) throw new Error();
+
+    const meetings = await res.json();
+
+    if (!meetings.length) {
+      container.innerHTML = `<p style="text-align:center;color:#94a3b8;padding:32px 16px;font-size:14px;">
+        ${view === 'scheduled'
+          ? 'No meetings scheduled yet. Use <strong>Plan Meeting</strong> to create one.'
+          : 'No past meetings yet. Meetings will appear here once their date has passed.'}
+      </p>`;
+      return;
+    }
+
+    container.innerHTML = meetings.map(m => renderMeetingCard(m, view)).join('');
+
+    container.querySelectorAll('.add-minute-btn').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        openAddMinuteInline(btn.getAttribute('data-meeting-id'), scope, scopeValue);
+      });
+    });
+
   } catch (err) {
-    console.error(`Error loading ${type}:`, err);
-    container.innerHTML = `<p style="text-align:center; color:#d32f2f;">Error loading ${type}.</p>`;
+    console.error(`Error loading ${view}:`, err);
+    container.innerHTML = `<p style="text-align:center;color:#ef4444;padding:24px;">Error loading ${view}. Please try again.</p>`;
   }
 }
 
-function openAddMeetingMinutesPanel() {
-  alert('Add Meeting Minutes panel - to be connected to backend');
+function renderPlanMeetingForm(context, scope, scopeValue) {
+  const container = document.getElementById('meetingViewContainer');
+  container.innerHTML = `
+    <div style="padding:16px;max-width:640px;">
+      <h3 style="margin-bottom:18px;color:#1e293b;">📅 Plan a Meeting</h3>
+      <div class="form-group">
+        <label>Meeting Type <span style="color:#ef4444;">*</span></label>
+        <select id="mType">
+          <option value="">Select type…</option>
+          <option value="site">Site Meeting</option>
+          <option value="office">Office Meeting</option>
+          <option value="virtual">Virtual Meeting</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Title <span style="color:#ef4444;">*</span></label>
+        <input type="text" id="mTitle" placeholder="e.g., Weekly Progress Meeting – Week 4" />
+      </div>
+      <div class="form-group">
+        <label>Date &amp; Time <span style="color:#ef4444;">*</span></label>
+        <input type="datetime-local" id="mDateTime" />
+      </div>
+      <div class="form-group">
+        <label>Location / Venue <span style="color:#ef4444;">*</span></label>
+        <input type="text" id="mLocation" placeholder="e.g., Site Office – Block A or https://zoom.us/j/…" />
+      </div>
+      <div class="form-group">
+        <label>Participants <span style="color:#ef4444;">*</span></label>
+        <textarea id="mParticipants" placeholder="Names or roles, comma-separated" style="min-height:60px;"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Agenda <span style="color:#ef4444;">*</span></label>
+        <textarea id="mAgenda" placeholder="List agenda items, one per line" style="min-height:100px;"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Attachments</label>
+        <input type="file" id="mAttachments" multiple />
+        <small style="color:#64748b;">Attach invitation letter, drawings, or supporting docs</small>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:18px;">
+        <button class="btn primary" id="savePlanMeetingBtn" style="flex:1;padding:10px;font-size:14px;">💾 Save &amp; Schedule</button>
+        <button class="btn" style="flex:1;padding:10px;font-size:14px;" onclick="renderMeetingContent('scheduled','${context}')">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.getElementById('savePlanMeetingBtn')
+    .addEventListener('click', () => savePlannedMeeting(context, scope, scopeValue));
+}
+
+async function savePlannedMeeting(context, scope, scopeValue) {
+  const type         = document.getElementById('mType').value;
+  const title        = document.getElementById('mTitle').value.trim();
+  const dateTime     = document.getElementById('mDateTime').value;
+  const location     = document.getElementById('mLocation').value.trim();
+  const participants = document.getElementById('mParticipants').value.trim();
+  const agenda       = document.getElementById('mAgenda').value.trim();
+  const files        = document.getElementById('mAttachments').files;
+
+  if (!type || !title || !dateTime || !location || !participants || !agenda) {
+    alert('Please fill in all required fields before saving.');
+    return;
+  }
+
+  const btn = document.getElementById('savePlanMeetingBtn');
+  btn.disabled    = true;
+  btn.textContent = 'Saving…';
+
+  try {
+    const projectId = localStorage.getItem('activeProjectId');
+    const body = new FormData();
+    body.append('project_id',   projectId);
+    body.append('meeting_type', type);
+    body.append('title',        title);
+    body.append('date_time',    dateTime);
+    body.append('location',     location);
+    body.append('participants', participants);
+    body.append('agenda',       agenda);
+    body.append('scope',        scope);
+    if (scopeValue) body.append('scope_value', scopeValue);
+    for (const file of files) body.append('attachments', file);
+
+    const res = await authFetch(`${API}/meetings`, { method: 'POST', body });
+    if (!res || !res.ok) throw new Error();
+
+    renderMeetingContent('scheduled', context);
+
+  } catch (err) {
+    console.error('Save meeting error:', err);
+    alert('Failed to schedule the meeting. Please try again.');
+    btn.disabled    = false;
+    btn.textContent = '💾 Save & Schedule';
+  }
+}
+
+function renderMeetingCard(meeting, view) {
+  const typeLabel = { site: '🏗 Site', office: '🏢 Office', virtual: '💻 Virtual' }[meeting.meeting_type] || meeting.meeting_type;
+  const dateStr   = new Date(meeting.date_time).toLocaleString();
+
+  return `
+    <div class="meeting-card" data-id="${meeting.id}">
+      <div class="meeting-card-header" style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;">
+        <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
+          <span style="font-size:20px;">${view === 'scheduled' ? '📅' : '📋'}</span>
+          <div style="min-width:0;">
+            <div style="font-weight:600;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${meeting.title}</div>
+            <div style="font-size:12px;color:#64748b;margin-top:2px;">${typeLabel} · ${dateStr} · ${meeting.location}</div>
+          </div>
+        </div>
+        <span class="expand-arrow" style="font-size:11px;color:#94a3b8;margin-left:8px;">▼</span>
+      </div>
+      <div class="meeting-card-body" style="display:none;padding:14px 16px;">
+        <div class="meeting-detail-row"><strong>Participants:</strong><span>${meeting.participants}</span></div>
+        <div class="meeting-detail-row"><strong>Agenda:</strong><span style="white-space:pre-line;">${meeting.agenda}</span></div>
+        ${meeting.attachments?.length ? `
+          <div class="meeting-detail-row"><strong>Attachments:</strong><span>
+            ${meeting.attachments.map(a => `<a href="${a.url}" target="_blank" style="color:#3b82f6;text-decoration:none;">${a.name}</a>`).join(' · ')}
+          </span></div>` : ''}
+        ${view === 'minutes' ? renderMinuteSection(meeting) : ''}
+      </div>
+    </div>
+  `;
+}
+
+document.addEventListener('click', e => {
+  const header = e.target.closest('.meeting-card-header');
+  if (!header) return;
+  const body  = header.closest('.meeting-card').querySelector('.meeting-card-body');
+  const arrow = header.querySelector('.expand-arrow');
+  const isOpen = body.style.display !== 'none';
+  body.style.display = isOpen ? 'none' : 'block';
+  arrow.textContent  = isOpen ? '▼'   : '▲';
+});
+
+function renderMinuteSection(meeting) {
+  return `
+    <div class="minute-section" id="minute-section-${meeting.id}" style="margin-top:14px;border-top:1px solid #e2e8f0;padding-top:12px;">
+      ${meeting.has_minute
+        ? renderMinuteDetail(meeting.minute)
+        : `<button class="btn primary add-minute-btn" data-meeting-id="${meeting.id}"
+            style="width:100%;padding:10px;font-size:13px;">📝 Add Minute</button>`}
+    </div>
+  `;
+}
+
+function renderMinuteDetail(minute) {
+  return `
+    <div style="margin-top:4px;">
+      <h4 style="color:#334155;margin-bottom:10px;font-size:13px;text-transform:uppercase;letter-spacing:.5px;">Recorded Minute</h4>
+      <div class="meeting-detail-row"><strong>Attendees Present:</strong><span>${minute.attendees}</span></div>
+      <div class="meeting-detail-row"><strong>Agenda Discussed:</strong><span style="white-space:pre-line;">${minute.agenda_discussed}</span></div>
+      <div class="meeting-detail-row"><strong>Decisions Made:</strong><span style="white-space:pre-line;">${minute.decisions}</span></div>
+      <div class="meeting-detail-row"><strong>Action Items:</strong><span style="white-space:pre-line;">${minute.action_items}</span></div>
+      <div class="meeting-detail-row"><strong>Next Meeting:</strong><span>${minute.next_meeting_date ? new Date(minute.next_meeting_date).toLocaleString() : '—'}</span></div>
+      ${minute.attachments?.length ? `
+        <div class="meeting-detail-row"><strong>Attachments:</strong><span>
+          ${minute.attachments.map(a => `<a href="${a.url}" target="_blank" style="color:#3b82f6;text-decoration:none;">${a.name}</a>`).join(' · ')}
+        </span></div>` : ''}
+    </div>
+  `;
+}
+
+function openAddMinuteInline(meetingId, scope, scopeValue) {
+  document.getElementById(`minute-section-${meetingId}`).innerHTML = `
+    <div style="margin-top:4px;">
+      <h4 style="color:#334155;margin-bottom:12px;font-size:13px;text-transform:uppercase;letter-spacing:.5px;">📝 Record Meeting Minute</h4>
+      <div class="form-group">
+        <label>Attendees Present <span style="color:#ef4444;">*</span></label>
+        <textarea id="minAttendees_${meetingId}" placeholder="Names of those who attended" style="min-height:60px;"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Agenda Items Discussed <span style="color:#ef4444;">*</span></label>
+        <textarea id="minAgenda_${meetingId}" placeholder="What was covered for each agenda item" style="min-height:80px;"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Decisions Made <span style="color:#ef4444;">*</span></label>
+        <textarea id="minDecisions_${meetingId}" placeholder="Key decisions reached" style="min-height:80px;"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Action Items / Tasks <span style="color:#ef4444;">*</span></label>
+        <textarea id="minActions_${meetingId}" placeholder="Who is responsible for what, and by when" style="min-height:80px;"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Attachments</label>
+        <input type="file" id="minAttachments_${meetingId}" multiple />
+      </div>
+      <div class="form-group">
+        <label>Next Meeting Date</label>
+        <input type="datetime-local" id="minNextDate_${meetingId}" />
+      </div>
+      <div style="display:flex;gap:8px;margin-top:14px;">
+        <button class="btn primary" id="saveMinuteBtn_${meetingId}" style="flex:1;padding:10px;font-size:13px;">💾 Save Minute</button>
+        <button class="btn" style="flex:1;padding:10px;font-size:13px;" onclick="cancelAddMinute('${meetingId}','${scope}','${scopeValue}')">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.getElementById(`saveMinuteBtn_${meetingId}`)
+    .addEventListener('click', () => saveMinute(meetingId, scope, scopeValue));
+}
+
+function cancelAddMinute(meetingId, scope, scopeValue) {
+  const section = document.getElementById(`minute-section-${meetingId}`);
+  section.innerHTML = `
+    <button class="btn primary add-minute-btn" data-meeting-id="${meetingId}"
+      style="width:100%;padding:10px;font-size:13px;">📝 Add Minute</button>
+  `;
+  section.querySelector('.add-minute-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    openAddMinuteInline(meetingId, scope, scopeValue);
+  });
+}
+
+async function saveMinute(meetingId, scope, scopeValue) {
+  const attendees = document.getElementById(`minAttendees_${meetingId}`).value.trim();
+  const agenda    = document.getElementById(`minAgenda_${meetingId}`).value.trim();
+  const decisions = document.getElementById(`minDecisions_${meetingId}`).value.trim();
+  const actions   = document.getElementById(`minActions_${meetingId}`).value.trim();
+  const nextDate  = document.getElementById(`minNextDate_${meetingId}`).value;
+  const files     = document.getElementById(`minAttachments_${meetingId}`).files;
+
+  if (!attendees || !agenda || !decisions || !actions) {
+    alert('Please fill in all required fields.');
+    return;
+  }
+
+  const btn = document.getElementById(`saveMinuteBtn_${meetingId}`);
+  btn.disabled    = true;
+  btn.textContent = 'Saving…';
+
+  try {
+    const projectId = localStorage.getItem('activeProjectId');
+    const body = new FormData();
+    body.append('project_id',       projectId);
+    body.append('meeting_id',       meetingId);
+    body.append('attendees',        attendees);
+    body.append('agenda_discussed', agenda);
+    body.append('decisions',        decisions);
+    body.append('action_items',     actions);
+    body.append('scope',            scope);
+    if (scopeValue) body.append('scope_value',       scopeValue);
+    if (nextDate)   body.append('next_meeting_date', nextDate);
+    for (const file of files) body.append('attachments', file);
+
+    const res = await authFetch(`${API}/meetings/${meetingId}/minute`, { method: 'POST', body });
+    if (!res || !res.ok) throw new Error();
+
+    const { minute } = await res.json();
+    document.getElementById(`minute-section-${meetingId}`).innerHTML = renderMinuteDetail(minute);
+
+  } catch (err) {
+    console.error('Save minute error:', err);
+    alert('Failed to save minute. Please try again.');
+    btn.disabled    = false;
+    btn.textContent = '💾 Save Minute';
+  }
 }
 
 // =======================================================================
@@ -3867,7 +4119,7 @@ async function loadTabRecords(tabKey) {
 
   try {
     const res = await authFetch(
-      'https://oneprojectapp-backend.onrender.com/api/fetch-tab-records',
+      `${API}/fetch-tab-records`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3902,7 +4154,7 @@ async function loadTabRecords(tabKey) {
 // =======================================================================
 function markRecordViewed(recordId, tabKey) {
   const projectId = localStorage.getItem('activeProjectId');
-  authFetch('https://oneprojectapp-backend.onrender.com/api/mark-record-viewed', {
+  authFetch(`${API}/mark-record-viewed`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ projectId, recordId, recordType: tabToTable(tabKey) })
@@ -4041,7 +4293,6 @@ function renderRecordsList(records, tabKey) {
         ⏳ Awaiting ${doc.pending_role || 'prior'} Approval</span>`;
 
     } else if (btnState === 'can_approve') {
-      // ── FIX 1: resolve action at render time from doc.approve_label ──
       const approveLabel  = doc.approve_label || 'Approve';
       const approveAction = approveLabel.toLowerCase().includes('accept') ? 'accepted' : 'approved';
 
@@ -4285,7 +4536,6 @@ bottomContent.addEventListener('click', (e) => {
 
   switch (action) {
     case 'approve': {
-      // ── FIX 2: read action directly from data-review-action — no text parsing ──
       const reviewAction = actionEl.getAttribute('data-review-action') || 'approved';
       handleDecisionMakerAction(recordId, tabKey, reviewAction);
       break;
@@ -4328,7 +4578,7 @@ function toggleRecordDetail(recordId, tabKey) {
 async function handleDecisionMakerAction(recordId, tabKey, action) {
   try {
     const res = await authFetch(
-      'https://oneprojectapp-backend.onrender.com/api/review-record',
+      `${API}/review-record`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4359,7 +4609,7 @@ async function handleDecisionMakerAction(recordId, tabKey, action) {
 async function handleTeamMemberAction(recordId, tabKey, action) {
   try {
     const res = await authFetch(
-      'https://oneprojectapp-backend.onrender.com/api/review-record',
+      `${API}/review-record`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4423,7 +4673,7 @@ function openTeamMemberComment(recordId, tabKey) {
     if (!comment) { alert('Please enter a comment.'); return; }
     try {
       const res = await authFetch(
-        'https://oneprojectapp-backend.onrender.com/api/review-record',
+        `${API}/review-record`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4456,7 +4706,7 @@ function openTeamMemberComment(recordId, tabKey) {
 async function downloadFile(recordId, tabKey, fileName) {
   try {
     const res = await authFetch(
-      `https://oneprojectapp-backend.onrender.com/api/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}`,
+      `${API}/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}`,
       { method: 'GET' }
     );
     if (!res || !res.ok) { alert('Failed to download.'); return; }
@@ -4485,7 +4735,7 @@ async function deleteRecord(recordId, tabKey) {
   if (!confirm('Are you sure you want to delete this record? This cannot be undone.')) return;
   try {
     const res = await authFetch(
-      'https://oneprojectapp-backend.onrender.com/api/delete-record',
+      `${API}/delete-record`,
       {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
@@ -4518,8 +4768,6 @@ function openNoticeOfDetermination(recordId, tabKey, isRejection = false) {
 
 // =======================================================================
 //  ADD RECORD PANEL
-//  ── FIX: toolbar buttons use mousedown+preventDefault so the
-//     contenteditable div never loses focus when clicking Bold/Italic etc ──
 // =======================================================================
 function openAddRecordPanel(noticeConfig = null, tabKey = null) {
   const isNotice     = noticeConfig !== null;
@@ -4561,7 +4809,6 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       <div style="font-size:15px;color:#333;">${tabLabel}</div>
     </div>` : '';
 
-  // ── Toolbar buttons use data-cmd — wired with mousedown to prevent focus loss ──
   const html = `
     <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
       <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
@@ -4590,7 +4837,6 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
               font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
               ${isNotice ? 'Notice Content *' : 'Description *'}</label>
 
-            <!-- ── Toolbar: mousedown+preventDefault keeps focus in editor ── -->
             <div id="editorToolbar" style="display:flex;flex-wrap:wrap;gap:4px;padding:8px;
               background:#f5f5f5;border:1px solid #ddd;border-bottom:none;border-radius:6px 6px 0 0;">
               <button type="button" data-cmd="bold"
@@ -4693,21 +4939,18 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
 
   expandGrayPart(html);
 
-  // ── Wire toolbar buttons with mousedown to prevent focus loss ──
   document.getElementById('editorToolbar')?.addEventListener('mousedown', (e) => {
     const btn = e.target.closest('button[data-cmd]');
     if (!btn) return;
-    e.preventDefault(); // keep focus in editor
+    e.preventDefault();
     const cmd = btn.getAttribute('data-cmd');
     document.execCommand(cmd, false, null);
-    // Update active state
     document.querySelectorAll('#editorToolbar button[data-cmd]').forEach(b => {
       try { b.classList.toggle('active', document.queryCommandState(b.getAttribute('data-cmd'))); }
       catch(_) {}
     });
   });
 
-  // Update toolbar active state when selection changes
   document.getElementById('recordDescription')?.addEventListener('keyup', updateToolbarState);
   document.getElementById('recordDescription')?.addEventListener('mouseup', updateToolbarState);
 
@@ -4718,7 +4961,6 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
     });
   }
 
-  // Attachment zone
   const dropZone     = document.getElementById('attachmentDropZone');
   const attachInput  = document.getElementById('recordAttachment');
   const attachNameEl = document.getElementById('attachmentName');
@@ -4748,7 +4990,6 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
   });
   attachInput.addEventListener('change', updateAttachDisplay);
 
-  // Save button
   document.getElementById('saveRecordBtn').addEventListener('click', async () => {
     try {
       const title     = document.getElementById('recordTitle').value.trim();
@@ -4781,7 +5022,7 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
 
       const res = await authFetch(
-        'https://oneprojectapp-backend.onrender.com/api/add-record',
+        `${API}/add-record`,
         { method: 'POST', body: formData }
       );
 
@@ -4851,7 +5092,6 @@ notificationIcon.addEventListener('click', async () => {
     const data          = await res.json();
     const notifications = data.notifications || [];
 
-    // Mark all read
     if (notifications.length > 0) {
       await authFetch(
         'https://oneprojectapp-backend.onrender.com/notifications/mark-all-read',
@@ -4914,7 +5154,6 @@ function renderNotificationPanel(notifications) {
 
   expandGrayPart(`<div style="display:flex;flex-direction:column;height:100%;">${html}</div>`);
 
-  // Delegate clicks inside the notification panel
   setTimeout(() => {
     document.getElementById('grayContent')?.addEventListener('click', (e) => {
       const li = e.target.closest('[data-action="notif-click"]');
