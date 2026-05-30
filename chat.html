@@ -480,6 +480,7 @@
         const currentUserRole = jwt?.role || 'Unknown role';
         const currentUserEmail = jwt?.email || jwt?.company_email || jwt?.companyEmail || '';
         const currentUserName = jwt?.representative || jwt?.name || currentUserEmail.split('@')[0] || 'You';
+        const currentUserPosition = jwt?.position || jwt?.title || '';
 
         const projectLabel = document.getElementById('projectLabel');
         const currentUserLabel = document.getElementById('currentUserLabel');
@@ -657,9 +658,11 @@
                 text: message.content,
                 attachmentUrl: message.attachment_url || null,
                 attachmentName: message.attachment_name || null,
+                attachmentMime: message.attachment_mime || message.attachmentMime || null,
                 sent: String(message.sender_id) === String(currentUserId) && String(message.sender_role) === String(currentUserRole),
                 senderName: message.sender_display_name || message.sender_email || 'Unknown',
                 senderRole: message.sender_role || '',
+                senderPosition: message.sender_position || message.sender_title || '',
                 time: new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 readBy: Array.isArray(message.read_by) ? message.read_by : (message.read_by ? JSON.parse(message.read_by) : []),
             }));
@@ -685,27 +688,42 @@
                 const bubble = document.createElement('div');
                 bubble.className = 'message-bubble';
                 
-                // Show sender name in group chats
+                // Show sender name and position in group chats
                 if (currentChat.isGroup && !m.sent) {
                     const senderNameEl = document.createElement('div');
                     senderNameEl.style.fontSize = '11px';
                     senderNameEl.style.fontWeight = 'bold';
                     senderNameEl.style.color = '#6b7280';
                     senderNameEl.style.marginBottom = '4px';
-                    senderNameEl.textContent = m.senderName;
+                    senderNameEl.textContent = m.senderName + (m.senderPosition ? ' · ' + m.senderPosition : '');
                     bubble.appendChild(senderNameEl);
                 }
-                
+
                 bubble.innerHTML += `<div>${escapeHtml(m.text || '')}</div>`;
                 if (m.attachmentUrl) {
-                    const a = document.createElement('a');
-                    a.href = m.attachmentUrl;
-                    a.target = '_blank';
-                    a.rel = 'noopener noreferrer';
-                    a.textContent = m.attachmentName || 'Attachment';
-                    a.style.display = 'block';
-                    a.style.marginTop = '8px';
-                    bubble.appendChild(a);
+                    const isImage = (m.attachmentMime && m.attachmentMime.startsWith && m.attachmentMime.startsWith('image/'))
+                        || /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(m.attachmentName || '');
+                    if (isImage) {
+                        const img = document.createElement('img');
+                        img.src = m.attachmentUrl;
+                        img.style.maxWidth = '320px';
+                        img.style.maxHeight = '320px';
+                        img.style.display = 'block';
+                        img.style.marginTop = '8px';
+                        img.style.borderRadius = '6px';
+                        img.style.cursor = 'pointer';
+                        img.addEventListener('click', () => window.open(m.attachmentUrl, '_blank'));
+                        bubble.appendChild(img);
+                    } else {
+                        const a = document.createElement('a');
+                        a.href = m.attachmentUrl;
+                        a.target = '_blank';
+                        a.rel = 'noopener noreferrer';
+                        a.textContent = m.attachmentName || 'Attachment';
+                        a.style.display = 'block';
+                        a.style.marginTop = '8px';
+                        bubble.appendChild(a);
+                    }
                 }
                 const timeEl = document.createElement('div');
                 timeEl.className = 'message-time';
@@ -762,13 +780,23 @@
             if (pendingAttachment && pendingAttachment.url) {
                 payload.attachmentUrl = pendingAttachment.url;
                 payload.attachmentName = pendingAttachment.name || '';
+                if (pendingAttachment.mime) payload.attachmentMime = pendingAttachment.mime;
             }
 
             const data = await apiRequest('/chat/messages', { method: 'POST', body: payload });
             if (!data) return;
 
             const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const message = { text, sent: true, time: now };
+            const message = {
+                text,
+                sent: true,
+                time: now,
+                attachmentUrl: pendingAttachment?.url || null,
+                attachmentName: pendingAttachment?.name || null,
+                attachmentMime: pendingAttachment?.mime || null,
+                senderName: currentUserName,
+                senderPosition: currentUserPosition,
+            };
             currentChat.messages.push(message);
             currentChat.lastMessage = text;
             currentChat.time = now;
@@ -833,7 +861,7 @@
                 });
                 const d = await res.json();
                 if (d && d.url) {
-                    pendingAttachment = { url: d.url, name: f.name };
+                    pendingAttachment = { url: d.url, name: f.name, mime: f.type };
                     messageInput.placeholder = `Attached: ${f.name}`;
                 } else {
                     alert('Attachment upload failed: ' + (d?.error || 'Unknown error'));
