@@ -658,6 +658,8 @@
                 attachmentUrl: message.attachment_url || null,
                 attachmentName: message.attachment_name || null,
                 sent: String(message.sender_id) === String(currentUserId) && String(message.sender_role) === String(currentUserRole),
+                senderName: message.sender_display_name || message.sender_email || 'Unknown',
+                senderRole: message.sender_role || '',
                 time: new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 readBy: Array.isArray(message.read_by) ? message.read_by : (message.read_by ? JSON.parse(message.read_by) : []),
             }));
@@ -682,7 +684,19 @@
                 el.className = `message ${m.sent ? 'sent' : 'received'}`;
                 const bubble = document.createElement('div');
                 bubble.className = 'message-bubble';
-                bubble.innerHTML = `<div>${escapeHtml(m.text || '')}</div>`;
+                
+                // Show sender name in group chats
+                if (currentChat.isGroup && !m.sent) {
+                    const senderNameEl = document.createElement('div');
+                    senderNameEl.style.fontSize = '11px';
+                    senderNameEl.style.fontWeight = 'bold';
+                    senderNameEl.style.color = '#6b7280';
+                    senderNameEl.style.marginBottom = '4px';
+                    senderNameEl.textContent = m.senderName;
+                    bubble.appendChild(senderNameEl);
+                }
+                
+                bubble.innerHTML += `<div>${escapeHtml(m.text || '')}</div>`;
                 if (m.attachmentUrl) {
                     const a = document.createElement('a');
                     a.href = m.attachmentUrl;
@@ -812,15 +826,19 @@
             const fd = new FormData();
             fd.append('attachment', f);
             try {
-                const res = await fetch(`${API_BASE}/api/upload-attachment`, { method: 'POST', body: fd });
+                const res = await fetch(`${API_BASE}/api/upload-attachment`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${authToken || localStorage.getItem('authToken')}` },
+                    body: fd
+                });
                 const d = await res.json();
                 if (d && d.url) {
                     pendingAttachment = { url: d.url, name: f.name };
                     messageInput.placeholder = `Attached: ${f.name}`;
                 } else {
-                    alert('Attachment upload failed');
+                    alert('Attachment upload failed: ' + (d?.error || 'Unknown error'));
                 }
-            } catch (err) { console.error('Attach upload error', err); alert('Attachment upload failed'); }
+            } catch (err) { console.error('Attach upload error', err); alert('Attachment upload failed: ' + err.message); }
         });
         sendBtn.addEventListener('click', sendMessage);
         messageInput.addEventListener('keypress', (event) => {
