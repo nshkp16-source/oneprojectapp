@@ -421,6 +421,14 @@
 
         <div class="chat-messages" id="chatMessages"></div>
 
+        <div class="reply-preview" id="replyPreview" style="display:none">
+            <div class="reply-preview-main">
+                <div class="reply-label">Replying to <span id="replyName"></span></div>
+                <div class="reply-text" id="replyText"></div>
+            </div>
+            <button class="reply-cancel-btn" id="cancelReplyBtn" title="Cancel reply">×</button>
+        </div>
+
         <div class="chat-input-area">
             <div class="message-input-wrapper">
                 <input type="text" class="message-input" id="messageInput" placeholder="Type a message...">
@@ -519,6 +527,12 @@
         let contacts = [];
         let pendingAttachment = null;
         let chatRefreshTimer = null;
+        let replyTarget = null;
+
+        const replyPreview = document.getElementById('replyPreview');
+        const replyNameEl = document.getElementById('replyName');
+        const replyTextEl = document.getElementById('replyText');
+        const cancelReplyBtn = document.getElementById('cancelReplyBtn');
 
         projectLabel.textContent = activeProjectName
             ? `Project: ${activeProjectName}`
@@ -535,6 +549,37 @@
                 return `<img src="${contact.pictureUrl}" alt="${contact.name || contact.email}">`;
             }
             return contact.initial || getInitialFromEmail(contact.email);
+        }
+
+        function parseReplySender(senderEmail) {
+            if (!senderEmail) return 'Unknown';
+            return senderEmail.split('@')[0] || senderEmail;
+        }
+
+        function setReplyTarget(message) {
+            if (!message || !message.id) return;
+            replyTarget = message;
+            replyNameEl.textContent = message.senderName || message.senderRole || 'Unknown';
+            replyTextEl.textContent = message.text || (message.attachmentName ? `Attachment: ${message.attachmentName}` : '');
+            replyPreview.style.display = 'flex';
+            messageInput.focus();
+        }
+
+        function clearReplyTarget() {
+            replyTarget = null;
+            replyPreview.style.display = 'none';
+            replyNameEl.textContent = '';
+            replyTextEl.textContent = '';
+        }
+
+        function updateReplyPreview() {
+            if (!replyTarget) {
+                clearReplyTarget();
+                return;
+            }
+            replyNameEl.textContent = replyTarget.senderName || replyTarget.senderRole || 'Unknown';
+            replyTextEl.textContent = replyTarget.text || (replyTarget.attachmentName ? `Attachment: ${replyTarget.attachmentName}` : '');
+            replyPreview.style.display = 'flex';
         }
 
         function stopChatRefresh() {
@@ -714,6 +759,9 @@
                 senderPosition: message.sender_position || message.sender_title || '',
                 time: new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 readBy: Array.isArray(message.read_by) ? message.read_by : (message.read_by ? JSON.parse(message.read_by) : []),
+                replyToMessageId: message.reply_to_message_id || null,
+                replyToText: message.reply_to_content || null,
+                replyToSenderName: message.reply_to_sender_email ? parseReplySender(message.reply_to_sender_email) : null,
             }));
             if (contact.messages.length) {
                 const last = contact.messages[contact.messages.length - 1];
@@ -726,6 +774,7 @@
             if (toMark.length) {
                 apiRequest('/chat/mark-read', { method: 'POST', body: { messageIds: toMark, projectId: activeProjectId } }).catch(()=>{});
             }
+            updateReplyPreview();
         }
 
         function renderMessages() {
@@ -748,7 +797,22 @@
                     bubble.appendChild(senderNameEl);
                 }
 
-                bubble.innerHTML += `<div>${escapeHtml(m.text || '')}</div>`;
+                if (m.replyToText) {
+                    const replyBlock = document.createElement('div');
+                    replyBlock.className = 'message-reply-preview';
+                    replyBlock.innerHTML = `<div class="reply-preview-label">Replying to ${escapeHtml(m.replyToSenderName || 'Unknown')}</div>
+                                            <div class="reply-preview-text">${escapeHtml(m.replyToText)}</div>`;
+                    bubble.appendChild(replyBlock);
+                }
+                const textBlock = document.createElement('div');
+                textBlock.textContent = m.text || '';
+                bubble.appendChild(textBlock);
+                bubble.style.cursor = 'pointer';
+                bubble.title = 'Click to reply';
+                bubble.addEventListener('click', (event) => {
+                    if (event.target.closest('a') || event.target.closest('img')) return;
+                    setReplyTarget(m);
+                });
                 if (m.attachmentUrl) {
                     const isImage = (m.attachmentMime && m.attachmentMime.startsWith && m.attachmentMime.startsWith('image/'))
                         || /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(m.attachmentName || '');
@@ -800,6 +864,7 @@
         }
 
         async function selectChat(contact) {
+            clearReplyTarget();
             currentChat = contact;
             currentChat.unreadCount = 0;
             chatName.textContent = contact.name;
@@ -823,6 +888,7 @@
                 projectId: activeProjectId,
                 content: text,
                 isGroup: currentChat.isGroup,
+                replyToMessageId: replyTarget?.id || null,
             };
             if (!currentChat.isGroup) {
                 payload.recipientRole = currentChat.recipientRole;
@@ -854,6 +920,7 @@
             currentChat.time = now;
             messageInput.value = '';
             pendingAttachment = null;
+            clearReplyTarget();
             messageInput.placeholder = 'Type a message...';
             renderContacts(searchInput.value);
             renderMessages();
@@ -928,6 +995,7 @@
             } catch (err) { console.error('Attach upload error', err); alert('Attachment upload failed: ' + err.message); }
         });
         sendBtn.addEventListener('click', sendMessage);
+        cancelReplyBtn.addEventListener('click', clearReplyTarget);
         messageInput.addEventListener('keypress', (event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
