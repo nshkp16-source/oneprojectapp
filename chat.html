@@ -113,6 +113,24 @@
             background: #e8f2ff;
         }
 
+        .contact-item.unread {
+            box-shadow: inset 0 0 0 1px rgba(37, 211, 102, 0.18);
+            border: 1px solid #25d366;
+        }
+
+        .unread-badge {
+            min-width: 20px;
+            padding: 0 8px;
+            border-radius: 999px;
+            background: #25d366;
+            color: #ffffff;
+            font-size: 11px;
+            line-height: 20px;
+            text-align: center;
+            margin-left: auto;
+            margin-top: 4px;
+        }
+
         .avatar {
             width: 56px;
             height: 56px;
@@ -541,7 +559,7 @@
 
         function createContactItem(contact) {
             const item = document.createElement('div');
-            item.className = `contact-item ${currentChat?.id === contact.id ? 'active' : ''}`;
+            item.className = `contact-item ${currentChat?.id === contact.id ? 'active' : ''}${contact.unreadCount ? ' unread' : ''}`;
             item.innerHTML = `
                 <div class="avatar ${contact.online ? 'online' : ''}">${buildAvatar(contact)}</div>
                 <div class="contact-info">
@@ -552,6 +570,7 @@
                     <div class="contact-meta">${contact.title || ''} · ${contact.role}${contact.position ? ' · ' + contact.position : ''}</div>
                     <div class="contact-message">${contact.lastMessage || 'Tap to chat'}</div>
                 </div>
+                ${contact.unreadCount ? `<div class="unread-badge">${contact.unreadCount}</div>` : ''}
             `;
             item.addEventListener('click', () => selectChat(contact));
             return item;
@@ -560,12 +579,19 @@
         function renderContacts(filter = '') {
             contactsList.innerHTML = '';
             const normalizedFilter = filter.trim().toLowerCase();
-            const visible = contacts.filter(contact => {
-                if (!normalizedFilter) return true;
-                return [contact.name, contact.role, contact.title, contact.position, contact.email, contact.lastMessage]
-                    .filter(Boolean)
-                    .some(text => text.toLowerCase().includes(normalizedFilter));
-            });
+            const visible = contacts
+                .filter(contact => {
+                    if (!normalizedFilter) return true;
+                    return [contact.name, contact.role, contact.title, contact.position, contact.email, contact.lastMessage]
+                        .filter(Boolean)
+                        .some(text => text.toLowerCase().includes(normalizedFilter));
+                })
+                .sort((a, b) => {
+                    if ((b.unreadCount || 0) !== (a.unreadCount || 0)) return (b.unreadCount || 0) - (a.unreadCount || 0);
+                    if (a.isGroup && !b.isGroup) return -1;
+                    if (!a.isGroup && b.isGroup) return 1;
+                    return (new Date(b.sortAt || b.time || 0) - new Date(a.sortAt || a.time || 0));
+                });
 
             visible.forEach(contact => contactsList.appendChild(createContactItem(contact)));
             if (visible.length === 0) {
@@ -660,8 +686,10 @@
                 isGroup: false,
                 recipientRole: member.role,
                 recipientId: member.role_id,
-                lastMessage: 'Tap to chat',
-                time: '',
+                lastMessage: member.lastMessage || 'Tap to chat',
+                time: member.time || '',
+                sortAt: member.sortAt || null,
+                unreadCount: member.unreadCount || 0,
                 messages: [],
             };
         }
@@ -773,6 +801,7 @@
 
         async function selectChat(contact) {
             currentChat = contact;
+            currentChat.unreadCount = 0;
             chatName.textContent = contact.name;
             chatStatus.textContent = contact.isGroup
                 ? `Group chat · ${contact.membersCount || contacts.length - 1} members`
@@ -831,9 +860,9 @@
         }
 
         async function loadProjectContacts() {
-            const data = await apiRequest(`/chat/members?projectId=${encodeURIComponent(activeProjectId)}`);
+            const data = await apiRequest(`/chat/conversations?projectId=${encodeURIComponent(activeProjectId)}`);
             if (!data || !data.success) {
-                throw new Error(data?.error || 'Failed to load chat members');
+                throw new Error(data?.error || 'Failed to load chat conversations');
             }
 
             const members = Array.isArray(data.members) ? data.members : [];
@@ -848,15 +877,17 @@
                 initial: 'G',
                 online: true,
                 isGroup: true,
-                membersCount: data.members.length,
-                lastMessage: 'Group chat for the project',
-                time: '',
+                membersCount: data.group?.membersCount || members.length,
+                lastMessage: data.group?.lastMessage || 'Group chat for the project',
+                time: data.group?.time || '',
+                sortAt: data.group?.lastAt || null,
+                unreadCount: data.group?.unreadCount || 0,
                 messages: [],
             };
 
             contacts = [
                 groupContact,
-                ...data.members
+                ...members
                     .filter(member => !(String(member.role_id) === String(currentUserId) && String(member.role) === String(currentUserRole)))
                     .map(normalizeMember)
             ];
