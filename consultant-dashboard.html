@@ -5167,21 +5167,63 @@ bootstrapUser();
 
 // ███████████████████████████████████████████████████████████████████████
 //
-//   WORKSPACE REPORT SECTION
+//   WORKSPACE REPORT SECTION  (fixed)
 //   ┌── Work Center        (work-centel tab)
 //   └── Planning & Execution (planning-execution tab)
 //
-//   Self-contained block. Hooks into the system above via:
-//     • CATEGORY_TABLE_MAP extension
-//     • setTabContent  patch
-//     • renderRecordsList patch
-//     • toggleRecordDetail patch
-//     • Second bottomContent click listener (WC-specific actions only)
-//
-//   All functions below are exclusively for the workspace/report tabs.
-//   Do not mix with home tab functions above.
+//   Fixes applied:
+//   [F1]  All API calls explicitly attach Authorization + x-project-id headers
+//         (never rely on localStorage being read inside authFetch implicitly)
+//   [F2]  XSS: escapeHtml() wraps every user-supplied string before innerHTML
+//   [F3]  Race condition: members are awaited before the create/update form
+//         is ready; Save button is disabled until members are loaded
+//   [F4]  Dead parameter removed from _wcHandleValidate; correct IDs used
+//   [F5]  Status field added to both create form and update handler
+//   [F6]  Chevron + detail panel explicitly collapsed before list re-render
+//   [F7]  wc-dl-task uses the correct work-center download endpoint
+//   [F8]  _wcOpenCreateForm awaits member fetch before wiring Save button;
+//         panel is collapsed on fetch error
+//   [F9]  tabKey null-guard on every bottomContent click handler
 //
 // ███████████████████████████████████████████████████████████████████████
+
+// ═══════════════════════════════════════════════════════════════════════
+//  UTIL — escape user content before injecting into innerHTML  [F2]
+// ═══════════════════════════════════════════════════════════════════════
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  UTIL — build headers with JWT + active project [F1]
+//  All authFetch calls inside this module pass these explicitly.
+// ═══════════════════════════════════════════════════════════════════════
+function _wcHeaders(extra = {}) {
+  const token     = localStorage.getItem('jwt') || localStorage.getItem('token') || '';
+  const projectId = localStorage.getItem('activeProjectId') || '';
+  return {
+    'Authorization': token ? `Bearer ${token}` : '',
+    'x-project-id':  projectId,
+    ...extra,
+  };
+}
+
+// Convenience: authFetch wrapper that always injects auth headers.
+// For FormData bodies we must NOT set Content-Type (browser sets it with boundary).
+async function _wcFetch(url, options = {}) {
+  const isFormData = options.body instanceof FormData;
+  const headers = _wcHeaders(isFormData ? {} : { 'Content-Type': 'application/json' });
+  // Merge caller headers after so they can still override if needed
+  const merged = { ...options, headers: { ...headers, ...(options.headers || {}) } };
+  if (isFormData) delete merged.headers['Content-Type']; // ensure browser sets boundary
+  return authFetch(url, merged);  // authFetch is the existing global wrapper
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 //  WS-1  EXTEND CATEGORY MAP
@@ -5193,12 +5235,10 @@ CATEGORY_TABLE_MAP['planning-execution'] = 'planning_execution';
 //  WS-2  HELPERS — side detection & badges
 // ═══════════════════════════════════════════════════════════════════════
 function wcSide(role) {
-  // All six users are equal leaders within their side.
-  // Contractor === ContractorPM, Consultant === ConsultantPM, Client === ClientPM
   if (['Contractor',  'ContractorPM'].includes(role)) return 'Contractor';
   if (['Consultant',  'ConsultantPM'].includes(role)) return 'Consultant';
   if (['Client',      'ClientPM'].includes(role))     return 'Client';
-  return null;                                          // TeamMember → no side leadership
+  return null;
 }
 
 function isWCLeader(role) { return wcSide(role) !== null; }
@@ -5209,15 +5249,19 @@ function wcPriorityBadge(priority) {
   const color = c[p] || '#6b7280';
   return `<span style="background:${color}20;color:${color};border:1px solid ${color}60;
     border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;white-space:nowrap;">
-    ${p.charAt(0).toUpperCase() + p.slice(1)}</span>`;
+    ${escapeHtml(p.charAt(0).toUpperCase() + p.slice(1))}</span>`;
 }
 
 function wcStatusBadge(status) {
-  const m = { ongoing: ['Ongoing','#3b82f6'], completed: ['Completed','#10b981'], closed: ['Closed','#6b7280'] };
+  const m = {
+    ongoing:   ['Ongoing',   '#3b82f6'],
+    completed: ['Completed', '#10b981'],
+    closed:    ['Closed',    '#6b7280'],
+  };
   const [label, color] = m[status] || [status || 'Ongoing', '#3b82f6'];
   return `<span style="background:${color}20;color:${color};border:1px solid ${color}60;
     border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;white-space:nowrap;">
-    ${label}</span>`;
+    ${escapeHtml(label)}</span>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -5241,7 +5285,7 @@ function wcStatusBadge(status) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-4  PATCH renderRecordsList  — route workspace tabs to own renderers
+//  WS-4  PATCH renderRecordsList
 // ═══════════════════════════════════════════════════════════════════════
 {
   const _orig = renderRecordsList;
@@ -5253,7 +5297,7 @@ function wcStatusBadge(status) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-5  PATCH toggleRecordDetail — work-centel loads detail async
+//  WS-5  PATCH toggleRecordDetail
 // ═══════════════════════════════════════════════════════════════════════
 {
   const _orig = toggleRecordDetail;
@@ -5264,12 +5308,12 @@ function wcStatusBadge(status) {
       if (!detail) return;
       const isOpen = detail.style.display !== 'none';
       if (!isOpen) {
-        const cached   = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
+        const cached    = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
         const isCreator = String(cached?.creator_id) === String(window.currentUserId);
         if (cached && !cached.is_viewed && !isCreator) markRecordViewed(recordId, tabKey);
-        _wcLoadDetail(recordId, tabKey);   // async — fills the placeholder div
+        _wcLoadDetail(recordId, tabKey);
       }
-      detail.style.display = isOpen ? 'none' : 'block';
+      detail.style.display  = isOpen ? 'none' : 'block';
       if (chevron) chevron.textContent = isOpen ? '▾' : '▴';
       return;
     }
@@ -5278,35 +5322,64 @@ function wcStatusBadge(status) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-6  SECOND bottomContent listener — WC-specific actions only
+//  WS-6  SECOND bottomContent listener — WC-specific actions only [F9]
 // ═══════════════════════════════════════════════════════════════════════
 bottomContent.addEventListener('click', (e) => {
   const actionEl = e.target.closest('[data-action]');
   if (!actionEl) return;
   const action = actionEl.getAttribute('data-action');
+
   const WC_ACTIONS = new Set([
-    'wc-update','wc-delete','wc-submit-progress',
-    'wc-validate','wc-dl-task','wc-dl-progress'
+    'wc-update', 'wc-delete', 'wc-submit-progress',
+    'wc-validate', 'wc-dl-task', 'wc-dl-progress',
   ]);
   if (!WC_ACTIONS.has(action)) return;
 
+  // Resolve tabKey and recordId from the closest .doc-item  [F9]
   const item     = actionEl.closest('.doc-item');
-  const tabKey   = item?.getAttribute('data-tab-key');
+  const tabKey   = item?.getAttribute('data-tab-key')   || 'work-centel';
   const recordId = item?.getAttribute('data-id');
 
-  if (action === 'wc-update')          { _wcHandleUpdate(recordId, tabKey); return; }
-  if (action === 'wc-delete')          { _wcHandleDelete(recordId, tabKey); return; }
-  if (action === 'wc-submit-progress') { _wcHandleSubmitProgress(actionEl.getAttribute('data-task-id'), tabKey); return; }
+  if (action === 'wc-update') {
+    // recordId comes from the parent .doc-item (reliable)
+    _wcHandleUpdate(recordId, tabKey);
+    return;
+  }
+
+  if (action === 'wc-delete') {
+    _wcHandleDelete(recordId, tabKey);
+    return;
+  }
+
+  if (action === 'wc-submit-progress') {
+    // task id is on the button itself; tabKey from .doc-item
+    const taskId = actionEl.getAttribute('data-task-id') || recordId;
+    _wcHandleSubmitProgress(taskId, tabKey);
+    return;
+  }
+
   if (action === 'wc-validate') {
     _wcHandleValidate(
-      recordId, tabKey,
+      tabKey,
       actionEl.getAttribute('data-progress-id'),
-      actionEl.getAttribute('data-validate-action')
+      actionEl.getAttribute('data-validate-action'),
     );
     return;
   }
-  if (action === 'wc-dl-task')     { downloadFile(recordId, tabKey, actionEl.getAttribute('data-filename')); return; }
-  if (action === 'wc-dl-progress') { _wcDownloadProgress(actionEl.getAttribute('data-progress-id'), actionEl.getAttribute('data-filename')); return; }
+
+  if (action === 'wc-dl-task') {
+    // [F7] use dedicated work-center file download endpoint
+    _wcDownloadTaskFile(recordId, actionEl.getAttribute('data-filename'));
+    return;
+  }
+
+  if (action === 'wc-dl-progress') {
+    _wcDownloadProgress(
+      actionEl.getAttribute('data-progress-id'),
+      actionEl.getAttribute('data-filename'),
+    );
+    return;
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -5344,6 +5417,9 @@ function _renderWCList(records) {
   const placeholderDiv = document.querySelector('.no-data-placeholder');
   if (!recordsList || !placeholderDiv) return;
 
+  // [F6] collapse all open details before re-rendering
+  recordsList.querySelectorAll('.doc-detail').forEach(d => { d.style.display = 'none'; });
+
   if (!records.length) {
     recordsList.innerHTML = '';
     placeholderDiv.style.display = 'block';
@@ -5361,7 +5437,7 @@ function _renderWCList(records) {
     const endDate   = task.end_date   ? new Date(task.end_date).toLocaleDateString()   : '—';
 
     return `
-      <li class="doc-item" data-id="${task.id}" data-tab-key="work-centel"
+      <li class="doc-item" data-id="${escapeHtml(String(task.id))}" data-tab-key="work-centel"
         style="background:${isUnread ? '#eff6ff' : '#fff'};
                border:1px solid ${isUnread ? '#bfdbfe' : '#e5e7eb'};
                border-left:4px solid ${isUnread ? '#3b82f6' : '#007B8A'};
@@ -5377,12 +5453,12 @@ function _renderWCList(records) {
                         display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
               ${isUnread ? `<span class="unread-dot-${task.id}" style="display:inline-block;
                   width:8px;height:8px;flex-shrink:0;background:#3b82f6;border-radius:50%;"></span>` : ''}
-              🗂️ ${task.title}
+              🗂️ ${escapeHtml(task.title)}
             </div>
             <div style="font-size:11px;color:#9ca3af;margin-top:3px;">
-              By <strong style="color:#6b7280;">${task.creator_role || 'N/A'}</strong>
-              &nbsp;•&nbsp; ${postedAt}
-              &nbsp;•&nbsp; 📅 ${startDate} → ${endDate}
+              By <strong style="color:#6b7280;">${escapeHtml(task.creator_role || 'N/A')}</strong>
+              &nbsp;•&nbsp; ${escapeHtml(postedAt)}
+              &nbsp;•&nbsp; 📅 ${escapeHtml(startDate)} → ${escapeHtml(endDate)}
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
@@ -5404,28 +5480,35 @@ function _renderWCList(records) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-9  WORK CENTER — async detail loader (called on card expand)
+//  WS-9  WORK CENTER — async detail loader
 // ═══════════════════════════════════════════════════════════════════════
 async function _wcLoadDetail(recordId, tabKey) {
   const container = document.getElementById(`wc-detail-${recordId}`);
   if (!container) return;
 
   const task = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
-  if (!task) { container.innerHTML = `<p style="color:#ef4444;text-align:center;">Task not found.</p>`; return; }
+  if (!task) {
+    container.innerHTML = `<p style="color:#ef4444;text-align:center;">Task not found.</p>`;
+    return;
+  }
 
-  const role           = window.currentUserRole;
-  const leader         = isWCLeader(role);
+  const role            = window.currentUserRole;
+  const leader          = isWCLeader(role);
   const assignedMembers = Array.isArray(task.assigned_members) ? task.assigned_members : [];
-  const isAssigned     = role === 'TeamMember' &&
+  const isAssigned      = role === 'TeamMember' &&
     assignedMembers.some(m => String(m.id) === String(window.currentUserId));
 
   try {
     const projectId = localStorage.getItem('activeProjectId');
-    const res = await authFetch(
-      `${API}/work-center-progress/${recordId}?projectId=${projectId}`
+    // [F1] explicit headers
+    const res = await _wcFetch(
+      `${API}/work-center-progress/${recordId}?projectId=${encodeURIComponent(projectId)}`
     );
     let progressEntries = [];
-    if (res && res.ok) { const d = await res.json(); progressEntries = d.entries || []; }
+    if (res && res.ok) {
+      const d = await res.json();
+      progressEntries = d.entries || [];
+    }
 
     if (leader)          container.innerHTML = _wcPMView(task, progressEntries);
     else if (isAssigned) container.innerHTML = _wcMemberView(task, progressEntries);
@@ -5440,15 +5523,15 @@ async function _wcLoadDetail(recordId, tabKey) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-10  WORK CENTER — PM expanded view (both sections)
+//  WS-10  WORK CENTER — PM expanded view
 // ═══════════════════════════════════════════════════════════════════════
 function _wcPMView(task, progressEntries) {
   const members = Array.isArray(task.assigned_members) ? task.assigned_members : [];
   const chips   = members.length
     ? members.map(m => `<span style="display:inline-flex;align-items:center;gap:4px;
         background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:999px;
-        padding:3px 10px;font-size:12px;">👤 ${m.email || ''}
-        ${m.position ? `<span style="color:#6b7280;font-size:10px;">(${m.position})</span>` : ''}
+        padding:3px 10px;font-size:12px;">👤 ${escapeHtml(m.email || '')}
+        ${m.position ? `<span style="color:#6b7280;font-size:10px;">(${escapeHtml(m.position)})</span>` : ''}
       </span>`).join('')
     : `<span style="font-size:12px;color:#9ca3af;">No members assigned yet.</span>`;
 
@@ -5466,9 +5549,9 @@ function _wcPMView(task, progressEntries) {
               flex-wrap:wrap;gap:8px;margin-bottom:10px;">
               <div>
                 <div style="font-size:13px;font-weight:700;color:#1f2937;">
-                  👤 ${e.member_email || 'Team Member'}
+                  👤 ${escapeHtml(e.member_email || 'Team Member')}
                   ${e.member_position ? `<span style="font-size:11px;background:#f3f4f6;color:#6b7280;
-                    border-radius:4px;padding:1px 6px;margin-left:6px;">${e.member_position}</span>` : ''}
+                    border-radius:4px;padding:1px 6px;margin-left:6px;">${escapeHtml(e.member_position)}</span>` : ''}
                 </div>
                 <div style="font-size:11px;color:#9ca3af;margin-top:2px;">
                   📅 ${e.report_date ? new Date(e.report_date).toLocaleDateString() : '—'}
@@ -5477,52 +5560,67 @@ function _wcPMView(task, progressEntries) {
                 </div>
               </div>
               <span style="background:${vc}20;color:${vc};border:1px solid ${vc}60;
-                border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;">${vLabel}</span>
+                border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;">${escapeHtml(vLabel)}</span>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;
               color:#374151;margin-bottom:10px;">
-              <div><strong>Work Done:</strong><br/>${e.work_done || '—'}</div>
+              <div><strong>Work Done:</strong><br/>${escapeHtml(e.work_done || '—')}</div>
               <div><strong>Progress:</strong><br/>
                 <div style="display:flex;align-items:center;gap:8px;">
                   <div style="flex:1;background:#e5e7eb;border-radius:999px;height:6px;">
                     <div style="background:#10b981;height:6px;border-radius:999px;
-                      width:${e.progress_pct || 0}%;"></div>
+                      width:${Math.min(100, Math.max(0, Number(e.progress_pct) || 0))}%;"></div>
                   </div>
-                  <strong style="color:#10b981;">${e.progress_pct || 0}%</strong>
+                  <strong style="color:#10b981;">${escapeHtml(String(e.progress_pct || 0))}%</strong>
                 </div>
               </div>
-              <div><strong>Manpower:</strong><br/>${e.manpower || '—'}</div>
-              <div><strong>Equipment:</strong><br/>${e.equipment || '—'}</div>
-              <div><strong>Materials:</strong><br/>${e.materials || '—'}</div>
-              <div><strong>Issues:</strong><br/>${e.issues || '—'}</div>
+              <div><strong>Manpower:</strong><br/>${escapeHtml(e.manpower || '—')}</div>
+              <div><strong>Equipment:</strong><br/>${escapeHtml(e.equipment || '—')}</div>
+              <div><strong>Materials:</strong><br/>${escapeHtml(e.materials || '—')}</div>
+              <div><strong>Issues:</strong><br/>${escapeHtml(e.issues || '—')}</div>
             </div>
-            ${e.notes ? `<div style="font-size:12px;color:#374151;margin-bottom:8px;"><strong>Notes:</strong> ${e.notes}</div>` : ''}
+            ${e.notes ? `<div style="font-size:12px;color:#374151;margin-bottom:8px;">
+              <strong>Notes:</strong> ${escapeHtml(e.notes)}</div>` : ''}
             ${e.attachment_name ? `
-              <a data-action="wc-dl-progress" data-progress-id="${e.id}" data-filename="${e.attachment_name}"
+              <a data-action="wc-dl-progress"
+                data-progress-id="${escapeHtml(String(e.id))}"
+                data-filename="${escapeHtml(e.attachment_name)}"
                 style="display:inline-flex;align-items:center;gap:5px;background:#eff6ff;color:#2563eb;
                 border:1px solid #bfdbfe;border-radius:6px;padding:5px 10px;font-size:12px;
-                cursor:pointer;margin-bottom:10px;">⬇️ ${e.attachment_name}</a>` : ''}
+                cursor:pointer;margin-bottom:10px;">⬇️ ${escapeHtml(e.attachment_name)}</a>` : ''}
             ${canVal ? `
               <div style="border-top:1px solid #e5e7eb;padding-top:10px;">
                 <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
                   letter-spacing:.5px;margin-bottom:8px;">Validate This Entry</div>
-                <textarea id="wc-val-notes-${e.id}" placeholder="Validation notes (optional)…"
+                <textarea id="wc-val-notes-${escapeHtml(String(e.id))}"
+                  placeholder="Validation notes (optional)…"
                   style="width:100%;min-height:60px;padding:8px;border:1px solid #d1d5db;
                   border-radius:6px;font-size:12px;resize:vertical;box-sizing:border-box;margin-bottom:8px;"></textarea>
                 <div style="display:flex;gap:8px;">
-                  <button data-action="wc-validate" data-progress-id="${e.id}" data-validate-action="approved"
+                  <button data-action="wc-validate"
+                    data-progress-id="${escapeHtml(String(e.id))}"
+                    data-validate-action="approved"
                     style="flex:1;padding:8px 12px;font-size:12px;font-weight:600;background:#d1fae5;
                     color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">✅ Approve</button>
-                  <button data-action="wc-validate" data-progress-id="${e.id}" data-validate-action="rejected"
+                  <button data-action="wc-validate"
+                    data-progress-id="${escapeHtml(String(e.id))}"
+                    data-validate-action="rejected"
                     style="flex:1;padding:8px 12px;font-size:12px;font-weight:600;background:#fee2e2;
                     color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">❌ Reject</button>
                 </div>
               </div>` : e.validation_notes ? `
               <div style="margin-top:8px;padding:8px 10px;background:#f9fafb;border:1px solid #e5e7eb;
-                border-radius:6px;font-size:12px;color:#6b7280;">💬 <em>${e.validation_notes}</em></div>` : ''}
+                border-radius:6px;font-size:12px;color:#6b7280;">
+                💬 <em>${escapeHtml(e.validation_notes)}</em></div>` : ''}
           </div>`;
       }).join('')
-    : `<div style="text-align:center;padding:24px 0;color:#9ca3af;font-size:13px;">📭 No progress entries submitted yet.</div>`;
+    : `<div style="text-align:center;padding:24px 0;color:#9ca3af;font-size:13px;">
+        📭 No progress entries submitted yet.</div>`;
+
+  // [F5] status options
+  const statusOptions = ['ongoing', 'completed', 'closed'].map(s =>
+    `<option value="${s}" ${(task.status || 'ongoing') === s ? 'selected' : ''}>
+      ${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join('');
 
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
@@ -5535,47 +5633,63 @@ function _wcPMView(task, progressEntries) {
           <span style="font-size:11px;font-weight:400;color:#6b7280;margin-left:6px;">Editable by side leader</span>
         </div>
         <div style="display:flex;flex-direction:column;gap:10px;">
+
           <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
             letter-spacing:.5px;display:block;margin-bottom:3px;">Title</label>
-            <input id="wc-ed-title-${task.id}" type="text" value="${task.title || ''}"
+            <input id="wc-ed-title-${task.id}" type="text" value="${escapeHtml(task.title || '')}"
               style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;
               font-size:13px;box-sizing:border-box;"/></div>
+
           <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
             letter-spacing:.5px;display:block;margin-bottom:3px;">Description</label>
             <textarea id="wc-ed-desc-${task.id}"
               style="width:100%;min-height:70px;padding:8px 10px;border:1px solid #d1d5db;
-              border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;">${task.description || ''}</textarea></div>
+              border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;">${escapeHtml(task.description || '')}</textarea></div>
+
           <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
             letter-spacing:.5px;display:block;margin-bottom:3px;">Work Package</label>
-            <input id="wc-ed-pkg-${task.id}" type="text" value="${task.work_package || ''}"
+            <input id="wc-ed-pkg-${task.id}" type="text" value="${escapeHtml(task.work_package || '')}"
               style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;
               font-size:13px;box-sizing:border-box;"/></div>
+
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
               letter-spacing:.5px;display:block;margin-bottom:3px;">Start Date</label>
-              <input id="wc-ed-start-${task.id}" type="date" value="${task.start_date || ''}"
+              <input id="wc-ed-start-${task.id}" type="date" value="${escapeHtml(task.start_date || '')}"
                 style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;
                 font-size:13px;box-sizing:border-box;"/></div>
             <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
               letter-spacing:.5px;display:block;margin-bottom:3px;">End Date</label>
-              <input id="wc-ed-end-${task.id}" type="date" value="${task.end_date || ''}"
+              <input id="wc-ed-end-${task.id}" type="date" value="${escapeHtml(task.end_date || '')}"
                 style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;
                 font-size:13px;box-sizing:border-box;"/></div>
           </div>
-          <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
-            letter-spacing:.5px;display:block;margin-bottom:3px;">Priority</label>
-            <select id="wc-ed-priority-${task.id}"
-              style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
-              <option value="low"    ${(task.priority||'normal')==='low'    ?'selected':''}>Low</option>
-              <option value="normal" ${(task.priority||'normal')==='normal' ?'selected':''}>Normal</option>
-              <option value="high"   ${(task.priority||'normal')==='high'   ?'selected':''}>High</option>
-            </select></div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+              letter-spacing:.5px;display:block;margin-bottom:3px;">Priority</label>
+              <select id="wc-ed-priority-${task.id}"
+                style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+                <option value="low"    ${(task.priority||'normal')==='low'    ?'selected':''}>Low</option>
+                <option value="normal" ${(task.priority||'normal')==='normal' ?'selected':''}>Normal</option>
+                <option value="high"   ${(task.priority||'normal')==='high'   ?'selected':''}>High</option>
+              </select></div>
+            <!-- [F5] Status field added -->
+            <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+              letter-spacing:.5px;display:block;margin-bottom:3px;">Status</label>
+              <select id="wc-ed-status-${task.id}"
+                style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+                ${statusOptions}
+              </select></div>
+          </div>
+
           <div>
             <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
               letter-spacing:.5px;display:block;margin-bottom:6px;">
               Assigned Members <span style="font-weight:400;text-transform:none;">(your side)</span>
             </label>
             <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">${chips}</div>
+            <!-- [F3] members container — Save button stays disabled until loaded -->
             <div id="wc-members-${task.id}"
               style="max-height:180px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:8px;
               padding:8px;background:#f9fafb;">
@@ -5583,22 +5697,27 @@ function _wcPMView(task, progressEntries) {
                 Loading team members…</p>
             </div>
           </div>
+
           <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
             letter-spacing:.5px;display:block;margin-bottom:3px;">Replace Linked File</label>
             <input id="wc-ed-file-${task.id}" type="file" style="font-size:12px;color:#374151;"/>
             ${task.linked_file_name
               ? `<div style="font-size:11px;color:#6b7280;margin-top:4px;">
-                  Current: <strong>${task.linked_file_name}</strong>
-                  <a data-action="wc-dl-task" data-filename="${task.linked_file_name}"
+                  Current: <strong>${escapeHtml(task.linked_file_name)}</strong>
+                  <a data-action="wc-dl-task"
+                    data-filename="${escapeHtml(task.linked_file_name)}"
                     style="color:#2563eb;cursor:pointer;margin-left:8px;">⬇️ Download</a>
                  </div>` : ''}
           </div>
+
           <div style="display:flex;gap:8px;margin-top:4px;">
-            <button data-action="wc-update" data-task-id="${task.id}"
+            <!-- [F3] wc-update button — disabled until members are loaded -->
+            <button data-action="wc-update" id="wc-save-btn-${task.id}" disabled
               style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;
-              background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+              background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;
+              opacity:.6;">
               💾 Update Task</button>
-            <button data-action="wc-delete" data-task-id="${task.id}"
+            <button data-action="wc-delete"
               style="padding:10px 14px;font-size:13px;font-weight:600;background:#fee2e2;
               color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">🗑️</button>
           </div>
@@ -5620,10 +5739,10 @@ function _wcPMView(task, progressEntries) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-11  WORK CENTER — team member expanded view (both sections)
+//  WS-11  WORK CENTER — team member expanded view
 // ═══════════════════════════════════════════════════════════════════════
 function _wcMemberView(task, myEntries) {
-  const members = Array.isArray(task.assigned_members) ? task.assigned_members : [];
+  const members  = Array.isArray(task.assigned_members) ? task.assigned_members : [];
   const valColor = { pending: '#f59e0b', approved: '#10b981', rejected: '#ef4444' };
 
   const myHistoryHtml = myEntries.length
@@ -5640,20 +5759,21 @@ function _wcMemberView(task, myEntries) {
                 📅 ${e.report_date ? new Date(e.report_date).toLocaleDateString() : '—'}
               </div>
               <span style="background:${vc}20;color:${vc};border:1px solid ${vc}60;
-                border-radius:12px;padding:1px 8px;font-size:11px;font-weight:600;">${vLabel}</span>
+                border-radius:12px;padding:1px 8px;font-size:11px;font-weight:600;">
+                ${escapeHtml(vLabel)}</span>
             </div>
             <div style="font-size:12px;color:#374151;display:grid;
               grid-template-columns:1fr 1fr;gap:6px;">
-              <div><strong>Work Done:</strong><br/>${e.work_done || '—'}</div>
+              <div><strong>Work Done:</strong><br/>${escapeHtml(e.work_done || '—')}</div>
               <div><strong>Progress:</strong><br/>
-                <strong style="color:#10b981;">${e.progress_pct || 0}%</strong></div>
-              <div><strong>Manpower:</strong><br/>${e.manpower || '—'}</div>
-              <div><strong>Equipment:</strong><br/>${e.equipment || '—'}</div>
+                <strong style="color:#10b981;">${escapeHtml(String(e.progress_pct || 0))}%</strong></div>
+              <div><strong>Manpower:</strong><br/>${escapeHtml(e.manpower || '—')}</div>
+              <div><strong>Equipment:</strong><br/>${escapeHtml(e.equipment || '—')}</div>
             </div>
             ${e.validation_notes ? `
               <div style="margin-top:8px;padding:6px 10px;background:#fffbeb;border:1px solid #fcd34d;
                 border-radius:6px;font-size:12px;color:#92400e;">
-                💬 Leader: <em>${e.validation_notes}</em></div>` : ''}
+                💬 Leader: <em>${escapeHtml(e.validation_notes)}</em></div>` : ''}
           </div>`;
       }).join('')
     : `<div style="text-align:center;padding:16px 0;color:#9ca3af;font-size:12px;">
@@ -5666,15 +5786,19 @@ function _wcMemberView(task, myEntries) {
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
           padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
-          📋 Section A — Task Plan <span style="font-size:11px;font-weight:400;color:#6b7280;">(read-only)</span>
+          📋 Section A — Task Plan
+          <span style="font-size:11px;font-weight:400;color:#6b7280;">(read-only)</span>
         </div>
         <div style="font-size:12px;color:#374151;display:flex;flex-direction:column;gap:9px;">
-          <div><strong>Title:</strong> ${task.title || '—'}</div>
-          <div><strong>Description:</strong><div style="margin-top:3px;line-height:1.6;">${task.description || '—'}</div></div>
-          <div><strong>Work Package:</strong> ${task.work_package || '—'}</div>
+          <div><strong>Title:</strong> ${escapeHtml(task.title || '—')}</div>
+          <div><strong>Description:</strong>
+            <div style="margin-top:3px;line-height:1.6;">${escapeHtml(task.description || '—')}</div></div>
+          <div><strong>Work Package:</strong> ${escapeHtml(task.work_package || '—')}</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-            <div><strong>Start:</strong> ${task.start_date ? new Date(task.start_date).toLocaleDateString() : '—'}</div>
-            <div><strong>End:</strong>   ${task.end_date   ? new Date(task.end_date).toLocaleDateString()   : '—'}</div>
+            <div><strong>Start:</strong>
+              ${task.start_date ? new Date(task.start_date).toLocaleDateString() : '—'}</div>
+            <div><strong>End:</strong>
+              ${task.end_date ? new Date(task.end_date).toLocaleDateString() : '—'}</div>
           </div>
           <div><strong>Priority:</strong> ${wcPriorityBadge(task.priority)}</div>
           <div><strong>Status:</strong>   ${wcStatusBadge(task.status)}</div>
@@ -5686,19 +5810,22 @@ function _wcMemberView(task, myEntries) {
                     <span style="display:inline-flex;align-items:center;gap:4px;background:#f0fdf4;
                       color:#166534;border:1px solid #bbf7d0;border-radius:999px;
                       padding:3px 10px;font-size:12px;">
-                      👤 ${m.email || ''}
-                      ${m.position ? `<span style="color:#6b7280;font-size:10px;">(${m.position})</span>` : ''}
+                      👤 ${escapeHtml(m.email || '')}
+                      ${m.position
+                        ? `<span style="color:#6b7280;font-size:10px;">(${escapeHtml(m.position)})</span>`
+                        : ''}
                     </span>`).join('')
                 : '<span style="font-size:12px;color:#9ca3af;">None</span>'}
             </div>
           </div>
           ${task.linked_file_name ? `
             <div><strong>Linked File:</strong>
-              <a data-action="wc-dl-task" data-filename="${task.linked_file_name}"
+              <a data-action="wc-dl-task"
+                data-filename="${escapeHtml(task.linked_file_name)}"
                 style="display:inline-flex;align-items:center;gap:5px;margin-left:6px;
                 background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;
                 border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;">
-                ⬇️ ${task.linked_file_name}</a>
+                ⬇️ ${escapeHtml(task.linked_file_name)}</a>
             </div>` : ''}
         </div>
       </div>
@@ -5714,7 +5841,8 @@ function _wcMemberView(task, myEntries) {
           <div>
             <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
               letter-spacing:.5px;display:block;margin-bottom:3px;">Report Date *</label>
-            <input id="wc-pr-date-${task.id}" type="date" value="${new Date().toISOString().slice(0,10)}"
+            <input id="wc-pr-date-${task.id}" type="date"
+              value="${new Date().toISOString().slice(0,10)}"
               style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
               font-size:13px;box-sizing:border-box;"/>
           </div>
@@ -5775,7 +5903,7 @@ function _wcMemberView(task, myEntries) {
             letter-spacing:.5px;display:block;margin-bottom:3px;">Attachment</label>
           <input id="wc-pr-file-${task.id}" type="file" style="font-size:12px;color:#374151;"/>
         </div>
-        <button data-action="wc-submit-progress" data-task-id="${task.id}"
+        <button data-action="wc-submit-progress" data-task-id="${escapeHtml(String(task.id))}"
           style="width:100%;padding:10px 14px;font-size:13px;font-weight:600;
           background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
           ✅ Submit Progress Report</button>
@@ -5797,8 +5925,8 @@ function _wcReadOnlyView(task) {
     <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
       <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:12px;">📋 Task Overview</div>
       <div style="font-size:12px;color:#374151;display:flex;flex-direction:column;gap:8px;">
-        <div><strong>Title:</strong> ${task.title || '—'}</div>
-        <div><strong>Description:</strong> ${task.description || '—'}</div>
+        <div><strong>Title:</strong> ${escapeHtml(task.title || '—')}</div>
+        <div><strong>Description:</strong> ${escapeHtml(task.description || '—')}</div>
         <div><strong>Priority:</strong> ${wcPriorityBadge(task.priority)}</div>
         <div><strong>Status:</strong> ${wcStatusBadge(task.status)}</div>
         <div><strong>Period:</strong>
@@ -5814,49 +5942,59 @@ function _wcReadOnlyView(task) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-13  WORK CENTER — wire PM member checkboxes (async fetch)
+//  WS-13  WORK CENTER — wire PM member checkboxes [F3]
+//  After members load, the Save button is enabled.
 // ═══════════════════════════════════════════════════════════════════════
 async function _wcWirePMMembers(taskId, currentAssigned) {
   const container = document.getElementById(`wc-members-${taskId}`);
+  const saveBtn   = document.getElementById(`wc-save-btn-${taskId}`);
   if (!container) return;
   try {
     const projectId = localStorage.getItem('activeProjectId');
-    const res       = await authFetch(`${API}/work-center/team-members?projectId=${projectId}`);
-    const members   = res && res.ok ? (await res.json()).members || [] : [];
+    // [F1] explicit auth headers
+    const res     = await _wcFetch(
+      `${API}/work-center/team-members?projectId=${encodeURIComponent(projectId)}`
+    );
+    const members = res && res.ok ? (await res.json()).members || [] : [];
+
     if (!members.length) {
       container.innerHTML = `<p style="font-size:12px;color:#9ca3af;text-align:center;padding:8px 0;">
         No team members found for your side.</p>`;
-      return;
+    } else {
+      container.innerHTML = members.map(m => {
+        const checked = currentAssigned.some(a => String(a.id) === String(m.id));
+        return `
+          <label style="display:flex;align-items:center;gap:10px;padding:8px;
+            border:1px solid ${checked ? '#bfdbfe' : '#e5e7eb'};
+            background:${checked ? '#eff6ff' : '#fff'};
+            border-radius:8px;cursor:pointer;margin-bottom:6px;transition:all .2s;">
+            <input type="checkbox"
+              data-member-id="${escapeHtml(String(m.id))}"
+              data-member-email="${escapeHtml(m.email)}"
+              data-member-position="${escapeHtml(m.position || '')}"
+              ${checked ? 'checked' : ''}
+              style="width:16px;height:16px;accent-color:#007B8A;flex-shrink:0;"/>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:13px;font-weight:600;color:#1f2937;
+                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                ${escapeHtml(m.email)}</div>
+              <div style="font-size:11px;color:#6b7280;">
+                ${escapeHtml(m.position || 'No position')}${m.title ? ' · ' + escapeHtml(m.title) : ''}</div>
+            </div>
+          </label>`;
+      }).join('');
     }
-    container.innerHTML = members.map(m => {
-      const checked = currentAssigned.some(a => String(a.id) === String(m.id));
-      return `
-        <label style="display:flex;align-items:center;gap:10px;padding:8px;
-          border:1px solid ${checked ? '#bfdbfe' : '#e5e7eb'};
-          background:${checked ? '#eff6ff' : '#fff'};
-          border-radius:8px;cursor:pointer;margin-bottom:6px;transition:all .2s;">
-          <input type="checkbox"
-            data-member-id="${m.id}"
-            data-member-email="${m.email}"
-            data-member-position="${m.position || ''}"
-            ${checked ? 'checked' : ''}
-            style="width:16px;height:16px;accent-color:#007B8A;flex-shrink:0;"/>
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:13px;font-weight:600;color:#1f2937;
-              white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${m.email}</div>
-            <div style="font-size:11px;color:#6b7280;">
-              ${m.position || 'No position'}${m.title ? ' · ' + m.title : ''}</div>
-          </div>
-        </label>`;
-    }).join('');
   } catch (err) {
     console.error('Fetch members error:', err);
     container.innerHTML = `<p style="font-size:12px;color:#ef4444;text-align:center;">⚠️ Could not load members.</p>`;
+  } finally {
+    // [F3] always re-enable save button once member load attempt completes
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.style.opacity = '1'; }
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-14  WORK CENTER — handler: update task (PM)
+//  WS-14  WORK CENTER — handler: update task (PM)  [F1] [F5]
 // ═══════════════════════════════════════════════════════════════════════
 async function _wcHandleUpdate(taskId, tabKey) {
   try {
@@ -5866,11 +6004,12 @@ async function _wcHandleUpdate(taskId, tabKey) {
     const startDate = document.getElementById(`wc-ed-start-${taskId}`)?.value;
     const endDate   = document.getElementById(`wc-ed-end-${taskId}`)?.value;
     const priority  = document.getElementById(`wc-ed-priority-${taskId}`)?.value;
+    const status    = document.getElementById(`wc-ed-status-${taskId}`)?.value;   // [F5]
     const fileInput = document.getElementById(`wc-ed-file-${taskId}`);
     const membersEl = document.getElementById(`wc-members-${taskId}`);
 
-    if (!title)                  return alert('Title is required.');
-    if (!startDate || !endDate)  return alert('Start and end dates are required.');
+    if (!title)                 return alert('Title is required.');
+    if (!startDate || !endDate) return alert('Start and end dates are required.');
 
     const assignedMembers = [];
     membersEl?.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
@@ -5885,26 +6024,31 @@ async function _wcHandleUpdate(taskId, tabKey) {
     const form = new FormData();
     form.append('projectId',        localStorage.getItem('activeProjectId'));
     form.append('title',            title);
-    form.append('description',      desc);
-    form.append('work_package',     pkg);
+    form.append('description',      desc || '');
+    form.append('work_package',     pkg  || '');
     form.append('start_date',       startDate);
     form.append('end_date',         endDate);
     form.append('priority',         priority);
+    form.append('status',           status || 'ongoing');   // [F5]
     form.append('assigned_members', JSON.stringify(assignedMembers));
     if (fileInput?.files?.[0]) form.append('linked_file', fileInput.files[0]);
 
-    const res = await authFetch(`${API}/work-center/${taskId}`, { method: 'PUT', body: form });
+    // [F1] _wcFetch injects auth headers automatically
+    const res = await _wcFetch(`${API}/work-center/${taskId}`, { method: 'PUT', body: form });
     if (!res) return;
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || 'Failed to update task');
     alert('Task updated successfully.');
     delete recordsCache[tabKey];
     loadTabRecords(tabKey);
-  } catch (err) { console.error('WC update error:', err); alert('Failed to update task: ' + err.message); }
+  } catch (err) {
+    console.error('WC update error:', err);
+    alert('Failed to update task: ' + err.message);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-15  WORK CENTER — handler: submit progress (team member)
+//  WS-15  WORK CENTER — handler: submit progress (team member)  [F1]
 // ═══════════════════════════════════════════════════════════════════════
 async function _wcHandleSubmitProgress(taskId, tabKey) {
   try {
@@ -5927,37 +6071,42 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
     form.append('reportDate',  reportDate);
     form.append('workDone',    workDone);
     form.append('progressPct', pct || '0');
-    form.append('manpower',    manpower);
-    form.append('equipment',   equipment);
-    form.append('materials',   materials);
-    form.append('issues',      issues);
-    form.append('notes',       notes);
+    form.append('manpower',    manpower  || '');
+    form.append('equipment',   equipment || '');
+    form.append('materials',   materials || '');
+    form.append('issues',      issues    || '');
+    form.append('notes',       notes     || '');
     if (fileInput?.files?.[0]) form.append('attachment', fileInput.files[0]);
 
-    const res = await authFetch(`${API}/work-center-progress`, { method: 'POST', body: form });
+    // [F1] _wcFetch injects auth headers automatically
+    const res = await _wcFetch(`${API}/work-center-progress`, { method: 'POST', body: form });
     if (!res) return;
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || 'Failed to submit progress');
     alert('Progress submitted successfully.');
     delete recordsCache[tabKey];
     loadTabRecords(tabKey);
-  } catch (err) { console.error('WC submit error:', err); alert('Failed to submit progress: ' + err.message); }
+  } catch (err) {
+    console.error('WC submit error:', err);
+    alert('Failed to submit progress: ' + err.message);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 //  WS-16  WORK CENTER — handler: validate progress (PM)
+//  [F4] dead `taskId` parameter removed; only progressId + action needed
+//  [F1] explicit auth headers
 // ═══════════════════════════════════════════════════════════════════════
-async function _wcHandleValidate(taskId, tabKey, progressId, validateAction) {
+async function _wcHandleValidate(tabKey, progressId, validateAction) {
   try {
     const notes = document.getElementById(`wc-val-notes-${progressId}`)?.value.trim() || '';
-    const res   = await authFetch(`${API}/work-center-progress/${progressId}/validate`, {
-      method:  'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
+    const res   = await _wcFetch(`${API}/work-center-progress/${progressId}/validate`, {
+      method: 'PUT',
+      body:   JSON.stringify({
         projectId:         localStorage.getItem('activeProjectId'),
         validation_status: validateAction,
         validation_notes:  notes,
-      })
+      }),
     });
     if (!res) return;
     const data = await res.json();
@@ -5965,19 +6114,21 @@ async function _wcHandleValidate(taskId, tabKey, progressId, validateAction) {
     alert(`Entry ${validateAction === 'approved' ? 'approved ✅' : 'rejected ❌'} successfully.`);
     delete recordsCache[tabKey];
     loadTabRecords(tabKey);
-  } catch (err) { console.error('WC validate error:', err); alert('Failed to validate: ' + err.message); }
+  } catch (err) {
+    console.error('WC validate error:', err);
+    alert('Failed to validate: ' + err.message);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-17  WORK CENTER — handler: delete task (PM)
+//  WS-17  WORK CENTER — handler: delete task (PM)  [F1]
 // ═══════════════════════════════════════════════════════════════════════
 async function _wcHandleDelete(taskId, tabKey) {
   if (!confirm('Delete this task? All progress entries will also be deleted. Cannot be undone.')) return;
   try {
-    const res = await authFetch(`${API}/work-center/${taskId}`, {
-      method:  'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ projectId: localStorage.getItem('activeProjectId') })
+    const res = await _wcFetch(`${API}/work-center/${taskId}`, {
+      method: 'DELETE',
+      body:   JSON.stringify({ projectId: localStorage.getItem('activeProjectId') }),
     });
     if (!res) return;
     const data = await res.json();
@@ -5985,18 +6136,20 @@ async function _wcHandleDelete(taskId, tabKey) {
     alert('Task deleted.');
     delete recordsCache[tabKey];
     loadTabRecords(tabKey);
-  } catch (err) { console.error('WC delete error:', err); alert('Failed to delete task: ' + err.message); }
+  } catch (err) {
+    console.error('WC delete error:', err);
+    alert('Failed to delete task: ' + err.message);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-18  WORK CENTER — download progress attachment
+//  WS-18  WORK CENTER — download progress attachment  [F1]
 // ═══════════════════════════════════════════════════════════════════════
 async function _wcDownloadProgress(progressId, fileName) {
   try {
     const projectId = localStorage.getItem('activeProjectId');
-    const res = await authFetch(
-      `${API}/work-center-progress/download/${progressId}?projectId=${projectId}`,
-      { method: 'GET' }
+    const res = await _wcFetch(
+      `${API}/work-center-progress/download/${progressId}?projectId=${encodeURIComponent(projectId)}`
     );
     if (!res || !res.ok) { alert('Failed to download.'); return; }
     const data = await res.json();
@@ -6004,12 +6157,42 @@ async function _wcDownloadProgress(progressId, fileName) {
       const a = document.createElement('a');
       a.href = data.url; a.download = fileName || 'attachment'; a.target = '_blank';
       document.body.appendChild(a); a.click(); a.remove();
-    } else { alert(data.error || 'File not available.'); }
-  } catch (err) { console.error('WC download progress error:', err); alert('Failed to download.'); }
+    } else {
+      alert(data.error || 'File not available.');
+    }
+  } catch (err) {
+    console.error('WC download progress error:', err);
+    alert('Failed to download.');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-19  WORK CENTER — create task form (gray panel, side leaders only)
+//  WS-18b  WORK CENTER — download task linked file  [F7]
+//  Dedicated endpoint for task files (separate from progress attachments)
+// ═══════════════════════════════════════════════════════════════════════
+async function _wcDownloadTaskFile(taskId, fileName) {
+  try {
+    const projectId = localStorage.getItem('activeProjectId');
+    const res = await _wcFetch(
+      `${API}/work-center/${taskId}/download?projectId=${encodeURIComponent(projectId)}`
+    );
+    if (!res || !res.ok) { alert('Failed to download task file.'); return; }
+    const data = await res.json();
+    if (data.url) {
+      const a = document.createElement('a');
+      a.href = data.url; a.download = fileName || 'task-file'; a.target = '_blank';
+      document.body.appendChild(a); a.click(); a.remove();
+    } else {
+      alert(data.error || 'File not available.');
+    }
+  } catch (err) {
+    console.error('WC download task file error:', err);
+    alert('Failed to download task file.');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  WS-19  WORK CENTER — create task form  [F1] [F3] [F5] [F8]
 // ═══════════════════════════════════════════════════════════════════════
 async function _wcOpenCreateForm() {
   if (!isWCLeader(window.currentUserRole)) {
@@ -6025,23 +6208,27 @@ async function _wcOpenCreateForm() {
           Tasks are visible only to members on your side.</p>
       </div>
       <div style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
+
         <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
           font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Title *</label>
           <input type="text" id="wc-cr-title"
             placeholder="e.g. Foundation excavation — Zone B"
             style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
             font-size:14px;box-sizing:border-box;"/></div>
+
         <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
           font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Description</label>
           <textarea id="wc-cr-desc" placeholder="Describe the task scope and objectives…"
             style="width:100%;min-height:90px;padding:10px 12px;border:1px solid #d1d5db;
             border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box;"></textarea></div>
+
         <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
           font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Work Package</label>
           <input type="text" id="wc-cr-pkg" placeholder="e.g. WP-03 Civil Works"
             style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
             font-size:14px;box-sizing:border-box;"/></div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">
           <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
             font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Start Date *</label>
             <input type="date" id="wc-cr-start"
@@ -6060,12 +6247,24 @@ async function _wcOpenCreateForm() {
               <option value="normal" selected>Normal</option>
               <option value="high">High</option>
             </select></div>
+          <!-- [F5] Status field in create form -->
+          <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
+            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Status</label>
+            <select id="wc-cr-status"
+              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
+              <option value="ongoing" selected>Ongoing</option>
+              <option value="completed">Completed</option>
+              <option value="closed">Closed</option>
+            </select></div>
         </div>
+
         <div>
           <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
             font-size:11px;letter-spacing:.5px;margin-bottom:5px;">
-            Assign Team Members * <span style="font-weight:400;text-transform:none;font-size:11px;color:#9ca3af;">(your side only)</span>
+            Assign Team Members *
+            <span style="font-weight:400;text-transform:none;font-size:11px;color:#9ca3af;">(your side only)</span>
           </label>
+          <!-- [F3] members load before Save is enabled -->
           <div id="wc-cr-members"
             style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#f9fafb;
             max-height:220px;overflow-y:auto;">
@@ -6073,15 +6272,18 @@ async function _wcOpenCreateForm() {
               ⏳ Loading team members…</p>
           </div>
         </div>
+
         <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
           font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Linked File</label>
           <input type="file" id="wc-cr-file" style="font-size:13px;color:#374151;"/></div>
       </div>
+
       <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
         background:#fff;display:flex;gap:12px;">
-        <button type="button" id="wc-cr-save"
+        <!-- [F3] disabled until members are loaded -->
+        <button type="button" id="wc-cr-save" disabled
           style="flex:1;padding:12px;font-size:14px;font-weight:700;
-          background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+          background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;opacity:.6;">
           ✓ Create Task</button>
         <button type="button" onclick="collapseGrayPart()"
           style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#f5f5f5;
@@ -6090,12 +6292,15 @@ async function _wcOpenCreateForm() {
       </div>
     </div>`);
 
-  // Load team members
+  // [F8] await member fetch before enabling Save
   try {
     const projectId = localStorage.getItem('activeProjectId');
-    const res       = await authFetch(`${API}/work-center/team-members?projectId=${projectId}`);
-    const members   = res && res.ok ? (await res.json()).members || [] : [];
-    const mc        = document.getElementById('wc-cr-members');
+    // [F1] explicit auth headers
+    const res     = await _wcFetch(
+      `${API}/work-center/team-members?projectId=${encodeURIComponent(projectId)}`
+    );
+    const members = res && res.ok ? (await res.json()).members || [] : [];
+    const mc      = document.getElementById('wc-cr-members');
     if (mc) {
       mc.innerHTML = members.length
         ? members.map(m => `
@@ -6103,26 +6308,35 @@ async function _wcOpenCreateForm() {
               border:1px solid #e5e7eb;background:#fff;border-radius:8px;
               cursor:pointer;margin-bottom:6px;transition:all .2s;">
               <input type="checkbox"
-                data-member-id="${m.id}"
-                data-member-email="${m.email}"
-                data-member-position="${m.position || ''}"
+                data-member-id="${escapeHtml(String(m.id))}"
+                data-member-email="${escapeHtml(m.email)}"
+                data-member-position="${escapeHtml(m.position || '')}"
                 style="width:16px;height:16px;accent-color:#007B8A;flex-shrink:0;"/>
               <div style="flex:1;min-width:0;">
                 <div style="font-size:13px;font-weight:600;color:#1f2937;
-                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${m.email}</div>
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                  ${escapeHtml(m.email)}</div>
                 <div style="font-size:11px;color:#6b7280;">
-                  ${m.position || 'No position listed'}${m.title ? ' · ' + m.title : ''}</div>
+                  ${escapeHtml(m.position || 'No position listed')}${m.title ? ' · ' + escapeHtml(m.title) : ''}</div>
               </div>
             </label>`).join('')
         : `<p style="font-size:12px;color:#9ca3af;text-align:center;padding:12px 0;">
             No team members found for your side. Add members to the project first.</p>`;
     }
   } catch (err) {
+    console.error('WC create — member fetch error:', err);
     const mc = document.getElementById('wc-cr-members');
-    if (mc) mc.innerHTML = `<p style="font-size:12px;color:#ef4444;text-align:center;">⚠️ Could not load members.</p>`;
+    if (mc) mc.innerHTML = `<p style="font-size:12px;color:#ef4444;text-align:center;">
+      ⚠️ Could not load members. Close and retry.</p>`;
+    // [F8] don't enable Save if member fetch failed — user can't assign anyone
+    return;
   }
 
-  document.getElementById('wc-cr-save').addEventListener('click', async () => {
+  // Members loaded — enable Save
+  const saveBtn = document.getElementById('wc-cr-save');
+  if (saveBtn) { saveBtn.disabled = false; saveBtn.style.opacity = '1'; }
+
+  saveBtn?.addEventListener('click', async () => {
     try {
       const title     = document.getElementById('wc-cr-title')?.value.trim();
       const desc      = document.getElementById('wc-cr-desc')?.value.trim();
@@ -6130,6 +6344,7 @@ async function _wcOpenCreateForm() {
       const startDate = document.getElementById('wc-cr-start')?.value;
       const endDate   = document.getElementById('wc-cr-end')?.value;
       const priority  = document.getElementById('wc-cr-priority')?.value;
+      const status    = document.getElementById('wc-cr-status')?.value;   // [F5]
       const fileInput = document.getElementById('wc-cr-file');
 
       if (!title)                 throw new Error('Title is required.');
@@ -6148,18 +6363,19 @@ async function _wcOpenCreateForm() {
       const form = new FormData();
       form.append('projectId',        localStorage.getItem('activeProjectId'));
       form.append('title',            title);
-      form.append('description',      desc);
-      form.append('work_package',     pkg);
+      form.append('description',      desc || '');
+      form.append('work_package',     pkg  || '');
       form.append('start_date',       startDate);
       form.append('end_date',         endDate);
       form.append('priority',         priority);
+      form.append('status',           status || 'ongoing');   // [F5]
       form.append('assigned_members', JSON.stringify(assignedMembers));
       if (fileInput?.files?.[0]) form.append('linked_file', fileInput.files[0]);
 
-      const saveBtn = document.getElementById('wc-cr-save');
-      if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Creating…'; }
+      saveBtn.disabled = true; saveBtn.textContent = 'Creating…';
 
-      const res  = await authFetch(`${API}/work-center`, { method: 'POST', body: form });
+      // [F1] _wcFetch injects auth headers automatically
+      const res  = await _wcFetch(`${API}/work-center`, { method: 'POST', body: form });
       if (!res) return;
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
@@ -6171,8 +6387,8 @@ async function _wcOpenCreateForm() {
     } catch (err) {
       console.error('WC create error:', err);
       alert('Error: ' + err.message);
-      const saveBtn = document.getElementById('wc-cr-save');
-      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '✓ Create Task'; }
+      const sb = document.getElementById('wc-cr-save');
+      if (sb) { sb.disabled = false; sb.textContent = '✓ Create Task'; }
     }
   });
 }
