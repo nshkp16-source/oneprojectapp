@@ -5166,22 +5166,19 @@ bootstrapUser();
 
 
 // =======================================================================
-//  WORK CENTER — COMPLETE FRONTEND FIX
-//  Replace every WS-* section in your existing file with this.
-//  Only the Work Center sections change. Nothing else is touched.
+//  WORK CENTER + PLANNING & EXECUTION — COMPLETE REWRITE
+//  Drop this entire block at the bottom of your main JS file,
+//  replacing all previous WS-* and PE sections.
 // =======================================================================
 
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-1  EXTEND CATEGORY MAP  (unchanged — keep as-is)
+//  SHARED HELPERS
 // ═══════════════════════════════════════════════════════════════════════
+
 CATEGORY_TABLE_MAP['work-centel']        = 'workspace_work_center';
 CATEGORY_TABLE_MAP['planning-execution'] = 'planning_execution';
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-2  HELPERS
-// ═══════════════════════════════════════════════════════════════════════
 function escapeHtml(str) {
   if (str == null) return '';
   return String(str)
@@ -5227,105 +5224,19 @@ function wcStatusBadge(status) {
 
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-NEW  DEDICATED FETCH — calls /api/fetch-work-center-records
-//  This is the TRUE fetch with JWT + projectId. Replaces loadTabRecords
-//  for work-centel entirely.
-// ═══════════════════════════════════════════════════════════════════════
-async function loadWCRecords() {
-  const recordsList    = document.getElementById('recordsList');
-  const placeholderDiv = document.querySelector('.no-data-placeholder');
-  if (!recordsList || !placeholderDiv) return;
-
-  const projectId = localStorage.getItem('activeProjectId');
-  if (!projectId) {
-    placeholderDiv.style.display = 'block';
-    placeholderDiv.innerHTML = '<p>⚠️ No Project Selected</p>';
-    return;
-  }
-
-  // Use cache if available
-  if (recordsCache['work-centel']) {
-    _renderWCList(recordsCache['work-centel']);
-    return;
-  }
-
-  recordsList.innerHTML = '';
-  placeholderDiv.style.display = 'block';
-  placeholderDiv.innerHTML = "<p style='color:#999;'>Loading...</p>";
-
-  try {
-    // TRUE CALL — sends JWT via _wcFetch + projectId in body
-    const res = await _wcFetch(`${API}/fetch-work-center-records`, {
-      method: 'POST',
-      body: JSON.stringify({ projectId }),
-    });
-
-    if (!res) return;
-    if (res.status === 401) {
-      placeholderDiv.innerHTML = "<p style='color:#ef4444;'>⚠️ Unauthorized. Please log in again.</p>";
-      return;
-    }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const data    = await res.json();
-    const records = (data.records || []).map(r => ({ ...r, _tabKey: 'work-centel' }));
-    recordsCache['work-centel'] = records;
-    _renderWCList(records);
-
-  } catch (err) {
-    console.error('loadWCRecords error:', err);
-    const pl = document.querySelector('.no-data-placeholder');
-    if (pl) {
-      pl.style.display = 'block';
-      pl.innerHTML = "<p style='color:#ef4444;'>⚠️ Error loading tasks. Please try again.</p>";
-    }
-  }
-}
-
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-NEW  DEDICATED MARK-VIEWED — calls /api/mark-work-center-viewed
-//  Replaces the generic markRecordViewed for work-centel tab.
-// ═══════════════════════════════════════════════════════════════════════
-function _wcMarkViewed(recordId) {
-  const projectId = localStorage.getItem('activeProjectId');
-  _wcFetch(`${API}/mark-work-center-viewed`, {
-    method: 'POST',
-    body: JSON.stringify({ projectId, recordId }),
-  })
-  .then(res => {
-    if (res && res.ok) {
-      const item    = document.querySelector(`.doc-item[data-id="${recordId}"]`);
-      const dot     = document.querySelector(`.unread-dot-${recordId}`);
-      if (dot)  dot.remove();
-      if (item) {
-        item.style.background  = '#fff';
-        item.style.border      = '1px solid #e5e7eb';
-        item.style.borderLeft  = '4px solid #007B8A';
-        item.style.boxShadow   = '0 1px 3px rgba(0,0,0,0.06)';
-      }
-      const cached = (recordsCache['work-centel'] || []).find(r => String(r.id) === String(recordId));
-      if (cached) cached.is_viewed = true;
-    }
-  })
-  .catch(err => console.error('WC mark viewed error:', err));
-}
-
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-3  PATCH setTabContent — work-centel now calls loadWCRecords
+//  PATCH setTabContent
 // ═══════════════════════════════════════════════════════════════════════
 {
   const _orig = setTabContent;
   setTabContent = function(tabKey) {
     if (tabKey === 'work-centel') {
       _renderWCShell();
-      loadWCRecords();           // ← TRUE CALL, not loadTabRecords
+      loadWCRecords();
       return;
     }
     if (tabKey === 'planning-execution') {
       _renderPEShell();
-      loadTabRecords('planning-execution');
+      loadPERecords();
       return;
     }
     _orig(tabKey);
@@ -5334,20 +5245,20 @@ function _wcMarkViewed(recordId) {
 
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-4  PATCH renderRecordsList
+//  PATCH renderRecordsList
 // ═══════════════════════════════════════════════════════════════════════
 {
   const _orig = renderRecordsList;
   renderRecordsList = function(records, tabKey) {
-    if (tabKey === 'work-centel')        { _renderWCList(records); return; }
-    if (tabKey === 'planning-execution') { _renderPEList(records); return; }
+    if (tabKey === 'work-centel')        { _renderWCList(records);  return; }
+    if (tabKey === 'planning-execution') { _renderPEList(records);  return; }
     _orig(records, tabKey);
   };
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-5  PATCH toggleRecordDetail — uses _wcMarkViewed for work-centel
+//  PATCH toggleRecordDetail — WC only (PE uses expand panel)
 // ═══════════════════════════════════════════════════════════════════════
 {
   const _orig = toggleRecordDetail;
@@ -5360,9 +5271,7 @@ function _wcMarkViewed(recordId) {
       if (!isOpen) {
         const cached    = (recordsCache['work-centel'] || []).find(r => String(r.id) === String(recordId));
         const isCreator = String(cached?.creator_id) === String(window.currentUserId);
-        if (cached && !cached.is_viewed && !isCreator) {
-          _wcMarkViewed(recordId);   // ← dedicated WC viewed route
-        }
+        if (cached && !cached.is_viewed && !isCreator) _wcMarkViewed(recordId);
         _wcLoadDetail(recordId, 'work-centel');
       }
       detail.style.display = isOpen ? 'none' : 'block';
@@ -5375,16 +5284,15 @@ function _wcMarkViewed(recordId) {
 
 
 // ═══════════════════════════════════════════════════════════════════════
-//  WS-6  SECOND bottomContent listener — WC-specific button actions
+//  bottomContent click delegate — WC actions
 // ═══════════════════════════════════════════════════════════════════════
 bottomContent.addEventListener('click', (e) => {
   const actionEl = e.target.closest('[data-action]');
   if (!actionEl) return;
   const action = actionEl.getAttribute('data-action');
-
   const WC_ACTIONS = new Set([
-    'wc-update', 'wc-delete', 'wc-submit-progress',
-    'wc-validate', 'wc-dl-task', 'wc-dl-progress',
+    'wc-update','wc-delete','wc-submit-progress',
+    'wc-validate','wc-dl-task','wc-dl-progress',
   ]);
   if (!WC_ACTIONS.has(action)) return;
 
@@ -5392,24 +5300,96 @@ bottomContent.addEventListener('click', (e) => {
   const tabKey   = item?.getAttribute('data-tab-key') || 'work-centel';
   const recordId = item?.getAttribute('data-id');
 
-  if (action === 'wc-update')         { _wcHandleUpdate(recordId, tabKey);  return; }
-  if (action === 'wc-delete')         { _wcHandleDelete(recordId, tabKey);  return; }
+  if (action === 'wc-update')          { _wcHandleUpdate(recordId, tabKey); return; }
+  if (action === 'wc-delete')          { _wcHandleDelete(recordId, tabKey); return; }
   if (action === 'wc-submit-progress') {
     _wcHandleSubmitProgress(actionEl.getAttribute('data-task-id') || recordId, tabKey);
     return;
   }
   if (action === 'wc-validate') {
-    _wcHandleValidate(tabKey, actionEl.getAttribute('data-progress-id'), actionEl.getAttribute('data-validate-action'));
+    _wcHandleValidate(
+      tabKey,
+      actionEl.getAttribute('data-progress-id'),
+      actionEl.getAttribute('data-validate-action')
+    );
     return;
   }
-  if (action === 'wc-dl-task')     { _wcDownloadTaskFile(recordId, actionEl.getAttribute('data-filename')); return; }
-  if (action === 'wc-dl-progress') { _wcDownloadProgress(actionEl.getAttribute('data-progress-id'), actionEl.getAttribute('data-filename')); return; }
+  if (action === 'wc-dl-task')
+    { _wcDownloadTaskFile(recordId, actionEl.getAttribute('data-filename')); return; }
+  if (action === 'wc-dl-progress')
+    { _wcDownloadProgress(actionEl.getAttribute('data-progress-id'), actionEl.getAttribute('data-filename')); return; }
 });
 
 
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-7  WORK CENTER — shell
-// ═══════════════════════════════════════════════════════════════════════
+// ███████████████████████████████████████████████████████████████████████
+//  ██  WORK CENTER
+// ███████████████████████████████████████████████████████████████████████
+
+// ── Fetch ────────────────────────────────────────────────────────────────────
+async function loadWCRecords() {
+  const recordsList    = document.getElementById('recordsList');
+  const placeholderDiv = document.querySelector('.no-data-placeholder');
+  if (!recordsList || !placeholderDiv) return;
+
+  const projectId = localStorage.getItem('activeProjectId');
+  if (!projectId) {
+    placeholderDiv.style.display = 'block';
+    placeholderDiv.innerHTML = '<p>⚠️ No Project Selected</p>';
+    return;
+  }
+  if (recordsCache['work-centel']) { _renderWCList(recordsCache['work-centel']); return; }
+
+  recordsList.innerHTML = '';
+  placeholderDiv.style.display  = 'block';
+  placeholderDiv.innerHTML = "<p style='color:#999;'>Loading…</p>";
+
+  try {
+    const res = await _wcFetch(`${API}/fetch-work-center-records`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId }),
+    });
+    if (!res) return;
+    if (res.status === 401) {
+      placeholderDiv.innerHTML = "<p style='color:#ef4444;'>⚠️ Unauthorized. Please log in again.</p>";
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    // Backend already filters: returns only tasks where user is creator OR in assigned_members
+    const records = (data.records || []).map(r => ({ ...r, _tabKey: 'work-centel' }));
+    recordsCache['work-centel'] = records;
+    _renderWCList(records);
+  } catch (err) {
+    console.error('loadWCRecords error:', err);
+    const pl = document.querySelector('.no-data-placeholder');
+    if (pl) { pl.style.display = 'block'; pl.innerHTML = "<p style='color:#ef4444;'>⚠️ Error loading tasks.</p>"; }
+  }
+}
+
+// ── Mark viewed ──────────────────────────────────────────────────────────────
+function _wcMarkViewed(recordId) {
+  const projectId = localStorage.getItem('activeProjectId');
+  _wcFetch(`${API}/mark-work-center-viewed`, {
+    method: 'POST',
+    body: JSON.stringify({ projectId, recordId }),
+  }).then(res => {
+    if (res && res.ok) {
+      const item = document.querySelector(`.doc-item[data-id="${recordId}"]`);
+      const dot  = document.querySelector(`.unread-dot-${recordId}`);
+      if (dot)  dot.remove();
+      if (item) {
+        item.style.background = '#fff';
+        item.style.border     = '1px solid #e5e7eb';
+        item.style.borderLeft = '4px solid #007B8A';
+        item.style.boxShadow  = '0 1px 3px rgba(0,0,0,0.06)';
+      }
+      const cached = (recordsCache['work-centel'] || []).find(r => String(r.id) === String(recordId));
+      if (cached) cached.is_viewed = true;
+    }
+  }).catch(err => console.error('WC mark viewed error:', err));
+}
+
+// ── Shell ────────────────────────────────────────────────────────────────────
 function _renderWCShell() {
   const leader = isWCLeader(window.currentUserRole);
   bottomContent.innerHTML = `
@@ -5434,16 +5414,11 @@ function _renderWCShell() {
   document.getElementById('wcAddBtn')?.addEventListener('click', _wcOpenCreateForm);
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-8  WORK CENTER — render list
-// ═══════════════════════════════════════════════════════════════════════
+// ── Render list ──────────────────────────────────────────────────────────────
 function _renderWCList(records) {
   const recordsList    = document.getElementById('recordsList');
   const placeholderDiv = document.querySelector('.no-data-placeholder');
   if (!recordsList || !placeholderDiv) return;
-
-  recordsList.querySelectorAll('.doc-detail').forEach(d => { d.style.display = 'none'; });
 
   if (!records.length) {
     recordsList.innerHTML = '';
@@ -5456,10 +5431,15 @@ function _renderWCList(records) {
     const isCreator = String(task.creator_id) === String(window.currentUserId);
     const isUnread  = !task.is_viewed && !isCreator;
     const postedAt  = task.created_at
-      ? new Date(task.created_at).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' })
-      : 'N/A';
+      ? new Date(task.created_at).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' }) : 'N/A';
     const startDate = task.start_date ? new Date(task.start_date).toLocaleDateString() : '—';
     const endDate   = task.end_date   ? new Date(task.end_date).toLocaleDateString()   : '—';
+
+    // Show activity link badge if task is tied to a P&E activity
+    const activityBadge = task.activity_id
+      ? `<span style="background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;border-radius:8px;
+          padding:1px 8px;font-size:10px;font-weight:700;margin-left:4px;">
+          📊 Activity #${escapeHtml(String(task.activity_id))}</span>` : '';
 
     return `
       <li class="doc-item" data-id="${escapeHtml(String(task.id))}" data-tab-key="work-centel"
@@ -5475,9 +5455,11 @@ function _renderWCList(records) {
           <div style="flex:1;min-width:0;">
             <div style="font-weight:${isUnread ? '700' : '600'};font-size:14px;color:#1f2937;
                         display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-              ${isUnread ? `<span class="unread-dot-${task.id}" style="display:inline-block;
-                  width:8px;height:8px;flex-shrink:0;background:#3b82f6;border-radius:50%;"></span>` : ''}
+              ${isUnread ? `<span class="unread-dot-${task.id}"
+                style="display:inline-block;width:8px;height:8px;flex-shrink:0;
+                background:#3b82f6;border-radius:50%;"></span>` : ''}
               🗂️ ${escapeHtml(task.title)}
+              ${activityBadge}
             </div>
             <div style="font-size:11px;color:#9ca3af;margin-top:3px;">
               By <strong style="color:#6b7280;">${escapeHtml(task.creator_role || 'N/A')}</strong>
@@ -5493,17 +5475,14 @@ function _renderWCList(records) {
         </div>
         <div class="doc-detail" id="detail-${task.id}" style="display:none;border-top:1px solid #e5e7eb;">
           <div id="wc-detail-${task.id}" style="padding:16px;background:#f8fafc;">
-            <p style="color:#9ca3af;font-size:13px;text-align:center;padding:24px 0;">⏳ Loading task details…</p>
+            <p style="color:#9ca3af;font-size:13px;text-align:center;padding:24px 0;">⏳ Loading…</p>
           </div>
         </div>
       </li>`;
   }).join('');
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-9  WORK CENTER — async detail loader
-// ═══════════════════════════════════════════════════════════════════════
+// ── Async detail loader ───────────────────────────────────────────────────────
 async function _wcLoadDetail(recordId, tabKey) {
   const container = document.getElementById(`wc-detail-${recordId}`);
   if (!container) return;
@@ -5514,7 +5493,7 @@ async function _wcLoadDetail(recordId, tabKey) {
   const role            = window.currentUserRole;
   const leader          = isWCLeader(role);
   const assignedMembers = Array.isArray(task.assigned_members) ? task.assigned_members : [];
-  const isAssigned      = role === 'TeamMember' &&
+  const isAssigned      = !leader &&
     assignedMembers.some(m => String(m.id) === String(window.currentUserId));
 
   try {
@@ -5525,9 +5504,14 @@ async function _wcLoadDetail(recordId, tabKey) {
     let progressEntries = [];
     if (res && res.ok) { const d = await res.json(); progressEntries = d.entries || []; }
 
+    // Filter entries: members only see their own entries
+    const myEntries = leader
+      ? progressEntries
+      : progressEntries.filter(e => String(e.member_id) === String(window.currentUserId));
+
     if (leader)          container.innerHTML = _wcPMView(task, progressEntries);
-    else if (isAssigned) container.innerHTML = _wcMemberView(task, progressEntries);
-    else                 container.innerHTML = _wcReadOnlyView(task);
+    else if (isAssigned) container.innerHTML = _wcMemberView(task, myEntries);
+    else                 container.innerHTML = _wcNotAssignedView(task);
 
     if (leader) _wcWirePMMembers(recordId, assignedMembers);
   } catch (err) {
@@ -5536,18 +5520,16 @@ async function _wcLoadDetail(recordId, tabKey) {
   }
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-10  PM VIEW
-// ═══════════════════════════════════════════════════════════════════════
+// ── PM View (Section A editable + Section B all entries with validate) ────────
 function _wcPMView(task, progressEntries) {
   const members = Array.isArray(task.assigned_members) ? task.assigned_members : [];
   const chips = members.length
-    ? members.map(m => `<span style="display:inline-flex;align-items:center;gap:4px;background:#eff6ff;
-        color:#1d4ed8;border:1px solid #bfdbfe;border-radius:999px;padding:3px 10px;font-size:12px;">
-        👤 ${escapeHtml(m.email || '')}
-        ${m.position ? `<span style="color:#6b7280;font-size:10px;">(${escapeHtml(m.position)})</span>` : ''}
-      </span>`).join('')
+    ? members.map(m => `
+        <span style="display:inline-flex;align-items:center;gap:4px;background:#eff6ff;
+          color:#1d4ed8;border:1px solid #bfdbfe;border-radius:999px;padding:3px 10px;font-size:12px;">
+          👤 ${escapeHtml(m.email || '')}
+          ${m.position ? `<span style="color:#6b7280;font-size:10px;">(${escapeHtml(m.position)})</span>` : ''}
+        </span>`).join('')
     : `<span style="font-size:12px;color:#9ca3af;">No members assigned yet.</span>`;
 
   const valColor = { pending:'#f59e0b', approved:'#10b981', rejected:'#ef4444' };
@@ -5555,112 +5537,202 @@ function _wcPMView(task, progressEntries) {
   const progressHtml = progressEntries.length
     ? progressEntries.map(e => {
         const vc     = valColor[e.validation_status] || '#6b7280';
-        const vLabel = (e.validation_status || 'pending').charAt(0).toUpperCase() + (e.validation_status || 'pending').slice(1);
+        const vLabel = (e.validation_status || 'pending').charAt(0).toUpperCase()
+          + (e.validation_status || 'pending').slice(1);
         const canVal = !e.validation_status || e.validation_status === 'pending';
         return `
-          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;margin-bottom:12px;">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;
+            padding:14px;margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;
+              flex-wrap:wrap;gap:8px;margin-bottom:10px;">
               <div>
                 <div style="font-size:13px;font-weight:700;color:#1f2937;">
                   👤 ${escapeHtml(e.member_email || 'Team Member')}
-                  ${e.member_position ? `<span style="font-size:11px;background:#f3f4f6;color:#6b7280;border-radius:4px;padding:1px 6px;margin-left:6px;">${escapeHtml(e.member_position)}</span>` : ''}
+                  ${e.member_position
+                    ? `<span style="font-size:11px;background:#f3f4f6;color:#6b7280;
+                        border-radius:4px;padding:1px 6px;margin-left:6px;">
+                        ${escapeHtml(e.member_position)}</span>` : ''}
                 </div>
                 <div style="font-size:11px;color:#9ca3af;margin-top:2px;">
                   📅 ${e.report_date ? new Date(e.report_date).toLocaleDateString() : '—'}
-                  &nbsp;•&nbsp; Submitted ${e.submitted_at ? new Date(e.submitted_at).toLocaleString(undefined,{dateStyle:'short',timeStyle:'short'}) : '—'}
+                  &nbsp;•&nbsp; Submitted
+                  ${e.submitted_at
+                    ? new Date(e.submitted_at).toLocaleString(undefined,
+                        { dateStyle:'short', timeStyle:'short' }) : '—'}
                 </div>
               </div>
-              <span style="background:${vc}20;color:${vc};border:1px solid ${vc}60;border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;">${escapeHtml(vLabel)}</span>
+              <span style="background:${vc}20;color:${vc};border:1px solid ${vc}60;
+                border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;">
+                ${escapeHtml(vLabel)}</span>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;color:#374151;margin-bottom:10px;">
-              <div><strong>Work Done:</strong><br/>${escapeHtml(e.work_done||'—')}</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;
+              font-size:12px;color:#374151;margin-bottom:10px;">
+              <div><strong>Work Done:</strong><br/>${escapeHtml(e.work_done || '—')}</div>
               <div><strong>Progress:</strong><br/>
                 <div style="display:flex;align-items:center;gap:8px;">
                   <div style="flex:1;background:#e5e7eb;border-radius:999px;height:6px;">
-                    <div style="background:#10b981;height:6px;border-radius:999px;width:${Math.min(100,Math.max(0,Number(e.progress_pct)||0))}%;"></div>
+                    <div style="background:#10b981;height:6px;border-radius:999px;
+                      width:${Math.min(100, Math.max(0, Number(e.progress_pct) || 0))}%;"></div>
                   </div>
-                  <strong style="color:#10b981;">${escapeHtml(String(e.progress_pct||0))}%</strong>
+                  <strong style="color:#10b981;">${escapeHtml(String(e.progress_pct || 0))}%</strong>
                 </div>
               </div>
-              <div><strong>Manpower:</strong><br/>${escapeHtml(e.manpower||'—')}</div>
-              <div><strong>Equipment:</strong><br/>${escapeHtml(e.equipment||'—')}</div>
-              <div><strong>Materials:</strong><br/>${escapeHtml(e.materials||'—')}</div>
-              <div><strong>Issues:</strong><br/>${escapeHtml(e.issues||'—')}</div>
+              <div><strong>Manpower:</strong><br/>${escapeHtml(e.manpower || '—')}</div>
+              <div><strong>Equipment:</strong><br/>${escapeHtml(e.equipment || '—')}</div>
+              <div><strong>Materials:</strong><br/>${escapeHtml(e.materials || '—')}</div>
+              <div><strong>Issues:</strong><br/>${escapeHtml(e.issues || '—')}</div>
             </div>
-            ${e.notes ? `<div style="font-size:12px;color:#374151;margin-bottom:8px;"><strong>Notes:</strong> ${escapeHtml(e.notes)}</div>` : ''}
+            ${e.notes
+              ? `<div style="font-size:12px;color:#374151;margin-bottom:8px;">
+                  <strong>Notes:</strong> ${escapeHtml(e.notes)}</div>` : ''}
             ${e.attachment_name ? `
-              <a data-action="wc-dl-progress" data-progress-id="${escapeHtml(String(e.id))}" data-filename="${escapeHtml(e.attachment_name)}"
-                style="display:inline-flex;align-items:center;gap:5px;background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;
-                border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;margin-bottom:10px;">
+              <a data-action="wc-dl-progress"
+                data-progress-id="${escapeHtml(String(e.id))}"
+                data-filename="${escapeHtml(e.attachment_name)}"
+                style="display:inline-flex;align-items:center;gap:5px;background:#eff6ff;
+                color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:5px 10px;
+                font-size:12px;cursor:pointer;margin-bottom:10px;">
                 ⬇️ ${escapeHtml(e.attachment_name)}</a>` : ''}
             ${canVal ? `
               <div style="border-top:1px solid #e5e7eb;padding-top:10px;">
-                <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Validate This Entry</div>
-                <textarea id="wc-val-notes-${escapeHtml(String(e.id))}" placeholder="Validation notes (optional)…"
-                  style="width:100%;min-height:60px;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;resize:vertical;box-sizing:border-box;margin-bottom:8px;"></textarea>
+                <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+                  letter-spacing:.5px;margin-bottom:6px;">Validate This Entry</div>
+                <textarea id="wc-val-notes-${escapeHtml(String(e.id))}"
+                  placeholder="Validation notes (optional)…"
+                  style="width:100%;min-height:60px;padding:8px;border:1px solid #d1d5db;
+                  border-radius:6px;font-size:12px;resize:vertical;box-sizing:border-box;
+                  margin-bottom:8px;"></textarea>
                 <div style="display:flex;gap:8px;">
-                  <button data-action="wc-validate" data-progress-id="${escapeHtml(String(e.id))}" data-validate-action="approved"
-                    style="flex:1;padding:8px 12px;font-size:12px;font-weight:600;background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">✅ Approve</button>
-                  <button data-action="wc-validate" data-progress-id="${escapeHtml(String(e.id))}" data-validate-action="rejected"
-                    style="flex:1;padding:8px 12px;font-size:12px;font-weight:600;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">❌ Reject</button>
+                  <button data-action="wc-validate"
+                    data-progress-id="${escapeHtml(String(e.id))}"
+                    data-validate-action="approved"
+                    style="flex:1;padding:8px 12px;font-size:12px;font-weight:600;
+                    background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;
+                    border-radius:6px;cursor:pointer;">✅ Approve</button>
+                  <button data-action="wc-validate"
+                    data-progress-id="${escapeHtml(String(e.id))}"
+                    data-validate-action="rejected"
+                    style="flex:1;padding:8px 12px;font-size:12px;font-weight:600;
+                    background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;
+                    border-radius:6px;cursor:pointer;">❌ Reject</button>
+                  <button data-action="wc-validate"
+                    data-progress-id="${escapeHtml(String(e.id))}"
+                    data-validate-action="comment_only"
+                    style="flex:1;padding:8px 12px;font-size:12px;font-weight:600;
+                    background:#f3f4f6;color:#374151;border:1px solid #d1d5db;
+                    border-radius:6px;cursor:pointer;">💬 Comment</button>
                 </div>
-              </div>` : e.validation_notes ? `
-              <div style="margin-top:8px;padding:8px 10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;font-size:12px;color:#6b7280;">
-                💬 <em>${escapeHtml(e.validation_notes)}</em></div>` : ''}
+              </div>` : `
+              <div style="margin-top:8px;padding:8px 10px;background:#f9fafb;
+                border:1px solid #e5e7eb;border-radius:6px;font-size:12px;color:#6b7280;">
+                ${e.validation_notes ? `💬 <em>${escapeHtml(e.validation_notes)}</em>` : ''}
+              </div>`}
           </div>`;
       }).join('')
-    : `<div style="text-align:center;padding:24px 0;color:#9ca3af;font-size:13px;">📭 No progress entries submitted yet.</div>`;
+    : `<div style="text-align:center;padding:24px 0;color:#9ca3af;font-size:13px;">
+        📭 No progress entries submitted yet.</div>`;
 
   const statusOptions = ['ongoing','completed','closed'].map(s =>
-    `<option value="${s}" ${(task.status||'ongoing')===s?'selected':''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('');
+    `<option value="${s}" ${(task.status || 'ongoing') === s ? 'selected' : ''}>
+      ${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join('');
+
+  // Show linked activity info if tied
+  const activityInfo = task.activity_id ? `
+    <div style="padding:8px 10px;background:#f0fdf4;border:1px solid #bbf7d0;
+      border-radius:8px;font-size:12px;color:#166534;margin-bottom:4px;">
+      📊 Tied to P&E Activity <strong>#${escapeHtml(String(task.activity_id))}</strong>
+      ${task.activity_title ? ` — ${escapeHtml(task.activity_title)}` : ''}
+    </div>` : '';
 
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+      <!-- SECTION A — Edit Task -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
-        <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
-          📋 Section A — Task Header <span style="font-size:11px;font-weight:400;color:#6b7280;margin-left:6px;">Editable by side leader</span>
+        <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
+          padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
+          📋 Section A — Task Header
+          <span style="font-size:11px;font-weight:400;color:#6b7280;margin-left:6px;">
+            Editable by side leader</span>
         </div>
         <div style="display:flex;flex-direction:column;gap:10px;">
-          <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Title</label>
-            <input id="wc-ed-title-${task.id}" type="text" value="${escapeHtml(task.title||'')}"
-              style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;"/></div>
-          <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Description</label>
-            <textarea id="wc-ed-desc-${task.id}"
-              style="width:100%;min-height:70px;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;">${escapeHtml(task.description||'')}</textarea></div>
-          <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Work Package</label>
-            <input id="wc-ed-pkg-${task.id}" type="text" value="${escapeHtml(task.work_package||'')}"
-              style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;"/></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Start Date</label>
-              <input id="wc-ed-start-${task.id}" type="date" value="${escapeHtml(task.start_date||'')}"
-                style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;"/></div>
-            <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">End Date</label>
-              <input id="wc-ed-end-${task.id}" type="date" value="${escapeHtml(task.end_date||'')}"
-                style="width:100%;padding:8px 10px;border:1d solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;"/></div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Priority</label>
-              <select id="wc-ed-priority-${task.id}" style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
-                <option value="low"    ${(task.priority||'normal')==='low'    ?'selected':''}>Low</option>
-                <option value="normal" ${(task.priority||'normal')==='normal' ?'selected':''}>Normal</option>
-                <option value="high"   ${(task.priority||'normal')==='high'   ?'selected':''}>High</option>
-              </select></div>
-            <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Status</label>
-              <select id="wc-ed-status-${task.id}" style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
-                ${statusOptions}
-              </select></div>
+          ${activityInfo}
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+              letter-spacing:.5px;display:block;margin-bottom:3px;">Title</label>
+            <input id="wc-ed-title-${task.id}" type="text" value="${escapeHtml(task.title || '')}"
+              style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;
+              font-size:13px;box-sizing:border-box;"/>
           </div>
           <div>
-            <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">
+            <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+              letter-spacing:.5px;display:block;margin-bottom:3px;">Description</label>
+            <textarea id="wc-ed-desc-${task.id}"
+              style="width:100%;min-height:70px;padding:8px 10px;border:1px solid #d1d5db;
+              border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;">
+              ${escapeHtml(task.description || '')}</textarea>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+              letter-spacing:.5px;display:block;margin-bottom:3px;">Work Package</label>
+            <input id="wc-ed-pkg-${task.id}" type="text" value="${escapeHtml(task.work_package || '')}"
+              style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;
+              font-size:13px;box-sizing:border-box;"/>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div>
+              <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+                letter-spacing:.5px;display:block;margin-bottom:3px;">Start Date</label>
+              <input id="wc-ed-start-${task.id}" type="date"
+                value="${escapeHtml(task.start_date || '')}"
+                style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;
+                font-size:13px;box-sizing:border-box;"/>
+            </div>
+            <div>
+              <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+                letter-spacing:.5px;display:block;margin-bottom:3px;">End Date</label>
+              <input id="wc-ed-end-${task.id}" type="date"
+                value="${escapeHtml(task.end_date || '')}"
+                style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;
+                font-size:13px;box-sizing:border-box;"/>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div>
+              <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+                letter-spacing:.5px;display:block;margin-bottom:3px;">Priority</label>
+              <select id="wc-ed-priority-${task.id}"
+                style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+                <option value="low"    ${(task.priority || 'normal') === 'low'    ? 'selected' : ''}>Low</option>
+                <option value="normal" ${(task.priority || 'normal') === 'normal' ? 'selected' : ''}>Normal</option>
+                <option value="high"   ${(task.priority || 'normal') === 'high'   ? 'selected' : ''}>High</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+                letter-spacing:.5px;display:block;margin-bottom:3px;">Status</label>
+              <select id="wc-ed-status-${task.id}"
+                style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+                ${statusOptions}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+              letter-spacing:.5px;display:block;margin-bottom:6px;">
               Assigned Members <span style="font-weight:400;text-transform:none;">(your side)</span>
             </label>
             <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">${chips}</div>
             <div id="wc-members-${task.id}"
-              style="max-height:180px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:8px;padding:8px;background:#f9fafb;">
-              <p style="font-size:12px;color:#9ca3af;text-align:center;padding:8px 0;">Loading team members…</p>
+              style="max-height:180px;overflow-y:auto;border:1px solid #e5e7eb;
+              border-radius:8px;padding:8px;background:#f9fafb;">
+              <p style="font-size:12px;color:#9ca3af;text-align:center;padding:8px 0;">
+                Loading team members…</p>
             </div>
           </div>
-          <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Replace Linked File</label>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+              letter-spacing:.5px;display:block;margin-bottom:3px;">Replace Linked File</label>
             <input id="wc-ed-file-${task.id}" type="file" style="font-size:12px;color:#374151;"/>
             ${task.linked_file_name ? `
               <div style="font-size:11px;color:#6b7280;margin-top:4px;">
@@ -5671,27 +5743,30 @@ function _wcPMView(task, progressEntries) {
           </div>
           <div style="display:flex;gap:8px;margin-top:4px;">
             <button data-action="wc-update" id="wc-save-btn-${task.id}" disabled
-              style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;opacity:.6;">
+              style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;background:#007B8A;
+              color:#fff;border:none;border-radius:8px;cursor:pointer;opacity:.6;">
               💾 Update Task</button>
             <button data-action="wc-delete"
-              style="padding:10px 14px;font-size:13px;font-weight:600;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">🗑️</button>
+              style="padding:10px 14px;font-size:13px;font-weight:600;background:#fee2e2;
+              color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">🗑️</button>
           </div>
         </div>
       </div>
+
+      <!-- SECTION B — Progress entries -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
-        <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
+        <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
+          padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
           📊 Section B — Progress Tracking
-          <span style="font-size:11px;font-weight:400;color:#6b7280;margin-left:6px;">${progressEntries.length} entr${progressEntries.length===1?'y':'ies'}</span>
+          <span style="font-size:11px;font-weight:400;color:#6b7280;margin-left:6px;">
+            ${progressEntries.length} entr${progressEntries.length === 1 ? 'y' : 'ies'}</span>
         </div>
         <div style="max-height:540px;overflow-y:auto;">${progressHtml}</div>
       </div>
     </div>`;
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-11  TEAM MEMBER VIEW
-// ═══════════════════════════════════════════════════════════════════════
+// ── Member View (Section A read-only + Section B submit + own history) ────────
 function _wcMemberView(task, myEntries) {
   const members  = Array.isArray(task.assigned_members) ? task.assigned_members : [];
   const valColor = { pending:'#f59e0b', approved:'#10b981', rejected:'#ef4444' };
@@ -5699,159 +5774,232 @@ function _wcMemberView(task, myEntries) {
   const myHistoryHtml = myEntries.length
     ? myEntries.map(e => {
         const vc     = valColor[e.validation_status] || '#6b7280';
-        const vLabel = (e.validation_status||'pending').charAt(0).toUpperCase()+(e.validation_status||'pending').slice(1);
+        const vLabel = (e.validation_status || 'pending').charAt(0).toUpperCase()
+          + (e.validation_status || 'pending').slice(1);
         return `
-          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px;margin-bottom:8px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
-              <div style="font-size:12px;font-weight:700;color:#1f2937;">📅 ${e.report_date?new Date(e.report_date).toLocaleDateString():'—'}</div>
-              <span style="background:${vc}20;color:${vc};border:1px solid ${vc}60;border-radius:12px;padding:1px 8px;font-size:11px;font-weight:600;">${escapeHtml(vLabel)}</span>
+          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;
+            padding:10px;margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;
+              flex-wrap:wrap;gap:6px;margin-bottom:6px;">
+              <div style="font-size:12px;font-weight:700;color:#1f2937;">
+                📅 ${e.report_date ? new Date(e.report_date).toLocaleDateString() : '—'}
+              </div>
+              <span style="background:${vc}20;color:${vc};border:1px solid ${vc}60;
+                border-radius:12px;padding:1px 8px;font-size:11px;font-weight:600;">
+                ${escapeHtml(vLabel)}</span>
             </div>
-            <div style="font-size:12px;color:#374151;display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-              <div><strong>Work Done:</strong><br/>${escapeHtml(e.work_done||'—')}</div>
-              <div><strong>Progress:</strong><br/><strong style="color:#10b981;">${escapeHtml(String(e.progress_pct||0))}%</strong></div>
-              <div><strong>Manpower:</strong><br/>${escapeHtml(e.manpower||'—')}</div>
-              <div><strong>Equipment:</strong><br/>${escapeHtml(e.equipment||'—')}</div>
+            <div style="font-size:12px;color:#374151;display:grid;
+              grid-template-columns:1fr 1fr;gap:6px;">
+              <div><strong>Work Done:</strong><br/>${escapeHtml(e.work_done || '—')}</div>
+              <div><strong>Progress:</strong><br/>
+                <strong style="color:#10b981;">${escapeHtml(String(e.progress_pct || 0))}%</strong>
+              </div>
+              <div><strong>Manpower:</strong><br/>${escapeHtml(e.manpower || '—')}</div>
+              <div><strong>Equipment:</strong><br/>${escapeHtml(e.equipment || '—')}</div>
             </div>
-            ${e.validation_notes?`<div style="margin-top:8px;padding:6px 10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;font-size:12px;color:#92400e;">💬 Leader: <em>${escapeHtml(e.validation_notes)}</em></div>`:''}
+            ${e.validation_notes ? `
+              <div style="margin-top:8px;padding:6px 10px;background:#fffbeb;
+                border:1px solid #fcd34d;border-radius:6px;font-size:12px;color:#92400e;">
+                💬 Leader: <em>${escapeHtml(e.validation_notes)}</em></div>` : ''}
           </div>`;
       }).join('')
-    : `<div style="text-align:center;padding:16px 0;color:#9ca3af;font-size:12px;">No submissions yet.</div>`;
+    : `<div style="text-align:center;padding:16px 0;color:#9ca3af;font-size:12px;">
+        No submissions yet.</div>`;
 
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+      <!-- Section A read-only -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
-        <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
-          📋 Section A — Task Plan <span style="font-size:11px;font-weight:400;color:#6b7280;">(read-only)</span>
+        <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
+          padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
+          📋 Section A — Task Plan
+          <span style="font-size:11px;font-weight:400;color:#6b7280;">(read-only)</span>
         </div>
         <div style="font-size:12px;color:#374151;display:flex;flex-direction:column;gap:9px;">
-          <div><strong>Title:</strong> ${escapeHtml(task.title||'—')}</div>
-          <div><strong>Description:</strong><div style="margin-top:3px;line-height:1.6;">${escapeHtml(task.description||'—')}</div></div>
-          <div><strong>Work Package:</strong> ${escapeHtml(task.work_package||'—')}</div>
+          <div><strong>Title:</strong> ${escapeHtml(task.title || '—')}</div>
+          <div><strong>Description:</strong>
+            <div style="margin-top:3px;line-height:1.6;">
+              ${escapeHtml(task.description || '—')}</div>
+          </div>
+          <div><strong>Work Package:</strong> ${escapeHtml(task.work_package || '—')}</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-            <div><strong>Start:</strong> ${task.start_date?new Date(task.start_date).toLocaleDateString():'—'}</div>
-            <div><strong>End:</strong> ${task.end_date?new Date(task.end_date).toLocaleDateString():'—'}</div>
+            <div><strong>Start:</strong>
+              ${task.start_date ? new Date(task.start_date).toLocaleDateString() : '—'}</div>
+            <div><strong>End:</strong>
+              ${task.end_date ? new Date(task.end_date).toLocaleDateString() : '—'}</div>
           </div>
           <div><strong>Priority:</strong> ${wcPriorityBadge(task.priority)}</div>
           <div><strong>Status:</strong> ${wcStatusBadge(task.status)}</div>
           <div><strong>Assigned Members:</strong>
             <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;">
               ${members.length
-                ? members.map(m=>`<span style="display:inline-flex;align-items:center;gap:4px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;border-radius:999px;padding:3px 10px;font-size:12px;">
-                    👤 ${escapeHtml(m.email||'')}${m.position?`<span style="color:#6b7280;font-size:10px;">(${escapeHtml(m.position)})</span>`:''}</span>`).join('')
+                ? members.map(m => `
+                    <span style="display:inline-flex;align-items:center;gap:4px;
+                      background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;
+                      border-radius:999px;padding:3px 10px;font-size:12px;">
+                      👤 ${escapeHtml(m.email || '')}
+                      ${m.position
+                        ? `<span style="color:#6b7280;font-size:10px;">
+                            (${escapeHtml(m.position)})</span>` : ''}
+                    </span>`).join('')
                 : '<span style="font-size:12px;color:#9ca3af;">None</span>'}
             </div>
           </div>
-          ${task.linked_file_name?`<div><strong>Linked File:</strong>
-            <a data-action="wc-dl-task" data-filename="${escapeHtml(task.linked_file_name)}"
-              style="display:inline-flex;align-items:center;gap:5px;margin-left:6px;background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;">
-              ⬇️ ${escapeHtml(task.linked_file_name)}</a></div>`:''}
+          ${task.linked_file_name ? `
+            <div><strong>Linked File:</strong>
+              <a data-action="wc-dl-task" data-filename="${escapeHtml(task.linked_file_name)}"
+                style="display:inline-flex;align-items:center;gap:5px;margin-left:6px;
+                background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;
+                padding:4px 10px;font-size:12px;cursor:pointer;">
+                ⬇️ ${escapeHtml(task.linked_file_name)}</a>
+            </div>` : ''}
         </div>
       </div>
-      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;">
-        <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:2px;padding-bottom:8px;border-bottom:2px solid #e5e7eb;">✏️ Section B — Submit My Progress</div>
+
+      <!-- Section B submit + history -->
+      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;
+        display:flex;flex-direction:column;gap:10px;">
+        <div style="font-size:13px;font-weight:700;color:#007B8A;padding-bottom:8px;
+          border-bottom:2px solid #e5e7eb;">✏️ Section B — Submit My Progress</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Report Date *</label>
-            <input id="wc-pr-date-${task.id}" type="date" value="${new Date().toISOString().slice(0,10)}"
-              style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;"/></div>
-          <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Progress %</label>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+              letter-spacing:.5px;display:block;margin-bottom:3px;">Report Date *</label>
+            <input id="wc-pr-date-${task.id}" type="date"
+              value="${new Date().toISOString().slice(0, 10)}"
+              style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+              font-size:13px;box-sizing:border-box;"/>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+              letter-spacing:.5px;display:block;margin-bottom:3px;">Progress %</label>
             <input id="wc-pr-pct-${task.id}" type="number" min="0" max="100" value="0"
-              style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;"/></div>
+              style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+              font-size:13px;box-sizing:border-box;"/>
+          </div>
         </div>
-        <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Work Done *</label>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+            letter-spacing:.5px;display:block;margin-bottom:3px;">Work Done *</label>
           <textarea id="wc-pr-work-${task.id}" placeholder="Describe the work performed today…"
-            style="width:100%;min-height:75px;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea></div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Manpower</label>
-            <input id="wc-pr-manpower-${task.id}" type="text" placeholder="e.g. 5 workers"
-              style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;"/></div>
-          <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Equipment</label>
-            <input id="wc-pr-equipment-${task.id}" type="text" placeholder="e.g. excavator"
-              style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;"/></div>
+            style="width:100%;min-height:75px;padding:8px;border:1px solid #d1d5db;
+            border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
         </div>
-        <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Materials</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+              letter-spacing:.5px;display:block;margin-bottom:3px;">Manpower</label>
+            <input id="wc-pr-manpower-${task.id}" type="text" placeholder="e.g. 5 workers"
+              style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+              font-size:13px;box-sizing:border-box;"/>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+              letter-spacing:.5px;display:block;margin-bottom:3px;">Equipment</label>
+            <input id="wc-pr-equipment-${task.id}" type="text" placeholder="e.g. excavator"
+              style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+              font-size:13px;box-sizing:border-box;"/>
+          </div>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+            letter-spacing:.5px;display:block;margin-bottom:3px;">Materials</label>
           <input id="wc-pr-materials-${task.id}" type="text" placeholder="e.g. 20 bags cement"
-            style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;"/></div>
-        <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Issues</label>
+            style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+            font-size:13px;box-sizing:border-box;"/>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+            letter-spacing:.5px;display:block;margin-bottom:3px;">Issues</label>
           <input id="wc-pr-issues-${task.id}" type="text" placeholder="Any blockers or problems"
-            style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;box-sizing:border-box;"/></div>
-        <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Notes</label>
+            style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+            font-size:13px;box-sizing:border-box;"/>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+            letter-spacing:.5px;display:block;margin-bottom:3px;">Notes</label>
           <textarea id="wc-pr-notes-${task.id}" placeholder="Additional notes…"
-            style="width:100%;min-height:55px;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea></div>
-        <div><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Attachment</label>
-          <input id="wc-pr-file-${task.id}" type="file" style="font-size:12px;color:#374151;"/></div>
+            style="width:100%;min-height:55px;padding:8px;border:1px solid #d1d5db;
+            border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+            letter-spacing:.5px;display:block;margin-bottom:3px;">Attachment</label>
+          <input id="wc-pr-file-${task.id}" type="file" style="font-size:12px;color:#374151;"/>
+        </div>
         <button data-action="wc-submit-progress" data-task-id="${escapeHtml(String(task.id))}"
-          style="width:100%;padding:10px 14px;font-size:13px;font-weight:600;background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+          style="width:100%;padding:10px 14px;font-size:13px;font-weight:600;
+          background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
           ✅ Submit Progress Report</button>
         <div style="border-top:1px solid #e5e7eb;padding-top:10px;">
-          <div style="font-size:12px;font-weight:700;color:#6b7280;margin-bottom:8px;">My Previous Submissions</div>
+          <div style="font-size:12px;font-weight:700;color:#6b7280;margin-bottom:8px;">
+            My Previous Submissions</div>
           <div style="max-height:200px;overflow-y:auto;">${myHistoryHtml}</div>
         </div>
       </div>
     </div>`;
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-12  READ-ONLY VIEW
-// ═══════════════════════════════════════════════════════════════════════
-function _wcReadOnlyView(task) {
+// ── Not-assigned View ─────────────────────────────────────────────────────────
+// NOTE: Backend should not return tasks the user has no relation to.
+// This view is a safety fallback only.
+function _wcNotAssignedView(task) {
   return `
-    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
-      <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:12px;">📋 Task Overview</div>
-      <div style="font-size:12px;color:#374151;display:flex;flex-direction:column;gap:8px;">
-        <div><strong>Title:</strong> ${escapeHtml(task.title||'—')}</div>
-        <div><strong>Description:</strong> ${escapeHtml(task.description||'—')}</div>
-        <div><strong>Priority:</strong> ${wcPriorityBadge(task.priority)}</div>
-        <div><strong>Status:</strong> ${wcStatusBadge(task.status)}</div>
-        <div><strong>Period:</strong> ${task.start_date?new Date(task.start_date).toLocaleDateString():'—'} → ${task.end_date?new Date(task.end_date).toLocaleDateString():'—'}</div>
-      </div>
-      <div style="margin-top:12px;padding:10px 12px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#92400e;">
-        ⚠️ You are not assigned to this task. Contact your side leader to be assigned.
-      </div>
+    <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;padding:20px;
+      text-align:center;">
+      <div style="font-size:24px;margin-bottom:8px;">⚠️</div>
+      <div style="font-size:13px;font-weight:700;color:#92400e;margin-bottom:6px;">
+        You are not assigned to this task</div>
+      <div style="font-size:12px;color:#78350f;">
+        Contact your side leader to be included.</div>
     </div>`;
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-13  WIRE PM MEMBER CHECKBOXES
-// ═══════════════════════════════════════════════════════════════════════
+// ── Wire PM member checkboxes ─────────────────────────────────────────────────
 async function _wcWirePMMembers(taskId, currentAssigned) {
   const container = document.getElementById(`wc-members-${taskId}`);
   const saveBtn   = document.getElementById(`wc-save-btn-${taskId}`);
   if (!container) return;
   try {
     const projectId = localStorage.getItem('activeProjectId');
-    const res     = await _wcFetch(`${API}/work-center/team-members?projectId=${encodeURIComponent(projectId)}`);
+    const res = await _wcFetch(
+      `${API}/work-center/team-members?projectId=${encodeURIComponent(projectId)}`
+    );
     const members = res && res.ok ? (await res.json()).members || [] : [];
     container.innerHTML = members.length
       ? members.map(m => {
           const checked = currentAssigned.some(a => String(a.id) === String(m.id));
           return `
             <label style="display:flex;align-items:center;gap:10px;padding:8px;
-              border:1px solid ${checked?'#bfdbfe':'#e5e7eb'};background:${checked?'#eff6ff':'#fff'};
+              border:1px solid ${checked ? '#bfdbfe' : '#e5e7eb'};
+              background:${checked ? '#eff6ff' : '#fff'};
               border-radius:8px;cursor:pointer;margin-bottom:6px;transition:all .2s;">
               <input type="checkbox" data-member-id="${escapeHtml(String(m.id))}"
-                data-member-email="${escapeHtml(m.email)}" data-member-position="${escapeHtml(m.position||'')}"
-                ${checked?'checked':''} style="width:16px;height:16px;accent-color:#007B8A;flex-shrink:0;"/>
+                data-member-email="${escapeHtml(m.email)}"
+                data-member-position="${escapeHtml(m.position || '')}"
+                ${checked ? 'checked' : ''}
+                style="width:16px;height:16px;accent-color:#007B8A;flex-shrink:0;"/>
               <div style="flex:1;min-width:0;">
-                <div style="font-size:13px;font-weight:600;color:#1f2937;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(m.email)}</div>
-                <div style="font-size:11px;color:#6b7280;">${escapeHtml(m.position||'No position')}${m.title?' · '+escapeHtml(m.title):''}</div>
+                <div style="font-size:13px;font-weight:600;color:#1f2937;white-space:nowrap;
+                  overflow:hidden;text-overflow:ellipsis;">${escapeHtml(m.email)}</div>
+                <div style="font-size:11px;color:#6b7280;">
+                  ${escapeHtml(m.position || 'No position')}
+                  ${m.title ? ' · ' + escapeHtml(m.title) : ''}</div>
               </div>
             </label>`;
         }).join('')
-      : `<p style="font-size:12px;color:#9ca3af;text-align:center;padding:8px 0;">No team members found for your side.</p>`;
+      : `<p style="font-size:12px;color:#9ca3af;text-align:center;padding:8px 0;">
+          No team members found for your side.</p>`;
   } catch (err) {
-    console.error('Fetch members error:', err);
-    container.innerHTML = `<p style="font-size:12px;color:#ef4444;text-align:center;">⚠️ Could not load members.</p>`;
+    container.innerHTML =
+      `<p style="font-size:12px;color:#ef4444;text-align:center;">⚠️ Could not load members.</p>`;
   } finally {
     if (saveBtn) { saveBtn.disabled = false; saveBtn.style.opacity = '1'; }
   }
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-14  HANDLER: UPDATE TASK — reloads via loadWCRecords
-// ═══════════════════════════════════════════════════════════════════════
+// ── Handler: Update Task ──────────────────────────────────────────────────────
 async function _wcHandleUpdate(taskId, tabKey) {
   try {
     const title     = document.getElementById(`wc-ed-title-${taskId}`)?.value.trim();
@@ -5869,19 +6017,23 @@ async function _wcHandleUpdate(taskId, tabKey) {
 
     const assignedMembers = [];
     membersEl?.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
-      assignedMembers.push({ id:cb.getAttribute('data-member-id'), email:cb.getAttribute('data-member-email'), position:cb.getAttribute('data-member-position') });
+      assignedMembers.push({
+        id:       cb.getAttribute('data-member-id'),
+        email:    cb.getAttribute('data-member-email'),
+        position: cb.getAttribute('data-member-position'),
+      });
     });
     if (!assignedMembers.length) return alert('Please assign at least one team member.');
 
     const form = new FormData();
     form.append('projectId',        localStorage.getItem('activeProjectId'));
     form.append('title',            title);
-    form.append('description',      desc||'');
-    form.append('work_package',     pkg||'');
+    form.append('description',      desc || '');
+    form.append('work_package',     pkg || '');
     form.append('start_date',       startDate);
     form.append('end_date',         endDate);
     form.append('priority',         priority);
-    form.append('status',           status||'ongoing');
+    form.append('status',           status || 'ongoing');
     form.append('assigned_members', JSON.stringify(assignedMembers));
     if (fileInput?.files?.[0]) form.append('linked_file', fileInput.files[0]);
 
@@ -5891,14 +6043,11 @@ async function _wcHandleUpdate(taskId, tabKey) {
     if (!res.ok) throw new Error(data.message || 'Failed to update task');
     alert('Task updated successfully.');
     delete recordsCache['work-centel'];
-    loadWCRecords();    // ← TRUE RELOAD
-  } catch (err) { console.error('WC update error:', err); alert('Failed to update task: '+err.message); }
+    loadWCRecords();
+  } catch (err) { alert('Failed to update task: ' + err.message); }
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-15  HANDLER: SUBMIT PROGRESS — reloads via loadWCRecords
-// ═══════════════════════════════════════════════════════════════════════
+// ── Handler: Submit Progress ──────────────────────────────────────────────────
 async function _wcHandleSubmitProgress(taskId, tabKey) {
   try {
     const reportDate = document.getElementById(`wc-pr-date-${taskId}`)?.value;
@@ -5919,12 +6068,12 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
     form.append('taskId',      taskId);
     form.append('reportDate',  reportDate);
     form.append('workDone',    workDone);
-    form.append('progressPct', pct||'0');
-    form.append('manpower',    manpower||'');
-    form.append('equipment',   equipment||'');
-    form.append('materials',   materials||'');
-    form.append('issues',      issues||'');
-    form.append('notes',       notes||'');
+    form.append('progressPct', pct || '0');
+    form.append('manpower',    manpower || '');
+    form.append('equipment',   equipment || '');
+    form.append('materials',   materials || '');
+    form.append('issues',      issues || '');
+    form.append('notes',       notes || '');
     if (fileInput?.files?.[0]) form.append('attachment', fileInput.files[0]);
 
     const res = await _wcFetch(`${API}/work-center-progress`, { method:'POST', body:form });
@@ -5933,162 +6082,264 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
     if (!res.ok) throw new Error(data.message || 'Failed to submit progress');
     alert('Progress submitted successfully.');
     delete recordsCache['work-centel'];
-    loadWCRecords();    // ← TRUE RELOAD
-  } catch (err) { console.error('WC submit error:', err); alert('Failed to submit progress: '+err.message); }
+    loadWCRecords();
+  } catch (err) { alert('Failed to submit progress: ' + err.message); }
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-16  HANDLER: VALIDATE PROGRESS — reloads via loadWCRecords
-// ═══════════════════════════════════════════════════════════════════════
+// ── Handler: Validate Progress ────────────────────────────────────────────────
 async function _wcHandleValidate(tabKey, progressId, validateAction) {
   try {
     const notes = document.getElementById(`wc-val-notes-${progressId}`)?.value.trim() || '';
-    const res   = await _wcFetch(`${API}/work-center-progress/${progressId}/validate`, {
+    // comment_only action just saves notes without changing validation_status
+    const body = {
+      projectId:         localStorage.getItem('activeProjectId'),
+      validation_notes:  notes,
+    };
+    if (validateAction !== 'comment_only') body.validation_status = validateAction;
+
+    const res = await _wcFetch(`${API}/work-center-progress/${progressId}/validate`, {
       method: 'PUT',
-      body: JSON.stringify({ projectId:localStorage.getItem('activeProjectId'), validation_status:validateAction, validation_notes:notes }),
+      body: JSON.stringify(body),
     });
     if (!res) return;
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || 'Failed to validate');
-    alert(`Entry ${validateAction==='approved'?'approved ✅':'rejected ❌'} successfully.`);
+    alert(
+      validateAction === 'approved'     ? 'Entry approved ✅' :
+      validateAction === 'rejected'     ? 'Entry rejected ❌' :
+      'Comment saved 💬'
+    );
     delete recordsCache['work-centel'];
-    loadWCRecords();    // ← TRUE RELOAD
-  } catch (err) { console.error('WC validate error:', err); alert('Failed to validate: '+err.message); }
+    loadWCRecords();
+  } catch (err) { alert('Failed to validate: ' + err.message); }
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-17  HANDLER: DELETE TASK — reloads via loadWCRecords
-// ═══════════════════════════════════════════════════════════════════════
+// ── Handler: Delete Task ──────────────────────────────────────────────────────
 async function _wcHandleDelete(taskId, tabKey) {
   if (!confirm('Delete this task? All progress entries will also be deleted. Cannot be undone.')) return;
   try {
     const res = await _wcFetch(`${API}/work-center/${taskId}`, {
       method: 'DELETE',
-      body: JSON.stringify({ projectId:localStorage.getItem('activeProjectId') }),
+      body: JSON.stringify({ projectId: localStorage.getItem('activeProjectId') }),
     });
     if (!res) return;
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || 'Failed to delete');
     alert('Task deleted.');
     delete recordsCache['work-centel'];
-    loadWCRecords();    // ← TRUE RELOAD
-  } catch (err) { console.error('WC delete error:', err); alert('Failed to delete task: '+err.message); }
+    loadWCRecords();
+  } catch (err) { alert('Failed to delete task: ' + err.message); }
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-18  DOWNLOAD PROGRESS ATTACHMENT
-// ═══════════════════════════════════════════════════════════════════════
+// ── Download helpers ──────────────────────────────────────────────────────────
 async function _wcDownloadProgress(progressId, fileName) {
   try {
     const projectId = localStorage.getItem('activeProjectId');
-    const res = await _wcFetch(`${API}/work-center-progress/download/${progressId}?projectId=${encodeURIComponent(projectId)}`);
+    const res = await _wcFetch(
+      `${API}/work-center-progress/download/${progressId}?projectId=${encodeURIComponent(projectId)}`
+    );
     if (!res || !res.ok) { alert('Failed to download.'); return; }
     const data = await res.json();
-    if (data.url) { const a=document.createElement('a'); a.href=data.url; a.download=fileName||'attachment'; a.target='_blank'; document.body.appendChild(a); a.click(); a.remove(); }
-    else alert(data.error||'File not available.');
-  } catch (err) { console.error('WC download progress error:', err); alert('Failed to download.'); }
+    if (data.url) {
+      const a = document.createElement('a'); a.href = data.url;
+      a.download = fileName || 'attachment'; a.target = '_blank';
+      document.body.appendChild(a); a.click(); a.remove();
+    } else alert(data.error || 'File not available.');
+  } catch (err) { alert('Failed to download.'); }
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-18b  DOWNLOAD TASK LINKED FILE
-// ═══════════════════════════════════════════════════════════════════════
 async function _wcDownloadTaskFile(taskId, fileName) {
   try {
     const projectId = localStorage.getItem('activeProjectId');
-    const res = await _wcFetch(`${API}/work-center/${taskId}/download?projectId=${encodeURIComponent(projectId)}`);
+    const res = await _wcFetch(
+      `${API}/work-center/${taskId}/download?projectId=${encodeURIComponent(projectId)}`
+    );
     if (!res || !res.ok) { alert('Failed to download task file.'); return; }
     const data = await res.json();
-    if (data.url) { const a=document.createElement('a'); a.href=data.url; a.download=fileName||'task-file'; a.target='_blank'; document.body.appendChild(a); a.click(); a.remove(); }
-    else alert(data.error||'File not available.');
-  } catch (err) { console.error('WC download task file error:', err); alert('Failed to download task file.'); }
+    if (data.url) {
+      const a = document.createElement('a'); a.href = data.url;
+      a.download = fileName || 'task-file'; a.target = '_blank';
+      document.body.appendChild(a); a.click(); a.remove();
+    } else alert(data.error || 'File not available.');
+  } catch (err) { alert('Failed to download task file.'); }
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════
-//  WS-19  CREATE TASK FORM — reloads via loadWCRecords on save
-// ═══════════════════════════════════════════════════════════════════════
+// ── Create Task Form ──────────────────────────────────────────────────────────
 async function _wcOpenCreateForm() {
-  if (!isWCLeader(window.currentUserRole)) { alert('Only side leaders can create tasks.'); return; }
+  if (!isWCLeader(window.currentUserRole)) {
+    alert('Only side leaders can create tasks.'); return;
+  }
+
+  // Fetch P&E activities for this project so leader can optionally tie to one
+  const projectId = localStorage.getItem('activeProjectId');
+  let peActivities = [];
+  try {
+    const res = await _wcFetch(
+      `${API}/planning-execution?projectId=${encodeURIComponent(projectId)}`
+    );
+    if (res && res.ok) {
+      const d = await res.json();
+      peActivities = d.records || d.activities || [];
+    }
+  } catch (e) { /* non-fatal */ }
+
+  const activityOptions = peActivities.length
+    ? peActivities.map(a =>
+        `<option value="${escapeHtml(String(a.id))}">
+          #${escapeHtml(String(a.id))} — ${escapeHtml(a.title)}
+        </option>`).join('')
+    : '';
+
+  const activityField = `
+    <div>
+      <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
+        font-size:11px;letter-spacing:.5px;margin-bottom:5px;">
+        Link to P&amp;E Activity
+        <span style="font-weight:400;text-transform:none;color:#9ca3af;">(optional)</span>
+      </label>
+      <select id="wc-cr-activity"
+        style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
+        <option value="">— Standalone task (no activity link) —</option>
+        ${activityOptions}
+      </select>
+      ${!peActivities.length
+        ? `<p style="font-size:11px;color:#9ca3af;margin:4px 0 0;">
+            No P&amp;E activities found for this project yet.</p>` : ''}
+    </div>`;
 
   expandGrayPart(`
     <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
-      <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
+      <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;
+        flex-shrink:0;background:#fff;">
         <h3 style="margin:0;color:#333;font-size:20px;">🗂️ Create Work Center Task</h3>
-        <p style="margin:4px 0 0;font-size:12px;color:#6b7280;">Tasks are visible only to members on your side.</p>
+        <p style="margin:4px 0 0;font-size:12px;color:#6b7280;">
+          Tasks are visible only to members on your side.</p>
       </div>
-      <div style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
-        <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Title *</label>
+      <div style="flex:1;overflow-y:auto;padding:16px 20px;
+        display:flex;flex-direction:column;gap:14px;">
+        ${activityField}
+        <div>
+          <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
+            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Title *</label>
           <input type="text" id="wc-cr-title" placeholder="e.g. Foundation excavation — Zone B"
-            style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box;"/></div>
-        <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Description</label>
-          <textarea id="wc-cr-desc" placeholder="Describe the task scope and objectives…"
-            style="width:100%;min-height:90px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box;"></textarea></div>
-        <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Work Package</label>
-          <input type="text" id="wc-cr-pkg" placeholder="e.g. WP-03 Civil Works"
-            style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box;"/></div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">
-          <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Start Date *</label>
-            <input type="date" id="wc-cr-start" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;box-sizing:border-box;"/></div>
-          <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;font-size:11px;letter-spacing:.5px;margin-bottom:5px;">End Date *</label>
-            <input type="date" id="wc-cr-end" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;box-sizing:border-box;"/></div>
-          <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Priority</label>
-            <select id="wc-cr-priority" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
-              <option value="low">Low</option><option value="normal" selected>Normal</option><option value="high">High</option>
-            </select></div>
-          <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Status</label>
-            <select id="wc-cr-status" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
-              <option value="ongoing" selected>Ongoing</option><option value="completed">Completed</option><option value="closed">Closed</option>
-            </select></div>
+            style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
+            font-size:14px;box-sizing:border-box;"/>
         </div>
         <div>
-          <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;font-size:11px;letter-spacing:.5px;margin-bottom:5px;">
-            Assign Team Members * <span style="font-weight:400;text-transform:none;font-size:11px;color:#9ca3af;">(your side only)</span>
-          </label>
-          <div id="wc-cr-members" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#f9fafb;max-height:220px;overflow-y:auto;">
-            <p style="font-size:12px;color:#9ca3af;text-align:center;padding:12px 0;">⏳ Loading team members…</p>
+          <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
+            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Description</label>
+          <textarea id="wc-cr-desc" placeholder="Describe the task scope and objectives…"
+            style="width:100%;min-height:90px;padding:10px 12px;border:1px solid #d1d5db;
+            border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box;"></textarea>
+        </div>
+        <div>
+          <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
+            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Work Package</label>
+          <input type="text" id="wc-cr-pkg" placeholder="e.g. WP-03 Civil Works"
+            style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
+            font-size:14px;box-sizing:border-box;"/>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">
+          <div>
+            <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
+              font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Start Date *</label>
+            <input type="date" id="wc-cr-start"
+              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;
+              font-size:13px;box-sizing:border-box;"/>
+          </div>
+          <div>
+            <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
+              font-size:11px;letter-spacing:.5px;margin-bottom:5px;">End Date *</label>
+            <input type="date" id="wc-cr-end"
+              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;
+              font-size:13px;box-sizing:border-box;"/>
+          </div>
+          <div>
+            <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
+              font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Priority</label>
+            <select id="wc-cr-priority"
+              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
+              <option value="low">Low</option>
+              <option value="normal" selected>Normal</option>
+              <option value="high">High</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
+              font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Status</label>
+            <select id="wc-cr-status"
+              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
+              <option value="ongoing" selected>Ongoing</option>
+              <option value="completed">Completed</option>
+              <option value="closed">Closed</option>
+            </select>
           </div>
         </div>
-        <div><label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Linked File</label>
-          <input type="file" id="wc-cr-file" style="font-size:13px;color:#374151;"/></div>
+        <div>
+          <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
+            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">
+            Assign Team Members *
+            <span style="font-weight:400;text-transform:none;font-size:11px;color:#9ca3af;">
+              (your side only)</span>
+          </label>
+          <div id="wc-cr-members"
+            style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;
+            background:#f9fafb;max-height:220px;overflow-y:auto;">
+            <p style="font-size:12px;color:#9ca3af;text-align:center;padding:12px 0;">
+              ⏳ Loading team members…</p>
+          </div>
+        </div>
+        <div>
+          <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
+            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Linked File</label>
+          <input type="file" id="wc-cr-file" style="font-size:13px;color:#374151;"/>
+        </div>
       </div>
-      <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;background:#fff;display:flex;gap:12px;">
+      <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
+        background:#fff;display:flex;gap:12px;">
         <button type="button" id="wc-cr-save" disabled
-          style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;opacity:.6;">
+          style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#007B8A;
+          color:#fff;border:none;border-radius:8px;cursor:pointer;opacity:.6;">
           ✓ Create Task</button>
         <button type="button" onclick="collapseGrayPart()"
-          style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#f5f5f5;color:#333;border:1px solid #ddd;border-radius:8px;cursor:pointer;">
+          style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#f5f5f5;
+          color:#333;border:1px solid #ddd;border-radius:8px;cursor:pointer;">
           ✕ Cancel</button>
       </div>
     </div>`);
 
+  // Load members
   try {
-    const projectId = localStorage.getItem('activeProjectId');
-    const res     = await _wcFetch(`${API}/work-center/team-members?projectId=${encodeURIComponent(projectId)}`);
+    const res     = await _wcFetch(
+      `${API}/work-center/team-members?projectId=${encodeURIComponent(projectId)}`
+    );
     const members = res && res.ok ? (await res.json()).members || [] : [];
     const mc      = document.getElementById('wc-cr-members');
     if (mc) {
       mc.innerHTML = members.length
         ? members.map(m => `
-            <label style="display:flex;align-items:center;gap:10px;padding:8px;border:1px solid #e5e7eb;background:#fff;border-radius:8px;cursor:pointer;margin-bottom:6px;transition:all .2s;">
+            <label style="display:flex;align-items:center;gap:10px;padding:8px;
+              border:1px solid #e5e7eb;background:#fff;border-radius:8px;cursor:pointer;
+              margin-bottom:6px;transition:all .2s;">
               <input type="checkbox" data-member-id="${escapeHtml(String(m.id))}"
-                data-member-email="${escapeHtml(m.email)}" data-member-position="${escapeHtml(m.position||'')}"
+                data-member-email="${escapeHtml(m.email)}"
+                data-member-position="${escapeHtml(m.position || '')}"
                 style="width:16px;height:16px;accent-color:#007B8A;flex-shrink:0;"/>
               <div style="flex:1;min-width:0;">
-                <div style="font-size:13px;font-weight:600;color:#1f2937;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(m.email)}</div>
-                <div style="font-size:11px;color:#6b7280;">${escapeHtml(m.position||'No position listed')}${m.title?' · '+escapeHtml(m.title):''}</div>
+                <div style="font-size:13px;font-weight:600;color:#1f2937;white-space:nowrap;
+                  overflow:hidden;text-overflow:ellipsis;">${escapeHtml(m.email)}</div>
+                <div style="font-size:11px;color:#6b7280;">
+                  ${escapeHtml(m.position || 'No position listed')}
+                  ${m.title ? ' · ' + escapeHtml(m.title) : ''}</div>
               </div>
             </label>`).join('')
-        : `<p style="font-size:12px;color:#9ca3af;text-align:center;padding:12px 0;">No team members found for your side.</p>`;
+        : `<p style="font-size:12px;color:#9ca3af;text-align:center;padding:12px 0;">
+            No team members found for your side.</p>`;
     }
   } catch (err) {
-    console.error('WC create — member fetch error:', err);
     const mc = document.getElementById('wc-cr-members');
-    if (mc) mc.innerHTML = `<p style="font-size:12px;color:#ef4444;text-align:center;">⚠️ Could not load members. Close and retry.</p>`;
-    return;
+    if (mc) mc.innerHTML =
+      `<p style="font-size:12px;color:#ef4444;text-align:center;">⚠️ Could not load members.</p>`;
   }
 
   const saveBtn = document.getElementById('wc-cr-save');
@@ -6096,33 +6347,40 @@ async function _wcOpenCreateForm() {
 
   saveBtn?.addEventListener('click', async () => {
     try {
-      const title     = document.getElementById('wc-cr-title')?.value.trim();
-      const desc      = document.getElementById('wc-cr-desc')?.value.trim();
-      const pkg       = document.getElementById('wc-cr-pkg')?.value.trim();
-      const startDate = document.getElementById('wc-cr-start')?.value;
-      const endDate   = document.getElementById('wc-cr-end')?.value;
-      const priority  = document.getElementById('wc-cr-priority')?.value;
-      const status    = document.getElementById('wc-cr-status')?.value;
-      const fileInput = document.getElementById('wc-cr-file');
+      const activityId = document.getElementById('wc-cr-activity')?.value || '';
+      const title      = document.getElementById('wc-cr-title')?.value.trim();
+      const desc       = document.getElementById('wc-cr-desc')?.value.trim();
+      const pkg        = document.getElementById('wc-cr-pkg')?.value.trim();
+      const startDate  = document.getElementById('wc-cr-start')?.value;
+      const endDate    = document.getElementById('wc-cr-end')?.value;
+      const priority   = document.getElementById('wc-cr-priority')?.value;
+      const status     = document.getElementById('wc-cr-status')?.value;
+      const fileInput  = document.getElementById('wc-cr-file');
 
       if (!title)                 throw new Error('Title is required.');
       if (!startDate || !endDate) throw new Error('Start and end dates are required.');
 
       const assignedMembers = [];
-      document.getElementById('wc-cr-members')?.querySelectorAll('input[type="checkbox"]:checked')
-        .forEach(cb => assignedMembers.push({ id:cb.getAttribute('data-member-id'), email:cb.getAttribute('data-member-email'), position:cb.getAttribute('data-member-position') }));
+      document.getElementById('wc-cr-members')
+        ?.querySelectorAll('input[type="checkbox"]:checked')
+        .forEach(cb => assignedMembers.push({
+          id:       cb.getAttribute('data-member-id'),
+          email:    cb.getAttribute('data-member-email'),
+          position: cb.getAttribute('data-member-position'),
+        }));
       if (!assignedMembers.length) throw new Error('Please assign at least one team member.');
 
       const form = new FormData();
       form.append('projectId',        localStorage.getItem('activeProjectId'));
       form.append('title',            title);
-      form.append('description',      desc||'');
-      form.append('work_package',     pkg||'');
+      form.append('description',      desc || '');
+      form.append('work_package',     pkg || '');
       form.append('start_date',       startDate);
       form.append('end_date',         endDate);
       form.append('priority',         priority);
-      form.append('status',           status||'ongoing');
+      form.append('status',           status || 'ongoing');
       form.append('assigned_members', JSON.stringify(assignedMembers));
+      if (activityId) form.append('activity_id', activityId);
       if (fileInput?.files?.[0]) form.append('linked_file', fileInput.files[0]);
 
       saveBtn.disabled = true; saveBtn.textContent = 'Creating…';
@@ -6134,294 +6392,769 @@ async function _wcOpenCreateForm() {
 
       alert(`✓ Task "${title}" created and assigned to ${assignedMembers.length} member(s).`);
       delete recordsCache['work-centel'];
-      loadWCRecords();    // ← TRUE RELOAD
+      loadWCRecords();
       collapseGrayPart();
     } catch (err) {
-      console.error('WC create error:', err);
-      alert('Error: '+err.message);
+      alert('Error: ' + err.message);
       const sb = document.getElementById('wc-cr-save');
       if (sb) { sb.disabled = false; sb.textContent = '✓ Create Task'; }
     }
   });
 }
 
+
 // ███████████████████████████████████████████████████████████████████████
-//  PLANNING & EXECUTION — gray panel (leader data entry)
+//  ██  PLANNING & EXECUTION
 // ███████████████████████████████████████████████████████████████████████
 
-// ─ Shell ─────────────────────────────────────────────────────────────────────
+// ── Dedicated fetch (JWT + projectId, side-filtered on backend) ───────────────
+async function loadPERecords() {
+  const recordsList    = document.getElementById('recordsList');
+  const placeholderDiv = document.querySelector('.no-data-placeholder');
+  if (!recordsList || !placeholderDiv) return;
+
+  const projectId = localStorage.getItem('activeProjectId');
+  if (!projectId) {
+    placeholderDiv.style.display = 'block';
+    placeholderDiv.innerHTML = '<p>⚠️ No Project Selected</p>';
+    return;
+  }
+  if (recordsCache['planning-execution']) {
+    _renderPEList(recordsCache['planning-execution']); return;
+  }
+
+  recordsList.innerHTML = '';
+  placeholderDiv.style.display = 'block';
+  placeholderDiv.innerHTML = "<p style='color:#999;'>Loading…</p>";
+
+  try {
+    // Send JWT via _wcFetch; backend filters by project + side
+    const res = await _wcFetch(`${API}/planning-execution`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId }),
+    });
+    if (!res) return;
+    if (res.status === 401) {
+      placeholderDiv.innerHTML =
+        "<p style='color:#ef4444;'>⚠️ Unauthorized. Please log in again.</p>";
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data    = await res.json();
+    const records = (data.records || []).map(r => ({ ...r, _tabKey: 'planning-execution' }));
+    recordsCache['planning-execution'] = records;
+    _renderPEList(records);
+  } catch (err) {
+    console.error('loadPERecords error:', err);
+    const pl = document.querySelector('.no-data-placeholder');
+    if (pl) {
+      pl.style.display = 'block';
+      pl.innerHTML = "<p style='color:#ef4444;'>⚠️ Error loading activities.</p>";
+    }
+  }
+}
+
+// ── Shell ─────────────────────────────────────────────────────────────────────
 function _renderPEShell() {
-  const leader = ['ContractorPM','ConsultantPM','ClientPM','Contractor','Consultant','Client'].includes(window.currentUserRole);
+  const leader = isWCLeader(window.currentUserRole);
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
       <button class="btn primary" id="peAddBtn" ${leader ? '' : 'disabled'}
         title="${leader ? '' : 'Only side leaders can add activities'}">➕ Add Activity</button>
       <div class="bottom-description">
-        <p>Leader sets planned milestones; members log actual execution for comparison.</p>
+        <p>Side leaders plan activities against milestones and track actual execution day by day.</p>
         <p class="tab-note" style="margin-top:6px;font-size:12px;color:#6b7280;">
-          ${leader ? 'Plan activities and track actual execution below.' : 'View planned activities and actual execution data.'}</p>
+          ${leader
+            ? 'Add activities tied to your milestones and log actual execution below.'
+            : 'View your side\'s planned activities and execution progress.'}
+        </p>
       </div>
     </div>
     <div class="bottom-scroll-area">
       <ul class="doc-list" id="recordsList"></ul>
-      <div class="no-data-placeholder"><p>${leader ? 'No activities yet. Click ➕ Add Activity to get started.' : 'No activities found.'}</p></div>
+      <div class="no-data-placeholder">
+        <p>${leader
+          ? 'No activities yet. Click ➕ Add Activity to get started.'
+          : 'No activities found for your side.'}</p>
+      </div>
     </div>`;
-  document.getElementById('peAddBtn')?.addEventListener('click', () => openPlanningExecutionForm(null));
+  document.getElementById('peAddBtn')?.addEventListener('click', () => _peOpenForm(null));
 }
 
-// ─ List render ───────────────────────────────────────────────────────────────
+// ── Render list ───────────────────────────────────────────────────────────────
 function _renderPEList(records) {
   const recordsList    = document.getElementById('recordsList');
   const placeholderDiv = document.querySelector('.no-data-placeholder');
   if (!recordsList || !placeholderDiv) return;
+
   if (!records.length) {
     recordsList.innerHTML = '';
     placeholderDiv.style.display = 'block';
     return;
   }
   placeholderDiv.style.display = 'none';
-  recordsList.innerHTML = records.map(r => {
-    const startDate = r.start_date ? new Date(r.start_date).toLocaleDateString() : '—';
-    const endDate   = r.end_date   ? new Date(r.end_date).toLocaleDateString()   : '—';
-    const statusC   = { ongoing: '#3b82f6', completed: '#10b981', closed: '#6b7280' };
-    const sc        = statusC[r.status] || '#3b82f6';
-    return `
-      <li class="doc-item" data-id="${r.id}" data-tab-key="planning-execution"
-        style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #007B8A;
-        border-radius:10px;margin-bottom:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06);
-        cursor:pointer;" onclick="openPlanningExecutionForm('${r.id}')">
-        <div style="display:flex;justify-content:space-between;align-items:center;
-          padding:12px 16px;gap:12px;">
-          <div style="flex:1;min-width:0;">
-            <div style="font-weight:600;font-size:14px;color:#1f2937;
-              white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-              📊 ${r.title}
+
+  // Group activities by milestone for visual clarity
+  const byMilestone = {};
+  records.forEach(r => {
+    const key = r.milestone_id || 'none';
+    if (!byMilestone[key]) byMilestone[key] = { label: r.milestone_title || `Milestone #${key}`, items: [] };
+    byMilestone[key].items.push(r);
+  });
+
+  recordsList.innerHTML = Object.entries(byMilestone).map(([milestoneKey, group]) => {
+    const milestoneHeader = milestoneKey !== 'none' ? `
+      <li style="padding:6px 12px;background:#f0fdf4;border-radius:8px;margin-bottom:6px;
+        font-size:12px;font-weight:700;color:#166534;display:flex;align-items:center;gap:6px;">
+        🏁 ${escapeHtml(group.label)}
+      </li>` : '';
+
+    const cards = group.items.map(r => {
+      const startDate = r.start_date ? new Date(r.start_date).toLocaleDateString() : '—';
+      const endDate   = r.end_date   ? new Date(r.end_date).toLocaleDateString()   : '—';
+      const sc = { ongoing:'#3b82f6', completed:'#10b981', closed:'#6b7280' }[r.status] || '#3b82f6';
+      const isCreator = String(r.creator_id) === String(window.currentUserId);
+      const editHint  = isCreator ? '' : 'cursor:default;';
+
+      return `
+        <li class="doc-item" data-id="${escapeHtml(String(r.id))}"
+          data-tab-key="planning-execution"
+          style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #007B8A;
+          border-radius:10px;margin-bottom:8px;overflow:hidden;
+          box-shadow:0 1px 3px rgba(0,0,0,.06);${editHint}"
+          onclick="_peOpenForm('${escapeHtml(String(r.id))}')">
+          <div style="display:flex;justify-content:space-between;align-items:center;
+            padding:12px 16px;gap:12px;cursor:pointer;">
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:600;font-size:14px;color:#1f2937;
+                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                📊 ${escapeHtml(r.title)}
+              </div>
+              <div style="font-size:11px;color:#9ca3af;margin-top:3px;">
+                By <strong style="color:#6b7280;">${escapeHtml(r.creator_role || 'N/A')}</strong>
+                &nbsp;•&nbsp; 📅 ${escapeHtml(startDate)} → ${escapeHtml(endDate)}
+                ${r.planned_quantity
+                  ? `&nbsp;•&nbsp; ${escapeHtml(String(r.planned_quantity))} ${escapeHtml(r.unit || '')}` : ''}
+              </div>
             </div>
-            <div style="font-size:11px;color:#9ca3af;margin-top:3px;">
-              ${r.milestone_id ? `Milestone: <strong>${r.milestone_id}</strong> &nbsp;•&nbsp;` : ''}
-              📅 ${startDate} → ${endDate}
-              ${r.planned_quantity ? `&nbsp;•&nbsp; Qty: ${r.planned_quantity} ${r.unit || ''}` : ''}
+            <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+              ${isCreator
+                ? `<span style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;
+                    border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">Mine</span>` : ''}
+              <span style="background:${sc}20;color:${sc};border:1px solid ${sc}60;
+                border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;white-space:nowrap;">
+                ${(r.status || 'ongoing').charAt(0).toUpperCase() + (r.status || 'ongoing').slice(1)}
+              </span>
             </div>
           </div>
-          <span style="background:${sc}20;color:${sc};border:1px solid ${sc}60;
-            border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;white-space:nowrap;">
-            ${(r.status || 'ongoing').charAt(0).toUpperCase() + (r.status || 'ongoing').slice(1)}
-          </span>
-        </div>
-      </li>`;
+        </li>`;
+    }).join('');
+
+    return milestoneHeader + cards;
   }).join('');
 }
 
-// ─ Gray panel form ───────────────────────────────────────────────────────────
-async function openPlanningExecutionForm(recordId = null) {
-  const tabKey = 'planning-execution';
-  const cached = recordId
+// ── Open form (create or edit) in gray panel ──────────────────────────────────
+async function _peOpenForm(recordId = null) {
+  const tabKey    = 'planning-execution';
+  const projectId = localStorage.getItem('activeProjectId');
+  const cached    = recordId
     ? (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId))
     : null;
-  const isNew    = !cached;
-  const isLeader = ['ContractorPM','ConsultantPM','ClientPM','Contractor','Consultant','Client']
-    .includes(window.currentUserRole);
-  const ro = isLeader ? '' : 'readonly';
-  const ds = isLeader ? '' : 'disabled';
+  const isNew     = !cached;
+  const isLeader  = isWCLeader(window.currentUserRole);
+  const isCreator = cached ? String(cached.creator_id) === String(window.currentUserId) : isLeader;
+  const canEdit   = isLeader && isCreator;
+  const ro        = canEdit ? '' : 'readonly';
+  const ds        = canEdit ? '' : 'disabled';
 
+  // Fetch milestones for picker
+  let milestones = [];
+  try {
+    const res = await _wcFetch(
+      `${API}/project-milestones?projectId=${encodeURIComponent(projectId)}`
+    );
+    if (res && res.ok) { const d = await res.json(); milestones = d.milestones || d || []; }
+  } catch (e) { /* non-fatal */ }
+
+  // Fetch existing tracking entries if editing
   let trackingEntries = [];
   if (cached) {
     try {
-      const res = await authFetch(`${API}/planning-execution-tracking?activityId=${cached.id}`);
+      const res = await _wcFetch(
+        `${API}/planning-execution-tracking?activityId=${cached.id}&projectId=${encodeURIComponent(projectId)}`
+      );
       if (res && res.ok) {
         const d = await res.json();
         trackingEntries = Array.isArray(d.entries) ? d.entries : d.tracking || [];
       }
-    } catch(e) { console.error('PE tracking fetch error:', e); }
+    } catch (e) { console.error('PE tracking fetch error:', e); }
   }
 
-  const title   = isNew ? '➕ Plan & Execute Activity' : `Activity: ${cached.title || 'Untitled'}`;
-  const status  = cached?.status || 'ongoing';
-  const comment = isLeader ? 'You can edit this activity.' : 'Review-only — contact your leader for changes.';
+  const panelTitle = isNew ? '➕ Add Activity' : `Activity: ${escapeHtml(cached?.title || 'Untitled')}`;
+
+  // Milestone picker — shows a clickable dropdown that populates milestone_id
+  const milestonePickerHtml = `
+    <div>
+      <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
+        font-size:11px;letter-spacing:.5px;margin-bottom:5px;">
+        Milestone *
+        ${!canEdit ? '<span style="font-weight:400;text-transform:none;">(read-only)</span>' : ''}
+      </label>
+      <div style="position:relative;">
+        <div id="pe-milestone-display"
+          style="padding:10px 12px;border:1px solid ${canEdit ? '#d1d5db' : '#e5e7eb'};
+          border-radius:8px;font-size:13px;background:${canEdit ? '#fff' : '#f9fafb'};
+          cursor:${canEdit ? 'pointer' : 'default'};display:flex;justify-content:space-between;
+          align-items:center;color:#374151;"
+          ${canEdit ? 'onclick="_peMilestonePicker()"' : ''}>
+          <span id="pe-milestone-label">
+            ${cached?.milestone_id
+              ? `#${escapeHtml(String(cached.milestone_id))}${cached.milestone_title ? ' — ' + escapeHtml(cached.milestone_title) : ''}`
+              : 'Click to choose a milestone…'}
+          </span>
+          ${canEdit ? '<span style="color:#9ca3af;">▾</span>' : ''}
+        </div>
+        <input type="hidden" id="pe-milestone-id" value="${escapeHtml(String(cached?.milestone_id || ''))}"/>
+        <div id="pe-milestone-dropdown"
+          style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;
+          background:#fff;border:1px solid #d1d5db;border-radius:8px;
+          box-shadow:0 4px 16px rgba(0,0,0,.12);max-height:200px;overflow-y:auto;margin-top:2px;">
+          ${milestones.length
+            ? milestones.map(m => `
+                <div onclick="_peSelectMilestone('${escapeHtml(String(m.id))}','${escapeHtml(m.title || m.name || String(m.id))}')"
+                  style="padding:10px 14px;cursor:pointer;font-size:13px;color:#374151;
+                  border-bottom:1px solid #f3f4f6;"
+                  onmouseover="this.style.background='#eff6ff'"
+                  onmouseout="this.style.background='#fff'">
+                  <strong style="color:#007B8A;">#${escapeHtml(String(m.id))}</strong>
+                  — ${escapeHtml(m.title || m.name || 'Untitled')}
+                  ${m.status ? `<span style="font-size:11px;color:#9ca3af;margin-left:6px;">
+                    (${escapeHtml(m.status)})</span>` : ''}
+                </div>`).join('')
+            : `<div style="padding:14px;font-size:12px;color:#9ca3af;text-align:center;">
+                No milestones found for this project.</div>`}
+        </div>
+      </div>
+    </div>`;
+
+  // Tracking entries display (read-only history, full detail)
+  const trackingHtml = trackingEntries.length
+    ? trackingEntries.map(e => `
+        <div style="background:#fff;border:1px solid #dbeafe;border-radius:8px;
+          padding:12px;margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;
+            flex-wrap:wrap;gap:6px;margin-bottom:8px;">
+            <div style="font-size:12px;font-weight:700;color:#1f2937;">
+              📅 ${e.report_date ? new Date(e.report_date).toLocaleDateString() : '—'}
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <div style="background:#e5e7eb;border-radius:999px;height:6px;width:80px;">
+                <div style="background:#10b981;height:6px;border-radius:999px;
+                  width:${Math.min(100, Number(e.progress_pct) || 0)}%;"></div>
+              </div>
+              <strong style="font-size:12px;color:#10b981;">
+                ${escapeHtml(String(e.progress_pct || 0))}%</strong>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;color:#374151;">
+            <div><strong>Actual Qty:</strong>
+              ${escapeHtml(String(e.actual_quantity || '—'))} ${escapeHtml(e.unit || '')}</div>
+            <div><strong>Manpower:</strong> ${escapeHtml(e.manpower_used || '—')}</div>
+            <div><strong>Equipment:</strong> ${escapeHtml(e.equipment_used || '—')}</div>
+            <div><strong>Materials:</strong> ${escapeHtml(e.materials_used || '—')}</div>
+          </div>
+          ${e.issues ? `<div style="font-size:12px;color:#374151;margin-top:6px;">
+            <strong>Issues:</strong> ${escapeHtml(e.issues)}</div>` : ''}
+          ${e.remark ? `<div style="font-size:12px;color:#374151;margin-top:4px;">
+            <strong>Remark:</strong> ${escapeHtml(e.remark)}</div>` : ''}
+          ${e.delay_days > 0 ? `
+            <div style="margin-top:6px;padding:5px 8px;background:#fff1f2;
+              border:1px solid #fca5a5;border-radius:6px;font-size:12px;color:#991b1b;">
+              ⚠️ Delay: ${escapeHtml(String(e.delay_days))} day(s)
+              ${e.delay_reason ? ` — ${escapeHtml(e.delay_reason)}` : ''}
+            </div>` : ''}
+        </div>`).join('')
+    : `<div style="text-align:center;padding:20px 0;color:#9ca3af;font-size:12px;">
+        No execution entries yet.</div>`;
 
   expandGrayPart(`
     <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
+
+      <!-- Header -->
       <div style="padding:14px 16px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;
         display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
         <div>
-          <div style="font-size:18px;font-weight:700;color:#1f2937;">${title}</div>
+          <div style="font-size:18px;font-weight:700;color:#1f2937;">${panelTitle}</div>
           <div style="font-size:12px;color:#4b5563;margin-top:4px;">
-            ${isNew ? 'Fill the planned activity on the left and log actual execution on the right.'
-              : 'Review or update activity plan and execution data.'}</div>
+            ${isNew
+              ? 'Choose a milestone, fill the plan, then log actual execution entries.'
+              : canEdit
+                ? 'Edit the plan on the left and log daily execution on the right.'
+                : 'Read-only — only the creating leader can edit this activity.'}
+          </div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;">
-          <span style="font-size:11px;color:#475569;background:#eff6ff;border:1px solid #bfdbfe;
-            border-radius:999px;padding:6px 12px;">Status: ${status}</span>
-          <button class="btn" onclick="collapseGrayPart()" style="background:#f3f4f6;color:#1f2937;">✕ Close</button>
+          ${!isNew ? wcStatusBadge(cached?.status) : ''}
+          <button onclick="collapseGrayPart()"
+            style="padding:7px 14px;background:#f3f4f6;color:#1f2937;border:1px solid #d1d5db;
+            border-radius:6px;font-size:13px;cursor:pointer;">✕ Close</button>
         </div>
       </div>
-      <div style="flex:1;overflow:auto;padding:16px;display:grid;grid-template-columns:1fr 1fr;
-        gap:14px;box-sizing:border-box;min-height:0;">
 
-        <!-- Planned Activity -->
+      <!-- Body — two columns -->
+      <div style="flex:1;overflow:auto;padding:16px;display:grid;
+        grid-template-columns:1fr 1fr;gap:14px;box-sizing:border-box;min-height:0;">
+
+        <!-- LEFT — Plan -->
         <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px;
-          display:flex;flex-direction:column;gap:12px;">
-          <div style="font-weight:700;color:#007B8A;font-size:14px;">A. Planned Activity</div>
-          <div class="form-group"><label>Milestone ID</label>
-            <input id="pe-milId" type="text" value="${cached?.milestone_id||''}" ${ro}/></div>
-          <div class="form-group"><label>Activity Title *</label>
-            <input id="pe-title" type="text" value="${cached?.title||''}" ${ro}/></div>
-          <div class="form-group"><label>Description</label>
-            <textarea id="pe-desc" ${ro}>${cached?.description||''}</textarea></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div class="form-group"><label>Start Date *</label>
-              <input id="pe-start" type="date" value="${cached?.start_date||''}" ${ro}/></div>
-            <div class="form-group"><label>End Date *</label>
-              <input id="pe-end" type="date" value="${cached?.end_date||''}" ${ro}/></div>
+          display:flex;flex-direction:column;gap:12px;overflow-y:auto;">
+          <div style="font-weight:700;color:#007B8A;font-size:14px;padding-bottom:8px;
+            border-bottom:2px solid #e5e7eb;">📋 A. Planned Activity</div>
+
+          ${milestonePickerHtml}
+
+          <div>
+            <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+              text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+              Activity Title *</label>
+            <input id="pe-title" type="text" value="${escapeHtml(cached?.title || '')}"
+              ${ro} style="width:100%;padding:9px 11px;border:1px solid #d1d5db;
+              border-radius:6px;font-size:13px;box-sizing:border-box;
+              background:${canEdit ? '#fff' : '#f9fafb'};"/>
+          </div>
+          <div>
+            <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+              text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Description</label>
+            <textarea id="pe-desc" ${ro}
+              style="width:100%;min-height:65px;padding:9px 11px;border:1px solid #d1d5db;
+              border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;
+              background:${canEdit ? '#fff' : '#f9fafb'};">${escapeHtml(cached?.description || '')}</textarea>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div class="form-group"><label>Planned Quantity</label>
-              <input id="pe-qty" type="number" value="${cached?.planned_quantity||''}" ${ro}/></div>
-            <div class="form-group"><label>Unit</label>
-              <input id="pe-unit" type="text" value="${cached?.unit||''}" ${ro}/></div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                Start Date *</label>
+              <input id="pe-start" type="date" value="${escapeHtml(cached?.start_date || '')}"
+                ${ro} style="width:100%;padding:9px 11px;border:1px solid #d1d5db;
+                border-radius:6px;font-size:13px;box-sizing:border-box;
+                background:${canEdit ? '#fff' : '#f9fafb'};"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                End Date *</label>
+              <input id="pe-end" type="date" value="${escapeHtml(cached?.end_date || '')}"
+                ${ro} style="width:100%;padding:9px 11px;border:1px solid #d1d5db;
+                border-radius:6px;font-size:13px;box-sizing:border-box;
+                background:${canEdit ? '#fff' : '#f9fafb'};"/>
+            </div>
           </div>
-          <div class="form-group"><label>Planned Work</label>
-            <textarea id="pe-work" ${ro}>${cached?.planned_work||''}</textarea></div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div class="form-group"><label>Planned Manpower</label>
-              <input id="pe-manpower" type="text" value="${cached?.planned_manpower||''}" ${ro}/></div>
-            <div class="form-group"><label>Planned Equipment</label>
-              <input id="pe-equipment" type="text" value="${cached?.planned_equipment||''}" ${ro}/></div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                Planned Qty *</label>
+              <input id="pe-qty" type="number" value="${escapeHtml(String(cached?.planned_quantity || ''))}"
+                ${ro} style="width:100%;padding:9px 11px;border:1px solid #d1d5db;
+                border-radius:6px;font-size:13px;box-sizing:border-box;
+                background:${canEdit ? '#fff' : '#f9fafb'};"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Unit *</label>
+              <input id="pe-unit" type="text" value="${escapeHtml(cached?.unit || '')}"
+                placeholder="e.g. m³, kg, pcs" ${ro}
+                style="width:100%;padding:9px 11px;border:1px solid #d1d5db;
+                border-radius:6px;font-size:13px;box-sizing:border-box;
+                background:${canEdit ? '#fff' : '#f9fafb'};"/>
+            </div>
           </div>
-          <div class="form-group"><label>Planned Materials</label>
-            <input id="pe-materials" type="text" value="${cached?.planned_materials||''}" ${ro}/></div>
-          <div class="form-group"><label>Linked File</label>
-            <input id="pe-file" type="file" ${ds}/></div>
-          <div style="font-size:12px;color:#4b5563;padding:10px 12px;background:#f8fafc;
-            border:1px solid #dbeafe;border-radius:10px;">${comment}</div>
-          <button id="pe-save-plan" class="btn primary" ${ds}>💾 Save Plan</button>
+          <div>
+            <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+              text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+              Planned Work</label>
+            <textarea id="pe-work" ${ro}
+              style="width:100%;min-height:60px;padding:9px 11px;border:1px solid #d1d5db;
+              border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;
+              background:${canEdit ? '#fff' : '#f9fafb'};">${escapeHtml(cached?.planned_work || '')}</textarea>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div>
+              <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                Planned Manpower</label>
+              <input id="pe-manpower" type="text" value="${escapeHtml(cached?.planned_manpower || '')}"
+                ${ro} style="width:100%;padding:9px 11px;border:1px solid #d1d5db;
+                border-radius:6px;font-size:13px;box-sizing:border-box;
+                background:${canEdit ? '#fff' : '#f9fafb'};"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                Planned Equipment</label>
+              <input id="pe-equipment" type="text" value="${escapeHtml(cached?.planned_equipment || '')}"
+                ${ro} style="width:100%;padding:9px 11px;border:1px solid #d1d5db;
+                border-radius:6px;font-size:13px;box-sizing:border-box;
+                background:${canEdit ? '#fff' : '#f9fafb'};"/>
+            </div>
+          </div>
+          <div>
+            <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+              text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+              Planned Materials</label>
+            <input id="pe-materials" type="text" value="${escapeHtml(cached?.planned_materials || '')}"
+              ${ro} style="width:100%;padding:9px 11px;border:1px solid #d1d5db;
+              border-radius:6px;font-size:13px;box-sizing:border-box;
+              background:${canEdit ? '#fff' : '#f9fafb'};"/>
+          </div>
+          ${canEdit ? `
+            <div>
+              <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                Status</label>
+              <select id="pe-status"
+                style="width:100%;padding:9px 11px;border:1px solid #d1d5db;
+                border-radius:6px;font-size:13px;">
+                <option value="ongoing"   ${(cached?.status || 'ongoing') === 'ongoing'   ? 'selected' : ''}>Ongoing</option>
+                <option value="completed" ${(cached?.status || 'ongoing') === 'completed' ? 'selected' : ''}>Completed</option>
+                <option value="closed"    ${(cached?.status || 'ongoing') === 'closed'    ? 'selected' : ''}>Closed</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                Replace Linked File</label>
+              <input id="pe-file" type="file" style="font-size:12px;color:#374151;"/>
+              ${cached?.linked_file_name ? `
+                <div style="font-size:11px;color:#6b7280;margin-top:4px;">
+                  Current: <strong>${escapeHtml(cached.linked_file_name)}</strong></div>` : ''}
+            </div>
+            <button id="pe-save-plan"
+              style="width:100%;padding:11px 14px;font-size:13px;font-weight:600;
+              background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+              💾 ${isNew ? 'Create Activity' : 'Update Activity'}</button>
+            ${!isNew ? `
+              <button id="pe-delete-btn"
+                style="width:100%;padding:9px 14px;font-size:13px;font-weight:600;
+                background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;
+                border-radius:8px;cursor:pointer;">🗑️ Delete Activity</button>` : ''}
+          ` : `
+            <div style="padding:10px 12px;background:#fffbeb;border:1px solid #fcd34d;
+              border-radius:8px;font-size:12px;color:#92400e;">
+              ⚠️ This activity was created by another leader on your side. View only.
+            </div>`}
         </div>
 
-        <!-- Actual Execution -->
+        <!-- RIGHT — Actual Execution -->
         <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px;
-          display:flex;flex-direction:column;gap:12px;">
-          <div style="font-weight:700;color:#007B8A;font-size:14px;">B. Actual Execution Tracking</div>
-          <div class="form-group"><label>Report Date</label>
-            <input id="pe-rep-date" type="date" value="${new Date().toISOString().slice(0,10)}" ${ro}/></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div class="form-group"><label>Actual Quantity</label>
-              <input id="pe-act-qty" type="number" ${ro}/></div>
-            <div class="form-group"><label>Unit</label>
-              <input id="pe-act-unit" type="text" value="${cached?.unit||''}" readonly/></div>
+          display:flex;flex-direction:column;gap:12px;overflow-y:auto;">
+          <div style="font-weight:700;color:#007B8A;font-size:14px;padding-bottom:8px;
+            border-bottom:2px solid #e5e7eb;">
+            📊 B. Actual Execution
+            <span style="font-size:11px;font-weight:400;color:#6b7280;margin-left:6px;">
+              ${trackingEntries.length} entr${trackingEntries.length === 1 ? 'y' : 'ies'}</span>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div class="form-group"><label>Manpower Used</label>
-              <input id="pe-act-manpower" type="text" ${ro}/></div>
-            <div class="form-group"><label>Equipment Used</label>
-              <input id="pe-act-equipment" type="text" ${ro}/></div>
-          </div>
-          <div class="form-group"><label>Materials Used</label>
-            <input id="pe-act-materials" type="text" ${ro}/></div>
-          <div class="form-group"><label>Progress %</label>
-            <input id="pe-act-pct" type="number" min="0" max="100" value="0" ${ro}/></div>
-          <div class="form-group"><label>Issues</label>
-            <textarea id="pe-act-issues" ${ro}></textarea></div>
-          <div class="form-group"><label>Notes / Remark</label>
-            <textarea id="pe-act-notes" ${ro}></textarea></div>
-          <div class="form-group"><label>Delay Days</label>
-            <input id="pe-act-delay" type="number" min="0" value="${cached?.delay_days||0}" readonly/></div>
-          <div class="form-group"><label>Delay Reason</label>
-            <textarea id="pe-act-delay-reason" ${ro}>${cached?.delay_reason||''}</textarea></div>
-          <div class="form-group"><label>Attachment</label>
-            <input id="pe-act-file" type="file" ${ds}/></div>
-          <button id="pe-save-actual" class="btn primary" ${ds}>✅ Save Actual</button>
-          <div style="font-size:12px;color:#475569;font-weight:600;margin-top:4px;">Existing Entries</div>
-          <div style="max-height:220px;overflow:auto;border:1px solid #e5e7eb;
-            border-radius:10px;padding:10px;background:#f8fafc;">
-            ${trackingEntries.length
-              ? trackingEntries.map(e => `
-                  <div style="margin-bottom:10px;padding:10px;background:#fff;
-                    border:1px solid #dbeafe;border-radius:8px;">
-                    <div style="font-size:12px;font-weight:700;color:#1f2937;">
-                      ${new Date(e.report_date).toLocaleDateString()}</div>
-                    <div style="font-size:12px;color:#475569;">
-                      Qty: ${e.actual_quantity} ${e.unit||''} &nbsp;|&nbsp; Progress: ${e.progress_pct}%
-                    </div>
-                    ${e.remark ? `<div style="font-size:12px;color:#475569;">Remark: ${e.remark}</div>` : ''}
-                  </div>`).join('')
-              : '<div style="font-size:12px;color:#6b7280;">No actual tracking entries yet.</div>'}
+
+          ${isNew ? `
+            <div style="padding:16px;background:#f8fafc;border:1px solid #e5e7eb;
+              border-radius:8px;text-align:center;font-size:13px;color:#9ca3af;">
+              Save the activity plan first to start logging execution entries.
+            </div>` : canEdit ? `
+            <!-- Log new entry -->
+            <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;
+              padding:14px;display:flex;flex-direction:column;gap:10px;">
+              <div style="font-size:12px;font-weight:700;color:#374151;">
+                ➕ Log Today's Execution</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <div>
+                  <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                    text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                    Report Date</label>
+                  <input id="pe-rep-date" type="date"
+                    value="${new Date().toISOString().slice(0, 10)}"
+                    style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+                    font-size:13px;box-sizing:border-box;"/>
+                </div>
+                <div>
+                  <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                    text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                    Progress %</label>
+                  <input id="pe-act-pct" type="number" min="0" max="100" value="0"
+                    style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+                    font-size:13px;box-sizing:border-box;"/>
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <div>
+                  <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                    text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                    Actual Qty</label>
+                  <input id="pe-act-qty" type="number"
+                    style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+                    font-size:13px;box-sizing:border-box;"/>
+                </div>
+                <div>
+                  <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                    text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Unit</label>
+                  <input id="pe-act-unit" type="text"
+                    value="${escapeHtml(cached?.unit || '')}" readonly
+                    style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:6px;
+                    font-size:13px;box-sizing:border-box;background:#f9fafb;"/>
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <div>
+                  <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                    text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                    Manpower Used</label>
+                  <input id="pe-act-manpower" type="text"
+                    style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+                    font-size:13px;box-sizing:border-box;"/>
+                </div>
+                <div>
+                  <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                    text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                    Equipment Used</label>
+                  <input id="pe-act-equipment" type="text"
+                    style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+                    font-size:13px;box-sizing:border-box;"/>
+                </div>
+              </div>
+              <div>
+                <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                  text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                  Materials Used</label>
+                <input id="pe-act-materials" type="text"
+                  style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+                  font-size:13px;box-sizing:border-box;"/>
+              </div>
+              <div>
+                <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                  text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Issues</label>
+                <textarea id="pe-act-issues"
+                  style="width:100%;min-height:50px;padding:8px;border:1px solid #d1d5db;
+                  border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;">
+                </textarea>
+              </div>
+              <div>
+                <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                  text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                  Notes / Remark</label>
+                <textarea id="pe-act-notes"
+                  style="width:100%;min-height:50px;padding:8px;border:1px solid #d1d5db;
+                  border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;">
+                </textarea>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <div>
+                  <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                    text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                    Delay Days</label>
+                  <input id="pe-act-delay" type="number" min="0" value="0"
+                    style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+                    font-size:13px;box-sizing:border-box;"/>
+                </div>
+                <div>
+                  <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                    text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">
+                    Delay Reason</label>
+                  <input id="pe-act-delay-reason" type="text"
+                    style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
+                    font-size:13px;box-sizing:border-box;"/>
+                </div>
+              </div>
+              <div>
+                <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
+                  text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Attachment</label>
+                <input id="pe-act-file" type="file" style="font-size:12px;color:#374151;"/>
+              </div>
+              <button id="pe-save-actual"
+                style="width:100%;padding:10px 14px;font-size:13px;font-weight:600;
+                background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+                ✅ Save Execution Entry</button>
+            </div>` : `
+            <div style="padding:10px 12px;background:#f0fdf4;border:1px solid #bbf7d0;
+              border-radius:8px;font-size:12px;color:#166534;">
+              ✅ You can view execution history below.
+              Only the creating leader can add entries.
+            </div>`}
+
+          <!-- Execution history -->
+          <div>
+            <div style="font-size:12px;font-weight:700;color:#6b7280;margin-bottom:8px;">
+              Execution History</div>
+            <div style="max-height:${isNew ? '0' : '320px'};overflow-y:auto;">
+              ${trackingHtml}
+            </div>
           </div>
         </div>
-
       </div>
     </div>`);
 
+  // Wire milestone dropdown toggle
+  window._peMilestonePicker = function() {
+    const dd = document.getElementById('pe-milestone-dropdown');
+    if (dd) dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+  };
+  window._peSelectMilestone = function(id, label) {
+    const hiddenInput = document.getElementById('pe-milestone-id');
+    const displayEl   = document.getElementById('pe-milestone-label');
+    const dropdown    = document.getElementById('pe-milestone-dropdown');
+    if (hiddenInput) hiddenInput.value = id;
+    if (displayEl)   displayEl.textContent = `#${id} — ${label}`;
+    if (dropdown)    dropdown.style.display = 'none';
+  };
+  // Close dropdown when clicking outside
+  document.addEventListener('click', function _closePEDd(e) {
+    const dd = document.getElementById('pe-milestone-dropdown');
+    if (dd && !e.target.closest('#pe-milestone-display') && !e.target.closest('#pe-milestone-dropdown')) {
+      dd.style.display = 'none';
+    }
+    if (!document.getElementById('pe-milestone-dropdown'))
+      document.removeEventListener('click', _closePEDd);
+  });
+
+  // Save Plan
   document.getElementById('pe-save-plan')?.addEventListener('click', async () => {
-    if (!isLeader) return alert('Only side leaders can edit activity plans.');
     try {
-      const payload = {
-        projectId:        localStorage.getItem('activeProjectId'),
-        milestone_id:     document.getElementById('pe-milId').value.trim(),
-        title:            document.getElementById('pe-title').value.trim(),
-        description:      document.getElementById('pe-desc').value.trim(),
-        start_date:       document.getElementById('pe-start').value,
-        end_date:         document.getElementById('pe-end').value,
-        planned_quantity: document.getElementById('pe-qty').value,
-        unit:             document.getElementById('pe-unit').value.trim(),
-        planned_work:     document.getElementById('pe-work').value.trim(),
-        planned_manpower: document.getElementById('pe-manpower').value.trim(),
-        planned_equipment:document.getElementById('pe-equipment').value.trim(),
-        planned_materials:document.getElementById('pe-materials').value.trim(),
-        status,
-      };
-      if (!payload.title)                         return alert('Activity title is required.');
-      if (!payload.start_date || !payload.end_date) return alert('Start and end dates are required.');
+      const milestoneId = document.getElementById('pe-milestone-id')?.value;
+      const title       = document.getElementById('pe-title')?.value.trim();
+      const desc        = document.getElementById('pe-desc')?.value.trim();
+      const startDate   = document.getElementById('pe-start')?.value;
+      const endDate     = document.getElementById('pe-end')?.value;
+      const qty         = document.getElementById('pe-qty')?.value;
+      const unit        = document.getElementById('pe-unit')?.value.trim();
+      const work        = document.getElementById('pe-work')?.value.trim();
+      const manpower    = document.getElementById('pe-manpower')?.value.trim();
+      const equipment   = document.getElementById('pe-equipment')?.value.trim();
+      const materials   = document.getElementById('pe-materials')?.value.trim();
+      const status      = document.getElementById('pe-status')?.value || 'ongoing';
+      const fileInput   = document.getElementById('pe-file');
+
+      if (!milestoneId) return alert('Please choose a milestone.');
+      if (!title)       return alert('Activity title is required.');
+      if (!startDate || !endDate) return alert('Start and end dates are required.');
+      if (!qty)         return alert('Planned quantity is required.');
+      if (!unit)        return alert('Unit is required.');
+
       const form = new FormData();
-      Object.entries(payload).forEach(([k,v]) => { if (v !== undefined) form.append(k, v); });
+      form.append('projectId',         projectId);
+      form.append('milestone_id',      milestoneId);
+      form.append('title',             title);
+      form.append('description',       desc || '');
+      form.append('start_date',        startDate);
+      form.append('end_date',          endDate);
+      form.append('planned_quantity',  qty);
+      form.append('unit',              unit);
+      form.append('planned_work',      work || '');
+      form.append('planned_manpower',  manpower || '');
+      form.append('planned_equipment', equipment || '');
+      form.append('planned_materials', materials || '');
+      form.append('status',            status);
       if (!isNew) form.append('id', cached.id);
-      const attach = document.getElementById('pe-file')?.files?.[0];
-      if (attach) form.append('linked_file', attach);
-      const res = await authFetch(`${API}/planning-execution`, {
-        method: isNew ? 'POST' : 'PUT', body: form
+      if (fileInput?.files?.[0]) form.append('linked_file', fileInput.files[0]);
+
+      const saveBtn = document.getElementById('pe-save-plan');
+      if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+
+      const res = await _wcFetch(`${API}/planning-execution`, {
+        method: isNew ? 'POST' : 'PUT', body: form,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || 'Unable to save plan');
-      alert('Plan saved.');
+
+      alert(isNew ? '✓ Activity created.' : '✓ Activity updated.');
       delete recordsCache[tabKey];
-      loadTabRecords(tabKey);
+      loadPERecords();
       collapseGrayPart();
-    } catch (err) { console.error('PE save plan error:', err); alert('Failed to save plan.'); }
+    } catch (err) {
+      console.error('PE save plan error:', err);
+      alert('Failed to save: ' + err.message);
+      const sb = document.getElementById('pe-save-plan');
+      if (sb) { sb.disabled = false; sb.textContent = isNew ? '💾 Create Activity' : '💾 Update Activity'; }
+    }
   });
 
-  document.getElementById('pe-save-actual')?.addEventListener('click', async () => {
-    if (!isLeader) return alert('Only side leaders can log actual execution.');
-    if (!cached)   return alert('Please save the activity plan first.');
+  // Delete Activity
+  document.getElementById('pe-delete-btn')?.addEventListener('click', async () => {
+    if (!confirm('Delete this activity? All execution entries will also be deleted. Cannot be undone.')) return;
     try {
-      const payload = {
-        activity_id:    cached.id,
-        report_date:    document.getElementById('pe-rep-date').value,
-        actual_quantity:document.getElementById('pe-act-qty').value,
-        unit:           document.getElementById('pe-act-unit').value.trim(),
-        manpower_used:  document.getElementById('pe-act-manpower').value.trim(),
-        equipment_used: document.getElementById('pe-act-equipment').value.trim(),
-        materials_used: document.getElementById('pe-act-materials').value.trim(),
-        progress_pct:   document.getElementById('pe-act-pct').value,
-        issues:         document.getElementById('pe-act-issues').value.trim(),
-        remark:         document.getElementById('pe-act-notes').value.trim(),
-      };
-      if (!payload.actual_quantity) return alert('Actual quantity is required.');
-      const form = new FormData();
-      Object.entries(payload).forEach(([k,v]) => { if (v !== undefined) form.append(k, v); });
-      const attach = document.getElementById('pe-act-file')?.files?.[0];
-      if (attach) form.append('attachment', attach);
-      const res = await authFetch(`${API}/planning-execution-tracking`, {
-        method: 'POST', body: form
+      const res = await _wcFetch(`${API}/planning-execution/${cached.id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ projectId }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || 'Unable to save actual execution');
-      alert('Actual execution saved.');
+      if (!res.ok) throw new Error(data.message || 'Failed to delete');
+      alert('Activity deleted.');
       delete recordsCache[tabKey];
-      loadTabRecords(tabKey);
+      loadPERecords();
       collapseGrayPart();
-    } catch (err) { console.error('PE save actual error:', err); alert('Failed to save actual execution.'); }
+    } catch (err) { alert('Failed to delete: ' + err.message); }
+  });
+
+  // Save Execution Entry
+  document.getElementById('pe-save-actual')?.addEventListener('click', async () => {
+    if (!cached) return alert('Save the activity plan first.');
+    try {
+      const reportDate  = document.getElementById('pe-rep-date')?.value;
+      const qty         = document.getElementById('pe-act-qty')?.value;
+      const unit        = document.getElementById('pe-act-unit')?.value.trim();
+      const manpower    = document.getElementById('pe-act-manpower')?.value.trim();
+      const equipment   = document.getElementById('pe-act-equipment')?.value.trim();
+      const materials   = document.getElementById('pe-act-materials')?.value.trim();
+      const pct         = document.getElementById('pe-act-pct')?.value;
+      const issues      = document.getElementById('pe-act-issues')?.value.trim();
+      const notes       = document.getElementById('pe-act-notes')?.value.trim();
+      const delayDays   = document.getElementById('pe-act-delay')?.value || '0';
+      const delayReason = document.getElementById('pe-act-delay-reason')?.value.trim();
+      const fileInput   = document.getElementById('pe-act-file');
+
+      if (!reportDate) return alert('Report date is required.');
+      if (!qty)        return alert('Actual quantity is required.');
+
+      const form = new FormData();
+      form.append('projectId',       projectId);
+      form.append('activity_id',     cached.id);
+      form.append('report_date',     reportDate);
+      form.append('actual_quantity', qty);
+      form.append('unit',            unit || '');
+      form.append('manpower_used',   manpower || '');
+      form.append('equipment_used',  equipment || '');
+      form.append('materials_used',  materials || '');
+      form.append('progress_pct',    pct || '0');
+      form.append('issues',          issues || '');
+      form.append('remark',          notes || '');
+      form.append('delay_days',      delayDays);
+      form.append('delay_reason',    delayReason || '');
+      if (fileInput?.files?.[0]) form.append('attachment', fileInput.files[0]);
+
+      const saveBtn = document.getElementById('pe-save-actual');
+      if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+
+      const res = await _wcFetch(`${API}/planning-execution-tracking`, {
+        method: 'POST', body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || 'Unable to save execution entry');
+
+      alert('✓ Execution entry saved.');
+      // Re-open the same form to show updated entries
+      delete recordsCache[tabKey];
+      await loadPERecords();
+      _peOpenForm(String(cached.id));
+    } catch (err) {
+      console.error('PE save actual error:', err);
+      alert('Failed to save execution entry: ' + err.message);
+      const sb = document.getElementById('pe-save-actual');
+      if (sb) { sb.disabled = false; sb.textContent = '✅ Save Execution Entry'; }
+    }
   });
 }
-window.openPlanningExecutionForm = openPlanningExecutionForm;
+
+window.openPlanningExecutionForm = _peOpenForm; // backward compat alias
+window._peOpenForm = _peOpenForm;
 </script>
 </body>
 </html>
