@@ -543,7 +543,7 @@
 
         const jwt = parseJwt(authToken);
         const currentUserId = jwt ? Number(jwt.sub) : null;
-        const currentUserRole = jwt?.role || 'Unknown role';
+        const currentUserRole = normalizeRole(jwt?.role || 'Unknown role');
         const currentUserEmail = jwt?.email || jwt?.company_email || jwt?.companyEmail || '';
         const currentUserName = jwt?.representative || jwt?.name || currentUserEmail.split('@')[0] || 'You';
         const currentUserPosition = jwt?.position || jwt?.title || '';
@@ -589,6 +589,23 @@
                 return `<img src="${contact.pictureUrl}" alt="${contact.name || contact.email}">`;
             }
             return contact.initial || getInitialFromEmail(contact.email);
+        }
+
+        function normalizeRole(role) {
+            if (!role) return role;
+            return {
+                Client: 'Client',
+                Contractor: 'Contractor',
+                Consultant: 'Consultant',
+                ClientPM: 'ClientPM',
+                'Client Project Manager': 'ClientPM',
+                ContractorPM: 'ContractorPM',
+                'Contractor Project Manager': 'ContractorPM',
+                ConsultantPM: 'ConsultantPM',
+                'Consultant Project Manager': 'ConsultantPM',
+                TeamMember: 'TeamMember',
+                'Team Member': 'TeamMember',
+            }[role] || role;
         }
 
         function parseReplySender(senderEmail) {
@@ -758,18 +775,19 @@
         }
 
         function normalizeMember(member) {
+            const normalizedRole = normalizeRole(member.role);
             return {
-                id: `${member.role}-${member.role_id}`,
+                id: `${normalizedRole}-${member.role_id}`,
                 name: member.display_name || member.email || member.role,
                 email: member.email || '',
-                role: member.role,
+                role: normalizedRole,
                 title: member.company_name || member.title || member.role,
                 position: member.position || '',
                 pictureUrl: member.profile_picture || null,
                 initial: member.display_name ? member.display_name.trim().charAt(0).toUpperCase() : getInitialFromEmail(member.email),
                 online: true,
                 isGroup: false,
-                recipientRole: member.role,
+                recipientRole: normalizedRole,
                 recipientId: member.role_id,
                 lastMessage: member.lastMessage || 'Tap to chat',
                 time: member.time || '',
@@ -793,7 +811,7 @@
                 attachmentUrl: message.attachment_url || null,
                 attachmentName: message.attachment_name || null,
                 attachmentMime: message.attachment_mime || message.attachmentMime || null,
-                sent: String(message.sender_id) === String(currentUserId) && String(message.sender_role) === String(currentUserRole),
+                sent: String(message.sender_id) === String(currentUserId) && normalizeRole(String(message.sender_role)) === currentUserRole,
                 senderName: message.sender_display_name || message.sender_email || 'Unknown',
                 senderRole: message.sender_role || '',
                 senderPosition: message.sender_position || message.sender_title || '',
@@ -1004,7 +1022,7 @@
             contacts = [
                 groupContact,
                 ...members
-                    .filter(member => !(String(member.role_id) === String(currentUserId) && String(member.role) === String(currentUserRole)))
+                    .filter(member => !(String(member.role_id) === String(currentUserId) && normalizeRole(member.role) === currentUserRole))
                     .map(normalizeMember)
             ];
             renderContacts();
