@@ -7099,18 +7099,8 @@ async function _peOpenAddForm() {
     alert('Only side leaders can add activities.'); return;
   }
   const projectId = localStorage.getItem('activeProjectId');
-
-  // Fetch milestones from baseline schedule (same side)
-  let milestones = [];
-  try {
-    const res = await _wcFetch(
-      `${API}/project-milestones?projectId=${encodeURIComponent(projectId)}`
-    );
-    if (res && res.ok) { const d = await res.json(); milestones = d.milestones || d || []; }
-  } catch (e) { /* non-fatal */ }
-
-  expandGrayPart(_pePlanFormHtml(null, milestones, true));
-  _pePlanFormWire(null, milestones, true, projectId);
+  expandGrayPart(_pePlanFormHtml(null, true));
+  _pePlanFormWire(null, true, projectId);
 }
 
 
@@ -7120,40 +7110,14 @@ async function _peOpenEditForm(recordId) {
   const cached  = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
   if (!cached) return alert('Activity not found in cache. Please refresh.');
   const projectId = localStorage.getItem('activeProjectId');
-
-  let milestones = [];
-  try {
-    const res = await _wcFetch(
-      `${API}/project-milestones?projectId=${encodeURIComponent(projectId)}`
-    );
-    if (res && res.ok) { const d = await res.json(); milestones = d.milestones || d || []; }
-  } catch (e) { /* non-fatal */ }
-
-  expandGrayPart(_pePlanFormHtml(cached, milestones, false));
-  _pePlanFormWire(cached, milestones, false, projectId);
+  expandGrayPart(_pePlanFormHtml(cached, false));
+  _pePlanFormWire(cached, false, projectId);
 }
 
 
 // ── Plan form HTML (shared by Add + Edit) ─────────────────────────────────────
-function _pePlanFormHtml(cached, milestones, isNew) {
+function _pePlanFormHtml(cached, isNew) {
   const v = f => escapeHtml(String(cached?.[f] || ''));
-
-  // Milestone section: choose from list OR type manually
-  const milestoneRows = milestones.map(m => `
-    <div onclick="_peSelectMilestone('${escapeHtml(String(m.id))}','${escapeHtml(m.title||m.name||String(m.id))}')"
-      style="padding:10px 14px;cursor:pointer;font-size:13px;color:#374151;
-      border-bottom:1px solid #f3f4f6;"
-      onmouseover="this.style.background='#eff6ff'"
-      onmouseout="this.style.background='#fff'">
-      <strong style="color:#007B8A;">#${escapeHtml(String(m.id))}</strong>
-      — ${escapeHtml(m.title||m.name||'Untitled')}
-    </div>`).join('');
-
-  const currentMilestoneLabel = cached
-    ? (cached.milestone_title
-        ? `${cached.milestone_title}`
-        : cached.milestone_ref || '')
-    : '';
 
   return `
     <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
@@ -7166,60 +7130,16 @@ function _pePlanFormHtml(cached, milestones, isNew) {
 
       <div style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
 
-        <!-- Milestone: choose or type -->
         <div>
           <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Milestone</label>
-
-          <!-- Toggle buttons -->
-          <div style="display:flex;gap:6px;margin-bottom:8px;">
-            <button type="button" id="pe-ms-tab-pick"
-              onclick="_peMsTabSwitch('pick')"
-              style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:6px;
-              background:#007B8A;color:#fff;border:none;cursor:pointer;">Choose from list</button>
-            <button type="button" id="pe-ms-tab-type"
-              onclick="_peMsTabSwitch('type')"
-              style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:6px;
-              background:#f3f4f6;color:#374151;border:1px solid #d1d5db;cursor:pointer;">
-              Type manually</button>
-          </div>
-
-          <!-- Picker panel -->
-          <div id="pe-ms-panel-pick">
-            <div id="pe-milestone-display"
-              style="padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
-              font-size:13px;background:#fff;cursor:pointer;
-              display:flex;justify-content:space-between;align-items:center;color:#374151;"
-              onclick="_peMilestonePicker()">
-              <span id="pe-milestone-label">
-                ${currentMilestoneLabel || 'Click to choose a milestone…'}
-              </span>
-              <span style="color:#9ca3af;">▾</span>
-            </div>
-            <input type="hidden" id="pe-milestone-id"
-              value="${cached?.milestone_id ? escapeHtml(String(cached.milestone_id)) : ''}"/>
-            <input type="hidden" id="pe-milestone-ref-from-picker"
-              value="${cached?.milestone_ref ? escapeHtml(cached.milestone_ref) : ''}"/>
-            <div id="pe-milestone-dropdown"
-              style="display:none;position:relative;z-index:50;background:#fff;
-              border:1px solid #d1d5db;border-radius:8px;
-              box-shadow:0 4px 16px rgba(0,0,0,.12);max-height:180px;overflow-y:auto;margin-top:2px;">
-              ${milestones.length ? milestoneRows
-                : `<div style="padding:14px;font-size:12px;color:#9ca3af;text-align:center;">
-                    No milestones found for this project.</div>`}
-            </div>
-          </div>
-
-          <!-- Manual type panel (hidden by default) -->
-          <div id="pe-ms-panel-type" style="display:none;">
-            <input id="pe-milestone-ref" type="text"
-              value="${v('milestone_ref')}"
-              placeholder="e.g. M-03 Foundation Works"
-              style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
-              font-size:13px;box-sizing:border-box;"/>
-            <p style="font-size:11px;color:#9ca3af;margin:4px 0 0;">
-              Type the milestone name or reference code as it appears in your schedule.</p>
-          </div>
+            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Milestone (optional)</label>
+          <input id="pe-milestone-ref" type="text"
+            value="${v('milestone_ref')}"
+            placeholder="e.g. M-03 Foundation Works"
+            style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
+            font-size:13px;box-sizing:border-box;"/>
+          <p style="font-size:11px;color:#9ca3af;margin:4px 0 0;">
+            Type the milestone name or reference code as it appears in your schedule, or leave blank if not applicable.</p>
         </div>
 
         <!-- Title -->
@@ -7338,63 +7258,12 @@ function _pePlanFormHtml(cached, milestones, isNew) {
 
 
 // ── Plan form wiring (milestone picker, tab switch, save) ─────────────────────
-function _pePlanFormWire(cached, milestones, isNew, projectId) {
-  // Milestone picker dropdown toggle
-  window._peMilestonePicker = function() {
-    const dd = document.getElementById('pe-milestone-dropdown');
-    if (dd) dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
-  };
-  window._peSelectMilestone = function(id, label) {
-    const hiddenId   = document.getElementById('pe-milestone-id');
-    const hiddenRef  = document.getElementById('pe-milestone-ref-from-picker');
-    const display    = document.getElementById('pe-milestone-label');
-    const dd         = document.getElementById('pe-milestone-dropdown');
-    if (hiddenId)   hiddenId.value = id;
-    if (hiddenRef)  hiddenRef.value = label;
-    if (display)    display.textContent = `${label}`;
-    if (dd)         dd.style.display = 'none';
-  };
-  // Close dropdown on outside click
-  const _ddClose = e => {
-    const dd = document.getElementById('pe-milestone-dropdown');
-    if (dd && !e.target.closest('#pe-milestone-display') && !e.target.closest('#pe-milestone-dropdown'))
-      dd.style.display = 'none';
-    if (!document.getElementById('pe-milestone-dropdown'))
-      document.removeEventListener('click', _ddClose);
-  };
-  document.addEventListener('click', _ddClose);
-
-  // Tab switch: "choose" vs "type"
-  window._peMsTabSwitch = function(tab) {
-    const pickPanel = document.getElementById('pe-ms-panel-pick');
-    const typePanel = document.getElementById('pe-ms-panel-type');
-    const pickBtn   = document.getElementById('pe-ms-tab-pick');
-    const typeBtn   = document.getElementById('pe-ms-tab-type');
-    if (tab === 'pick') {
-      pickPanel.style.display = 'block'; typePanel.style.display = 'none';
-      pickBtn.style.background = '#007B8A'; pickBtn.style.color = '#fff'; pickBtn.style.border = 'none';
-      typeBtn.style.background = '#f3f4f6'; typeBtn.style.color = '#374151'; typeBtn.style.border = '1px solid #d1d5db';
-    } else {
-      pickPanel.style.display = 'none'; typePanel.style.display = 'block';
-      typeBtn.style.background = '#007B8A'; typeBtn.style.color = '#fff'; typeBtn.style.border = 'none';
-      pickBtn.style.background = '#f3f4f6'; pickBtn.style.color = '#374151'; pickBtn.style.border = '1px solid #d1d5db';
-    }
-  };
-  // If editing with existing milestone_ref but no milestone_id, default to type tab
-  if (cached && cached.milestone_ref && !cached.milestone_id) {
-    window._peMsTabSwitch('type');
-  }
-
+function _pePlanFormWire(cached, isNew, projectId) {
   // Save plan
   document.getElementById('pe-save-plan')?.addEventListener('click', async () => {
     try {
       // Determine milestone source
-      const pickPanel   = document.getElementById('pe-ms-panel-pick');
-      const usePickMode = pickPanel && pickPanel.style.display !== 'none';
-      const milestoneId  = usePickMode ? (document.getElementById('pe-milestone-id')?.value || '') : '';
-      const milestoneRef = usePickMode 
-        ? (document.getElementById('pe-milestone-ref-from-picker')?.value.trim() || '')
-        : (document.getElementById('pe-milestone-ref')?.value.trim() || '');
+      const milestoneRef = (document.getElementById('pe-milestone-ref')?.value.trim() || '');
 
       const title    = document.getElementById('pe-title')?.value.trim();
       const desc     = document.getElementById('pe-desc')?.value.trim();
@@ -7412,8 +7281,6 @@ function _pePlanFormWire(cached, milestones, isNew, projectId) {
       if (!start || !end) return alert('Start and end dates are required.');
       if (!qty)           return alert('Planned quantity is required.');
       if (!unit)          return alert('Unit is required.');
-      if (!milestoneId && !milestoneRef)
-                          return alert('Please choose a milestone or type one manually.');
 
       const form = new FormData();
       form.append('projectId',         projectId);
@@ -7427,7 +7294,6 @@ function _pePlanFormWire(cached, milestones, isNew, projectId) {
       form.append('planned_manpower',  manpower || '');
       form.append('planned_equipment', equip || '');
       form.append('planned_materials', mats || '');
-      if (milestoneId)  form.append('milestone_id',  milestoneId);
       if (milestoneRef) form.append('milestone_ref', milestoneRef);
       if (!isNew)       form.append('id', cached.id);
       if (fileInput?.files?.[0]) form.append('linked_file', fileInput.files[0]);
