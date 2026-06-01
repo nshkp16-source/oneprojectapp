@@ -1173,19 +1173,19 @@ const clientEmail = decoded?.companyEmail || decoded?.email;
 const clientRole  = decoded?.role;
 
 // DOM elements
-const profileIcon       = document.getElementById('profileIcon');
-const profileDialog     = document.getElementById('profileDialog');
-const editProfileBtn    = document.getElementById('editProfileBtn');
-const editProfileOptions= document.getElementById('editProfileOptions');
-const changePictureBtn  = document.getElementById('changePictureBtn');
-const deletePictureBtn  = document.getElementById('deletePictureBtn');
-const profileUpload     = document.getElementById('profileUpload');
-const profileIconLarge  = document.getElementById('profileIconLarge');
-const profileEmail      = document.getElementById('profileEmail');
-const profileRole       = document.getElementById('profileRole');
-const projectSelector   = document.getElementById("projectSelector");
-const projectDialog     = document.getElementById("projectDialog");
-const activeProject     = document.getElementById("activeProject");
+const profileIcon        = document.getElementById('profileIcon');
+const profileDialog      = document.getElementById('profileDialog');
+const editProfileBtn     = document.getElementById('editProfileBtn');
+const editProfileOptions = document.getElementById('editProfileOptions');
+const changePictureBtn   = document.getElementById('changePictureBtn');
+const deletePictureBtn   = document.getElementById('deletePictureBtn');
+const profileUpload      = document.getElementById('profileUpload');
+const profileIconLarge   = document.getElementById('profileIconLarge');
+const profileEmail       = document.getElementById('profileEmail');
+const profileRole        = document.getElementById('profileRole');
+const projectSelector    = document.getElementById("projectSelector");
+const projectDialog      = document.getElementById("projectDialog");
+const activeProject      = document.getElementById("activeProject");
 
 // =========================
 // BOOT — single DOMContentLoaded
@@ -1216,10 +1216,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // 3. Fetch client profile picture
+  // FIX: use client.company_email (not client.email — clients table has company_email)
   try {
     const client = await apiRequest("https://oneprojectapp-backend.onrender.com/client/profile", { method: "GET" });
 
-    const pictureUrl = client.profile_picture;
+    const pictureUrl = client?.profile_picture;
 
     if (pictureUrl && pictureUrl.trim() !== "") {
       profileIcon.style.backgroundImage      = `url("${pictureUrl}")`;
@@ -1227,7 +1228,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       profileIcon.textContent      = "";
       profileIconLarge.textContent = "";
     } else {
-      const ch = (client.email || decoded?.companyEmail || decoded?.email || "?").charAt(0).toUpperCase();
+      // FIX: client.company_email instead of client.email
+      const ch = (client?.company_email || clientEmail || "?").charAt(0).toUpperCase();
       profileIcon.style.backgroundImage      = "";
       profileIconLarge.style.backgroundImage = "";
       profileIcon.textContent      = ch;
@@ -1235,9 +1237,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   } catch (err) {
     console.error("Client profile fetch error:", err);
+    // Fallback: show initial from JWT even if profile fetch fails
+    const ch = (clientEmail || "?").charAt(0).toUpperCase();
+    profileIcon.textContent      = ch;
+    profileIconLarge.textContent = ch;
   }
 
   // 4. Fetch projects owned by client
+  // NOTE: clientId in body is ignored by backend (uses JWT), but kept for clarity
   try {
     const data     = await apiRequest("https://oneprojectapp-backend.onrender.com/client/projects", {
       method: "POST",
@@ -1349,7 +1356,11 @@ editProfileBtn.addEventListener('click', () => {
   editProfileOptions.style.display = editProfileOptions.style.display === 'block' ? 'none' : 'block';
 });
 
+// =========================
 // Upload picture
+// FIX: no manual Authorization header — apiRequest adds it automatically.
+// No Content-Type header either — browser sets multipart boundary automatically for FormData.
+// =========================
 changePictureBtn.addEventListener('click', () => profileUpload.click());
 profileUpload.addEventListener('change', async (e) => {
   const file = e.target.files[0];
@@ -1361,29 +1372,42 @@ profileUpload.addEventListener('change', async (e) => {
   formData.append("profile_picture", file);
 
   try {
+    // FIX: no headers object — apiRequest handles Authorization,
+    // and browser must set Content-Type for FormData (multipart boundary)
     const data = await apiRequest("https://oneprojectapp-backend.onrender.com/client/upload-picture", {
       method: "POST",
       body: formData
     });
-    profileIcon.style.backgroundImage      = `url("${data.url}")`;
-    profileIconLarge.style.backgroundImage = `url("${data.url}")`;
-    profileIcon.textContent      = "";
-    profileIconLarge.textContent = "";
+
+    if (data?.url) {
+      profileIcon.style.backgroundImage      = `url("${data.url}")`;
+      profileIconLarge.style.backgroundImage = `url("${data.url}")`;
+      profileIcon.textContent      = "";
+      profileIconLarge.textContent = "";
+    } else {
+      alert("Upload succeeded but no URL returned.");
+    }
   } catch (err) {
     console.error("Upload error:", err);
     alert("Failed to upload profile picture.");
   }
 });
 
+// =========================
 // Delete picture
+// FIX: no manual Authorization header — apiRequest adds it automatically.
+// FIX: use clientEmail (from JWT at top) instead of re-reading decoded inline.
+// =========================
 deletePictureBtn.addEventListener('click', async () => {
   try {
+    // FIX: no headers object needed
     const result = await apiRequest("https://oneprojectapp-backend.onrender.com/client/delete-picture", {
       method: "POST"
     });
 
-    if (result.success) {
-      const ch = (decoded?.companyEmail || decoded?.email || "?").charAt(0).toUpperCase();
+    if (result?.success) {
+      // FIX: use clientEmail (already resolved from companyEmail || email at top)
+      const ch = (clientEmail || "?").charAt(0).toUpperCase();
       profileIcon.style.backgroundImage      = "";
       profileIcon.textContent                = ch;
       profileIconLarge.style.backgroundImage = "";
@@ -1397,9 +1421,13 @@ deletePictureBtn.addEventListener('click', async () => {
   }
 });
 
-// Profile picture preview
+// =========================
+// Profile picture preview (full-size view inside dialog)
+// =========================
 profileIconLarge.addEventListener("click", () => {
-  const pictureUrl = profileIconLarge.style.backgroundImage.replace(/^url\(["']?/, "").replace(/["']?\)$/, "");
+  const pictureUrl = profileIconLarge.style.backgroundImage
+    .replace(/^url\(["']?/, "")
+    .replace(/["']?\)$/, "");
   if (!pictureUrl) return;
 
   if (profileDefault) profileDefault.style.display = "none";
