@@ -5181,9 +5181,11 @@ bootstrapUser();
 
 
 // =======================================================================
-//  WORK CENTER + PLANNING & EXECUTION — COMPLETE REWRITE
-//  Drop this entire block at the bottom of your main JS file,
-//  replacing all previous WS-* and PE sections.
+//  WORK CENTER + PLANNING & EXECUTION — COMPLETE REWRITE (FIXED)
+//  Fixes applied:
+//   1. Added GET /api/project-milestones route call for milestone picker
+//   2. P&E create form sends milestone_id alongside milestone_ref
+//   3. All fixes are purely frontend — backend side column fix is separate
 // =======================================================================
 
 
@@ -5217,7 +5219,7 @@ function wcSide(role) {
   const normalized = String(role).trim().toLowerCase().replace(/[-_ ]+/g, '');
   if (['contractor', 'contractorpm'].includes(normalized)) return 'Contractor';
   if (['consultant', 'consultantpm'].includes(normalized)) return 'Consultant';
-  if (['client', 'clientpm'].includes(normalized))     return 'Client';
+  if (['client', 'clientpm'].includes(normalized))         return 'Client';
   return null;
 }
 function isWCLeader(role) { return wcSide(role) !== null; }
@@ -5291,6 +5293,16 @@ function wcStatusBadge(status) {
         if (cached && !cached.is_viewed && !isCreator) _wcMarkViewed(recordId);
         _wcLoadDetail(recordId, 'work-center');
       }
+      detail.style.display = isOpen ? 'none' : 'block';
+      if (chevron) chevron.textContent = isOpen ? '▾' : '▴';
+      return;
+    }
+    if (tabKey === 'planning-execution') {
+      const detail  = document.getElementById(`pe-detail-${recordId}`);
+      const chevron = document.querySelector(`.chevron-${recordId}`);
+      if (!detail) return;
+      const isOpen = detail.style.display !== 'none';
+      if (!isOpen) _peLoadDetail(recordId, 'planning-execution');
       detail.style.display = isOpen ? 'none' : 'block';
       if (chevron) chevron.textContent = isOpen ? '▾' : '▴';
       return;
@@ -5372,7 +5384,6 @@ async function loadWCRecords() {
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    // Backend already filters: returns only tasks where user is creator OR in assigned_members
     const records = (data.records || []).map(r => ({ ...r, _tabKey: 'work-center' }));
     recordsCache['work-center'] = records;
     _renderWCList(records);
@@ -5454,7 +5465,6 @@ function _renderWCList(records) {
     const startDate = task.start_date ? new Date(task.start_date).toLocaleDateString() : '—';
     const endDate   = task.end_date   ? new Date(task.end_date).toLocaleDateString()   : '—';
 
-    // Show activity link badge if task is tied to a P&E activity
     const activityBadge = task.activity_id
       ? `<span style="background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;border-radius:8px;
           padding:1px 8px;font-size:10px;font-weight:700;margin-left:4px;">
@@ -5523,7 +5533,6 @@ async function _wcLoadDetail(recordId, tabKey) {
     let progressEntries = [];
     if (res && res.ok) { const d = await res.json(); progressEntries = d.entries || []; }
 
-    // Filter entries: members only see their own entries
     const myEntries = leader
       ? progressEntries
       : progressEntries.filter(e => String(e.member_id) === String(window.currentUserId));
@@ -5539,7 +5548,7 @@ async function _wcLoadDetail(recordId, tabKey) {
   }
 }
 
-// ── PM View (Section A editable + Section B all entries with validate) ────────
+// ── PM View ────────────────────────────────────────────────────────────────
 function _wcPMView(task, progressEntries) {
   const members = Array.isArray(task.assigned_members) ? task.assigned_members : [];
   const chips = members.length
@@ -5655,17 +5664,15 @@ function _wcPMView(task, progressEntries) {
     `<option value="${s}" ${(task.status || 'ongoing') === s ? 'selected' : ''}>
       ${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join('');
 
-  // Show linked activity info if tied
   const activityInfo = task.activity_id ? `
     <div style="padding:8px 10px;background:#f0fdf4;border:1px solid #bbf7d0;
       border-radius:8px;font-size:12px;color:#166534;margin-bottom:4px;">
-      📊 Tied to P&E Activity <strong>#${escapeHtml(String(task.activity_id))}</strong>
+      📊 Tied to P&amp;E Activity <strong>#${escapeHtml(String(task.activity_id))}</strong>
       ${task.activity_title ? ` — ${escapeHtml(task.activity_title)}` : ''}
     </div>` : '';
 
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-
       <!-- SECTION A — Edit Task -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
@@ -5688,8 +5695,7 @@ function _wcPMView(task, progressEntries) {
               letter-spacing:.5px;display:block;margin-bottom:3px;">Description</label>
             <textarea id="wc-ed-desc-${task.id}"
               style="width:100%;min-height:70px;padding:8px 10px;border:1px solid #d1d5db;
-              border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;">
-              ${escapeHtml(task.description || '')}</textarea>
+              border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;">${escapeHtml(task.description || '')}</textarea>
           </div>
           <div>
             <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
@@ -5771,7 +5777,6 @@ function _wcPMView(task, progressEntries) {
           </div>
         </div>
       </div>
-
       <!-- SECTION B — Progress entries -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
@@ -5785,7 +5790,7 @@ function _wcPMView(task, progressEntries) {
     </div>`;
 }
 
-// ── Member View (Section A read-only + Section B submit + own history) ────────
+// ── Member View ────────────────────────────────────────────────────────────
 function _wcMemberView(task, myEntries) {
   const members  = Array.isArray(task.assigned_members) ? task.assigned_members : [];
   const valColor = { pending:'#f59e0b', approved:'#10b981', rejected:'#ef4444' };
@@ -5827,7 +5832,6 @@ function _wcMemberView(task, myEntries) {
 
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-
       <!-- Section A read-only -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
@@ -5838,8 +5842,7 @@ function _wcMemberView(task, myEntries) {
         <div style="font-size:12px;color:#374151;display:flex;flex-direction:column;gap:9px;">
           <div><strong>Title:</strong> ${escapeHtml(task.title || '—')}</div>
           <div><strong>Description:</strong>
-            <div style="margin-top:3px;line-height:1.6;">
-              ${escapeHtml(task.description || '—')}</div>
+            <div style="margin-top:3px;line-height:1.6;">${escapeHtml(task.description || '—')}</div>
           </div>
           <div><strong>Work Package:</strong> ${escapeHtml(task.work_package || '—')}</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
@@ -5875,7 +5878,6 @@ function _wcMemberView(task, myEntries) {
             </div>` : ''}
         </div>
       </div>
-
       <!-- Section B submit + history -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;
         display:flex;flex-direction:column;gap:10px;">
@@ -5914,8 +5916,8 @@ function _wcMemberView(task, myEntries) {
               font-size:13px;box-sizing:border-box;"/>
           </div>
           <div>
-            <label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
-              letter-spacing:.5px;display:block;margin-bottom:3px;">Equipment</label>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;font-size:11px;
+              text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px;">Equipment</label>
             <input id="wc-pr-equipment-${task.id}" type="text" placeholder="e.g. excavator"
               style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
               font-size:13px;box-sizing:border-box;"/>
@@ -5961,8 +5963,6 @@ function _wcMemberView(task, myEntries) {
 }
 
 // ── Not-assigned View ─────────────────────────────────────────────────────────
-// NOTE: Backend should not return tasks the user has no relation to.
-// This view is a safety fallback only.
 function _wcNotAssignedView(task) {
   return `
     <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;padding:20px;
@@ -6109,10 +6109,9 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
 async function _wcHandleValidate(tabKey, progressId, validateAction) {
   try {
     const notes = document.getElementById(`wc-val-notes-${progressId}`)?.value.trim() || '';
-    // comment_only action just saves notes without changing validation_status
     const body = {
-      projectId:         localStorage.getItem('activeProjectId'),
-      validation_notes:  notes,
+      projectId:        localStorage.getItem('activeProjectId'),
+      validation_notes: notes,
     };
     if (validateAction !== 'comment_only') body.validation_status = validateAction;
 
@@ -6183,11 +6182,9 @@ async function _wcDownloadTaskFile(taskId, fileName) {
   } catch (err) { alert('Failed to download task file.'); }
 }
 
+
 // ███████████████████████████████████████████████████████████████████████
-//  ██  WORK CENTER — _wcOpenCreateForm PATCH
-//  Only change: activity link field supports manual type OR choose from
-//  this side's P&E activities (replaces the old dropdown-only field).
-//  Everything else in Work Center is unchanged.
+//  ██  WORK CENTER — _wcOpenCreateForm
 // ███████████████████████████████████████████████████████████████████████
 
 async function _wcOpenCreateForm() {
@@ -6227,8 +6224,6 @@ async function _wcOpenCreateForm() {
         Link to P&amp;E Activity
         <span style="font-weight:400;text-transform:none;color:#9ca3af;">(optional)</span>
       </label>
-
-      <!-- Tab toggle -->
       <div style="display:flex;gap:6px;margin-bottom:8px;">
         <button type="button" id="wc-act-tab-pick"
           onclick="_wcActTabSwitch('pick')"
@@ -6245,7 +6240,6 @@ async function _wcOpenCreateForm() {
           background:#f3f4f6;color:#374151;border:1px solid #d1d5db;cursor:pointer;">
           Standalone (no link)</button>
       </div>
-
       <!-- Pick panel -->
       <div id="wc-act-panel-pick">
         <div id="wc-activity-display"
@@ -6266,8 +6260,7 @@ async function _wcOpenCreateForm() {
                 No P&amp;E activities found for your side yet.</div>`}
         </div>
       </div>
-
-      <!-- Type panel (hidden by default) -->
+      <!-- Type panel -->
       <div id="wc-act-panel-type" style="display:none;">
         <input id="wc-cr-activity-ref" type="text"
           placeholder="e.g. Excavation Grid B — Activity #12"
@@ -6276,7 +6269,6 @@ async function _wcOpenCreateForm() {
         <p style="font-size:11px;color:#9ca3af;margin:4px 0 0;">
           Type the activity name or reference as it appears in your P&amp;E log.</p>
       </div>
-
       <!-- None panel -->
       <div id="wc-act-panel-none" style="display:none;">
         <div style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;
@@ -6386,7 +6378,7 @@ async function _wcOpenCreateForm() {
       </div>
     </div>`);
 
-  // ── Wire activity picker helpers ──
+  // Wire activity picker helpers
   window._wcActivityPicker = function() {
     const dd = document.getElementById('wc-activity-dropdown');
     if (dd) dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
@@ -6420,9 +6412,9 @@ async function _wcOpenCreateForm() {
     [pickPanel, typePanel, nonePanel].forEach(p => { if (p) p.style.display = 'none'; });
     [pickBtn, typeBtn].forEach(b => { if (b) Object.assign(b.style, inactive); });
 
-    if (tab === 'pick')   { pickPanel.style.display='block'; Object.assign(pickBtn.style, active); }
-    else if (tab === 'type') { typePanel.style.display='block'; Object.assign(typeBtn.style, active); }
-    else                  { nonePanel.style.display='block'; }
+    if (tab === 'pick')      { pickPanel.style.display = 'block'; Object.assign(pickBtn.style, active); }
+    else if (tab === 'type') { typePanel.style.display = 'block'; Object.assign(typeBtn.style, active); }
+    else                     { nonePanel.style.display = 'block'; }
   };
 
   // Load team members
@@ -6464,15 +6456,12 @@ async function _wcOpenCreateForm() {
 
   saveBtn?.addEventListener('click', async () => {
     try {
-      // Resolve activity link
-      const pickPanel    = document.getElementById('wc-act-panel-pick');
-      const typePanel    = document.getElementById('wc-act-panel-type');
-      const usePickMode  = pickPanel && pickPanel.style.display !== 'none';
-      const useTypeMode  = typePanel && typePanel.style.display !== 'none';
-      const activityId   = usePickMode ? (document.getElementById('wc-cr-activity')?.value || '') : '';
-      // activity_ref is informational only — backend stores in description or a notes field
-      // For now we send it alongside so backend can log it
-      const activityRef  = useTypeMode ? (document.getElementById('wc-cr-activity-ref')?.value.trim() || '') : '';
+      const pickPanel   = document.getElementById('wc-act-panel-pick');
+      const typePanel   = document.getElementById('wc-act-panel-type');
+      const usePickMode = pickPanel && pickPanel.style.display !== 'none';
+      const useTypeMode = typePanel && typePanel.style.display !== 'none';
+      const activityId  = usePickMode ? (document.getElementById('wc-cr-activity')?.value || '') : '';
+      const activityRef = useTypeMode ? (document.getElementById('wc-cr-activity-ref')?.value.trim() || '') : '';
 
       const title     = document.getElementById('wc-cr-title')?.value.trim();
       const desc      = document.getElementById('wc-cr-desc')?.value.trim();
@@ -6529,17 +6518,10 @@ async function _wcOpenCreateForm() {
   });
 }
 
-// ███████████████████████████████████████████████████████████████████████
-//  ██  PLANNING & EXECUTION  — FULL REWRITE
-//  Key changes vs original:
-//   1. Bottom content = collapsible cards (no gray panel for list)
-//   2. Add form (gray panel) = Section A ONLY (no execution section)
-//   3. Expand a card → shows Section A (read-only) + Section B (execution form + history)
-//   4. Side isolation: backend already filters; frontend uses window.currentUserSide
-//   5. Milestone picker: choose from side's milestones OR type manually
-//   6. Status hidden from user — system managed
-// ███████████████████████████████████████████████████████████████████████
 
+// ███████████████████████████████████████████████████████████████████████
+//  ██  PLANNING & EXECUTION
+// ███████████████████████████████████████████████████████████████████████
 
 // ── Load records ─────────────────────────────────────────────────────────────
 async function loadPERecords() {
@@ -6583,7 +6565,6 @@ async function loadPERecords() {
   }
 }
 
-
 // ── Shell ─────────────────────────────────────────────────────────────────────
 function _renderPEShell() {
   const leader = isWCLeader(window.currentUserRole);
@@ -6613,7 +6594,6 @@ function _renderPEShell() {
   if (leader) document.getElementById('peAddBtn')?.addEventListener('click', () => _peOpenAddForm());
 }
 
-
 // ── Render list as collapsible cards ─────────────────────────────────────────
 function _renderPEList(records) {
   const recordsList    = document.getElementById('recordsList');
@@ -6627,10 +6607,9 @@ function _renderPEList(records) {
   }
   placeholderDiv.style.display = 'none';
 
-  // Group by milestone label for visual clarity
   const byMilestone = {};
   records.forEach(r => {
-    const key = r.milestone_id || r.milestone_ref || 'none';
+    const key   = r.milestone_id || r.milestone_ref || 'none';
     const label = r.milestone_title || r.milestone_ref || 'No Milestone';
     if (!byMilestone[key]) byMilestone[key] = { label, items: [] };
     byMilestone[key].items.push(r);
@@ -6654,7 +6633,6 @@ function _renderPEList(records) {
           style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #007B8A;
           border-radius:10px;margin-bottom:8px;overflow:hidden;
           box-shadow:0 1px 3px rgba(0,0,0,.06);">
-          <!-- Card header — click to toggle -->
           <div class="doc-item-header" data-action="toggle"
             style="display:flex;justify-content:space-between;align-items:center;
             padding:12px 16px;cursor:pointer;gap:12px;">
@@ -6681,7 +6659,6 @@ function _renderPEList(records) {
               <span style="color:#9ca3af;font-size:16px;" class="chevron-${r.id}">▾</span>
             </div>
           </div>
-          <!-- Expandable detail — loaded async on first open -->
           <div class="doc-detail" id="pe-detail-${r.id}"
             style="display:none;border-top:1px solid #e5e7eb;">
             <div id="pe-detail-inner-${r.id}" style="padding:16px;background:#f8fafc;">
@@ -6695,8 +6672,7 @@ function _renderPEList(records) {
   }).join('');
 }
 
-
-// ── Async detail loader (called by global toggle handler) ─────────────────────
+// ── Async detail loader ───────────────────────────────────────────────────────
 async function _peLoadDetail(recordId, tabKey) {
   const container = document.getElementById(`pe-detail-inner-${recordId}`);
   if (!container) return;
@@ -6729,14 +6705,12 @@ async function _peLoadDetail(recordId, tabKey) {
   }
 }
 
-
-// ── Detail HTML (two-column: Section A read-only | Section B execution) ────────
+// ── Detail HTML ────────────────────────────────────────────────────────────────
 function _peDetailHtml(task, trackingEntries, canEdit, leader) {
-  // ── Progress bar (actual vs planned) ──
-  const totalActual  = trackingEntries.reduce((s, e) => s + (Number(e.actual_quantity) || 0), 0);
-  const plannedQty   = Number(task.planned_quantity) || 0;
-  const progressPct  = plannedQty > 0 ? Math.min(100, Math.round((totalActual / plannedQty) * 100)) : 0;
-  const latestPct    = trackingEntries.length
+  const totalActual = trackingEntries.reduce((s, e) => s + (Number(e.actual_quantity) || 0), 0);
+  const plannedQty  = Number(task.planned_quantity) || 0;
+  const progressPct = plannedQty > 0 ? Math.min(100, Math.round((totalActual / plannedQty) * 100)) : 0;
+  const latestPct   = trackingEntries.length
     ? Number(trackingEntries[trackingEntries.length - 1].progress_pct) || progressPct
     : progressPct;
 
@@ -6750,8 +6724,6 @@ function _peDetailHtml(task, trackingEntries, canEdit, leader) {
       <strong style="color:${latestPct >= 100 ? '#10b981' : '#3b82f6'};">${latestPct}%</strong>
     </div>`;
 
-  // ── Tracking history ──
-  const valColor = { pending:'#f59e0b', approved:'#10b981', rejected:'#ef4444' };
   const trackingHtml = trackingEntries.length
     ? [...trackingEntries].reverse().map(e => `
         <div style="background:#fff;border:1px solid #dbeafe;border-radius:8px;
@@ -6786,7 +6758,6 @@ function _peDetailHtml(task, trackingEntries, canEdit, leader) {
         </div>`).join('')
     : `<div style="text-align:center;padding:20px 0;color:#9ca3af;font-size:12px;">No execution entries yet.</div>`;
 
-  // ── Section B: execution form (only if canEdit) ──
   const execFormHtml = canEdit ? `
     <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;
       padding:14px;display:flex;flex-direction:column;gap:10px;margin-bottom:14px;">
@@ -6894,8 +6865,7 @@ function _peDetailHtml(task, trackingEntries, canEdit, leader) {
 
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-
-      <!-- SECTION A — Planned Activity (read-only) -->
+      <!-- SECTION A — Planned Activity -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
           padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
@@ -6945,7 +6915,6 @@ function _peDetailHtml(task, trackingEntries, canEdit, leader) {
               border-radius:8px;cursor:pointer;">🗑️ Delete Activity</button>
           </div>` : ''}
       </div>
-
       <!-- SECTION B — Actual Execution -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;
         display:flex;flex-direction:column;gap:10px;">
@@ -6955,15 +6924,10 @@ function _peDetailHtml(task, trackingEntries, canEdit, leader) {
           <span style="font-size:11px;font-weight:400;color:#6b7280;margin-left:6px;">
             ${trackingEntries.length} entr${trackingEntries.length===1?'y':'ies'}</span>
         </div>
-
         ${execFormHtml}
-
-        <!-- Progress bar -->
         <div style="padding:10px 12px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;">
           ${progressBar}
         </div>
-
-        <!-- History -->
         <div>
           <div style="font-size:12px;font-weight:700;color:#6b7280;margin-bottom:8px;">
             Execution History</div>
@@ -6973,32 +6937,26 @@ function _peDetailHtml(task, trackingEntries, canEdit, leader) {
     </div>`;
 }
 
-
-// ── Wire buttons inside a loaded detail card ─────────────────────────────────
+// ── Wire buttons inside a loaded detail card ──────────────────────────────────
 function _peWireDetailButtons(recordId, task, canEdit) {
   const container = document.getElementById(`pe-detail-inner-${recordId}`);
   if (!container) return;
 
-  // Save execution entry
   container.querySelector(`[data-action="pe-save-actual"]`)
     ?.addEventListener('click', () => _peHandleSaveActual(recordId, task));
 
-  // Edit plan (opens gray panel pre-filled)
   container.querySelector(`[data-action="pe-open-edit"]`)
     ?.addEventListener('click', () => _peOpenEditForm(recordId));
 
-  // Delete
   container.querySelector(`[data-action="pe-delete"]`)
     ?.addEventListener('click', () => _peHandleDelete(recordId));
 
-  // Download task file
   container.querySelector(`[data-action="pe-dl-task"]`)
     ?.addEventListener('click', e => {
       const btn = e.currentTarget;
       _peDownloadTaskFile(btn.dataset.taskId, btn.dataset.filename);
     });
 }
-
 
 // ── Save execution entry ──────────────────────────────────────────────────────
 async function _peHandleSaveActual(recordId, task) {
@@ -7043,7 +7001,6 @@ async function _peHandleSaveActual(recordId, task) {
     alert('✓ Execution entry saved.');
     delete recordsCache['planning-execution'];
     await loadPERecords();
-    // Re-trigger detail load for this card
     const detailEl = document.getElementById(`pe-detail-${recordId}`);
     if (detailEl && detailEl.style.display !== 'none') {
       const inner = document.getElementById(`pe-detail-inner-${recordId}`);
@@ -7055,7 +7012,6 @@ async function _peHandleSaveActual(recordId, task) {
     alert('Failed to save execution entry: ' + err.message);
   }
 }
-
 
 // ── Delete activity ───────────────────────────────────────────────────────────
 async function _peHandleDelete(recordId) {
@@ -7073,7 +7029,6 @@ async function _peHandleDelete(recordId) {
     loadPERecords();
   } catch (err) { alert('Failed to delete: ' + err.message); }
 }
-
 
 // ── Download task file ────────────────────────────────────────────────────────
 async function _peDownloadTaskFile(taskId, fileName) {
@@ -7093,31 +7048,71 @@ async function _peDownloadTaskFile(taskId, fileName) {
 }
 
 
-// ── ADD form (Section A only — gray panel) ────────────────────────────────────
+// ── ADD form ──────────────────────────────────────────────────────────────────
 async function _peOpenAddForm() {
   if (!isWCLeader(window.currentUserRole)) {
     alert('Only side leaders can add activities.'); return;
   }
   const projectId = localStorage.getItem('activeProjectId');
-  expandGrayPart(_pePlanFormHtml(null, true));
-  _pePlanFormWire(null, true, projectId);
+
+  // FIXED: fetch milestones from the correct route
+  let milestones = [];
+  try {
+    const res = await _wcFetch(
+      `${API}/project-milestones?projectId=${encodeURIComponent(projectId)}`
+    );
+    if (res && res.ok) {
+      const d = await res.json();
+      milestones = d.milestones || d || [];
+    }
+  } catch (e) { /* non-fatal — picker will show empty */ }
+
+  expandGrayPart(_pePlanFormHtml(null, milestones, true));
+  _pePlanFormWire(null, milestones, true, projectId);
 }
 
-
-// ── EDIT form (pre-filled, Section A only) ────────────────────────────────────
+// ── EDIT form ─────────────────────────────────────────────────────────────────
 async function _peOpenEditForm(recordId) {
   const tabKey  = 'planning-execution';
   const cached  = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
   if (!cached) return alert('Activity not found in cache. Please refresh.');
   const projectId = localStorage.getItem('activeProjectId');
-  expandGrayPart(_pePlanFormHtml(cached, false));
-  _pePlanFormWire(cached, false, projectId);
+
+  // FIXED: fetch milestones from the correct route
+  let milestones = [];
+  try {
+    const res = await _wcFetch(
+      `${API}/project-milestones?projectId=${encodeURIComponent(projectId)}`
+    );
+    if (res && res.ok) {
+      const d = await res.json();
+      milestones = d.milestones || d || [];
+    }
+  } catch (e) { /* non-fatal */ }
+
+  expandGrayPart(_pePlanFormHtml(cached, milestones, false));
+  _pePlanFormWire(cached, milestones, false, projectId);
 }
 
 
-// ── Plan form HTML (shared by Add + Edit) ─────────────────────────────────────
-function _pePlanFormHtml(cached, isNew) {
+// ── Plan form HTML ────────────────────────────────────────────────────────────
+function _pePlanFormHtml(cached, milestones, isNew) {
   const v = f => escapeHtml(String(cached?.[f] || ''));
+
+  const milestoneRows = milestones.map(m => `
+    <div onclick="_peSelectMilestone('${escapeHtml(String(m.id))}','${escapeHtml(m.title||m.name||String(m.id))}')"
+      style="padding:10px 14px;cursor:pointer;font-size:13px;color:#374151;
+      border-bottom:1px solid #f3f4f6;"
+      onmouseover="this.style.background='#eff6ff'"
+      onmouseout="this.style.background='#fff'">
+      <strong style="color:#007B8A;">#${escapeHtml(String(m.id))}</strong>
+      — ${escapeHtml(m.title||m.name||'Untitled')}
+      ${m.activity_status ? `<span style="font-size:11px;color:#9ca3af;margin-left:6px;">(${escapeHtml(m.activity_status)})</span>` : ''}
+    </div>`).join('');
+
+  const currentMilestoneLabel = cached
+    ? (cached.milestone_title || cached.milestone_ref || '')
+    : '';
 
   return `
     <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
@@ -7127,19 +7122,63 @@ function _pePlanFormHtml(cached, isNew) {
         <p style="margin:4px 0 0;font-size:12px;color:#6b7280;">
           Fill the planned activity details. Execution entries are logged from the activity card.</p>
       </div>
-
       <div style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
 
+        <!-- Milestone section -->
         <div>
           <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Milestone (optional)</label>
-          <input id="pe-milestone-ref" type="text"
-            value="${v('milestone_ref')}"
-            placeholder="e.g. M-03 Foundation Works"
-            style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
-            font-size:13px;box-sizing:border-box;"/>
-          <p style="font-size:11px;color:#9ca3af;margin:4px 0 0;">
-            Type the milestone name or reference code as it appears in your schedule, or leave blank if not applicable.</p>
+            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">
+            Milestone *
+            <span style="font-weight:400;text-transform:none;color:#9ca3af;">
+              (choose from schedule or type manually)</span>
+          </label>
+          <div style="display:flex;gap:6px;margin-bottom:8px;">
+            <button type="button" id="pe-ms-tab-pick"
+              onclick="_peMsTabSwitch('pick')"
+              style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:6px;
+              background:#007B8A;color:#fff;border:none;cursor:pointer;">Choose from list</button>
+            <button type="button" id="pe-ms-tab-type"
+              onclick="_peMsTabSwitch('type')"
+              style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:6px;
+              background:#f3f4f6;color:#374151;border:1px solid #d1d5db;cursor:pointer;">
+              Type manually</button>
+          </div>
+          <!-- Picker panel -->
+          <div id="pe-ms-panel-pick">
+            <div id="pe-milestone-display"
+              style="padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
+              font-size:13px;background:#fff;cursor:pointer;
+              display:flex;justify-content:space-between;align-items:center;color:#374151;"
+              onclick="_peMilestonePicker()">
+              <span id="pe-milestone-label">
+                ${currentMilestoneLabel || 'Click to choose a milestone…'}
+              </span>
+              <span style="color:#9ca3af;">▾</span>
+            </div>
+            <!-- FIXED: stores both id and ref text -->
+            <input type="hidden" id="pe-milestone-id"
+              value="${cached?.milestone_id ? escapeHtml(String(cached.milestone_id)) : ''}"/>
+            <input type="hidden" id="pe-milestone-ref-from-picker"
+              value="${cached?.milestone_ref ? escapeHtml(cached.milestone_ref) : ''}"/>
+            <div id="pe-milestone-dropdown"
+              style="display:none;position:relative;z-index:50;background:#fff;
+              border:1px solid #d1d5db;border-radius:8px;
+              box-shadow:0 4px 16px rgba(0,0,0,.12);max-height:180px;overflow-y:auto;margin-top:2px;">
+              ${milestones.length ? milestoneRows
+                : `<div style="padding:14px;font-size:12px;color:#9ca3af;text-align:center;">
+                    No milestones found. Make sure a schedule has been saved for this project.</div>`}
+            </div>
+          </div>
+          <!-- Manual type panel -->
+          <div id="pe-ms-panel-type" style="display:none;">
+            <input id="pe-milestone-ref" type="text"
+              value="${v('milestone_ref')}"
+              placeholder="e.g. M-03 Foundation Works"
+              style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
+              font-size:13px;box-sizing:border-box;"/>
+            <p style="font-size:11px;color:#9ca3af;margin:4px 0 0;">
+              Type the milestone name or reference code as it appears in your schedule.</p>
+          </div>
         </div>
 
         <!-- Title -->
@@ -7198,7 +7237,7 @@ function _pePlanFormHtml(cached, isNew) {
           </div>
         </div>
 
-        <!-- Planned work / resources -->
+        <!-- Planned resources -->
         <div>
           <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
             font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Planned Work</label>
@@ -7241,7 +7280,7 @@ function _pePlanFormHtml(cached, isNew) {
         </div>
       </div>
 
-      <!-- Footer buttons -->
+      <!-- Footer -->
       <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
         background:#fff;display:flex;gap:12px;">
         <button type="button" id="pe-save-plan"
@@ -7257,13 +7296,71 @@ function _pePlanFormHtml(cached, isNew) {
 }
 
 
-// ── Plan form wiring (milestone picker, tab switch, save) ─────────────────────
-function _pePlanFormWire(cached, isNew, projectId) {
+// ── Plan form wiring ──────────────────────────────────────────────────────────
+function _pePlanFormWire(cached, milestones, isNew, projectId) {
+  // Milestone picker dropdown toggle
+  window._peMilestonePicker = function() {
+    const dd = document.getElementById('pe-milestone-dropdown');
+    if (dd) dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+  };
+
+  // FIXED: stores both id and the title as ref
+  window._peSelectMilestone = function(id, label) {
+    const hiddenId  = document.getElementById('pe-milestone-id');
+    const hiddenRef = document.getElementById('pe-milestone-ref-from-picker');
+    const display   = document.getElementById('pe-milestone-label');
+    const dd        = document.getElementById('pe-milestone-dropdown');
+    if (hiddenId)  hiddenId.value  = id;
+    if (hiddenRef) hiddenRef.value = label;
+    if (display)   display.textContent = `${label}`;
+    if (dd)        dd.style.display = 'none';
+  };
+
+  // Close dropdown on outside click
+  const _ddClose = e => {
+    const dd = document.getElementById('pe-milestone-dropdown');
+    if (dd && !e.target.closest('#pe-milestone-display') && !e.target.closest('#pe-milestone-dropdown'))
+      dd.style.display = 'none';
+    if (!document.getElementById('pe-milestone-dropdown'))
+      document.removeEventListener('click', _ddClose);
+  };
+  document.addEventListener('click', _ddClose);
+
+  // Tab switch
+  window._peMsTabSwitch = function(tab) {
+    const pickPanel = document.getElementById('pe-ms-panel-pick');
+    const typePanel = document.getElementById('pe-ms-panel-type');
+    const pickBtn   = document.getElementById('pe-ms-tab-pick');
+    const typeBtn   = document.getElementById('pe-ms-tab-type');
+    if (tab === 'pick') {
+      pickPanel.style.display = 'block'; typePanel.style.display = 'none';
+      pickBtn.style.background = '#007B8A'; pickBtn.style.color = '#fff'; pickBtn.style.border = 'none';
+      typeBtn.style.background = '#f3f4f6'; typeBtn.style.color = '#374151'; typeBtn.style.border = '1px solid #d1d5db';
+    } else {
+      pickPanel.style.display = 'none'; typePanel.style.display = 'block';
+      typeBtn.style.background = '#007B8A'; typeBtn.style.color = '#fff'; typeBtn.style.border = 'none';
+      pickBtn.style.background = '#f3f4f6'; pickBtn.style.color = '#374151'; pickBtn.style.border = '1px solid #d1d5db';
+    }
+  };
+
+  // If editing with only a text ref and no id, default to type tab
+  if (cached && cached.milestone_ref && !cached.milestone_id) {
+    window._peMsTabSwitch('type');
+  }
+
   // Save plan
   document.getElementById('pe-save-plan')?.addEventListener('click', async () => {
     try {
-      // Determine milestone source
-      const milestoneRef = (document.getElementById('pe-milestone-ref')?.value.trim() || '');
+      const pickPanel   = document.getElementById('pe-ms-panel-pick');
+      const usePickMode = pickPanel && pickPanel.style.display !== 'none';
+
+      // FIXED: collect both milestone_id and milestone_ref from whichever mode is active
+      const milestoneId  = usePickMode
+        ? (document.getElementById('pe-milestone-id')?.value || '')
+        : '';
+      const milestoneRef = usePickMode
+        ? (document.getElementById('pe-milestone-ref-from-picker')?.value.trim() || '')
+        : (document.getElementById('pe-milestone-ref')?.value.trim() || '');
 
       const title    = document.getElementById('pe-title')?.value.trim();
       const desc     = document.getElementById('pe-desc')?.value.trim();
@@ -7281,6 +7378,8 @@ function _pePlanFormWire(cached, isNew, projectId) {
       if (!start || !end) return alert('Start and end dates are required.');
       if (!qty)           return alert('Planned quantity is required.');
       if (!unit)          return alert('Unit is required.');
+      if (!milestoneId && !milestoneRef)
+        return alert('Please choose a milestone from the list or type one manually.');
 
       const form = new FormData();
       form.append('projectId',         projectId);
@@ -7294,8 +7393,10 @@ function _pePlanFormWire(cached, isNew, projectId) {
       form.append('planned_manpower',  manpower || '');
       form.append('planned_equipment', equip || '');
       form.append('planned_materials', mats || '');
-      if (milestoneRef) form.append('milestone_ref', milestoneRef);
-      if (!isNew)       form.append('id', cached.id);
+      // FIXED: always send milestone_ref (required by backend); send milestone_id when available
+      form.append('milestone_ref',     milestoneRef || milestoneId);
+      if (milestoneId) form.append('milestone_id', milestoneId);
+      if (!isNew)      form.append('id', cached.id);
       if (fileInput?.files?.[0]) form.append('linked_file', fileInput.files[0]);
 
       const btn = document.getElementById('pe-save-plan');
@@ -7306,7 +7407,7 @@ function _pePlanFormWire(cached, isNew, projectId) {
         method: isNew ? 'POST' : 'PUT', body: form,
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || 'Unable to save activity');
+      if (!res.ok) throw new Error(data.message || `HTTP ${res.status} — ${data.error || 'Unable to save activity'}`);
 
       alert(isNew ? '✓ Activity created.' : '✓ Activity updated.');
       delete recordsCache['planning-execution'];
@@ -7321,10 +7422,9 @@ function _pePlanFormWire(cached, isNew, projectId) {
   });
 }
 
-
 // ── Expose aliases ────────────────────────────────────────────────────────────
 window.openPlanningExecutionForm = _peOpenAddForm;
-window._peOpenForm = _peOpenAddForm;
+window._peOpenForm               = _peOpenAddForm;
 </script>
 </body>
 </html>
