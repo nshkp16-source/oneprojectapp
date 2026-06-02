@@ -6520,39 +6520,96 @@ async function _wcOpenCreateForm() {
 
 
 // ███████████████████████████████████████████████████████████████████████
-//  ██  PLANNING & EXECUTION
+//  PLANNING & EXECUTION  — corrected layout
+//
+//  Layout:
+//  • Gray panel  = Add Activity form / Edit Activity form
+//  • bottomContent = activity cards list (always rendered here)
+//    └─ Expanded card = LEFT (plan, read-only) + RIGHT (daily execution)
+//
+//  Rules:
+//  • Milestone = text label only (type or pick from schedule names).
+//  • Unit      = dropdown from fixed list — no free typing.
+//  • Status    = derived, never set from plan form:
+//      before start_date          → Not Yet Started
+//      on/after start_date        → Ongoing
+//      ongoing + no recent entry  → Delayed
+//      progress_pct >= 100        → Completed
+//      user ticks "mark closed"   → Closed
+//  • Only the creating leader can add/edit/log entries.
+//  • Same-side team members can view everything, edit nothing.
 // ███████████████████████████████████████████████████████████████████████
 
-// ── Load records ─────────────────────────────────────────────────────────────
-async function loadPERecords() {
-  const recordsList    = document.getElementById('recordsList');
-  const placeholderDiv = document.querySelector('.no-data-placeholder');
-  if (!recordsList || !placeholderDiv) return;
+// ── Unit catalogue ────────────────────────────────────────────────────────────
+const PE_UNITS = [
+  'm', 'm²', 'm³', 'km', 'cm', 'mm',
+  'kg', 't', 'lb',
+  'l', 'ml',
+  'pcs', 'nos', 'sets', 'pairs',
+  'bags', 'rolls', 'sheets', 'boxes', 'pallets',
+  'days', 'hrs', 'shifts',
+  'trips', 'loads',
+  '%', 'lump sum',
+];
 
+function _peUnitOptions(selected) {
+  return PE_UNITS.map(u =>
+    `<option value="${u}"${selected === u ? ' selected' : ''}>${u}</option>`
+  ).join('');
+}
+
+// ── Derive status from task + tracking entries ────────────────────────────────
+function _peDeriveStatus(task, trackingEntries) {
+  if (task.status === 'closed')     return { label: 'Closed',          color: '#6b7280' };
+  if (task.status === 'completed')  return { label: 'Completed',       color: '#10b981' };
+  const today     = new Date(); today.setHours(0,0,0,0);
+  const startDate = task.start_date ? new Date(task.start_date) : null;
+  if (startDate) startDate.setHours(0,0,0,0);
+  if (!startDate || today < startDate) return { label: 'Not Yet Started', color: '#f59e0b' };
+  // past start date — check progress
+  const entries   = trackingEntries || [];
+  const latestPct = entries.length
+    ? Number(entries[entries.length - 1].progress_pct) || 0
+    : 0;
+  if (latestPct >= 100) return { label: 'Completed', color: '#10b981' };
+  if (!entries.length)  return { label: 'Delayed',   color: '#ef4444' };
+  const lastDate  = new Date(entries[entries.length - 1].report_date);
+  lastDate.setHours(0,0,0,0);
+  const diffDays  = Math.floor((today - lastDate) / 86400000);
+  if (diffDays > 3)     return { label: 'Delayed',   color: '#ef4444' };
+  return { label: 'Ongoing', color: '#3b82f6' };
+}
+
+// ── Style helpers ─────────────────────────────────────────────────────────────
+function _peLabelStyle() {
+  return 'display:block;font-size:11px;font-weight:700;color:#6b7280;' +
+         'text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;';
+}
+function _peInputStyle(readonly) {
+  return `width:100%;padding:8px;border:1px solid ${readonly ? '#e5e7eb' : '#d1d5db'};` +
+         `border-radius:6px;font-size:13px;box-sizing:border-box;` +
+         `${readonly ? 'background:#f9fafb;' : ''}`;
+}
+
+// ── Load records ──────────────────────────────────────────────────────────────
+async function loadPERecords() {
   const projectId = localStorage.getItem('activeProjectId');
   if (!projectId) {
-    placeholderDiv.style.display = 'block';
-    placeholderDiv.innerHTML = '<p>⚠️ No Project Selected</p>';
+    _peSetPlaceholder('⚠️ No Project Selected');
     return;
   }
   if (recordsCache['planning-execution']) {
-    _renderPEList(recordsCache['planning-execution']); return;
+    _renderPEList(recordsCache['planning-execution']);
+    return;
   }
-
-  recordsList.innerHTML = '';
-  placeholderDiv.style.display = 'block';
-  placeholderDiv.innerHTML = "<p style='color:#999;'>Loading…</p>";
-
+  _peSetPlaceholder('Loading…', '#999');
   try {
     const res = await _wcFetch(`${API}/planning-execution`, {
       method: 'POST',
       body: JSON.stringify({ projectId }),
     });
     if (!res) return;
-    if (res.status === 401) {
-      placeholderDiv.innerHTML = "<p style='color:#ef4444;'>⚠️ Unauthorized. Please log in again.</p>";
-      return;
-    }
+    if (res.status === 401) { _peSetPlaceholder('⚠️ Unauthorized. Please log in again.', '#ef4444'); return; }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data    = await res.json();
     const records = (data.records || []).map(r => ({ ...r, _tabKey: 'planning-execution' }));
@@ -6560,82 +6617,83 @@ async function loadPERecords() {
     _renderPEList(records);
   } catch (err) {
     console.error('loadPERecords error:', err);
-    const pl = document.querySelector('.no-data-placeholder');
-    if (pl) { pl.style.display = 'block'; pl.innerHTML = "<p style='color:#ef4444;'>⚠️ Error loading activities.</p>"; }
+    _peSetPlaceholder('⚠️ Error loading activities.', '#ef4444');
   }
 }
 
-// ── Shell ─────────────────────────────────────────────────────────────────────
+function _peSetPlaceholder(msg, color = '#6b7280') {
+  const pl = document.querySelector('.no-data-placeholder');
+  if (pl) { pl.style.display = 'block'; pl.innerHTML = `<p style="color:${color};">${msg}</p>`; }
+}
+
+// ── Shell (bottomContent) ─────────────────────────────────────────────────────
 function _renderPEShell() {
   const leader = isWCLeader(window.currentUserRole);
-  const addButton = leader
-    ? `<button class="btn primary" id="peAddBtn">➕ Add Activity</button>`
-    : '';
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
-      ${addButton}
+      ${leader ? `<button class="btn primary" id="peAddBtn">➕ Add Activity</button>` : ''}
       <div class="bottom-description">
-        <p>Side leaders plan activities against milestones and track actual execution day by day.</p>
+        <p>Plan activities against milestones and track actual execution day by day.</p>
         <p class="tab-note" style="margin-top:6px;font-size:12px;color:#6b7280;">
           ${leader
             ? 'Add activities, then expand each card to log daily execution entries.'
-            : 'View your side\'s planned activities and their execution progress.'}
+            : 'View planned activities and their execution progress for your side.'}
         </p>
       </div>
     </div>
     <div class="bottom-scroll-area">
       <ul class="doc-list" id="recordsList"></ul>
       <div class="no-data-placeholder">
-        <p>${leader
-          ? 'No activities yet. Click ➕ Add Activity to get started.'
-          : 'No activities found for your side.'}</p>
+        <p>${leader ? 'No activities yet. Click ➕ Add Activity to get started.' : 'No activities found for your side.'}</p>
       </div>
     </div>`;
   if (leader) document.getElementById('peAddBtn')?.addEventListener('click', () => _peOpenAddForm());
 }
 
-// ── Render list as collapsible cards ─────────────────────────────────────────
+// ── Render list ───────────────────────────────────────────────────────────────
 function _renderPEList(records) {
-  const recordsList    = document.getElementById('recordsList');
-  const placeholderDiv = document.querySelector('.no-data-placeholder');
-  if (!recordsList || !placeholderDiv) return;
+  const recordsList = document.getElementById('recordsList');
+  const placeholder = document.querySelector('.no-data-placeholder');
+  if (!recordsList || !placeholder) return;
 
   if (!records.length) {
     recordsList.innerHTML = '';
-    placeholderDiv.style.display = 'block';
+    placeholder.style.display = 'block';
     return;
   }
-  placeholderDiv.style.display = 'none';
+  placeholder.style.display = 'none';
 
+  // Group by milestone_name
   const byMilestone = {};
   records.forEach(r => {
-    const key   = r.milestone_id || r.milestone_ref || 'none';
-    const label = r.milestone_title || r.milestone_ref || 'No Milestone';
-    if (!byMilestone[key]) byMilestone[key] = { label, items: [] };
-    byMilestone[key].items.push(r);
+    const key = r.milestone_name || 'No Milestone';
+    if (!byMilestone[key]) byMilestone[key] = [];
+    byMilestone[key].push(r);
   });
 
-  recordsList.innerHTML = Object.entries(byMilestone).map(([mKey, group]) => {
-    const header = mKey !== 'none' ? `
+  recordsList.innerHTML = Object.entries(byMilestone).map(([mName, items]) => {
+    const header = mName !== 'No Milestone' ? `
       <li style="padding:6px 12px;background:#f0fdf4;border-radius:8px;margin-bottom:6px;
         font-size:12px;font-weight:700;color:#166534;display:flex;align-items:center;gap:6px;">
-        🏁 ${escapeHtml(group.label)}
+        🏁 ${escapeHtml(mName)}
       </li>` : '';
 
-    const cards = group.items.map(r => {
+    const cards = items.map(r => {
       const startDate = r.start_date ? new Date(r.start_date).toLocaleDateString() : '—';
       const endDate   = r.end_date   ? new Date(r.end_date).toLocaleDateString()   : '—';
-      const sc = { ongoing:'#3b82f6', completed:'#10b981', closed:'#6b7280' }[r.status] || '#3b82f6';
       const isCreator = String(r.creator_id) === String(window.currentUserId);
+      const pct       = Math.min(100, Number(r.avg_progress) || 0);
+      const barColor  = pct >= 100 ? '#10b981' : '#3b82f6';
 
       return `
         <li class="doc-item" data-id="${escapeHtml(String(r.id))}" data-tab-key="planning-execution"
           style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #007B8A;
           border-radius:10px;margin-bottom:8px;overflow:hidden;
           box-shadow:0 1px 3px rgba(0,0,0,.06);">
+
+          <!-- Collapsed header -->
           <div class="doc-item-header" data-action="toggle"
-            style="display:flex;justify-content:space-between;align-items:center;
-            padding:12px 16px;cursor:pointer;gap:12px;">
+            style="display:flex;align-items:center;padding:12px 16px;cursor:pointer;gap:12px;">
             <div style="flex:1;min-width:0;">
               <div style="font-weight:600;font-size:14px;color:#1f2937;
                 white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
@@ -6645,20 +6703,30 @@ function _renderPEList(records) {
                 By <strong style="color:#6b7280;">${escapeHtml(r.creator_role || 'N/A')}</strong>
                 &nbsp;•&nbsp; 📅 ${escapeHtml(startDate)} → ${escapeHtml(endDate)}
                 ${r.planned_quantity
-                  ? `&nbsp;•&nbsp; ${escapeHtml(String(r.planned_quantity))} ${escapeHtml(r.unit || '')}` : ''}
+                  ? `&nbsp;•&nbsp; <span style="color:#374151;">${escapeHtml(String(r.planned_quantity))} ${escapeHtml(r.unit || '')}</span>` : ''}
+              </div>
+              <!-- Mini progress bar always visible -->
+              <div style="margin-top:7px;display:flex;align-items:center;gap:8px;">
+                <div style="flex:1;background:#e5e7eb;border-radius:999px;height:6px;">
+                  <div style="background:${barColor};height:6px;border-radius:999px;
+                    width:${pct}%;transition:width .4s;"></div>
+                </div>
+                <span style="font-size:11px;font-weight:700;color:${barColor};min-width:34px;text-align:right;">
+                  ${pct}%</span>
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
               ${isCreator
                 ? `<span style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;
                     border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">Mine</span>` : ''}
-              <span style="background:${sc}20;color:${sc};border:1px solid ${sc}60;
-                border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;white-space:nowrap;">
-                ${(r.status||'ongoing').charAt(0).toUpperCase()+(r.status||'ongoing').slice(1)}
-              </span>
+              <span id="pe-status-badge-${r.id}"
+                style="border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;
+                white-space:nowrap;background:#e5e7eb;color:#6b7280;">…</span>
               <span style="color:#9ca3af;font-size:16px;" class="chevron-${r.id}">▾</span>
             </div>
           </div>
+
+          <!-- Expandable detail (inline in bottomContent) -->
           <div class="doc-detail" id="pe-detail-${r.id}"
             style="display:none;border-top:1px solid #e5e7eb;">
             <div id="pe-detail-inner-${r.id}" style="padding:16px;background:#f8fafc;">
@@ -6670,19 +6738,30 @@ function _renderPEList(records) {
 
     return header + cards;
   }).join('');
+
+  // Async update status badges
+  records.forEach(r => _peUpdateStatusBadge(r, null));
 }
 
-// ── Async detail loader ───────────────────────────────────────────────────────
+function _peUpdateStatusBadge(task, trackingEntries) {
+  const badge = document.getElementById(`pe-status-badge-${task.id}`);
+  if (!badge) return;
+  const st = _peDeriveStatus(task, trackingEntries || []);
+  badge.style.background = st.color + '20';
+  badge.style.color       = st.color;
+  badge.style.border      = `1px solid ${st.color}60`;
+  badge.textContent       = st.label;
+}
+
+// ── Async detail loader (called when card is toggled open) ────────────────────
 async function _peLoadDetail(recordId, tabKey) {
   const container = document.getElementById(`pe-detail-inner-${recordId}`);
   if (!container) return;
-
   const task = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
   if (!task) {
     container.innerHTML = `<p style="color:#ef4444;text-align:center;">Activity not found.</p>`;
     return;
   }
-
   const leader    = isWCLeader(window.currentUserRole);
   const isCreator = String(task.creator_id) === String(window.currentUserId);
   const canEdit   = leader && isCreator;
@@ -6697,7 +6776,8 @@ async function _peLoadDetail(recordId, tabKey) {
       const d = await res.json();
       trackingEntries = Array.isArray(d.entries) ? d.entries : (d.tracking || []);
     }
-    container.innerHTML = _peDetailHtml(task, trackingEntries, canEdit, leader);
+    _peUpdateStatusBadge(task, trackingEntries);
+    container.innerHTML = _peDetailHtml(task, trackingEntries, canEdit);
     _peWireDetailButtons(recordId, task, canEdit);
   } catch (err) {
     console.error('PE detail load error:', err);
@@ -6705,23 +6785,29 @@ async function _peLoadDetail(recordId, tabKey) {
   }
 }
 
-// ── Detail HTML ────────────────────────────────────────────────────────────────
-function _peDetailHtml(task, trackingEntries, canEdit, leader) {
+// ── Detail HTML (two-column: left = plan, right = execution) ──────────────────
+function _peDetailHtml(task, trackingEntries, canEdit) {
   const totalActual = trackingEntries.reduce((s, e) => s + (Number(e.actual_quantity) || 0), 0);
   const plannedQty  = Number(task.planned_quantity) || 0;
-  const progressPct = plannedQty > 0 ? Math.min(100, Math.round((totalActual / plannedQty) * 100)) : 0;
-  const latestPct   = trackingEntries.length
-    ? Number(trackingEntries[trackingEntries.length - 1].progress_pct) || progressPct
-    : progressPct;
+  const latestEntry = trackingEntries.length ? trackingEntries[trackingEntries.length - 1] : null;
+  const latestPct   = latestEntry ? (Number(latestEntry.progress_pct) || 0) : 0;
+  const barColor    = latestPct >= 100 ? '#10b981' : '#3b82f6';
+  const st          = _peDeriveStatus(task, trackingEntries);
 
   const progressBar = `
-    <div style="background:#e5e7eb;border-radius:999px;height:10px;margin-bottom:4px;">
-      <div style="background:${latestPct >= 100 ? '#10b981' : '#3b82f6'};height:10px;
-        border-radius:999px;width:${latestPct}%;transition:width .4s;"></div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+      <div style="flex:1;background:#e5e7eb;border-radius:999px;height:10px;">
+        <div style="background:${barColor};height:10px;border-radius:999px;
+          width:${latestPct}%;transition:width .4s;"></div>
+      </div>
+      <strong style="font-size:13px;color:${barColor};min-width:38px;text-align:right;">
+        ${latestPct}%</strong>
     </div>
     <div style="display:flex;justify-content:space-between;font-size:11px;color:#6b7280;">
-      <span>Actual vs Planned</span>
-      <strong style="color:${latestPct >= 100 ? '#10b981' : '#3b82f6'};">${latestPct}%</strong>
+      <span>Actual: <strong style="color:#374151;">${totalActual} ${escapeHtml(task.unit||'')}</strong>
+        &nbsp;/&nbsp; Planned: <strong style="color:#374151;">${plannedQty} ${escapeHtml(task.unit||'')}</strong></span>
+      <span style="background:${st.color}20;color:${st.color};border:1px solid ${st.color}60;
+        border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">${st.label}</span>
     </div>`;
 
   const trackingHtml = trackingEntries.length
@@ -6747,13 +6833,23 @@ function _peDetailHtml(task, trackingEntries, canEdit, leader) {
             <div><strong>Equipment:</strong> ${escapeHtml(e.equipment_used||'—')}</div>
             <div><strong>Materials:</strong> ${escapeHtml(e.materials_used||'—')}</div>
           </div>
-          ${e.issues ? `<div style="font-size:12px;color:#374151;margin-top:6px;"><strong>Issues:</strong> ${escapeHtml(e.issues)}</div>` : ''}
-          ${e.remark ? `<div style="font-size:12px;color:#374151;margin-top:4px;"><strong>Remark:</strong> ${escapeHtml(e.remark)}</div>` : ''}
+          ${e.day_remark
+            ? `<div style="font-size:12px;color:#374151;margin-top:6px;padding:6px 8px;
+                background:#fefce8;border:1px solid #fef08a;border-radius:6px;">
+                💬 ${escapeHtml(e.day_remark)}</div>` : ''}
+          ${e.issues
+            ? `<div style="font-size:12px;color:#374151;margin-top:6px;">
+                <strong>Issues:</strong> ${escapeHtml(e.issues)}</div>` : ''}
           ${e.delay_days > 0 ? `
             <div style="margin-top:6px;padding:5px 8px;background:#fff1f2;
               border:1px solid #fca5a5;border-radius:6px;font-size:12px;color:#991b1b;">
               ⚠️ Delay: ${escapeHtml(String(e.delay_days))} day(s)
               ${e.delay_reason ? ` — ${escapeHtml(e.delay_reason)}` : ''}
+            </div>` : ''}
+          ${e.status_change_to_closed ? `
+            <div style="margin-top:6px;padding:5px 8px;background:#f3f4f6;
+              border:1px solid #d1d5db;border-radius:6px;font-size:12px;color:#6b7280;">
+              🔒 Activity marked as Closed on this entry
             </div>` : ''}
         </div>`).join('')
     : `<div style="text-align:center;padding:20px 0;color:#9ca3af;font-size:12px;">No execution entries yet.</div>`;
@@ -6762,97 +6858,92 @@ function _peDetailHtml(task, trackingEntries, canEdit, leader) {
     <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;
       padding:14px;display:flex;flex-direction:column;gap:10px;margin-bottom:14px;">
       <div style="font-size:12px;font-weight:700;color:#374151;">➕ Log Execution Entry</div>
+
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
         <div>
-          <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
-            text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Report Date</label>
+          <label style="${_peLabelStyle()}">Report Date</label>
           <input id="pe-rep-date-${task.id}" type="date"
             value="${new Date().toISOString().slice(0,10)}"
-            style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
-            font-size:13px;box-sizing:border-box;"/>
+            style="${_peInputStyle()}"/>
         </div>
         <div>
-          <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
-            text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Progress %</label>
+          <label style="${_peLabelStyle()}">Progress %</label>
           <input id="pe-act-pct-${task.id}" type="number" min="0" max="100" value="0"
-            style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
-            font-size:13px;box-sizing:border-box;"/>
+            style="${_peInputStyle()}"/>
         </div>
       </div>
+
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
         <div>
-          <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
-            text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Actual Qty *</label>
-          <input id="pe-act-qty-${task.id}" type="number"
-            style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
-            font-size:13px;box-sizing:border-box;"/>
+          <label style="${_peLabelStyle()}">Actual Qty *</label>
+          <input id="pe-act-qty-${task.id}" type="number" style="${_peInputStyle()}"/>
         </div>
         <div>
-          <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
-            text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Unit</label>
-          <input id="pe-act-unit-${task.id}" type="text" value="${escapeHtml(task.unit||'')}" readonly
-            style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:6px;
-            font-size:13px;box-sizing:border-box;background:#f9fafb;"/>
+          <label style="${_peLabelStyle()}">Unit</label>
+          <input value="${escapeHtml(task.unit||'')}" readonly style="${_peInputStyle(true)}"/>
         </div>
       </div>
+
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
         <div>
-          <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
-            text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Manpower Used</label>
-          <input id="pe-act-manpower-${task.id}" type="text"
-            style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
-            font-size:13px;box-sizing:border-box;"/>
+          <label style="${_peLabelStyle()}">Manpower Used</label>
+          <input id="pe-act-manpower-${task.id}" type="text" style="${_peInputStyle()}"/>
         </div>
         <div>
-          <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
-            text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Equipment Used</label>
-          <input id="pe-act-equipment-${task.id}" type="text"
-            style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
-            font-size:13px;box-sizing:border-box;"/>
+          <label style="${_peLabelStyle()}">Equipment Used</label>
+          <input id="pe-act-equipment-${task.id}" type="text" style="${_peInputStyle()}"/>
         </div>
       </div>
+
       <div>
-        <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
-          text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Materials Used</label>
-        <input id="pe-act-materials-${task.id}" type="text"
-          style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
-          font-size:13px;box-sizing:border-box;"/>
+        <label style="${_peLabelStyle()}">Materials Used</label>
+        <input id="pe-act-materials-${task.id}" type="text" style="${_peInputStyle()}"/>
       </div>
+
       <div>
-        <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
-          text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Issues</label>
+        <label style="${_peLabelStyle()}">Day Remark *</label>
+        <textarea id="pe-act-remark-${task.id}"
+          placeholder="Describe what happened on site today…"
+          style="width:100%;min-height:60px;padding:8px;border:1px solid #d1d5db;
+          border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
+      </div>
+
+      <div>
+        <label style="${_peLabelStyle()}">Issues</label>
         <textarea id="pe-act-issues-${task.id}"
           style="width:100%;min-height:50px;padding:8px;border:1px solid #d1d5db;
           border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
       </div>
-      <div>
-        <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
-          text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Notes / Remark</label>
-        <textarea id="pe-act-notes-${task.id}"
-          style="width:100%;min-height:50px;padding:8px;border:1px solid #d1d5db;
-          border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
-      </div>
+
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
         <div>
-          <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
-            text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Delay Days</label>
+          <label style="${_peLabelStyle()}">Delay Days</label>
           <input id="pe-act-delay-${task.id}" type="number" min="0" value="0"
-            style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
-            font-size:13px;box-sizing:border-box;"/>
+            style="${_peInputStyle()}"/>
         </div>
         <div>
-          <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
-            text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Delay Reason</label>
-          <input id="pe-act-delay-reason-${task.id}" type="text"
-            style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;
-            font-size:13px;box-sizing:border-box;"/>
+          <label style="${_peLabelStyle()}">Delay Reason</label>
+          <input id="pe-act-delay-reason-${task.id}" type="text" style="${_peInputStyle()}"/>
         </div>
       </div>
+
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;
+        background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;">
+        <input type="checkbox" id="pe-close-activity-${task.id}"
+          style="width:16px;height:16px;accent-color:#007B8A;cursor:pointer;"/>
+        <label for="pe-close-activity-${task.id}"
+          style="font-size:12px;color:#374151;cursor:pointer;line-height:1.4;">
+          🔒 Mark this activity as <strong>Closed</strong> with this entry
+          <span style="display:block;font-size:11px;color:#9ca3af;font-weight:400;">
+            Use this when the activity is finished or abandoned.</span>
+        </label>
+      </div>
+
       <div>
-        <label style="display:block;font-size:11px;font-weight:700;color:#6b7280;
-          text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Attachment</label>
+        <label style="${_peLabelStyle()}">Attachment</label>
         <input id="pe-act-file-${task.id}" type="file" style="font-size:12px;color:#374151;"/>
       </div>
+
       <button data-action="pe-save-actual" data-task-id="${escapeHtml(String(task.id))}"
         style="width:100%;padding:10px 14px;font-size:13px;font-weight:600;
         background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
@@ -6860,12 +6951,13 @@ function _peDetailHtml(task, trackingEntries, canEdit, leader) {
     </div>` : `
     <div style="padding:10px 12px;background:#f0fdf4;border:1px solid #bbf7d0;
       border-radius:8px;font-size:12px;color:#166534;margin-bottom:14px;">
-      ✅ Execution history is shown below. Only the creating leader can add entries.
+      ✅ Execution history shown below. Only the creating leader can log entries.
     </div>`;
 
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-      <!-- SECTION A — Planned Activity -->
+
+      <!-- LEFT: Planned Activity (read-only) -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
           padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
@@ -6877,10 +6969,10 @@ function _peDetailHtml(task, trackingEntries, canEdit, leader) {
                 border-radius:6px;cursor:pointer;">✏️ Edit</button>` : ''}
         </div>
         <div style="font-size:12px;color:#374151;display:flex;flex-direction:column;gap:9px;">
-          ${task.milestone_title || task.milestone_ref
+          ${task.milestone_name
             ? `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;
                 padding:6px 10px;font-size:12px;color:#166534;">
-                🏁 ${escapeHtml(task.milestone_title || task.milestone_ref)}</div>` : ''}
+                🏁 ${escapeHtml(task.milestone_name)}</div>` : ''}
           <div><strong>Title:</strong> ${escapeHtml(task.title||'—')}</div>
           <div><strong>Description:</strong>
             <div style="margin-top:3px;line-height:1.6;">${escapeHtml(task.description||'—')}</div>
@@ -6891,7 +6983,10 @@ function _peDetailHtml(task, trackingEntries, canEdit, leader) {
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
             <div><strong>Planned Qty:</strong> ${escapeHtml(String(task.planned_quantity||'—'))} ${escapeHtml(task.unit||'')}</div>
-            <div><strong>Status:</strong> ${wcStatusBadge(task.status)}</div>
+            <div><strong>Status:</strong>
+              <span style="background:${st.color}20;color:${st.color};border:1px solid ${st.color}60;
+                border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">${st.label}</span>
+            </div>
           </div>
           ${task.planned_work      ? `<div><strong>Planned Work:</strong> ${escapeHtml(task.planned_work)}</div>` : ''}
           ${task.planned_manpower  ? `<div><strong>Planned Manpower:</strong> ${escapeHtml(task.planned_manpower)}</div>` : ''}
@@ -6915,14 +7010,15 @@ function _peDetailHtml(task, trackingEntries, canEdit, leader) {
               border-radius:8px;cursor:pointer;">🗑️ Delete Activity</button>
           </div>` : ''}
       </div>
-      <!-- SECTION B — Actual Execution -->
+
+      <!-- RIGHT: Actual Execution -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;
         display:flex;flex-direction:column;gap:10px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;padding-bottom:8px;
           border-bottom:2px solid #e5e7eb;">
           📊 Section B — Actual Execution
           <span style="font-size:11px;font-weight:400;color:#6b7280;margin-left:6px;">
-            ${trackingEntries.length} entr${trackingEntries.length===1?'y':'ies'}</span>
+            ${trackingEntries.length} entr${trackingEntries.length === 1 ? 'y' : 'ies'}</span>
         </div>
         ${execFormHtml}
         <div style="padding:10px 12px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;">
@@ -6937,20 +7033,16 @@ function _peDetailHtml(task, trackingEntries, canEdit, leader) {
     </div>`;
 }
 
-// ── Wire buttons inside a loaded detail card ──────────────────────────────────
+// ── Wire buttons inside expanded card detail ──────────────────────────────────
 function _peWireDetailButtons(recordId, task, canEdit) {
   const container = document.getElementById(`pe-detail-inner-${recordId}`);
   if (!container) return;
-
   container.querySelector(`[data-action="pe-save-actual"]`)
     ?.addEventListener('click', () => _peHandleSaveActual(recordId, task));
-
   container.querySelector(`[data-action="pe-open-edit"]`)
     ?.addEventListener('click', () => _peOpenEditForm(recordId));
-
   container.querySelector(`[data-action="pe-delete"]`)
     ?.addEventListener('click', () => _peHandleDelete(recordId));
-
   container.querySelector(`[data-action="pe-dl-task"]`)
     ?.addEventListener('click', e => {
       const btn = e.currentTarget;
@@ -6964,39 +7056,42 @@ async function _peHandleSaveActual(recordId, task) {
     const projectId   = localStorage.getItem('activeProjectId');
     const reportDate  = document.getElementById(`pe-rep-date-${recordId}`)?.value;
     const qty         = document.getElementById(`pe-act-qty-${recordId}`)?.value;
-    const unit        = document.getElementById(`pe-act-unit-${recordId}`)?.value.trim();
     const manpower    = document.getElementById(`pe-act-manpower-${recordId}`)?.value.trim();
     const equipment   = document.getElementById(`pe-act-equipment-${recordId}`)?.value.trim();
     const materials   = document.getElementById(`pe-act-materials-${recordId}`)?.value.trim();
     const pct         = document.getElementById(`pe-act-pct-${recordId}`)?.value;
+    const remark      = document.getElementById(`pe-act-remark-${recordId}`)?.value.trim();
     const issues      = document.getElementById(`pe-act-issues-${recordId}`)?.value.trim();
-    const notes       = document.getElementById(`pe-act-notes-${recordId}`)?.value.trim();
     const delayDays   = document.getElementById(`pe-act-delay-${recordId}`)?.value || '0';
     const delayReason = document.getElementById(`pe-act-delay-reason-${recordId}`)?.value.trim();
+    const closeCb     = document.getElementById(`pe-close-activity-${recordId}`);
+    const markClosed  = closeCb?.checked || false;
     const fileInput   = document.getElementById(`pe-act-file-${recordId}`);
 
     if (!reportDate) return alert('Report date is required.');
     if (!qty)        return alert('Actual quantity is required.');
+    if (!remark)     return alert('Day remark is required — please describe what happened today.');
 
     const form = new FormData();
-    form.append('projectId',       projectId);
-    form.append('activity_id',     recordId);
-    form.append('report_date',     reportDate);
-    form.append('actual_quantity', qty);
-    form.append('unit',            unit || '');
-    form.append('manpower_used',   manpower || '');
-    form.append('equipment_used',  equipment || '');
-    form.append('materials_used',  materials || '');
-    form.append('progress_pct',    pct || '0');
-    form.append('issues',          issues || '');
-    form.append('remark',          notes || '');
-    form.append('delay_days',      delayDays);
-    form.append('delay_reason',    delayReason || '');
+    form.append('projectId',               projectId);
+    form.append('activity_id',             recordId);
+    form.append('report_date',             reportDate);
+    form.append('actual_quantity',         qty);
+    form.append('unit',                    task.unit || '');
+    form.append('manpower_used',           manpower || '');
+    form.append('equipment_used',          equipment || '');
+    form.append('materials_used',          materials || '');
+    form.append('progress_pct',            pct || '0');
+    form.append('day_remark',              remark);
+    form.append('issues',                  issues || '');
+    form.append('delay_days',              delayDays);
+    form.append('delay_reason',            delayReason || '');
+    form.append('status_change_to_closed', markClosed ? '1' : '0');
     if (fileInput?.files?.[0]) form.append('attachment', fileInput.files[0]);
 
-    const res  = await _wcFetch(`${API}/planning-execution-tracking`, { method:'POST', body:form });
+    const res  = await _wcFetch(`${API}/planning-execution-tracking`, { method: 'POST', body: form });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.message || 'Unable to save execution entry');
+    if (!res.ok) throw new Error(data.message || data.error || 'Unable to save execution entry');
 
     alert('✓ Execution entry saved.');
     delete recordsCache['planning-execution'];
@@ -7034,7 +7129,7 @@ async function _peHandleDelete(recordId) {
 async function _peDownloadTaskFile(taskId, fileName) {
   try {
     const projectId = localStorage.getItem('activeProjectId');
-    const res  = await _wcFetch(
+    const res = await _wcFetch(
       `${API}/planning-execution/${taskId}/download?projectId=${encodeURIComponent(projectId)}`
     );
     if (!res || !res.ok) { alert('Failed to download file.'); return; }
@@ -7047,154 +7142,111 @@ async function _peDownloadTaskFile(taskId, fileName) {
   } catch (err) { alert('Failed to download file.'); }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  ADD / EDIT FORM — opens in the GRAY PANEL (expandGrayPart)
+// ══════════════════════════════════════════════════════════════════════════════
 
-// ── ADD form ──────────────────────────────────────────────────────────────────
 async function _peOpenAddForm() {
   if (!isWCLeader(window.currentUserRole)) {
     alert('Only side leaders can add activities.'); return;
   }
-  const projectId = localStorage.getItem('activeProjectId');
-
-  // FIXED: fetch milestones from the correct route
-  let milestones = [];
-  try {
-    const res = await _wcFetch(
-      `${API}/project-milestones?projectId=${encodeURIComponent(projectId)}`
-    );
-    if (res && res.ok) {
-      const d = await res.json();
-      milestones = d.milestones || d || [];
-    }
-  } catch (e) { /* non-fatal — picker will show empty */ }
-
-  expandGrayPart(_pePlanFormHtml(null, milestones, true));
-  _pePlanFormWire(null, milestones, true, projectId);
+  const milestoneNames = await _peFetchMilestoneNames();
+  expandGrayPart(_pePlanFormHtml(null, milestoneNames, true));
+  _pePlanFormWire(null, milestoneNames, true);
 }
 
-// ── EDIT form ─────────────────────────────────────────────────────────────────
 async function _peOpenEditForm(recordId) {
-  const tabKey  = 'planning-execution';
-  const cached  = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
+  const tabKey = 'planning-execution';
+  const cached = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
   if (!cached) return alert('Activity not found in cache. Please refresh.');
-  const projectId = localStorage.getItem('activeProjectId');
+  const milestoneNames = await _peFetchMilestoneNames();
+  expandGrayPart(_pePlanFormHtml(cached, milestoneNames, false));
+  _pePlanFormWire(cached, milestoneNames, false);
+}
 
-  // FIXED: fetch milestones from the correct route
-  let milestones = [];
+// Fetch milestone names from the project schedule (text only — no FK needed)
+async function _peFetchMilestoneNames() {
+  const projectId = localStorage.getItem('activeProjectId');
   try {
     const res = await _wcFetch(
       `${API}/project-milestones?projectId=${encodeURIComponent(projectId)}`
     );
     if (res && res.ok) {
-      const d = await res.json();
-      milestones = d.milestones || d || [];
+      const d    = await res.json();
+      const list = d.milestones || d || [];
+      return [...new Set(list.map(m => m.title || m.name || '').filter(Boolean))];
     }
   } catch (e) { /* non-fatal */ }
-
-  expandGrayPart(_pePlanFormHtml(cached, milestones, false));
-  _pePlanFormWire(cached, milestones, false, projectId);
+  return [];
 }
 
+// ── Plan form HTML (rendered inside gray panel) ───────────────────────────────
+function _pePlanFormHtml(cached, milestoneNames, isNew) {
+  const v = f => escapeHtml(String(cached?.[f] ?? ''));
 
-// ── Plan form HTML ────────────────────────────────────────────────────────────
-function _pePlanFormHtml(cached, milestones, isNew) {
-  const v = f => escapeHtml(String(cached?.[f] || ''));
-
-  const milestoneRows = milestones.map(m => `
-    <div onclick="_peSelectMilestone('${escapeHtml(String(m.id))}','${escapeHtml(m.title||m.name||String(m.id))}')"
-      style="padding:10px 14px;cursor:pointer;font-size:13px;color:#374151;
+  const suggestionRows = milestoneNames.map(name => `
+    <div onclick="_pePickMilestoneName(${JSON.stringify(name)})"
+      style="padding:9px 14px;cursor:pointer;font-size:13px;color:#374151;
       border-bottom:1px solid #f3f4f6;"
       onmouseover="this.style.background='#eff6ff'"
       onmouseout="this.style.background='#fff'">
-      <strong style="color:#007B8A;">#${escapeHtml(String(m.id))}</strong>
-      — ${escapeHtml(m.title||m.name||'Untitled')}
-      ${m.activity_status ? `<span style="font-size:11px;color:#9ca3af;margin-left:6px;">(${escapeHtml(m.activity_status)})</span>` : ''}
+      🏁 ${escapeHtml(name)}
     </div>`).join('');
-
-  const currentMilestoneLabel = cached
-    ? (cached.milestone_title || cached.milestone_ref || '')
-    : '';
 
   return `
     <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
+
+      <!-- Gray panel header -->
       <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
         <h3 style="margin:0;color:#333;font-size:20px;">
           ${isNew ? '📊 Add Activity' : '✏️ Edit Activity'}</h3>
         <p style="margin:4px 0 0;font-size:12px;color:#6b7280;">
           Fill the planned activity details. Execution entries are logged from the activity card.</p>
       </div>
+
+      <!-- Scrollable fields -->
       <div style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
 
-        <!-- Milestone section -->
+        <!-- Milestone name (text only, with live autosuggest) -->
         <div>
-          <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">
-            Milestone *
-            <span style="font-weight:400;text-transform:none;color:#9ca3af;">
-              (choose from schedule or type manually)</span>
+          <label style="${_peLabelStyle()}">
+            Milestone Name
+            <span style="font-weight:400;text-transform:none;font-size:11px;color:#9ca3af;">
+              — type or pick from your schedule</span>
           </label>
-          <div style="display:flex;gap:6px;margin-bottom:8px;">
-            <button type="button" id="pe-ms-tab-pick"
-              onclick="_peMsTabSwitch('pick')"
-              style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:6px;
-              background:#007B8A;color:#fff;border:none;cursor:pointer;">Choose from list</button>
-            <button type="button" id="pe-ms-tab-type"
-              onclick="_peMsTabSwitch('type')"
-              style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:6px;
-              background:#f3f4f6;color:#374151;border:1px solid #d1d5db;cursor:pointer;">
-              Type manually</button>
-          </div>
-          <!-- Picker panel -->
-          <div id="pe-ms-panel-pick">
-            <div id="pe-milestone-display"
-              style="padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
-              font-size:13px;background:#fff;cursor:pointer;
-              display:flex;justify-content:space-between;align-items:center;color:#374151;"
-              onclick="_peMilestonePicker()">
-              <span id="pe-milestone-label">
-                ${currentMilestoneLabel || 'Click to choose a milestone…'}
-              </span>
-              <span style="color:#9ca3af;">▾</span>
-            </div>
-            <!-- FIXED: stores both id and ref text -->
-            <input type="hidden" id="pe-milestone-id"
-              value="${cached?.milestone_id ? escapeHtml(String(cached.milestone_id)) : ''}"/>
-            <input type="hidden" id="pe-milestone-ref-from-picker"
-              value="${cached?.milestone_ref ? escapeHtml(cached.milestone_ref) : ''}"/>
-            <div id="pe-milestone-dropdown"
-              style="display:none;position:relative;z-index:50;background:#fff;
-              border:1px solid #d1d5db;border-radius:8px;
-              box-shadow:0 4px 16px rgba(0,0,0,.12);max-height:180px;overflow-y:auto;margin-top:2px;">
-              ${milestones.length ? milestoneRows
-                : `<div style="padding:14px;font-size:12px;color:#9ca3af;text-align:center;">
-                    No milestones found. Make sure a schedule has been saved for this project.</div>`}
-            </div>
-          </div>
-          <!-- Manual type panel -->
-          <div id="pe-ms-panel-type" style="display:none;">
-            <input id="pe-milestone-ref" type="text"
-              value="${v('milestone_ref')}"
+          <div style="position:relative;">
+            <input id="pe-milestone-name" type="text"
+              value="${v('milestone_name')}"
               placeholder="e.g. M-03 Foundation Works"
-              style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
-              font-size:13px;box-sizing:border-box;"/>
-            <p style="font-size:11px;color:#9ca3af;margin:4px 0 0;">
-              Type the milestone name or reference code as it appears in your schedule.</p>
+              autocomplete="off"
+              oninput="_peMilestoneNameInput()"
+              onfocus="_peMilestoneNameInput()"
+              style="${_peInputStyle()} padding:10px 12px;"/>
+            <div id="pe-milestone-suggestions"
+              style="display:none;position:absolute;z-index:200;top:100%;left:0;right:0;
+              background:#fff;border:1px solid #d1d5db;border-radius:8px;
+              box-shadow:0 4px 16px rgba(0,0,0,.12);max-height:200px;overflow-y:auto;margin-top:2px;">
+              ${milestoneNames.length
+                ? suggestionRows
+                : `<div style="padding:12px;font-size:12px;color:#9ca3af;text-align:center;">
+                    No milestones found in schedule — type a name manually.</div>`}
+            </div>
           </div>
+          <p style="font-size:11px;color:#9ca3af;margin:3px 0 0;">
+            This label is for reference only and does not create a database link to the schedule.</p>
         </div>
 
         <!-- Title -->
         <div>
-          <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Activity Title *</label>
+          <label style="${_peLabelStyle()}">Activity Title *</label>
           <input id="pe-title" type="text" value="${v('title')}"
             placeholder="e.g. Excavation of Grid B foundation"
-            style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;
-            font-size:14px;box-sizing:border-box;"/>
+            style="${_peInputStyle()} padding:10px 12px;font-size:14px;"/>
         </div>
 
         <!-- Description -->
         <div>
-          <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Description</label>
+          <label style="${_peLabelStyle()}">Description</label>
           <textarea id="pe-desc" placeholder="Scope and objectives…"
             style="width:100%;min-height:80px;padding:10px 12px;border:1px solid #d1d5db;
             border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box;">${v('description')}</textarea>
@@ -7203,84 +7255,72 @@ function _pePlanFormHtml(cached, milestones, isNew) {
         <!-- Dates -->
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
           <div>
-            <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-              font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Start Date *</label>
+            <label style="${_peLabelStyle()}">Start Date *</label>
             <input id="pe-start" type="date" value="${v('start_date')}"
-              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;
-              font-size:13px;box-sizing:border-box;"/>
+              style="${_peInputStyle()} padding:10px;"/>
           </div>
           <div>
-            <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-              font-size:11px;letter-spacing:.5px;margin-bottom:5px;">End Date *</label>
+            <label style="${_peLabelStyle()}">End Date *</label>
             <input id="pe-end" type="date" value="${v('end_date')}"
-              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;
-              font-size:13px;box-sizing:border-box;"/>
+              style="${_peInputStyle()} padding:10px;"/>
           </div>
         </div>
 
-        <!-- Planned qty + unit -->
+        <!-- Planned qty + unit dropdown -->
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
           <div>
-            <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-              font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Planned Quantity *</label>
+            <label style="${_peLabelStyle()}">Planned Quantity *</label>
             <input id="pe-qty" type="number" value="${v('planned_quantity')}"
-              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;
-              font-size:13px;box-sizing:border-box;"/>
+              style="${_peInputStyle()} padding:10px;"/>
           </div>
           <div>
-            <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-              font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Unit *</label>
-            <input id="pe-unit" type="text" value="${v('unit')}"
-              placeholder="e.g. m³, kg, pcs"
+            <label style="${_peLabelStyle()}">Unit *</label>
+            <select id="pe-unit"
               style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;
-              font-size:13px;box-sizing:border-box;"/>
+              font-size:13px;box-sizing:border-box;background:#fff;cursor:pointer;">
+              <option value="">— select unit —</option>
+              ${_peUnitOptions(cached?.unit || '')}
+            </select>
           </div>
         </div>
 
         <!-- Planned resources -->
         <div>
-          <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Planned Work</label>
+          <label style="${_peLabelStyle()}">Planned Work</label>
           <textarea id="pe-work"
             style="width:100%;min-height:60px;padding:10px 12px;border:1px solid #d1d5db;
             border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box;">${v('planned_work')}</textarea>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
           <div>
-            <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-              font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Planned Manpower</label>
+            <label style="${_peLabelStyle()}">Planned Manpower</label>
             <input id="pe-manpower" type="text" value="${v('planned_manpower')}"
-              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;
-              font-size:13px;box-sizing:border-box;"/>
+              style="${_peInputStyle()} padding:10px;"/>
           </div>
           <div>
-            <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-              font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Planned Equipment</label>
+            <label style="${_peLabelStyle()}">Planned Equipment</label>
             <input id="pe-equipment" type="text" value="${v('planned_equipment')}"
-              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;
-              font-size:13px;box-sizing:border-box;"/>
+              style="${_peInputStyle()} padding:10px;"/>
           </div>
         </div>
         <div>
-          <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Planned Materials</label>
+          <label style="${_peLabelStyle()}">Planned Materials</label>
           <input id="pe-materials" type="text" value="${v('planned_materials')}"
-            style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;
-            font-size:13px;box-sizing:border-box;"/>
+            style="${_peInputStyle()} padding:10px;"/>
         </div>
 
         <!-- Linked file -->
         <div>
-          <label style="display:block;font-weight:700;color:#007B8A;text-transform:uppercase;
-            font-size:11px;letter-spacing:.5px;margin-bottom:5px;">Linked File</label>
+          <label style="${_peLabelStyle()}">Linked File</label>
           <input id="pe-file" type="file" style="font-size:13px;color:#374151;"/>
           ${cached?.linked_file_name
             ? `<div style="font-size:11px;color:#6b7280;margin-top:4px;">
                 Current: <strong>${escapeHtml(cached.linked_file_name)}</strong></div>` : ''}
         </div>
+
       </div>
 
-      <!-- Footer -->
+      <!-- Gray panel footer -->
       <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
         background:#fff;display:flex;gap:12px;">
         <button type="button" id="pe-save-plan"
@@ -7295,94 +7335,70 @@ function _pePlanFormHtml(cached, milestones, isNew) {
     </div>`;
 }
 
-
 // ── Plan form wiring ──────────────────────────────────────────────────────────
-function _pePlanFormWire(cached, milestones, isNew, projectId) {
-  // Milestone picker dropdown toggle
-  window._peMilestonePicker = function() {
-    const dd = document.getElementById('pe-milestone-dropdown');
-    if (dd) dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+function _pePlanFormWire(cached, milestoneNames, isNew) {
+  const projectId = localStorage.getItem('activeProjectId');
+
+  // Live autosuggest
+  window._peMilestoneNameInput = function() {
+    const input    = document.getElementById('pe-milestone-name');
+    const dd       = document.getElementById('pe-milestone-suggestions');
+    if (!input || !dd) return;
+    const query    = input.value.toLowerCase().trim();
+    const filtered = milestoneNames.filter(n => !query || n.toLowerCase().includes(query));
+    if (!filtered.length) { dd.style.display = 'none'; return; }
+    dd.innerHTML = filtered.map(name => `
+      <div onclick="_pePickMilestoneName(${JSON.stringify(name)})"
+        style="padding:9px 14px;cursor:pointer;font-size:13px;color:#374151;
+        border-bottom:1px solid #f3f4f6;"
+        onmouseover="this.style.background='#eff6ff'"
+        onmouseout="this.style.background='#fff'">
+        🏁 ${escapeHtml(name)}
+      </div>`).join('');
+    dd.style.display = 'block';
   };
 
-  // FIXED: stores both id and the title as ref
-  window._peSelectMilestone = function(id, label) {
-    const hiddenId  = document.getElementById('pe-milestone-id');
-    const hiddenRef = document.getElementById('pe-milestone-ref-from-picker');
-    const display   = document.getElementById('pe-milestone-label');
-    const dd        = document.getElementById('pe-milestone-dropdown');
-    if (hiddenId)  hiddenId.value  = id;
-    if (hiddenRef) hiddenRef.value = label;
-    if (display)   display.textContent = `${label}`;
-    if (dd)        dd.style.display = 'none';
+  window._pePickMilestoneName = function(name) {
+    const input = document.getElementById('pe-milestone-name');
+    const dd    = document.getElementById('pe-milestone-suggestions');
+    if (input) input.value = name;
+    if (dd)    dd.style.display = 'none';
   };
 
-  // Close dropdown on outside click
-  const _ddClose = e => {
-    const dd = document.getElementById('pe-milestone-dropdown');
-    if (dd && !e.target.closest('#pe-milestone-display') && !e.target.closest('#pe-milestone-dropdown'))
+  // Close suggestions on outside click
+  const _closeSuggest = e => {
+    const dd = document.getElementById('pe-milestone-suggestions');
+    if (dd && !e.target.closest('#pe-milestone-name') && !e.target.closest('#pe-milestone-suggestions'))
       dd.style.display = 'none';
-    if (!document.getElementById('pe-milestone-dropdown'))
-      document.removeEventListener('click', _ddClose);
+    if (!document.getElementById('pe-milestone-suggestions'))
+      document.removeEventListener('click', _closeSuggest);
   };
-  document.addEventListener('click', _ddClose);
+  document.addEventListener('click', _closeSuggest);
 
-  // Tab switch
-  window._peMsTabSwitch = function(tab) {
-    const pickPanel = document.getElementById('pe-ms-panel-pick');
-    const typePanel = document.getElementById('pe-ms-panel-type');
-    const pickBtn   = document.getElementById('pe-ms-tab-pick');
-    const typeBtn   = document.getElementById('pe-ms-tab-type');
-    if (tab === 'pick') {
-      pickPanel.style.display = 'block'; typePanel.style.display = 'none';
-      pickBtn.style.background = '#007B8A'; pickBtn.style.color = '#fff'; pickBtn.style.border = 'none';
-      typeBtn.style.background = '#f3f4f6'; typeBtn.style.color = '#374151'; typeBtn.style.border = '1px solid #d1d5db';
-    } else {
-      pickPanel.style.display = 'none'; typePanel.style.display = 'block';
-      typeBtn.style.background = '#007B8A'; typeBtn.style.color = '#fff'; typeBtn.style.border = 'none';
-      pickBtn.style.background = '#f3f4f6'; pickBtn.style.color = '#374151'; pickBtn.style.border = '1px solid #d1d5db';
-    }
-  };
-
-  // If editing with only a text ref and no id, default to type tab
-  if (cached && cached.milestone_ref && !cached.milestone_id) {
-    window._peMsTabSwitch('type');
-  }
-
-  // Save plan
+  // Save
   document.getElementById('pe-save-plan')?.addEventListener('click', async () => {
     try {
-      const pickPanel   = document.getElementById('pe-ms-panel-pick');
-      const usePickMode = pickPanel && pickPanel.style.display !== 'none';
-
-      // FIXED: collect both milestone_id and milestone_ref from whichever mode is active
-      const milestoneId  = usePickMode
-        ? (document.getElementById('pe-milestone-id')?.value || '')
-        : '';
-      const milestoneRef = usePickMode
-        ? (document.getElementById('pe-milestone-ref-from-picker')?.value.trim() || '')
-        : (document.getElementById('pe-milestone-ref')?.value.trim() || '');
-
-      const title    = document.getElementById('pe-title')?.value.trim();
-      const desc     = document.getElementById('pe-desc')?.value.trim();
-      const start    = document.getElementById('pe-start')?.value;
-      const end      = document.getElementById('pe-end')?.value;
-      const qty      = document.getElementById('pe-qty')?.value;
-      const unit     = document.getElementById('pe-unit')?.value.trim();
-      const work     = document.getElementById('pe-work')?.value.trim();
-      const manpower = document.getElementById('pe-manpower')?.value.trim();
-      const equip    = document.getElementById('pe-equipment')?.value.trim();
-      const mats     = document.getElementById('pe-materials')?.value.trim();
-      const fileInput= document.getElementById('pe-file');
+      const milestoneName = document.getElementById('pe-milestone-name')?.value.trim() || '';
+      const title         = document.getElementById('pe-title')?.value.trim();
+      const desc          = document.getElementById('pe-desc')?.value.trim();
+      const start         = document.getElementById('pe-start')?.value;
+      const end           = document.getElementById('pe-end')?.value;
+      const qty           = document.getElementById('pe-qty')?.value;
+      const unit          = document.getElementById('pe-unit')?.value;
+      const work          = document.getElementById('pe-work')?.value.trim();
+      const manpower      = document.getElementById('pe-manpower')?.value.trim();
+      const equip         = document.getElementById('pe-equipment')?.value.trim();
+      const mats          = document.getElementById('pe-materials')?.value.trim();
+      const fileInput     = document.getElementById('pe-file');
 
       if (!title)         return alert('Activity title is required.');
       if (!start || !end) return alert('Start and end dates are required.');
       if (!qty)           return alert('Planned quantity is required.');
-      if (!unit)          return alert('Unit is required.');
-      if (!milestoneId && !milestoneRef)
-        return alert('Please choose a milestone from the list or type one manually.');
+      if (!unit)          return alert('Please select a unit from the dropdown.');
 
       const form = new FormData();
       form.append('projectId',         projectId);
+      form.append('milestone_name',    milestoneName);
       form.append('title',             title);
       form.append('description',       desc || '');
       form.append('start_date',        start);
@@ -7393,26 +7409,23 @@ function _pePlanFormWire(cached, milestones, isNew, projectId) {
       form.append('planned_manpower',  manpower || '');
       form.append('planned_equipment', equip || '');
       form.append('planned_materials', mats || '');
-      // FIXED: always send milestone_ref (required by backend); send milestone_id when available
-      form.append('milestone_ref',     milestoneRef || milestoneId);
-      if (milestoneId) form.append('milestone_id', milestoneId);
-      if (!isNew)      form.append('id', cached.id);
+      if (!isNew) form.append('id', cached.id);
       if (fileInput?.files?.[0]) form.append('linked_file', fileInput.files[0]);
 
       const btn = document.getElementById('pe-save-plan');
       if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
-      const endpoint = isNew ? `${API}/planning-execution/create` : `${API}/planning-execution`;
-      const res  = await _wcFetch(endpoint, {
-        method: isNew ? 'POST' : 'PUT', body: form,
-      });
+      const endpoint = isNew
+        ? `${API}/planning-execution/create`
+        : `${API}/planning-execution`;
+      const res  = await _wcFetch(endpoint, { method: isNew ? 'POST' : 'PUT', body: form });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || `HTTP ${res.status} — ${data.error || 'Unable to save activity'}`);
+      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
 
       alert(isNew ? '✓ Activity created.' : '✓ Activity updated.');
       delete recordsCache['planning-execution'];
-      loadPERecords();
       collapseGrayPart();
+      loadPERecords();
     } catch (err) {
       console.error('PE save plan error:', err);
       alert('Failed to save: ' + err.message);
