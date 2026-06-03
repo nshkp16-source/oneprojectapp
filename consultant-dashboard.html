@@ -7588,1136 +7588,507 @@ function _pePlanFormWire(cached, milestoneNames, isNew) {
 window.openPlanningExecutionForm = _peOpenAddForm;
 window._peOpenForm               = _peOpenAddForm;
 
-// =======================================================================
-//  DOCUMENT & APPROVAL  +  CONTROL & REPORT
-//  Tabs: "document-approval" and "control-reports"
+// =============================================================================
+//  DOCUMENT & APPROVAL  +  CONTROL & REPORT  —  Backend Routes
+//  Paste these into server.js (before the global error handler)
 //
-//  Every network call goes through authFetch() — the same function used
-//  throughout the main file — which:
-//    • Attaches  Authorization: Bearer <token>  from localStorage
-//    • On 401/403 attempts a token refresh via refreshAccessToken()
-//    • On refresh failure clears storage and redirects to home.html
+//  Tables used:
+//    project_documents        (D&A)
+//    control_report_records   (C&R)
 //
-//  Every call also passes projectId (from localStorage 'activeProjectId').
-//  If projectId is missing the function bails early with a UI message.
-//
-//  Rules:
-//  • Only team members (non-leaders) can CREATE documents
-//  • Side leader / PM can APPROVE or REJECT
-//  • review_comment is hidden from the creator until the decision is issued
-//  • Leader manually chooses to share an approved doc to Control & Report
-//  • Shared copies are read-only in both tabs
-// =======================================================================
+//  Helper functions already in server.js that we rely on:
+//    authenticateToken, upload, isWCLeader, wcSide,
+//    scheduleCloudinaryUpload, cloudinary, pool
+// =============================================================================
 
-// ── Thin wrapper: JSON body + authFetch (handles JWT + refresh) ───────────────
-// For FormData bodies we pass the FormData directly; authFetch already skips
-// Content-Type so multipart boundary is set automatically by the browser.
-function _daAuthFetch(url, options = {}) {
-  const isFormData = options.body instanceof FormData;
-  if (!isFormData && options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
-    options.body    = JSON.stringify(options.body);
-    options.headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-  }
-  // authFetch is defined in the main file; it injects the Bearer token and
-  // handles 401 → refresh → redirect automatically.
-  return authFetch(url, options);
+// ── Side resolver for D&A (leaders + TeamMembers) ────────────────────────────
+async function _daSide(role, userId, projectId) {
+  const direct = wcSide(role);
+  if (direct) return direct;
+  if (role !== 'TeamMember') return null;
+  const r = await pool.query(
+    `SELECT assigned_part FROM team_member_assignments
+     WHERE team_member_id = $1 AND project_id = $2 LIMIT 1`,
+    [userId, projectId]
+  );
+  return r.rows.length ? r.rows[0].assigned_part : null;
 }
 
-// ── Guard: returns projectId or null + shows error in placeholder ─────────────
-function _daRequireProject(placeholderEl) {
-  const projectId = localStorage.getItem('activeProjectId');
-  if (!projectId && placeholderEl) {
-    placeholderEl.style.display = 'block';
-    placeholderEl.innerHTML     = "<p style='color:#ef4444;'>⚠️ No project selected. Please select a project first.</p>";
-  }
-  return projectId || null;
+// ── Resolve creator email from role + id ─────────────────────────────────────
+async function _daCreatorEmail(role, userId) {
+  const map = roleTableMap(role);
+  if (!map) return null;
+  const r = await pool.query(
+    `SELECT ${map.emailCol} AS email FROM ${map.table} WHERE id = $1`, [userId]
+  );
+  return r.rows[0]?.email || null;
 }
 
-// ── Document type catalogue ───────────────────────────────────────────────────
-const DA_DOC_TYPES = [
-  'Daily Report',
-  'Weekly Report',
-  'Monthly Report',
-  'Progress Report',
-  'Inspection Report',
-  'Method Statement',
-  'Risk Assessment',
-  'Quality Control Report',
-  'Safety Report',
-  'Request for Information (RFI)',
-  'Submittal',
-  'Technical Note',
-  'Correspondence',
-  'Meeting Summary',
-  'Claim Document',
-  'Other',
-];
+// =============================================================================
+//  DOCUMENT & APPROVAL
+// =============================================================================
 
-// ── Status badge ──────────────────────────────────────────────────────────────
-function _daBadge(status) {
-  const map = {
-    draft:            { label: 'Draft',           color: '#6b7280' },
-    pending_approval: { label: 'Pending Approval', color: '#f59e0b' },
-    approved:         { label: 'Approved',         color: '#10b981' },
-    rejected:         { label: 'Rejected',         color: '#ef4444' },
-    shared:           { label: 'Shared to C&R',    color: '#3b82f6' },
-  };
-  const s = map[status] || { label: status || 'Unknown', color: '#6b7280' };
-  return `<span style="background:${s.color}20;color:${s.color};border:1px solid ${s.color}60;
-    border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;white-space:nowrap;">
-    ${s.label}</span>`;
-}
-
-// ── Style helpers ─────────────────────────────────────────────────────────────
-function _daLabelStyle() {
-  return 'display:block;font-size:11px;font-weight:700;color:#6b7280;' +
-         'text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;';
-}
-function _daInputStyle() {
-  return 'width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:8px;' +
-         'font-size:13px;box-sizing:border-box;background:#fff;';
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  PATCH setTabContent
-// ═══════════════════════════════════════════════════════════════════════
-{
-  const _origSetTab = setTabContent;
-  setTabContent = function (tabKey) {
-    if (tabKey === 'document-approval') { _daRenderShell(); _daLoadRecords(); return; }
-    if (tabKey === 'control-reports')   { _crRenderShell(); _crLoadRecords(); return; }
-    _origSetTab(tabKey);
-  };
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  PATCH renderRecordsList
-// ═══════════════════════════════════════════════════════════════════════
-{
-  const _origRender = renderRecordsList;
-  renderRecordsList = function (records, tabKey) {
-    if (tabKey === 'document-approval') { _daRenderList(records); return; }
-    if (tabKey === 'control-reports')   { _crRenderList(records);  return; }
-    _origRender(records, tabKey);
-  };
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  PATCH toggleRecordDetail
-// ═══════════════════════════════════════════════════════════════════════
-{
-  const _origToggle = toggleRecordDetail;
-  toggleRecordDetail = function (recordId, tabKey) {
-    if (tabKey === 'document-approval') {
-      const detail  = document.getElementById(`da-detail-${recordId}`);
-      const chevron = document.querySelector(`.chevron-${recordId}`);
-      if (!detail) return;
-      const isOpen = detail.style.display !== 'none';
-      if (!isOpen) _daLoadDetail(recordId);
-      detail.style.display = isOpen ? 'none' : 'block';
-      if (chevron) chevron.textContent = isOpen ? '▾' : '▴';
-      return;
-    }
-    if (tabKey === 'control-reports') {
-      const detail  = document.getElementById(`cr-detail-${recordId}`);
-      const chevron = document.querySelector(`.chevron-cr-${recordId}`);
-      if (!detail) return;
-      const isOpen = detail.style.display !== 'none';
-      detail.style.display = isOpen ? 'none' : 'block';
-      if (chevron) chevron.textContent = isOpen ? '▾' : '▴';
-      return;
-    }
-    _origToggle(recordId, tabKey);
-  };
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — Shell
-// ═══════════════════════════════════════════════════════════════════════
-function _daRenderShell() {
-  const leader    = isWCLeader(window.currentUserRole);
-  const canCreate = !leader;
-
-  bottomContent.innerHTML = `
-    <div class="bottom-fixed-header">
-      ${canCreate
-        ? `<button class="btn primary" id="daAddBtn">➕ Submit Document</button>`
-        : `<div style="padding:6px 14px;background:#f0fdf4;border:1px solid #bbf7d0;
-            border-radius:8px;font-size:12px;color:#166534;font-weight:600;">
-            👁️ Leader View — Review &amp; Approve team documents below</div>`}
-      <div class="bottom-description">
-        <p>Team members submit internal documents for leader review and approval before they can be shared to Control &amp; Report.</p>
-        <p style="margin-top:4px;font-size:12px;color:#6b7280;">
-          ${leader
-            ? 'Review submitted documents, approve or reject with comments, then choose to share approved ones to Control &amp; Report.'
-            : 'Submit a document for your side leader to review. Once approved, the leader may share it to the Control &amp; Report board.'}
-        </p>
-      </div>
-    </div>
-    <div class="bottom-scroll-area">
-      <ul class="doc-list" id="recordsList" style="padding:0;margin:0;list-style:none;"></ul>
-      <div class="no-data-placeholder">
-        <p>${canCreate
-          ? 'No documents submitted yet. Click ➕ Submit Document to get started.'
-          : 'No documents submitted by your team yet.'}</p>
-      </div>
-    </div>`;
-
-  document.getElementById('daAddBtn')?.addEventListener('click', _daOpenCreateForm);
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — Load records
-//  POST /api/document-approval
-//  Headers: Authorization: Bearer <token>   (injected by authFetch)
-//  Body:    { projectId }
-// ═══════════════════════════════════════════════════════════════════════
-async function _daLoadRecords() {
-  const list        = document.getElementById('recordsList');
-  const placeholder = document.querySelector('.no-data-placeholder');
-  if (!list) return;
-
-  const projectId = _daRequireProject(placeholder);
-  if (!projectId) return;
-
-  if (recordsCache['document-approval']) {
-    _daRenderList(recordsCache['document-approval']);
-    return;
-  }
-
-  if (placeholder) {
-    placeholder.style.display = 'block';
-    placeholder.innerHTML     = "<p style='color:#999;'>Loading…</p>";
-  }
-  list.innerHTML = '';
-
+// ── LIST  POST /api/document-approval ────────────────────────────────────────
+app.post('/api/document-approval', authenticateToken, async (req, res) => {
   try {
-    const res = await _daAuthFetch(`${API}/document-approval`, {
-      method: 'POST',
-      body:   { projectId },
-    });
+    const { user_id, role } = req.user;
+    const { projectId }     = req.body;
+    if (!projectId) return res.status(400).json({ error: 'projectId is required.' });
 
-    // authFetch returns null when it redirects (token unrecoverable)
-    if (!res) return;
+    const side = await _daSide(role, user_id, projectId);
+    if (!side)  return res.status(403).json({ error: 'Access denied.' });
 
-    if (res.status === 401 || res.status === 403) {
-      if (placeholder) {
-        placeholder.style.display = 'block';
-        placeholder.innerHTML     = "<p style='color:#ef4444;'>⚠️ Unauthorized. Please log in again.</p>";
-      }
-      return;
-    }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const data    = await res.json();
-    const records = (data.documents || []).map(r => ({ ...r, _tabKey: 'document-approval' }));
-    recordsCache['document-approval'] = records;
-    _daRenderList(records);
-
-  } catch (err) {
-    console.error('DA load error:', err);
-    if (placeholder) {
-      placeholder.style.display = 'block';
-      placeholder.innerHTML     = "<p style='color:#ef4444;'>⚠️ Error loading documents. Please try again.</p>";
-    }
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — Render list
-// ═══════════════════════════════════════════════════════════════════════
-function _daRenderList(records) {
-  const list        = document.getElementById('recordsList');
-  const placeholder = document.querySelector('.no-data-placeholder');
-  if (!list || !placeholder) return;
-
-  if (!records.length) {
-    list.innerHTML        = '';
-    placeholder.style.display = 'block';
-    return;
-  }
-  placeholder.style.display = 'none';
-
-  // Group by doc_type
-  const byType = {};
-  records.forEach(r => {
-    const key = r.doc_type || 'Uncategorised';
-    if (!byType[key]) byType[key] = [];
-    byType[key].push(r);
-  });
-
-  list.innerHTML = Object.entries(byType).map(([type, items]) => {
-    const typeHeader = `
-      <li style="padding:5px 12px;background:#eff6ff;border-radius:8px;margin-bottom:6px;
-        font-size:11px;font-weight:700;color:#1d4ed8;letter-spacing:.4px;text-transform:uppercase;">
-        📁 ${escapeHtml(type)}
-      </li>`;
-
-    const cards = items.map(doc => {
-      const isCreator = String(doc.creator_id) === String(window.currentUserId);
-      const isShared  = doc.status === 'shared';
-      const postedAt  = doc.created_at
-        ? new Date(doc.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-        : 'N/A';
-
-      return `
-        <li class="doc-item"
-          data-id="${escapeHtml(String(doc.id))}"
-          data-tab-key="document-approval"
-          style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #3b82f6;
-          border-radius:10px;margin-bottom:8px;overflow:hidden;
-          box-shadow:0 1px 4px rgba(0,0,0,.06);transition:box-shadow .2s;">
-
-          <div class="doc-item-header" data-action="toggle"
-            style="display:flex;align-items:center;padding:12px 16px;cursor:pointer;gap:12px;">
-            <div style="flex:1;min-width:0;">
-              <div style="font-weight:600;font-size:14px;color:#1f2937;
-                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-                display:flex;align-items:center;gap:6px;">
-                📄 ${escapeHtml(doc.title)}
-                ${isShared ? `<span style="background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd;
-                  border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">SHARED TO C&R</span>` : ''}
-                ${isCreator ? `<span style="background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;
-                  border-radius:8px;padding:1px 7px;font-size:10px;font-weight:700;">Mine</span>` : ''}
-              </div>
-              <div style="font-size:11px;color:#9ca3af;margin-top:3px;">
-                <strong style="color:#6b7280;">${escapeHtml(doc.doc_type || '—')}</strong>
-                &nbsp;•&nbsp; By <strong style="color:#6b7280;">${escapeHtml(doc.creator_role || 'N/A')}</strong>
-                &nbsp;•&nbsp; ${escapeHtml(postedAt)}
-              </div>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-              ${_daBadge(doc.status)}
-              <span style="color:#9ca3af;font-size:16px;" class="chevron-${doc.id}">▾</span>
-            </div>
-          </div>
-
-          <div class="doc-detail" id="da-detail-${doc.id}"
-            style="display:none;border-top:1px solid #e5e7eb;">
-            <div id="da-detail-inner-${doc.id}" style="padding:16px;background:#f8fafc;">
-              <p style="color:#9ca3af;font-size:13px;text-align:center;padding:24px 0;">⏳ Loading…</p>
-            </div>
-          </div>
-        </li>`;
-    }).join('');
-
-    return typeHeader + cards;
-  }).join('');
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — Load detail (async, called on expand)
-// ═══════════════════════════════════════════════════════════════════════
-async function _daLoadDetail(recordId) {
-  const container = document.getElementById(`da-detail-inner-${recordId}`);
-  if (!container) return;
-
-  const doc = (recordsCache['document-approval'] || []).find(r => String(r.id) === String(recordId));
-  if (!doc) {
-    container.innerHTML = `<p style="color:#ef4444;text-align:center;">Document not found.</p>`;
-    return;
-  }
-
-  const leader    = isWCLeader(window.currentUserRole);
-  const isCreator = String(doc.creator_id) === String(window.currentUserId);
-
-  container.innerHTML = _daDetailHtml(doc, leader, isCreator);
-  _daWireDetailButtons(recordId, doc, leader, isCreator);
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — Detail HTML
-// ═══════════════════════════════════════════════════════════════════════
-function _daDetailHtml(doc, leader, isCreator) {
-  const isShared   = doc.status === 'shared';
-  const isApproved = doc.status === 'approved' || isShared;
-  const canAct     = leader && doc.status === 'pending_approval';
-
-  // ── Decision block ────────────────────────────────────────────────
-  // Leader: always sees review history if it exists
-  // Creator: only sees decision + comment AFTER leader has acted (status approved/rejected/shared)
-  let decisionBlock = '';
-  if (leader && doc.review_action) {
-    const ac = doc.review_action === 'approved' ? '#10b981' : '#ef4444';
-    const al = doc.review_action === 'approved' ? '✅ Approved' : '❌ Rejected';
-    decisionBlock = `
-      <div style="padding:12px 14px;background:${ac}10;border:1px solid ${ac}60;
-        border-radius:10px;margin-bottom:12px;">
-        <div style="font-size:12px;font-weight:700;color:${ac};margin-bottom:4px;">${al}</div>
-        ${doc.review_comment
-          ? `<div style="font-size:12px;color:#374151;margin-top:4px;">💬 <em>${escapeHtml(doc.review_comment)}</em></div>` : ''}
-        <div style="font-size:11px;color:#9ca3af;margin-top:4px;">
-          ${doc.reviewed_at
-            ? new Date(doc.reviewed_at).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' }) : ''}</div>
-      </div>`;
-  } else if (isCreator && doc.review_action && ['approved','rejected','shared'].includes(doc.status)) {
-    const ac = doc.review_action === 'approved' ? '#10b981' : '#ef4444';
-    const al = doc.review_action === 'approved'
-      ? '✅ Your document was approved'
-      : '❌ Your document was rejected';
-    decisionBlock = `
-      <div style="padding:12px 14px;background:${ac}10;border:1px solid ${ac}60;
-        border-radius:10px;margin-bottom:12px;">
-        <div style="font-size:12px;font-weight:700;color:${ac};margin-bottom:4px;">${al}</div>
-        ${doc.review_comment
-          ? `<div style="font-size:12px;color:#374151;margin-top:4px;">
-              Leader's note: <em>${escapeHtml(doc.review_comment)}</em></div>` : ''}
-        <div style="font-size:11px;color:#9ca3af;margin-top:4px;">
-          ${doc.reviewed_at
-            ? new Date(doc.reviewed_at).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' }) : ''}</div>
-      </div>`;
-  }
-
-  // ── Action area ───────────────────────────────────────────────────
-  let actionArea = '';
-  if (canAct) {
-    actionArea = `
-      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;
-        padding:14px;margin-top:14px;">
-        <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:10px;
-          text-transform:uppercase;letter-spacing:.5px;">📋 Review This Document</div>
-        <div style="margin-bottom:10px;">
-          <label style="${_daLabelStyle()}">Comment / Reason
-            <span style="text-transform:none;font-weight:400;color:#9ca3af;">
-              (shown to creator after decision)</span></label>
-          <textarea id="da-review-comment-${doc.id}"
-            placeholder="Add a note — visible to the submitter once you approve or reject…"
-            style="${_daInputStyle()} min-height:80px;resize:vertical;"></textarea>
-        </div>
-        <div style="display:flex;gap:8px;">
-          <button data-action="da-approve"
-            style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;
-            background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:8px;cursor:pointer;">
-            ✅ Approve</button>
-          <button data-action="da-reject"
-            style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;
-            background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">
-            ❌ Reject</button>
-        </div>
-      </div>`;
-
-  } else if (leader && isApproved && !isShared) {
-    actionArea = `
-      <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;
-        padding:14px;margin-top:14px;">
-        <div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:6px;">
-          📤 Share to Control &amp; Report</div>
-        <p style="font-size:12px;color:#78350f;margin:0 0 10px;">
-          This creates a read-only copy on the Control &amp; Report board, visible to all sides.
-          The document will become read-only here once shared.</p>
-        <button data-action="da-share"
-          style="width:100%;padding:10px 14px;font-size:13px;font-weight:600;
-          background:#d97706;color:#fff;border:none;border-radius:8px;cursor:pointer;">
-          📤 Share to Control &amp; Report</button>
-      </div>`;
-
-  } else if (isShared) {
-    actionArea = `
-      <div style="padding:10px 14px;background:#dbeafe;border:1px solid #93c5fd;
-        border-radius:10px;margin-top:14px;font-size:12px;color:#1d4ed8;font-weight:600;">
-        ✅ Shared to Control &amp; Report — this document is now read-only.
-      </div>`;
-
-  } else if (isCreator && doc.status === 'pending_approval') {
-    actionArea = `
-      <div style="padding:10px 14px;background:#fef3c7;border:1px solid #fcd34d;
-        border-radius:10px;margin-top:14px;font-size:12px;color:#92400e;">
-        ⏳ Awaiting leader review. You will be notified once a decision is made.
-      </div>`;
-
-  } else if (isCreator && doc.status === 'rejected') {
-    actionArea = `
-      <div style="display:flex;gap:8px;margin-top:14px;">
-        <button data-action="da-resubmit"
-          style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;
-          background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
-          🔄 Resubmit Revised Document</button>
-        <button data-action="da-delete"
-          style="padding:10px 14px;font-size:13px;font-weight:600;
-          background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">
-          🗑️ Delete</button>
-      </div>`;
-
-  } else if (isCreator && doc.status === 'draft') {
-    actionArea = `
-      <div style="display:flex;gap:8px;margin-top:14px;">
-        <button data-action="da-submit"
-          style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;
-          background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
-          📤 Submit for Approval</button>
-        <button data-action="da-delete"
-          style="padding:10px 14px;font-size:13px;font-weight:600;
-          background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">
-          🗑️ Delete</button>
-      </div>`;
-  }
-
-  const fileName = doc.file_name || (doc.file_path ? doc.file_path.split('/').pop() : null);
-
-  return `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-
-      <!-- LEFT: Document info (read-only) -->
-      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
-        <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
-          padding-bottom:8px;border-bottom:2px solid #e5e7eb;">📄 Document Details</div>
-        <div style="font-size:12px;color:#374151;display:flex;flex-direction:column;gap:10px;">
-          <div>
-            <div style="${_daLabelStyle()}">Type</div>
-            <div style="font-size:13px;font-weight:600;">${escapeHtml(doc.doc_type || '—')}</div>
-          </div>
-          <div>
-            <div style="${_daLabelStyle()}">Title</div>
-            <div style="font-size:13px;font-weight:600;">${escapeHtml(doc.title || '—')}</div>
-          </div>
-          <div>
-            <div style="${_daLabelStyle()}">Description</div>
-            <div style="font-size:13px;line-height:1.7;">${escapeHtml(doc.description || 'No description provided.')}</div>
-          </div>
-          <div>
-            <div style="${_daLabelStyle()}">Submitted By</div>
-            <div>${escapeHtml(doc.creator_role || '—')}
-              ${doc.creator_email
-                ? `<span style="color:#6b7280;font-size:11px;"> (${escapeHtml(doc.creator_email)})</span>` : ''}</div>
-          </div>
-          <div>
-            <div style="${_daLabelStyle()}">Status</div>
-            ${_daBadge(doc.status)}
-          </div>
-          ${fileName ? `
-            <div>
-              <div style="${_daLabelStyle()}">Attached File</div>
-              <a data-action="da-download"
-                data-doc-id="${escapeHtml(String(doc.id))}"
-                data-filename="${escapeHtml(fileName)}"
-                style="display:inline-flex;align-items:center;gap:6px;background:#eff6ff;
-                color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:6px 12px;
-                font-size:12px;font-weight:500;cursor:pointer;text-decoration:none;">
-                ⬇️ ${escapeHtml(fileName)}</a>
-            </div>` : ''}
-        </div>
-      </div>
-
-      <!-- RIGHT: Review / action panel -->
-      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
-        <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
-          padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
-          ${leader ? '🔍 Leader Review' : '📊 Approval Status'}
-        </div>
-        ${decisionBlock || `<p style="font-size:12px;color:#9ca3af;margin:0 0 10px;">No review action yet.</p>`}
-        ${actionArea}
-      </div>
-    </div>`;
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — Wire buttons inside expanded card
-// ═══════════════════════════════════════════════════════════════════════
-function _daWireDetailButtons(recordId, doc, leader, isCreator) {
-  const container = document.getElementById(`da-detail-inner-${recordId}`);
-  if (!container) return;
-  container.querySelector('[data-action="da-approve"]')   ?.addEventListener('click', () => _daReview(recordId, 'approved'));
-  container.querySelector('[data-action="da-reject"]')    ?.addEventListener('click', () => _daReview(recordId, 'rejected'));
-  container.querySelector('[data-action="da-share"]')     ?.addEventListener('click', () => _daShare(recordId));
-  container.querySelector('[data-action="da-submit"]')    ?.addEventListener('click', () => _daSubmitForApproval(recordId));
-  container.querySelector('[data-action="da-resubmit"]')  ?.addEventListener('click', () => _daOpenCreateForm(doc));
-  container.querySelector('[data-action="da-delete"]')    ?.addEventListener('click', () => _daDelete(recordId));
-  container.querySelector('[data-action="da-download"]')  ?.addEventListener('click', e => {
-    const btn = e.currentTarget;
-    _daDownload(btn.dataset.docId, btn.dataset.filename);
-  });
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — API: Review (approve / reject)
-//  POST /api/document-approval/:id/review
-//  Headers: Authorization: Bearer <token>   (injected by authFetch)
-//  Body:    { projectId, action, comment }
-// ═══════════════════════════════════════════════════════════════════════
-async function _daReview(docId, action) {
-  const projectId = localStorage.getItem('activeProjectId');
-  if (!projectId) { alert('No project selected.'); return; }
-
-  const comment = document.getElementById(`da-review-comment-${docId}`)?.value.trim() || '';
-  if (action === 'rejected' && !comment) {
-    if (!confirm('No rejection reason entered. Proceed without a comment?')) return;
-  }
-
-  try {
-    const res = await _daAuthFetch(`${API}/document-approval/${docId}/review`, {
-      method: 'POST',
-      body:   { projectId, action, comment },
-    });
-    if (!res) return;
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || 'Failed to submit review');
-    alert(action === 'approved' ? '✅ Document approved.' : '❌ Document rejected.');
-    delete recordsCache['document-approval'];
-    _daLoadRecords();
-  } catch (err) {
-    console.error('DA review error:', err);
-    alert('Error: ' + err.message);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — API: Share to C&R
-//  POST /api/document-approval/:id/share
-//  Headers: Authorization: Bearer <token>
-//  Body:    { projectId }
-// ═══════════════════════════════════════════════════════════════════════
-async function _daShare(docId) {
-  const projectId = localStorage.getItem('activeProjectId');
-  if (!projectId) { alert('No project selected.'); return; }
-
-  if (!confirm('Share this approved document to the Control & Report board?\nIt will become read-only here once shared.')) return;
-
-  try {
-    const res = await _daAuthFetch(`${API}/document-approval/${docId}/share`, {
-      method: 'POST',
-      body:   { projectId },
-    });
-    if (!res) return;
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || 'Failed to share document');
-    alert('📤 Document shared to Control & Report successfully.');
-    delete recordsCache['document-approval'];
-    delete recordsCache['control-reports'];
-    _daLoadRecords();
-  } catch (err) {
-    console.error('DA share error:', err);
-    alert('Error: ' + err.message);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — API: Submit for approval (from draft)
-//  POST /api/document-approval/:id/submit
-//  Headers: Authorization: Bearer <token>
-//  Body:    { projectId }
-// ═══════════════════════════════════════════════════════════════════════
-async function _daSubmitForApproval(docId) {
-  const projectId = localStorage.getItem('activeProjectId');
-  if (!projectId) { alert('No project selected.'); return; }
-
-  if (!confirm('Submit this document to your side leader for approval?')) return;
-
-  try {
-    const res = await _daAuthFetch(`${API}/document-approval/${docId}/submit`, {
-      method: 'POST',
-      body:   { projectId },
-    });
-    if (!res) return;
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || 'Failed to submit');
-    alert('📤 Document submitted for leader approval.');
-    delete recordsCache['document-approval'];
-    _daLoadRecords();
-  } catch (err) {
-    console.error('DA submit error:', err);
-    alert('Error: ' + err.message);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — API: Delete
-//  DELETE /api/document-approval/:id
-//  Headers: Authorization: Bearer <token>
-//  Body:    { projectId }
-// ═══════════════════════════════════════════════════════════════════════
-async function _daDelete(docId) {
-  const projectId = localStorage.getItem('activeProjectId');
-  if (!projectId) { alert('No project selected.'); return; }
-
-  if (!confirm('Delete this document? This cannot be undone.')) return;
-
-  try {
-    const res = await _daAuthFetch(`${API}/document-approval/${docId}`, {
-      method: 'DELETE',
-      body:   { projectId },
-    });
-    if (!res) return;
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || 'Failed to delete');
-    alert('Document deleted.');
-    delete recordsCache['document-approval'];
-    _daLoadRecords();
-  } catch (err) {
-    console.error('DA delete error:', err);
-    alert('Error: ' + err.message);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — API: Download file
-//  GET /api/document-approval/:id/download?projectId=...
-//  Headers: Authorization: Bearer <token>   (injected by authFetch)
-// ═══════════════════════════════════════════════════════════════════════
-async function _daDownload(docId, fileName) {
-  const projectId = localStorage.getItem('activeProjectId');
-  if (!projectId) { alert('No project selected.'); return; }
-
-  try {
-    const res = await _daAuthFetch(
-      `${API}/document-approval/${docId}/download?projectId=${encodeURIComponent(projectId)}`
-    );
-    if (!res) return;
-    if (!res.ok) { alert('Failed to download file.'); return; }
-    const data = await res.json();
-    if (data.url) {
-      const a = document.createElement('a');
-      a.href = data.url; a.download = fileName; a.target = '_blank';
-      document.body.appendChild(a); a.click(); a.remove();
+    let rows;
+    if (isWCLeader(role)) {
+      // Leaders see all documents on their side
+      const r = await pool.query(
+        `SELECT * FROM project_documents
+         WHERE project_id = $1 AND side = $2
+         ORDER BY created_at DESC`,
+        [projectId, side]
+      );
+      rows = r.rows;
     } else {
-      alert(data.error || 'File not available.');
+      // Team members only see their own
+      const r = await pool.query(
+        `SELECT * FROM project_documents
+         WHERE project_id = $1 AND side = $2 AND creator_id = $3
+         ORDER BY created_at DESC`,
+        [projectId, side, user_id]
+      );
+      rows = r.rows;
     }
+
+    return res.json({ documents: rows });
   } catch (err) {
-    console.error('DA download error:', err);
-    alert('Failed to download file.');
+    console.error('POST /api/document-approval:', err);
+    return res.status(500).json({ error: 'Server error.' });
   }
-}
+});
 
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — Create / Resubmit form (opens in gray panel)
-//  POST /api/document-approval/create        (new)
-//  PUT  /api/document-approval/:id/resubmit  (resubmit after rejection)
-//  Headers: Authorization: Bearer <token>   (injected by authFetch)
-//  Body:    FormData { projectId, doc_type, title, description, file? }
-// ═══════════════════════════════════════════════════════════════════════
-function _daOpenCreateForm(existingDoc = null) {
-  const projectId = localStorage.getItem('activeProjectId');
-  if (!projectId) { alert('No project selected. Please select a project first.'); return; }
+// ── CREATE  POST /api/document-approval/create ───────────────────────────────
+app.post('/api/document-approval/create', authenticateToken,
+  upload.single('file'), async (req, res) => {
+  try {
+    const { user_id, role } = req.user;
+    const { projectId, doc_type, title, description } = req.body;
 
-  const isEdit    = existingDoc !== null;
-  const v         = f => escapeHtml(String(existingDoc?.[f] ?? ''));
-  const typeOptions = DA_DOC_TYPES.map(t =>
-    `<option value="${t}" ${existingDoc?.doc_type === t ? 'selected' : ''}>${escapeHtml(t)}</option>`
-  ).join('');
+    if (!projectId)      return res.status(400).json({ error: 'projectId is required.' });
+    if (!doc_type)       return res.status(400).json({ error: 'doc_type is required.' });
+    if (!title?.trim())  return res.status(400).json({ error: 'title is required.' });
+    if (!description?.trim()) return res.status(400).json({ error: 'description is required.' });
+    if (!req.file)       return res.status(400).json({ error: 'file is required.' });
 
-  expandGrayPart(`
-    <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
+    const side = await _daSide(role, user_id, projectId);
+    if (!side) return res.status(403).json({ error: 'Access denied.' });
 
-      <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
-        <h3 style="margin:0;color:#333;font-size:20px;">
-          ${isEdit ? '🔄 Resubmit Revised Document' : '📄 Submit New Document'}</h3>
-        <p style="margin:4px 0 0;font-size:12px;color:#6b7280;">
-          ${isEdit
-            ? 'Update your document and resubmit it for leader review.'
-            : 'Fill in the details below. After saving the draft, use the Submit button on the card to send it to your leader.'}
-        </p>
-      </div>
+    const email = await _daCreatorEmail(role, user_id);
 
-      <div style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
+    const uploaded = await scheduleCloudinaryUpload(
+      req.file.buffer, req.file.originalname, 'document_approval'
+    );
 
-        <div>
-          <label style="${_daLabelStyle()}">Document Type *</label>
-          <select id="da-cr-type" style="${_daInputStyle()} cursor:pointer;">
-            <option value="">— Select type —</option>
-            ${typeOptions}
-          </select>
-        </div>
+    const r = await pool.query(
+      `INSERT INTO project_documents
+         (project_id, creator_id, creator_role, creator_email, side,
+          doc_type, title, description,
+          file_name, file_id, file_url, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'draft')
+       RETURNING *`,
+      [projectId, user_id, role, email, side,
+       doc_type, title.trim(), description.trim(),
+       req.file.originalname, uploaded.public_id, uploaded.secure_url]
+    );
 
-        <div>
-          <label style="${_daLabelStyle()}">Title *</label>
-          <input id="da-cr-title" type="text" value="${v('title')}"
-            placeholder="e.g. Weekly Progress Report — Week 12"
-            style="${_daInputStyle()} font-size:14px;"/>
-        </div>
+    return res.status(201).json({ success: true, document: r.rows[0] });
+  } catch (err) {
+    console.error('POST /api/document-approval/create:', err);
+    return res.status(500).json({ error: 'Server error.' });
+  }
+});
 
-        <div>
-          <label style="${_daLabelStyle()}">Description *</label>
-          <textarea id="da-cr-desc"
-            placeholder="Briefly describe the content and purpose of this document…"
-            style="width:100%;min-height:100px;padding:10px 12px;border:1px solid #d1d5db;
-            border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box;">${v('description')}</textarea>
-        </div>
+// ── SUBMIT FOR APPROVAL  POST /api/document-approval/:id/submit ──────────────
+app.post('/api/document-approval/:id/submit', authenticateToken, async (req, res) => {
+  try {
+    const { user_id, role } = req.user;
+    const { id }            = req.params;
+    const { projectId }     = req.body;
+    if (!projectId) return res.status(400).json({ error: 'projectId is required.' });
 
-        <div>
-          <label style="${_daLabelStyle()}">
-            Attach File ${isEdit ? '<span style="font-weight:400;text-transform:none;">(leave empty to keep existing file)</span>' : '*'}
-          </label>
-          <div id="da-drop-zone"
-            style="display:flex;align-items:center;gap:12px;padding:14px;
-            border:2px dashed #d1d5db;border-radius:8px;background:#fafafa;cursor:pointer;">
-            <span style="font-size:24px;">📎</span>
-            <div style="flex:1;">
-              <div style="font-weight:600;color:#374151;font-size:13px;">
-                Click to upload or drag &amp; drop</div>
-              <div style="font-size:11px;color:#9ca3af;margin-top:2px;">
-                PDF, DOC, DOCX, XLS, XLSX, JPG, PNG — max 20 MB</div>
-              <input type="file" id="da-cr-file" style="display:none;"
-                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"/>
-            </div>
-          </div>
-          <div id="da-file-display"
-            style="display:none;margin-top:6px;font-size:12px;color:#10b981;font-weight:600;"></div>
-          ${isEdit && existingDoc?.file_name
-            ? `<div style="font-size:11px;color:#6b7280;margin-top:4px;">
-                Current file: <strong>${escapeHtml(existingDoc.file_name)}</strong></div>` : ''}
-        </div>
+    const check = await pool.query(
+      `SELECT * FROM project_documents WHERE id = $1 AND project_id = $2`,
+      [id, projectId]
+    );
+    if (!check.rows.length) return res.status(404).json({ error: 'Document not found.' });
+    const doc = check.rows[0];
 
-        <div style="padding:12px 14px;background:#f0fdf4;border:1px solid #bbf7d0;
-          border-radius:8px;font-size:12px;color:#166534;">
-          ℹ️ ${isEdit
-            ? 'Saving will reset the document to <strong>Draft</strong> status and notify your leader that a revision has been submitted.'
-            : 'The document is saved as a <strong>Draft</strong>. Expand the card and click <strong>Submit for Approval</strong> when you are ready.'}
-        </div>
-      </div>
+    if (String(doc.creator_id) !== String(user_id))
+      return res.status(403).json({ error: 'Only the creator can submit this document.' });
+    if (!['draft', 'rejected'].includes(doc.status))
+      return res.status(409).json({ error: `Cannot submit a document with status: ${doc.status}` });
 
-      <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
-        background:#fff;display:flex;gap:12px;">
-        <button type="button" id="da-cr-save"
-          style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#007B8A;
-          color:#fff;border:none;border-radius:8px;cursor:pointer;">
-          💾 ${isEdit ? 'Resubmit Document' : 'Save Draft'}</button>
-        <button type="button" onclick="collapseGrayPart()"
-          style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#f5f5f5;
-          color:#333;border:1px solid #ddd;border-radius:8px;cursor:pointer;">
-          ✕ Cancel</button>
-      </div>
-    </div>`);
+    await pool.query(
+      `UPDATE project_documents
+       SET status = 'pending_approval', updated_at = NOW()
+       WHERE id = $1`,
+      [id]
+    );
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('POST /api/document-approval/:id/submit:', err);
+    return res.status(500).json({ error: 'Server error.' });
+  }
+});
 
-  // ── Drop-zone wiring ──────────────────────────────────────────────
-  const dropZone    = document.getElementById('da-drop-zone');
-  const fileInput   = document.getElementById('da-cr-file');
-  const fileDisplay = document.getElementById('da-file-display');
+// ── REVIEW  POST /api/document-approval/:id/review ───────────────────────────
+app.post('/api/document-approval/:id/review', authenticateToken, async (req, res) => {
+  try {
+    const { user_id, role } = req.user;
+    const { id }            = req.params;
+    const { projectId, action, comment = '' } = req.body;
 
-  const _updateFileDisplay = () => {
-    if (fileInput.files.length) {
-      const f = fileInput.files[0];
-      fileDisplay.textContent   = `✓ ${f.name} (${(f.size / 1024 / 1024).toFixed(2)} MB)`;
-      fileDisplay.style.display = 'block';
-      dropZone.style.borderColor = '#10b981';
-    }
-  };
-  dropZone.addEventListener('click',    () => fileInput.click());
-  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.style.borderColor = '#007B8A'; });
-  dropZone.addEventListener('dragleave',  () => { dropZone.style.borderColor = '#d1d5db'; });
-  dropZone.addEventListener('drop', e => {
-    e.preventDefault(); dropZone.style.borderColor = '#d1d5db';
-    if (e.dataTransfer.files.length) {
-      const dt = new DataTransfer(); dt.items.add(e.dataTransfer.files[0]);
-      fileInput.files = dt.files; _updateFileDisplay();
-    }
-  });
-  fileInput.addEventListener('change', _updateFileDisplay);
+    if (!projectId) return res.status(400).json({ error: 'projectId is required.' });
+    if (!['approved', 'rejected'].includes(action))
+      return res.status(400).json({ error: 'action must be approved or rejected.' });
+    if (!isWCLeader(role))
+      return res.status(403).json({ error: 'Only leaders can review documents.' });
 
-  // ── Save / resubmit ───────────────────────────────────────────────
-  document.getElementById('da-cr-save')?.addEventListener('click', async () => {
-    const type  = document.getElementById('da-cr-type')?.value;
-    const title = document.getElementById('da-cr-title')?.value.trim();
-    const desc  = document.getElementById('da-cr-desc')?.value.trim();
-    const file  = fileInput.files?.[0];
+    const check = await pool.query(
+      `SELECT * FROM project_documents WHERE id = $1 AND project_id = $2`,
+      [id, projectId]
+    );
+    if (!check.rows.length) return res.status(404).json({ error: 'Document not found.' });
+    const doc = check.rows[0];
 
-    if (!type)                            return alert('Please select a document type.');
-    if (!title)                           return alert('Title is required.');
-    if (!desc)                            return alert('Description is required.');
-    if (!isEdit && !file)                 return alert('Please attach a file.');
-    if (file && file.size > 20*1024*1024) return alert('File size must not exceed 20 MB.');
+    // Leader must be on the same side as the document
+    if (wcSide(role) !== doc.side)
+      return res.status(403).json({ error: 'You can only review documents from your side.' });
+    if (doc.status !== 'pending_approval')
+      return res.status(409).json({ error: `Document is not pending approval (status: ${doc.status})` });
 
-    // Build FormData — projectId and JWT token both required
-    const form = new FormData();
-    form.append('projectId',   projectId);   // active project from localStorage
-    form.append('doc_type',    type);
-    form.append('title',       title);
-    form.append('description', desc);
-    if (isEdit) form.append('docId', existingDoc.id);
-    if (file)   form.append('file',  file);
+    const reviewerEmail = await _daCreatorEmail(role, user_id);
 
-    const btn = document.getElementById('da-cr-save');
-    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    await pool.query(
+      `UPDATE project_documents
+       SET status         = $1,
+           review_action  = $2,
+           review_comment = $3,
+           reviewer_id    = $4,
+           reviewer_role  = $5,
+           reviewer_email = $6,
+           reviewed_at    = NOW(),
+           updated_at     = NOW()
+       WHERE id = $7`,
+      [action, action, comment.trim(), user_id, role, reviewerEmail, id]
+    );
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('POST /api/document-approval/:id/review:', err);
+    return res.status(500).json({ error: 'Server error.' });
+  }
+});
 
+// ── SHARE TO C&R  POST /api/document-approval/:id/share ──────────────────────
+app.post('/api/document-approval/:id/share', authenticateToken, async (req, res) => {
+  try {
+    const { user_id, role } = req.user;
+    const { id }            = req.params;
+    const { projectId }     = req.body;
+    if (!projectId) return res.status(400).json({ error: 'projectId is required.' });
+    if (!isWCLeader(role))
+      return res.status(403).json({ error: 'Only leaders can share documents.' });
+
+    const check = await pool.query(
+      `SELECT * FROM project_documents WHERE id = $1 AND project_id = $2`,
+      [id, projectId]
+    );
+    if (!check.rows.length) return res.status(404).json({ error: 'Document not found.' });
+    const doc = check.rows[0];
+
+    if (wcSide(role) !== doc.side)
+      return res.status(403).json({ error: 'You can only share documents from your side.' });
+    if (doc.status !== 'approved')
+      return res.status(409).json({ error: 'Only approved documents can be shared.' });
+
+    const client = await pool.connect();
     try {
-      // authFetch injects Authorization: Bearer <token> automatically
-      const endpoint = isEdit
-        ? `${API}/document-approval/${existingDoc.id}/resubmit`
-        : `${API}/document-approval/create`;
-      const res  = await authFetch(endpoint, { method: isEdit ? 'PUT' : 'POST', body: form });
-      if (!res) return;   // authFetch redirected (token unrecoverable)
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || data.error || 'Failed to save document');
+      await client.query('BEGIN');
 
-      alert(isEdit
-        ? '✓ Document resubmitted. Your leader will be notified.'
-        : '✓ Draft saved. Expand the card and click "Submit for Approval" when ready.');
-      delete recordsCache['document-approval'];
-      collapseGrayPart();
-      _daLoadRecords();
-    } catch (err) {
-      console.error('DA save error:', err);
-      alert('Error: ' + err.message);
-      if (btn) { btn.disabled = false; btn.textContent = isEdit ? 'Resubmit Document' : 'Save Draft'; }
+      // Mark source as shared
+      await client.query(
+        `UPDATE project_documents
+         SET status = 'shared', shared_at = NOW(), updated_at = NOW()
+         WHERE id = $1`,
+        [id]
+      );
+
+      // Insert copy into C&R
+      await client.query(
+        `INSERT INTO control_report_records
+           (project_id, source_doc_id, creator_id, creator_role, creator_email,
+            side, doc_type, title, description,
+            file_name, file_id, file_url,
+            reviewer_id, reviewer_role, reviewer_email,
+            review_comment, reviewed_at, shared_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW())`,
+        [projectId, id,
+         doc.creator_id, doc.creator_role, doc.creator_email,
+         doc.side, doc.doc_type, doc.title, doc.description,
+         doc.file_name, doc.file_id, doc.file_url,
+         user_id, role, await _daCreatorEmail(role, user_id),
+         doc.review_comment, doc.reviewed_at]
+      );
+
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
     }
-  });
-}
 
-// ═══════════════════════════════════════════════════════════════════════
-//  CONTROL & REPORT — Shell (read-only board)
-// ═══════════════════════════════════════════════════════════════════════
-function _crRenderShell() {
-  bottomContent.innerHTML = `
-    <div class="bottom-fixed-header">
-      <div style="padding:6px 14px;background:#fff7ed;border:1px solid #fed7aa;
-        border-radius:8px;font-size:12px;color:#92400e;font-weight:600;">
-        📋 Read-Only Board — Documents shared here by side leaders
-      </div>
-      <div class="bottom-description">
-        <p>Consolidated view of all approved and shared documents from every side. All entries are read-only.</p>
-        <p style="margin-top:4px;font-size:12px;color:#6b7280;">
-          Documents appear here once a side leader approves and shares them from the
-          Document &amp; Approval tab.
-        </p>
-      </div>
-    </div>
-    <div class="bottom-scroll-area">
-      <ul class="doc-list" id="recordsList" style="padding:0;margin:0;list-style:none;"></ul>
-      <div class="no-data-placeholder">
-        <p>No shared documents yet. Side leaders can share approved documents from the Document &amp; Approval tab.</p>
-      </div>
-    </div>`;
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  CONTROL & REPORT — Load records
-//  POST /api/control-reports
-//  Headers: Authorization: Bearer <token>   (injected by authFetch)
-//  Body:    { projectId }
-// ═══════════════════════════════════════════════════════════════════════
-async function _crLoadRecords() {
-  const list        = document.getElementById('recordsList');
-  const placeholder = document.querySelector('.no-data-placeholder');
-  if (!list) return;
-
-  const projectId = _daRequireProject(placeholder);
-  if (!projectId) return;
-
-  if (recordsCache['control-reports']) {
-    _crRenderList(recordsCache['control-reports']);
-    return;
-  }
-
-  if (placeholder) {
-    placeholder.style.display = 'block';
-    placeholder.innerHTML     = "<p style='color:#999;'>Loading…</p>";
-  }
-  list.innerHTML = '';
-
-  try {
-    const res = await _daAuthFetch(`${API}/control-reports`, {
-      method: 'POST',
-      body:   { projectId },
-    });
-
-    if (!res) return;
-
-    if (res.status === 401 || res.status === 403) {
-      if (placeholder) {
-        placeholder.style.display = 'block';
-        placeholder.innerHTML     = "<p style='color:#ef4444;'>⚠️ Unauthorized. Please log in again.</p>";
-      }
-      return;
-    }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const data    = await res.json();
-    const records = (data.documents || []).map(r => ({ ...r, _tabKey: 'control-reports' }));
-    recordsCache['control-reports'] = records;
-    _crRenderList(records);
-
+    return res.json({ success: true });
   } catch (err) {
-    console.error('CR load error:', err);
-    if (placeholder) {
-      placeholder.style.display = 'block';
-      placeholder.innerHTML     = "<p style='color:#ef4444;'>⚠️ Error loading documents. Please try again.</p>";
-    }
+    console.error('POST /api/document-approval/:id/share:', err);
+    return res.status(500).json({ error: 'Server error.' });
   }
-}
+});
 
-// ═══════════════════════════════════════════════════════════════════════
-//  CONTROL & REPORT — Render list (grouped by side)
-// ═══════════════════════════════════════════════════════════════════════
-function _crRenderList(records) {
-  const list        = document.getElementById('recordsList');
-  const placeholder = document.querySelector('.no-data-placeholder');
-  if (!list || !placeholder) return;
-
-  if (!records.length) {
-    list.innerHTML            = '';
-    placeholder.style.display = 'block';
-    return;
-  }
-  placeholder.style.display = 'none';
-
-  const bySide = {};
-  records.forEach(r => {
-    const side = r.side_label || r.creator_side || 'General';
-    if (!bySide[side]) bySide[side] = [];
-    bySide[side].push(r);
-  });
-
-  const sideColors = { Contractor: '#f59e0b', Consultant: '#3b82f6', Client: '#10b981' };
-
-  list.innerHTML = Object.entries(bySide).map(([side, items]) => {
-    const sc = sideColors[side] || '#6b7280';
-
-    const sideHeader = `
-      <li style="padding:6px 14px;background:${sc}15;border-left:4px solid ${sc};
-        border-radius:8px;margin-bottom:6px;font-size:12px;font-weight:700;color:${sc};">
-        🏢 ${escapeHtml(side)} Side
-      </li>`;
-
-    const cards = items.map(doc => {
-      const sharedAt = doc.shared_at
-        ? new Date(doc.shared_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-        : 'N/A';
-      const fileName = doc.file_name || (doc.file_path ? doc.file_path.split('/').pop() : null);
-
-      return `
-        <li class="doc-item"
-          data-id="${escapeHtml(String(doc.id))}"
-          data-tab-key="control-reports"
-          style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid ${sc};
-          border-radius:10px;margin-bottom:8px;overflow:hidden;
-          box-shadow:0 1px 4px rgba(0,0,0,.06);">
-
-          <div class="doc-item-header" data-action="toggle"
-            style="display:flex;align-items:center;padding:12px 16px;cursor:pointer;gap:12px;">
-            <div style="flex:1;min-width:0;">
-              <div style="font-weight:600;font-size:14px;color:#1f2937;
-                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-                display:flex;align-items:center;gap:6px;">
-                📄 ${escapeHtml(doc.title)}
-                <span style="background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd;
-                  border-radius:8px;padding:1px 6px;font-size:10px;font-weight:700;flex-shrink:0;">
-                  READ-ONLY</span>
-              </div>
-              <div style="font-size:11px;color:#9ca3af;margin-top:3px;">
-                <strong style="color:#6b7280;">${escapeHtml(doc.doc_type || '—')}</strong>
-                &nbsp;•&nbsp; By <strong style="color:#6b7280;">${escapeHtml(doc.creator_role || 'N/A')}</strong>
-                &nbsp;•&nbsp; Shared ${escapeHtml(sharedAt)}
-              </div>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-              <span style="background:#10b98120;color:#10b981;border:1px solid #10b98160;
-                border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;">
-                ✅ Approved &amp; Shared</span>
-              <span style="color:#9ca3af;font-size:16px;" class="chevron-cr-${doc.id}">▾</span>
-            </div>
-          </div>
-
-          <!-- Expandable detail — fully inline, no async needed -->
-          <div class="doc-detail" id="cr-detail-${doc.id}"
-            style="display:none;border-top:1px solid #e5e7eb;">
-            <div style="padding:16px;background:#f8fafc;">
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-
-                <!-- Document info -->
-                <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px;">
-                  <div style="font-size:12px;font-weight:700;color:#007B8A;margin-bottom:10px;
-                    padding-bottom:6px;border-bottom:1px solid #e5e7eb;">📄 Document Info</div>
-                  <div style="font-size:12px;color:#374151;display:flex;flex-direction:column;gap:8px;">
-                    <div><div style="${_daLabelStyle()}">Type</div>
-                      <div style="font-weight:600;">${escapeHtml(doc.doc_type || '—')}</div></div>
-                    <div><div style="${_daLabelStyle()}">Title</div>
-                      <div style="font-weight:600;">${escapeHtml(doc.title || '—')}</div></div>
-                    <div><div style="${_daLabelStyle()}">Description</div>
-                      <div style="line-height:1.7;">${escapeHtml(doc.description || '—')}</div></div>
-                    <div><div style="${_daLabelStyle()}">Submitted By</div>
-                      <div>${escapeHtml(doc.creator_role || '—')}
-                        ${doc.creator_email
-                          ? `<span style="color:#6b7280;font-size:11px;">(${escapeHtml(doc.creator_email)})</span>` : ''}</div></div>
-                    ${fileName ? `
-                      <div>
-                        <div style="${_daLabelStyle()}">File</div>
-                        <a data-action="cr-download"
-                          data-doc-id="${escapeHtml(String(doc.id))}"
-                          data-filename="${escapeHtml(fileName)}"
-                          style="display:inline-flex;align-items:center;gap:6px;background:#eff6ff;
-                          color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:6px 12px;
-                          font-size:12px;font-weight:500;cursor:pointer;text-decoration:none;">
-                          ⬇️ ${escapeHtml(fileName)}</a>
-                      </div>` : ''}
-                  </div>
-                </div>
-
-                <!-- Approval trail -->
-                <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px;">
-                  <div style="font-size:12px;font-weight:700;color:#007B8A;margin-bottom:10px;
-                    padding-bottom:6px;border-bottom:1px solid #e5e7eb;">✅ Approval Trail</div>
-                  <div style="font-size:12px;color:#374151;display:flex;flex-direction:column;gap:8px;">
-                    <div><div style="${_daLabelStyle()}">Approved By</div>
-                      <div>${escapeHtml(doc.reviewer_role || '—')}
-                        ${doc.reviewer_email
-                          ? `<span style="color:#6b7280;font-size:11px;">(${escapeHtml(doc.reviewer_email)})</span>` : ''}</div></div>
-                    <div><div style="${_daLabelStyle()}">Approval Date</div>
-                      <div>${doc.reviewed_at
-                        ? new Date(doc.reviewed_at).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' })
-                        : '—'}</div></div>
-                    <div><div style="${_daLabelStyle()}">Shared On</div>
-                      <div>${escapeHtml(sharedAt)}</div></div>
-                    ${doc.review_comment ? `
-                      <div><div style="${_daLabelStyle()}">Leader's Note</div>
-                        <div style="padding:6px 10px;background:#f9fafb;border:1px solid #e5e7eb;
-                          border-radius:6px;font-style:italic;color:#6b7280;">
-                          💬 ${escapeHtml(doc.review_comment)}</div></div>` : ''}
-                  </div>
-                  <div style="margin-top:12px;padding:10px 12px;background:#f0fdf4;
-                    border:1px solid #bbf7d0;border-radius:8px;font-size:11px;color:#166534;">
-                    🔒 Read-only copy — the original lives in Document &amp; Approval.
-                  </div>
-                </div>
-
-              </div>
-            </div>
-          </div>
-        </li>`;
-    }).join('');
-
-    return sideHeader + cards;
-  }).join('');
-
-  // Wire download buttons after HTML is injected
-  list.querySelectorAll('[data-action="cr-download"]').forEach(btn => {
-    btn.addEventListener('click', e => {
-      const el = e.currentTarget;
-      _crDownload(el.dataset.docId, el.dataset.filename);
-    });
-  });
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  CONTROL & REPORT — API: Download
-//  GET /api/control-reports/:id/download?projectId=...
-//  Headers: Authorization: Bearer <token>   (injected by authFetch)
-// ═══════════════════════════════════════════════════════════════════════
-async function _crDownload(docId, fileName) {
-  const projectId = localStorage.getItem('activeProjectId');
-  if (!projectId) { alert('No project selected.'); return; }
-
+// ── RESUBMIT  PUT /api/document-approval/:id/resubmit ────────────────────────
+app.put('/api/document-approval/:id/resubmit', authenticateToken,
+  upload.single('file'), async (req, res) => {
   try {
-    const res = await _daAuthFetch(
-      `${API}/control-reports/${docId}/download?projectId=${encodeURIComponent(projectId)}`
+    const { user_id, role } = req.user;
+    const { id }            = req.params;
+    const { projectId, doc_type, title, description } = req.body;
+
+    if (!projectId) return res.status(400).json({ error: 'projectId is required.' });
+
+    const check = await pool.query(
+      `SELECT * FROM project_documents WHERE id = $1 AND project_id = $2`,
+      [id, projectId]
     );
-    if (!res) return;
-    if (!res.ok) { alert('Failed to download file.'); return; }
-    const data = await res.json();
-    if (data.url) {
-      const a = document.createElement('a');
-      a.href = data.url; a.download = fileName; a.target = '_blank';
-      document.body.appendChild(a); a.click(); a.remove();
-    } else {
-      alert(data.error || 'File not available.');
-    }
-  } catch (err) {
-    console.error('CR download error:', err);
-    alert('Failed to download file.');
-  }
-}
+    if (!check.rows.length) return res.status(404).json({ error: 'Document not found.' });
+    const doc = check.rows[0];
 
-// ═══════════════════════════════════════════════════════════════════════
-//  Expose for external use
-// ═══════════════════════════════════════════════════════════════════════
-window.openDocumentApprovalForm = _daOpenCreateForm;
+    if (String(doc.creator_id) !== String(user_id))
+      return res.status(403).json({ error: 'Only the creator can resubmit.' });
+    if (doc.status !== 'rejected')
+      return res.status(409).json({ error: 'Only rejected documents can be resubmitted.' });
+
+    const setClauses = [], values = []; let idx = 1;
+    const push = (col, val) => { setClauses.push(`${col} = $${idx++}`); values.push(val); };
+
+    if (doc_type)    push('doc_type',    doc_type);
+    if (title)       push('title',       title.trim());
+    if (description) push('description', description.trim());
+
+    // Replace file if a new one was uploaded
+    if (req.file) {
+      if (doc.file_id)
+        await cloudinary.uploader.destroy(doc.file_id, { resource_type: 'raw' }).catch(() => {});
+      const uploaded = await scheduleCloudinaryUpload(
+        req.file.buffer, req.file.originalname, 'document_approval'
+      );
+      push('file_name', req.file.originalname);
+      push('file_id',   uploaded.public_id);
+      push('file_url',  uploaded.secure_url);
+    }
+
+    // Reset review fields and move to pending
+    push('status',         'pending_approval');
+    push('review_action',  null);
+    push('review_comment', null);
+    push('reviewer_id',    null);
+    push('reviewer_role',  null);
+    push('reviewer_email', null);
+    push('reviewed_at',    null);
+    push('updated_at',     new Date());
+
+    values.push(id, projectId);
+    await pool.query(
+      `UPDATE project_documents SET ${setClauses.join(', ')}
+       WHERE id = $${idx} AND project_id = $${idx + 1}`,
+      values
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('PUT /api/document-approval/:id/resubmit:', err);
+    return res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// ── DELETE  DELETE /api/document-approval/:id ─────────────────────────────────
+app.delete('/api/document-approval/:id', authenticateToken, async (req, res) => {
+  try {
+    const { user_id, role } = req.user;
+    const { id }            = req.params;
+    const { projectId }     = req.body;
+    if (!projectId) return res.status(400).json({ error: 'projectId is required.' });
+
+    const check = await pool.query(
+      `SELECT * FROM project_documents WHERE id = $1 AND project_id = $2`,
+      [id, projectId]
+    );
+    if (!check.rows.length) return res.status(404).json({ error: 'Document not found.' });
+    const doc = check.rows[0];
+
+    if (String(doc.creator_id) !== String(user_id))
+      return res.status(403).json({ error: 'Only the creator can delete this document.' });
+    if (doc.status === 'shared')
+      return res.status(409).json({ error: 'Shared documents cannot be deleted.' });
+
+    if (doc.file_id)
+      await cloudinary.uploader.destroy(doc.file_id, { resource_type: 'raw' }).catch(() => {});
+
+    await pool.query(
+      `DELETE FROM project_documents WHERE id = $1 AND project_id = $2`,
+      [id, projectId]
+    );
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /api/document-approval/:id:', err);
+    return res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// ── DOWNLOAD  GET /api/document-approval/:id/download ────────────────────────
+app.get('/api/document-approval/:id/download', authenticateToken, async (req, res) => {
+  try {
+    const { user_id, role } = req.user;
+    const { id }            = req.params;
+    const { projectId }     = req.query;
+    if (!projectId) return res.status(400).json({ error: 'projectId is required.' });
+
+    const check = await pool.query(
+      `SELECT * FROM project_documents WHERE id = $1 AND project_id = $2`,
+      [id, projectId]
+    );
+    if (!check.rows.length) return res.status(404).json({ error: 'Document not found.' });
+    const doc = check.rows[0];
+
+    const side = await _daSide(role, user_id, projectId);
+    if (!side || side !== doc.side)
+      return res.status(403).json({ error: 'Access denied.' });
+    if (!doc.file_id)
+      return res.status(404).json({ error: 'No file attached.' });
+
+    return res.json({ url: doc.file_url, filename: doc.file_name });
+  } catch (err) {
+    console.error('GET /api/document-approval/:id/download:', err);
+    return res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// =============================================================================
+//  CONTROL & REPORT
+// =============================================================================
+
+// ── LIST  POST /api/control-reports ──────────────────────────────────────────
+app.post('/api/control-reports', authenticateToken, async (req, res) => {
+  try {
+    const { user_id, role } = req.user;
+    const { projectId }     = req.body;
+    if (!projectId) return res.status(400).json({ error: 'projectId is required.' });
+
+    // Verify project membership
+    const hasAccess = await userHasProjectAccess(user_id, role, projectId);
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied.' });
+
+    // Everyone on the project sees all C&R records (cross-side visibility)
+    const r = await pool.query(
+      `SELECT * FROM control_report_records
+       WHERE project_id = $1
+       ORDER BY shared_at DESC`,
+      [projectId]
+    );
+
+    // Map file_url → consistent field name for frontend
+    const documents = r.rows.map(row => ({
+      ...row,
+      side_label: row.side,
+    }));
+
+    return res.json({ documents });
+  } catch (err) {
+    console.error('POST /api/control-reports:', err);
+    return res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// ── DIRECT CREATE (leader only)  POST /api/control-reports/create ────────────
+app.post('/api/control-reports/create', authenticateToken,
+  upload.single('file'), async (req, res) => {
+  try {
+    const { user_id, role } = req.user;
+    const { projectId, doc_type, title, description } = req.body;
+
+    if (!isWCLeader(role))
+      return res.status(403).json({ error: 'Only leaders can add records directly.' });
+    if (!projectId)      return res.status(400).json({ error: 'projectId is required.' });
+    if (!doc_type)       return res.status(400).json({ error: 'doc_type is required.' });
+    if (!title?.trim())  return res.status(400).json({ error: 'title is required.' });
+    if (!description?.trim()) return res.status(400).json({ error: 'description is required.' });
+    if (!req.file)       return res.status(400).json({ error: 'file is required.' });
+
+    const side  = wcSide(role);
+    const email = await _daCreatorEmail(role, user_id);
+
+    const uploaded = await scheduleCloudinaryUpload(
+      req.file.buffer, req.file.originalname, 'control_reports'
+    );
+
+    const r = await pool.query(
+      `INSERT INTO control_report_records
+         (project_id, source_doc_id,
+          creator_id, creator_role, creator_email, side,
+          doc_type, title, description,
+          file_name, file_id, file_url,
+          reviewer_id, reviewer_role, reviewer_email,
+          reviewed_at, shared_at)
+       VALUES ($1, NULL, $2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+               $2,$3,$4, NOW(), NOW())
+       RETURNING *`,
+      [projectId,
+       user_id, role, email, side,
+       doc_type, title.trim(), description.trim(),
+       req.file.originalname, uploaded.public_id, uploaded.secure_url]
+    );
+
+    return res.status(201).json({ success: true, document: r.rows[0] });
+  } catch (err) {
+    console.error('POST /api/control-reports/create:', err);
+    return res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// ── DOWNLOAD  GET /api/control-reports/:id/download ──────────────────────────
+app.get('/api/control-reports/:id/download', authenticateToken, async (req, res) => {
+  try {
+    const { user_id, role } = req.user;
+    const { id }            = req.params;
+    const { projectId }     = req.query;
+    if (!projectId) return res.status(400).json({ error: 'projectId is required.' });
+
+    const hasAccess = await userHasProjectAccess(user_id, role, projectId);
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied.' });
+
+    const check = await pool.query(
+      `SELECT * FROM control_report_records WHERE id = $1 AND project_id = $2`,
+      [id, projectId]
+    );
+    if (!check.rows.length) return res.status(404).json({ error: 'Record not found.' });
+    const rec = check.rows[0];
+    if (!rec.file_id) return res.status(404).json({ error: 'No file attached.' });
+
+    return res.json({ url: rec.file_url, filename: rec.file_name });
+  } catch (err) {
+    console.error('GET /api/control-reports/:id/download:', err);
+    return res.status(500).json({ error: 'Server error.' });
+  }
+});
+
 </script>
 </body>
 </html>
