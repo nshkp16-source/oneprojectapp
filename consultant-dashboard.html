@@ -8194,12 +8194,10 @@ function _daOpenCreateForm(existingDoc = null) {
   const projectId = localStorage.getItem('activeProjectId');
   if (!projectId) { alert('No project selected.'); return; }
 
-  const isEdit      = existingDoc !== null;
-  const existingDocId = existingDoc ? (existingDoc.id ?? existingDoc.document_id ?? existingDoc.docId) : null;
-  if (isEdit && !existingDocId) {
-    alert('Unable to resubmit: missing document identifier.');
-    return;
-  }
+  // If invoked as an event handler the browser may pass a MouseEvent as
+  // the first argument. Treat such calls as "create new" instead of edit.
+  if (existingDoc && (typeof Event !== 'undefined') && existingDoc instanceof Event) existingDoc = null;
+  const isEdit      = existingDoc !== null && typeof existingDoc === 'object';
   const v           = f => escapeHtml(String(existingDoc?.[f] ?? ''));
   const typeOptions = DA_DOC_TYPES.map(t =>
     `<option value="${t}" ${existingDoc?.doc_type === t ? 'selected' : ''}>${escapeHtml(t)}</option>`
@@ -8315,7 +8313,7 @@ function _daOpenCreateForm(existingDoc = null) {
     form.append('doc_type',    type);
     form.append('title',       title);
     form.append('description', desc);
-    if (isEdit) form.append('docId', existingDocId);
+    if (isEdit) form.append('docId', existingDoc.id);
     if (file)   form.append('file',  file);
 
     const btn = document.getElementById('da-cr-save');
@@ -8323,7 +8321,7 @@ function _daOpenCreateForm(existingDoc = null) {
 
     try {
       const endpoint = isEdit
-        ? `${API}/document-approval/${encodeURIComponent(existingDocId)}/resubmit`
+        ? `${API}/document-approval/${existingDoc.id}/resubmit`
         : `${API}/document-approval/create`;
       const res  = await authFetch(endpoint, { method: isEdit ? 'PUT' : 'POST', body: form });
       if (!res) return;
