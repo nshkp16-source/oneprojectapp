@@ -1207,6 +1207,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         const user = await res.json();
         window.currentUserId   = user.id;
         window.currentUserRole = user.role;
+        if (isTeamMember(window.currentUserRole || clientRole)) {
+          document.getElementById('addRecordBtn')?.style.display = 'none';
+        }
       } else {
         console.error('Failed to fetch user info:', res.status);
       }
@@ -3716,19 +3719,23 @@ function setTabContent(tabKey) {
 //  BOTTOM CONTENT SHELL
 // =======================================================================
 function renderBottomContent(description, placeholder) {
+  const role = window.currentUserRole || clientRole;
+  const showAddButton = !isTeamMember(role);
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
-      <button class="btn primary add-doc-btn" type="button" id="addRecordBtnRendered">➕ Add</button>
+      ${showAddButton ? `<button class="btn primary add-doc-btn" type="button" id="addRecordBtnRendered">➕ Add</button>` : ''}
       <div class="bottom-description"><p>${description}</p></div>
     </div>
     <div class="bottom-scroll-area">
       <ul class="doc-list" id="recordsList"></ul>
       <div class="no-data-placeholder"><p>${placeholder}</p></div>
     </div>`;
-  document.getElementById('addRecordBtnRendered').addEventListener('click', () => {
-    const activeTab = getNavTabs()?.querySelector('li.active');
-    openAddRecordPanel(null, activeTab?.getAttribute('data-tab') || 'contractual');
-  });
+  if (showAddButton) {
+    document.getElementById('addRecordBtnRendered').addEventListener('click', () => {
+      const activeTab = getNavTabs()?.querySelector('li.active');
+      openAddRecordPanel(null, activeTab?.getAttribute('data-tab') || 'contractual');
+    });
+  }
 }
 
 // =======================================================================
@@ -3747,11 +3754,16 @@ async function getMeetingScope(context) {
 }
 
 function renderMeetingContent(activeView = 'minutes', context = 'global') {
+  const role = window.currentUserRole || clientRole;
+  const isTm = isTeamMember(role);
+  if (activeView === 'plan' && isTm) activeView = 'scheduled';
+  const planButton = isTm ? '' : `<button class="meeting-btn ${activeView === 'plan' ? 'active' : ''}" data-view="plan">✏️ Plan Meeting</button>`;
+
   bottomContent.innerHTML = `
     <div class="meeting-options">
       <button class="meeting-btn ${activeView === 'minutes'   ? 'active' : ''}" data-view="minutes">📋 Meeting Minutes</button>
       <button class="meeting-btn ${activeView === 'scheduled' ? 'active' : ''}" data-view="scheduled">📅 Scheduled Meetings</button>
-      <button class="meeting-btn ${activeView === 'plan'      ? 'active' : ''}" data-view="plan">✏️ Plan Meeting</button>
+      ${planButton}
     </div>
     <div class="bottom-scroll-area" id="meetingViewContainer"></div>
   `;
@@ -3950,12 +3962,16 @@ document.addEventListener('click', e => {
 });
 
 function renderMinuteSection(meeting) {
+  const role = window.currentUserRole || clientRole;
+  const isTm = isTeamMember(role);
   return `
     <div class="minute-section" id="minute-section-${meeting.id}" style="margin-top:14px;border-top:1px solid #e2e8f0;padding-top:12px;">
       ${meeting.has_minute
         ? renderMinuteDetail(meeting.minute)
-        : `<button class="btn primary add-minute-btn" data-meeting-id="${meeting.id}"
-            style="width:100%;padding:10px;font-size:13px;">📝 Add Minute</button>`}
+        : isTm
+          ? `<div style="color:#475569;font-size:13px;line-height:1.6;">This meeting has no minutes yet. Team members can only view scheduled meetings and recorded minutes.</div>`
+          : `<button class="btn primary add-minute-btn" data-meeting-id="${meeting.id}"
+              style="width:100%;padding:10px;font-size:13px;">📝 Add Minute</button>`}
     </div>
   `;
 }
