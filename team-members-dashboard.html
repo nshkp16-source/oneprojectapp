@@ -1035,11 +1035,13 @@ async function apiRequest(url, options = {}) {
   let res = await fetch(url, options);
 
   if (res.status === 401 || res.status === 403) {
+    // Access token expired → try refresh
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       options.headers.Authorization = `Bearer ${localStorage.getItem("authToken")}`;
-      res = await fetch(url, options);
+      res = await fetch(url, options); // retry original request
     } else {
+      // Refresh failed → logout
       localStorage.clear();
       window.location.href = "home.html";
       return;
@@ -1050,7 +1052,7 @@ async function apiRequest(url, options = {}) {
 }
 
 // =========================
-// Refresh access token
+// Refresh access token using refresh route
 // =========================
 async function refreshAccessToken() {
   const refreshToken = localStorage.getItem("refreshToken");
@@ -1077,7 +1079,7 @@ async function refreshAccessToken() {
 }
 
 // =========================
-// Team Member Profile + Project Selector Logic
+// Team Member Profile + Project Selector Logic (Corrected Full)
 // =========================
 const token = localStorage.getItem("authToken");
 if (!token) {
@@ -1087,11 +1089,9 @@ if (!token) {
 const decoded = parseJwt(token);
 const teamMemberId = decoded?.sub;
 const teamMemberEmail = decoded?.email;
-
-// ── FIX: normalize role with underscore replacement so _isViewOnly() works ──
-window._currentUserRole = (decoded?.role || localStorage.getItem('userRole') || '').toLowerCase().replace(/\s+/g, '_');
-
-// Hide static add button for team members immediately
+// set role early from token so role-guarded UI can hide initial elements
+window._currentUserRole = (decoded?.role || localStorage.getItem('userRole') || '').toLowerCase().replace(/\s+/g,'_');
+// hide the static add button for team members immediately
 try {
   if (window._currentUserRole === 'team_member') {
     document.getElementById('addRecordBtn')?.remove();
@@ -1131,6 +1131,7 @@ function updateProfileDialog(project) {
 // MAIN LOAD LOGIC
 // =========================
 document.addEventListener("DOMContentLoaded", async () => {
+  // Fetch team member profile basics
   try {
     const teamMember = await apiRequest("https://oneprojectapp-backend.onrender.com/team-member/profile", {
       method: "GET",
@@ -1154,10 +1155,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     console.error("Team Member profile fetch error:", err);
   }
 
+  // Fetch projects assigned to team member
   try {
     const data = await apiRequest("https://oneprojectapp-backend.onrender.com/team-member/projects", {
       method: "POST",
-      headers: {
+      headers: { 
         "Content-Type": "application/json",
         "Authorization": `Bearer ${token}`
       }
@@ -1172,13 +1174,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       let activeProjectObj = projects.find(p => String(p.id) === String(savedProjectId));
 
       if (!activeProjectObj) {
-        activeProjectObj = projects[0];
+        activeProjectObj = projects[0]; // fallback
         ProjectContext.set(activeProjectObj);
       }
 
       activeProject.textContent = activeProjectObj.name;
       updateProfileDialog(activeProjectObj);
 
+      // Build project selector list
       projects.forEach(project => {
         const item = document.createElement("div");
         item.className = "project-item";
@@ -1217,7 +1220,7 @@ projectSelector.addEventListener("click", (e) => {
 // =========================
 const profileOverlay = document.getElementById('profileOverlay');
 const profileDefault = document.getElementById('profileDefault');
-const profilePreview = document.getElementById('profilePreview');
+const profilePreview = document.getElementById('profilePreview'); // ✅ inside dialog now
 
 function openProfileDialog() {
   profileDialog.style.display = "block";
@@ -1246,6 +1249,7 @@ function closeProfileDialog() {
   }, 300);
 }
 
+// Toggle dialog on icon click
 profileIcon.addEventListener("click", (e) => {
   e.stopPropagation();
   const isActive = profileDialog.classList.contains("active");
@@ -1256,6 +1260,7 @@ profileIcon.addEventListener("click", (e) => {
   }
 });
 
+// ESC key closes dialog
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeProfileDialog();
@@ -1265,6 +1270,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+// Click outside closes profile dialog and project selector
 document.addEventListener('click', (event) => {
   const isClickInsideProfile = profileDialog.contains(event.target) || profileIcon.contains(event.target);
   if (profileDialog.classList.contains('active') && !isClickInsideProfile) {
@@ -1277,11 +1283,13 @@ document.addEventListener('click', (event) => {
   }
 });
 
+// Edit button toggle
 editProfileBtn.addEventListener('click', () => {
   editProfileOptions.style.display =
     editProfileOptions.style.display === 'block' ? 'none' : 'block';
 });
 
+// Upload picture
 changePictureBtn.addEventListener('click', () => profileUpload.click());
 profileUpload.addEventListener('change', async (event) => {
   const file = event.target.files[0];
@@ -1313,6 +1321,7 @@ profileUpload.addEventListener('change', async (event) => {
   }
 });
 
+// Delete picture
 deletePictureBtn.addEventListener('click', async () => {
   try {
     await apiRequest("https://oneprojectapp-backend.onrender.com/team-member/delete-picture", {
@@ -1330,6 +1339,7 @@ deletePictureBtn.addEventListener('click', async () => {
   }
 });
 
+// Profile picture preview
 profileIconLarge.addEventListener("click", () => {
   const pictureUrl = profileIconLarge.style.backgroundImage
     .replace(/^url\(["']?/, "")
@@ -1353,8 +1363,7 @@ profileIconLarge.addEventListener("click", () => {
   previewBox.style.backgroundRepeat = "no-repeat";
   previewBox.style.backgroundPosition = "center";
   previewBox.style.position = "relative";
-
-  const closeIcon = document.createElement("span");
+    const closeIcon = document.createElement("span");
   closeIcon.textContent = "✖";
   closeIcon.style.position = "absolute";
   closeIcon.style.top = "2px";
@@ -1363,6 +1372,7 @@ profileIconLarge.addEventListener("click", () => {
   closeIcon.style.color = "#333";
   closeIcon.style.fontWeight = "bold";
 
+  // Close preview and restore default view
   closeIcon.addEventListener("click", () => {
     if (profilePreview) {
       profilePreview.style.display = "none";
@@ -1376,7 +1386,7 @@ profileIconLarge.addEventListener("click", () => {
 });
 
 // =========================
-// Global Active Project Manager
+// Global Active Project Manager (Profile only)
 // =========================
 window.ProjectContext = {
   set(project) {
@@ -1406,14 +1416,14 @@ window.ProjectContext = {
   }
 };
 
-// =========================
+  // =========================
 // Settings dialog
 // =========================
-const settingsToggle    = document.getElementById('settingsToggle');
-const settingsDialog    = document.getElementById('settingsDialog');
-const resetPasswordBtn  = document.getElementById('resetPasswordBtn');
-const changeLanguageBtn = document.getElementById('changeLanguageBtn');
-const exitProjectBtn    = document.getElementById('exitProjectBtn');
+const settingsToggle   = document.getElementById('settingsToggle');
+const settingsDialog   = document.getElementById('settingsDialog');
+const resetPasswordBtn = document.getElementById('resetPasswordBtn');
+const changeLanguageBtn= document.getElementById('changeLanguageBtn');
+const exitProjectBtn   = document.getElementById('exitProjectBtn');
 
 settingsToggle.addEventListener('click', (e) => { e.stopPropagation(); settingsDialog.classList.add('active'); });
 resetPasswordBtn.addEventListener('click',  () => { settingsDialog.classList.remove('active'); window.location.href = 'reset-password.html'; });
@@ -1428,7 +1438,6 @@ const translationDictionary = {
   'French':      { 'home':'Accueil','reports':'Rapports','assign-team-members':'Assigner les Membres','edit-information':'Modifier les Informations','chat':'Chat','settings':'Paramètres','support':'Support / Aide','logout':'Déconnexion','dashboard-label':'Tableau de Bord Consultant','edit-profile':'Modifier le Profil','change-picture':'Changer la Photo','delete-picture':'Supprimer la Photo','switch-project':'Changer de Projet','search':'Chercher...','reset-password':'Réinitialiser le Mot de Passe','change-language':'Changer la Langue','exit-project':'Quitter le Projet','confirm-close':'Fermer' },
   'Kinyarwanda': { 'home':'Ahabanza','reports':'Raporo','assign-team-members':'Aterana Abagize','edit-information':'Hindura Amakuru','chat':'Imigamire','settings':'Igenamigambi','support':'Ubufatanye','logout':'Porosita','dashboard-label':'Paneli ya Consultant','edit-profile':'Hindura Inyandiko','change-picture':'Hindura Ifoto','delete-picture':'Siba Ifoto','switch-project':'Hindura Intego','search':'Shakisha...','reset-password':'Ongera Kugenera','change-language':'Hindura Ururimi','exit-project':'Sohoka mu Ntego','confirm-close':'Funga' }
 };
-
 const applyLanguageBtn = document.getElementById('applyLanguageBtn');
 applyLanguageBtn.addEventListener('click', () => {
   const selected = document.querySelector('input[name="language"]:checked').value;
@@ -1457,9 +1466,9 @@ document.getElementById('confirmResetBtn').addEventListener('click', () => {
 // =========================
 let verificationInterval;
 let verificationCountdown = 60;
-const exitProjectDialog     = document.getElementById('exitProjectDialog');
-const verificationDialog    = document.getElementById('verificationDialog');
-const confirmExitBtn        = document.getElementById('confirmExitBtn');
+const exitProjectDialog  = document.getElementById('exitProjectDialog');
+const verificationDialog = document.getElementById('verificationDialog');
+const confirmExitBtn     = document.getElementById('confirmExitBtn');
 const cancelVerificationBtn = document.getElementById('cancelVerificationBtn');
 const resendVerificationBtn = document.getElementById('resendVerificationBtn');
 const verifyEmailBtn        = document.getElementById('verifyEmailBtn');
@@ -1468,13 +1477,12 @@ confirmExitBtn.addEventListener('click', () => {
   exitProjectDialog.classList.remove('active');
   startEmailVerification();
 });
-
 function startEmailVerification() {
   verificationCountdown = 60;
   verificationDialog.classList.add('active');
   verifyEmailBtn.disabled = false;
-  verifyEmailBtn.style.opacity  = '1';
-  verifyEmailBtn.style.cursor   = 'pointer';
+  verifyEmailBtn.style.opacity = '1';
+  verifyEmailBtn.style.cursor  = 'pointer';
   document.getElementById('verificationStatus').textContent = 'Waiting for email verification...';
   document.getElementById('verificationStatus').style.color = '#666';
   if (verificationInterval) clearInterval(verificationInterval);
@@ -1491,7 +1499,6 @@ function startEmailVerification() {
     }
   }, 1000);
 }
-
 verifyEmailBtn.addEventListener('click', () => {
   if (verificationCountdown > 0) {
     clearInterval(verificationInterval);
@@ -1500,20 +1507,11 @@ verifyEmailBtn.addEventListener('click', () => {
     verifyEmailBtn.disabled         = true;
     resendVerificationBtn.disabled  = true;
     cancelVerificationBtn.disabled  = true;
-    setTimeout(() => {
-      verificationDialog.classList.remove('active');
-      alert('You have successfully exited the project.');
-      window.location.href = 'home.html';
-    }, 1500);
+    setTimeout(() => { verificationDialog.classList.remove('active'); alert('You have successfully exited the project.'); window.location.href = 'home.html'; }, 1500);
   }
 });
-
 resendVerificationBtn.addEventListener('click', () => { alert('Verification email has been resent.'); startEmailVerification(); });
-cancelVerificationBtn.addEventListener('click', () => {
-  verificationDialog.classList.remove('active');
-  if (verificationInterval) clearInterval(verificationInterval);
-  alert('Project exit cancelled.');
-});
+cancelVerificationBtn.addEventListener('click', () => { verificationDialog.classList.remove('active'); if (verificationInterval) clearInterval(verificationInterval); alert('Project exit cancelled.'); });
 
 // =========================
 // Logout dialog
@@ -1578,13 +1576,13 @@ document.getElementById('searchBox').addEventListener('keyup', (e) => {
 let expandedGrayPart = false;
 let grayHidden       = false;
 
-const grayRightPart   = document.getElementById('grayRightPart');
-const whiteLeftPart   = document.getElementById('whiteLeftPart');
-const dragHandle      = document.getElementById('dragHandle');
-const grayToggleBtn   = document.getElementById('grayToggleBtn');
-const expandLabel     = document.getElementById('expandLabel');
-const grayPlaceholder = document.getElementById('grayPlaceholder');
-const scheduleOption  = document.getElementById('scheduleOption');
+const grayRightPart  = document.getElementById('grayRightPart');
+const whiteLeftPart  = document.getElementById('whiteLeftPart');
+const dragHandle     = document.getElementById('dragHandle');
+const grayToggleBtn  = document.getElementById('grayToggleBtn');
+const expandLabel    = document.getElementById('expandLabel');
+const grayPlaceholder= document.getElementById('grayPlaceholder');
+const scheduleOption = document.getElementById('scheduleOption');
 
 // =========================
 // SUMMARY PANEL — date/time ticker
@@ -1602,7 +1600,7 @@ function initializeSummaryPanel() {
 }
 
 // =========================
-// LIVE WEATHER via Open-Meteo
+// LIVE WEATHER via Open-Meteo (no API key needed)
 // =========================
 async function loadSummaryWeather() {
   const el = document.getElementById('summaryWeather');
@@ -1712,6 +1710,7 @@ async function loadSummaryPanelData() {
 
     const { progress, timeline, chart_milestones, photos } = data;
 
+    // ── Overall progress ──
     const pctEl = document.getElementById('summaryProgress');
     const barEl = document.getElementById('summaryProgressBar');
     if (pctEl) pctEl.textContent = progress.overall_pct.toFixed(1) + '%';
@@ -1720,6 +1719,7 @@ async function loadSummaryPanelData() {
       barEl.style.background = progress.overall_pct >= 100 ? '#007B8A' : '#28a745';
     }
 
+    // ── Variance ──
     const varEl = document.getElementById('summaryVariance');
     if (varEl) {
       const sign        = progress.variance_pct >= 0 ? '+' : '';
@@ -1727,6 +1727,7 @@ async function loadSummaryPanelData() {
       varEl.style.color = progress.variance_pct >= 0 ? '#28a745' : '#dc3545';
     }
 
+    // ── Last completed milestone ──
     const lastMsEl = document.getElementById('summaryLastMs');
     if (lastMsEl) {
       lastMsEl.textContent = progress.last_completed
@@ -1735,6 +1736,7 @@ async function loadSummaryPanelData() {
       lastMsEl.style.color = progress.last_completed ? '#28a745' : '#888';
     }
 
+    // ── Progress chart ──
     const chartEl  = document.getElementById('summaryChart');
     const labelsEl = document.getElementById('summaryChartLabels');
     if (chartEl && chart_milestones.length) {
@@ -1767,6 +1769,7 @@ async function loadSummaryPanelData() {
       chartEl.innerHTML = '<div style="font-size:11px;color:#bbb;padding:12px;width:100%;text-align:center;">No milestones yet</div>';
     }
 
+    // ── Photos ──
     const photosEl  = document.getElementById('summaryPhotos');
     const counterEl = document.getElementById('summaryPhotoCounter');
     if (!photosEl) return;
@@ -1866,8 +1869,8 @@ function showGrayPanel() {
   grayHidden       = false;
   expandedGrayPart = false;
   setGrayToggleArrow('>');
-  loadSummaryPanelData();
-  loadSummaryWeather();
+  loadSummaryPanelData();   // ← refresh live data when panel reopens
+  loadSummaryWeather();     // ← refresh weather when panel reopens
 }
 
 // =======================================================================
@@ -1886,8 +1889,12 @@ grayToggleBtn.addEventListener('click', (e) => {
 });
 
 // ============================================================
-//  SCHEDULE MODULE — with view-only role guards
-//  View-only roles: client, client_project_manager, team_member
+//  SCHEDULE MODULE v7 — with view-only role guards
+//  View-only roles: client, client project manager, team_member
+//  View-only users:
+//    • Section 1 (no schedule): see placeholder text, NO create button
+//    • Section 3 (has schedule): see progress page, NO edit/extension buttons
+//    • Section 2 (builder): never shown to view-only users
 // ============================================================
 
 const BACKEND = 'https://oneprojectapp-backend.onrender.com';
@@ -1898,7 +1905,7 @@ function _authHeaders(json = false) {
   return h;
 }
 
-// ── returns true for roles that can only view, never edit ──
+// ── helper: returns true for roles that can only view, never edit ──
 function _isViewOnly() {
   const r = (window._currentUserRole || '').toLowerCase().replace(/\s+/g, '_');
   return r === 'client' || r === 'client_project_manager' || r === 'team_member';
@@ -2055,11 +2062,13 @@ function openCreateScheduleIntro() {
       </div>
     </div>`);
 
+  // only wire up the button for non-view-only users
   document.getElementById('s1CreateBtn')?.addEventListener('click', () => openProjectScheduleForm(null));
 }
 
 // ============================================================
-//  SECTION 2 — Baseline builder (non-view-only only)
+//  SECTION 2 — Baseline builder
+//  (unchanged — view-only users never reach this section)
 // ============================================================
 function openProjectScheduleForm(existingSchedule) {
   const projectName = (typeof activeProject !== 'undefined' && activeProject) ? activeProject.textContent : 'Project';
@@ -2070,8 +2079,8 @@ function openProjectScheduleForm(existingSchedule) {
     (existingSchedule?.milestones || []).map(m => m.id)
   );
 
-  const touchedIds = new Set();
-  const deletedIds = new Set();
+  const touchedIds  = new Set();
+  const deletedIds  = new Set();
 
   let editingId = null;
 
@@ -2286,6 +2295,7 @@ function openProjectScheduleForm(existingSchedule) {
     el.innerHTML=milestones.map((ms,i)=>{
       const m=_sfMeta(ms), oor=_isOutOfRange(ms);
       const pct=Number(ms.progress_pct||0), hasProgress=pct>0||ms.executed>0;
+      const isDBItem = !ms._isNew && originalIds.has(ms.id);
       const isTouched = touchedIds.has(ms.id);
       const dimmed = editingId !== null && editingId !== ms.id;
       const isBeingEdited = editingId === ms.id;
@@ -2530,7 +2540,7 @@ function openProjectScheduleForm(existingSchedule) {
 }
 
 // ============================================================
-//  EXTENSION PANEL
+//  EXTENSION PANEL — unchanged
 // ============================================================
 function openExtensionPanel(existingSchedule) {
   document.getElementById('extOverlay')?.remove();
@@ -2803,11 +2813,12 @@ function openExtensionPanel(existingSchedule) {
 
 // ============================================================
 //  SECTION 3 — Daily tracking + Gantt
-//  VIEW-ONLY: no Edit Plan, no Extension, no Save Progress,
-//             no Mark Ended, no photo upload/delete, no entry form
+//  VIEW-ONLY: no Edit Plan button, no Extension button,
+//             no Save Progress button, no Mark Ended button,
+//             no photo upload/delete, no daily entry form
 // ============================================================
 function openActualProgressPage(savedSchedule) {
-  const viewOnly = _isViewOnly();
+  const viewOnly = _isViewOnly();  // ── GUARD ──
 
   const pms=(savedSchedule.milestones||[]).map(ms=>({
     ...ms, executed:Number(ms.executed||0),
@@ -2912,6 +2923,7 @@ function openActualProgressPage(savedSchedule) {
       </div>
       <div style="display:flex;gap:8px;align-items:center;">
         ${viewOnly
+          // ── VIEW-ONLY: show a read-only badge instead of action buttons ──
           ? `<span style="font-size:11px;background:rgba(255,255,255,0.08);color:#7dd3c4;
                border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:5px 12px;
                font-family:monospace;font-weight:600;">👁 View Only</span>`
@@ -2978,6 +2990,7 @@ function openActualProgressPage(savedSchedule) {
   const listEl  =document.getElementById('p3MsList');
   const detailEl=document.getElementById('p3Detail');
 
+  // only wire up edit/extension buttons for non-view-only users
   document.getElementById('p3EditPlan')?.addEventListener('click',()=>openProjectScheduleForm(savedSchedule));
   document.getElementById('p3Extension')?.addEventListener('click',()=>openExtensionPanel(savedSchedule));
   document.getElementById('p3Back')?.addEventListener('click',()=>collapseGrayPart());
@@ -3089,7 +3102,9 @@ function openActualProgressPage(savedSchedule) {
         </div>
       </div>
 
-      ${viewOnly
+      ${
+        // ── VIEW-ONLY: hide daily entry card entirely ──
+        viewOnly
           ? `<div class="sc-card">
                <div style="padding:16px 20px;display:flex;align-items:center;gap:10px;color:#7a9e9a;font-size:13px;">
                  👁 <span>Progress entry is restricted to reporting roles. You are viewing in read-only mode.</span>
@@ -3168,6 +3183,7 @@ function openActualProgressPage(savedSchedule) {
         </div>
       </div>`;
 
+    // only wire up progress buttons for non-view-only users
     if (!viewOnly && !completed) {
       document.getElementById('p3UpdateBtn')?.addEventListener('click',()=>{
         if (_renderToken!==token) return;
@@ -3179,6 +3195,7 @@ function openActualProgressPage(savedSchedule) {
       });
     }
 
+    // photos: view-only users can see photos but cannot upload or delete
     let photosLoaded = false;
     document.getElementById('p3PhotosToggleHdr')?.addEventListener('click',()=>{
       const body=document.getElementById('p3PhotosBody');
@@ -3251,9 +3268,13 @@ function openActualProgressPage(savedSchedule) {
     const thumbs=photos.map(p=>`
       <div class="photo-thumb" data-url="${p.cloudinary_url}" data-pid="${p.id}">
         <img src="${p.cloudinary_url}" alt="${p.file_name||''}" loading="lazy"/>
-        ${viewOnly ? '' : `<button class="del-btn" data-pid="${p.id}" title="Delete photo">✕</button>`}
+        ${
+          // ── VIEW-ONLY: no delete button on photos ──
+          viewOnly ? '' : `<button class="del-btn" data-pid="${p.id}" title="Delete photo">✕</button>`
+        }
       </div>`).join('');
 
+    // ── VIEW-ONLY: no upload tile ──
     const uploadTile = viewOnly ? '' : `
       <div class="photo-add">
         <label style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;cursor:pointer;gap:4px;">
@@ -3277,6 +3298,7 @@ function openActualProgressPage(savedSchedule) {
         lb.addEventListener('click',()=>lb.remove());
         document.body.appendChild(lb);
       });
+      // only wire delete for non-view-only
       if (!viewOnly) {
         thumb.querySelector('.del-btn')?.addEventListener('click', async e=>{
           e.stopPropagation();
@@ -3292,6 +3314,7 @@ function openActualProgressPage(savedSchedule) {
       }
     });
 
+    // only wire upload for non-view-only
     if (!viewOnly) {
       document.getElementById(inputId)?.addEventListener('change', function() {
         if (_renderToken!==token) return;
@@ -3373,7 +3396,7 @@ function openActualProgressPage(savedSchedule) {
   }
 
   // ============================================================
-  //  GANTT BUILDER
+  //  GANTT BUILDER — unchanged from v7
   // ============================================================
   function buildGantt() {
     if (!ganttDirty) return;
@@ -3545,9 +3568,6 @@ async function authFetch(url, options = {}) {
 
 // =======================================================================
 //  BOOTSTRAP
-//  ── KEY FIX: normalize role with .replace(/\s+/g,'_') ──
-//  This ensures window._currentUserRole === 'team_member' (not 'team member')
-//  so _isViewOnly() correctly identifies team members throughout the app.
 // =======================================================================
 async function bootstrapUser() {
   const token = localStorage.getItem('authToken');
@@ -3555,8 +3575,9 @@ async function bootstrapUser() {
   try {
     const res = await authFetch(`${API}/me`);
     if (!res || !res.ok) { window.location.href = '/login.html'; return; }
+    // ── CHANGE 1: store role globally so all functions can check it ──
     const me = await res.json();
-    // ── NORMALIZED with underscore replacement — must match _isViewOnly() ──
+    // normalize role to match token-based normalization (lowercase + underscores)
     window._currentUserRole = (me.role || '').toLowerCase().replace(/\s+/g, '_');
     loadHomeTabs();
     updateNotificationBadge();
@@ -3665,9 +3686,9 @@ function setTabContent(tabKey) {
 
 // =======================================================================
 //  BOTTOM CONTENT SHELL
-//  Team members: no Add button on all project record tabs
 // =======================================================================
 function renderBottomContent(description, placeholder) {
+  // ── CHANGE 2: hide Add button for team members ──
   const isTeamMember = window._currentUserRole === 'team_member';
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
@@ -3678,6 +3699,7 @@ function renderBottomContent(description, placeholder) {
       <ul class="doc-list" id="recordsList"></ul>
       <div class="no-data-placeholder"><p>${placeholder}</p></div>
     </div>`;
+  // guard: button only exists for non-team-members
   const addBtn = document.getElementById('addRecordBtnRendered');
   if (addBtn) {
     addBtn.addEventListener('click', () => {
@@ -3702,10 +3724,11 @@ async function getMeetingScope(context) {
   return { scope: 'side', scopeValue: user.role || null };
 }
 
-// Team members: only see Minutes and Scheduled tabs, cannot plan or add minutes
+// ── CHANGE 3: hide Plan Meeting tab for team members; force away from 'plan' view ──
 function renderMeetingContent(activeView = 'minutes', context = 'global') {
   const isTeamMember = window._currentUserRole === 'team_member';
 
+  // if a team member somehow lands on 'plan', redirect to 'minutes'
   if (isTeamMember && activeView === 'plan') activeView = 'minutes';
 
   const planBtn = isTeamMember
@@ -3768,6 +3791,7 @@ async function displayMeetingList(view, scope, scopeValue, context) {
 
     container.innerHTML = meetings.map(m => renderMeetingCard(m, view)).join('');
 
+    // only wire up Add Minute buttons if they exist (non-team-members only)
     container.querySelectorAll('.add-minute-btn').forEach(btn => {
       btn.addEventListener('click', e => {
         e.stopPropagation();
@@ -3914,7 +3938,7 @@ document.addEventListener('click', e => {
   arrow.textContent  = isOpen ? '▼'   : '▲';
 });
 
-// Team members see minute content (or "no minute yet" notice) but no Add Minute button
+// ── CHANGE 4: team members see minute details (or a notice) but no Add Minute button ──
 function renderMinuteSection(meeting) {
   const isTeamMember = window._currentUserRole === 'team_member';
   const noMinuteContent = isTeamMember
@@ -4494,12 +4518,15 @@ bottomContent.addEventListener('click', (e) => {
     case 'approve':
       handleDecisionMakerAction(recordId, tabKey, 'approved');
       break;
+
     case 'accept':
       handleDecisionMakerAction(recordId, tabKey, 'accepted');
       break;
+
     case 'reject':
       handleDecisionMakerAction(recordId, tabKey, 'rejected');
       break;
+
     case 'tm-approve':   handleTeamMemberAction(recordId, tabKey, 'approved');    break;
     case 'tm-reject':    handleTeamMemberAction(recordId, tabKey, 'rejected');    break;
     case 'comment':      openTeamMemberComment(recordId, tabKey);                 break;
