@@ -3623,6 +3623,21 @@ async function bootstrapUser() {
   try {
     const res = await authFetch(`${API}/me`);
     if (!res || !res.ok) { window.location.href = '/login.html'; return; }
+    const meData = await res.json();
+    window.currentUserId = meData.id;
+    window.currentUserRole = meData.role;
+
+    // Fetch user assignment to get side and leader status
+    const projectId = localStorage.getItem('activeProjectId');
+    if (projectId) {
+      const assignRes = await authFetch(`${API}/user-assignment?projectId=${encodeURIComponent(projectId)}`);
+      if (assignRes && assignRes.ok) {
+        const assignData = await assignRes.json();
+        window.currentUserSide = assignData.side;
+        window.isCurrentUserLeader = assignData.isLeader;
+      }
+    }
+
     loadHomeTabs();
     updateNotificationBadge();
     setInterval(updateNotificationBadge, 30000);
@@ -3692,14 +3707,14 @@ function loadReportTabs() {
     return;
   }
   tabs.innerHTML = `
-    <li data-tab="work-centel">work centel</li>
-    <li data-tab="planning-execution" class="active">Planning &amp; Execution</li>
+    <li data-tab="work-center" class="active">Work Center</li>
+    <li data-tab="planning-execution">Planning &amp; Execution</li>
     <li data-tab="document-approval">document &amp; approval</li>
     <li data-tab="control-reports">control &amp; report</li>
     <li data-tab="communication-meetings">Communication &amp; Meetings</li>
   `;
   attachTabEvents();
-  setTabContent('planning-execution');
+  setTabContent('work-center');
 }
 
 function setTabContent(tabKey) {
@@ -3710,7 +3725,7 @@ function setTabContent(tabKey) {
     operational:              'Daily site reports, progress reports, BoQ, technical specs, submittals, drawings.',
     financial:                'Interim payment certificates, contractor claims, final account reports.',
     meeting:                  null,
-    'work-centel':            'Leader assigns tasks, members execute and report progress for validation.',
+    'work-center':            'Leader assigns tasks, members execute and report progress for validation.',
     'planning-execution':     'Leader sets planned milestones, members log actual execution for comparison.',
     'document-approval':      'Members draft reports, leader reviews and approves before records move forward.',
     'control-reports':        'Leader consolidates approved drafts, members monitor validated information.',
@@ -4292,21 +4307,15 @@ function renderRecordsList(records, tabKey) {
         font-style:italic;text-align:center;">
         ⏳ Awaiting ${doc.pending_role || 'prior'} Approval</span>`;
 
-    // ===================================================================
-    //  FIX: can_approve — separate approve vs accept buttons cleanly
-    // ===================================================================
     } else if (btnState === 'can_approve') {
       const approveLabel  = doc.approve_label || 'Approve';
-      const isAcceptance  = approveLabel.toLowerCase().includes('accept');
+      const approveAction = approveLabel.toLowerCase().includes('accept') ? 'accepted' : 'approved';
 
       actionButtons = `
-        <button data-action="${isAcceptance ? 'accept' : 'approve'}"
+        <button data-action="approve" data-review-action="${approveAction}"
           style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
-          background:${isAcceptance ? '#dbeafe' : '#d1fae5'};
-          color:${isAcceptance ? '#1d4ed8' : '#065f46'};
-          border:1px solid ${isAcceptance ? '#93c5fd' : '#6ee7b7'};
-          border-radius:6px;cursor:pointer;">
-          ${isAcceptance ? '✅ Accept' : '✅ Approve'}
+          background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">
+          ✅ ${approveLabel}
         </button>
         <button data-action="reject"
           style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
@@ -4390,14 +4399,12 @@ function renderRecordsList(records, tabKey) {
             }).join('')}
            </ul>`
         : '<p style="font-size:12px;color:#9ca3af;margin:0;">No decision-maker reviews yet.</p>'}
-
       ${decisionViewersHtml ? `
         <div style="margin-top:10px;">
           <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
             letter-spacing:.5px;margin-bottom:6px;">👁️ Viewed (Decision Makers)</div>
           <ul style="margin:0;padding:0;list-style:none;">${decisionViewersHtml}</ul>
         </div>` : ''}
-
       ${teamMemberViewersHtml}
     ` : '<p style="font-size:12px;color:#9ca3af;margin:0;">No reviews yet.</p>';
 
@@ -4541,21 +4548,12 @@ bottomContent.addEventListener('click', (e) => {
   const tabKey   = item.getAttribute('data-tab-key');
 
   switch (action) {
-    // ===================================================================
-    //  FIX: approve and accept are now fully separate cases
-    // ===================================================================
-    case 'approve':
-      handleDecisionMakerAction(recordId, tabKey, 'approved');
+    case 'approve': {
+      const reviewAction = actionEl.getAttribute('data-review-action') || 'approved';
+      handleDecisionMakerAction(recordId, tabKey, reviewAction);
       break;
-
-    case 'accept':
-      handleDecisionMakerAction(recordId, tabKey, 'accepted');
-      break;
-
-    case 'reject':
-      handleDecisionMakerAction(recordId, tabKey, 'rejected');
-      break;
-
+    }
+    case 'reject':       handleDecisionMakerAction(recordId, tabKey, 'rejected'); break;
     case 'tm-approve':   handleTeamMemberAction(recordId, tabKey, 'approved');    break;
     case 'tm-reject':    handleTeamMemberAction(recordId, tabKey, 'rejected');    break;
     case 'comment':      openTeamMemberComment(recordId, tabKey);                 break;
