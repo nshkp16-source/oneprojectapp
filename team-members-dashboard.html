@@ -3640,8 +3640,11 @@ async function bootstrapUser() {
     const res = await authFetch(`${API}/me`);
     if (!res || !res.ok) { window.location.href = '/login.html'; return; }
     const meData = await res.json();
-    window.currentUserId = meData.id;
+    window.currentUserId   = meData.id;
     window.currentUserRole = meData.role;
+
+    // Safe default — must be set before any render happens
+    window.isCurrentUserLeader = false;
 
     // Fetch user assignment to get side and leader status
     const projectId = localStorage.getItem('activeProjectId');
@@ -3649,8 +3652,8 @@ async function bootstrapUser() {
       const assignRes = await authFetch(`${API}/user-assignment?projectId=${encodeURIComponent(projectId)}`);
       if (assignRes && assignRes.ok) {
         const assignData = await assignRes.json();
-        window.currentUserSide = assignData.side;
-        window.isCurrentUserLeader = assignData.isLeader;
+        window.currentUserSide     = assignData.side;
+        window.isCurrentUserLeader = assignData.isLeader === true;
       }
     }
 
@@ -3761,21 +3764,25 @@ function setTabContent(tabKey) {
 
 // =======================================================================
 //  BOTTOM CONTENT SHELL
+//  ── Add button hidden for team members ──
 // =======================================================================
 function renderBottomContent(description, placeholder) {
+  const leader = window.isCurrentUserLeader === true;
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
-      <button class="btn primary add-doc-btn" type="button" id="addRecordBtnRendered">➕ Add</button>
+      ${leader ? `<button class="btn primary add-doc-btn" type="button" id="addRecordBtnRendered">➕ Add</button>` : ''}
       <div class="bottom-description"><p>${description}</p></div>
     </div>
     <div class="bottom-scroll-area">
       <ul class="doc-list" id="recordsList"></ul>
       <div class="no-data-placeholder"><p>${placeholder}</p></div>
     </div>`;
-  document.getElementById('addRecordBtnRendered').addEventListener('click', () => {
-    const activeTab = getNavTabs()?.querySelector('li.active');
-    openAddRecordPanel(null, activeTab?.getAttribute('data-tab') || 'contractual');
-  });
+  if (leader) {
+    document.getElementById('addRecordBtnRendered').addEventListener('click', () => {
+      const activeTab = getNavTabs()?.querySelector('li.active');
+      openAddRecordPanel(null, activeTab?.getAttribute('data-tab') || 'contractual');
+    });
+  }
 }
 
 // =======================================================================
@@ -3793,12 +3800,18 @@ async function getMeetingScope(context) {
   return { scope: 'side', scopeValue: user.role || null };
 }
 
+// ── Plan Meeting tab hidden for team members ──
 function renderMeetingContent(activeView = 'minutes', context = 'global') {
+  const leader = window.isCurrentUserLeader === true;
+
+  // If a non-leader somehow requests the plan view, redirect to minutes
+  if (activeView === 'plan' && !leader) activeView = 'minutes';
+
   bottomContent.innerHTML = `
     <div class="meeting-options">
       <button class="meeting-btn ${activeView === 'minutes'   ? 'active' : ''}" data-view="minutes">📋 Meeting Minutes</button>
       <button class="meeting-btn ${activeView === 'scheduled' ? 'active' : ''}" data-view="scheduled">📅 Scheduled Meetings</button>
-      <button class="meeting-btn ${activeView === 'plan'      ? 'active' : ''}" data-view="plan">✏️ Plan Meeting</button>
+      ${leader ? `<button class="meeting-btn ${activeView === 'plan' ? 'active' : ''}" data-view="plan">✏️ Plan Meeting</button>` : ''}
     </div>
     <div class="bottom-scroll-area" id="meetingViewContainer"></div>
   `;
@@ -3822,6 +3835,11 @@ async function updateMeetingView(activeView = 'minutes', context = 'global') {
       await displayMeetingList('scheduled', scope, scopeValue, context);
       break;
     case 'plan':
+      // Extra safety net — should never reach here for non-leaders
+      if (window.isCurrentUserLeader !== true) {
+        updateMeetingView('minutes', context);
+        return;
+      }
       renderPlanMeetingForm(context, scope, scopeValue);
       break;
   }
@@ -3850,12 +3868,15 @@ async function displayMeetingList(view, scope, scopeValue, context) {
 
     container.innerHTML = meetings.map(m => renderMeetingCard(m, view)).join('');
 
-    container.querySelectorAll('.add-minute-btn').forEach(btn => {
-      btn.addEventListener('click', e => {
-        e.stopPropagation();
-        openAddMinuteInline(btn.getAttribute('data-meeting-id'), scope, scopeValue);
+    // ── Add Minute button only for leaders ──
+    if (window.isCurrentUserLeader === true) {
+      container.querySelectorAll('.add-minute-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          openAddMinuteInline(btn.getAttribute('data-meeting-id'), scope, scopeValue);
+        });
       });
-    });
+    }
 
   } catch (err) {
     console.error(`Error loading ${view}:`, err);
@@ -3996,13 +4017,19 @@ document.addEventListener('click', e => {
   arrow.textContent  = isOpen ? '▼'   : '▲';
 });
 
+// ── Add Minute button hidden for team members ──
 function renderMinuteSection(meeting) {
+  const leader = window.isCurrentUserLeader === true;
   return `
     <div class="minute-section" id="minute-section-${meeting.id}" style="margin-top:14px;border-top:1px solid #e2e8f0;padding-top:12px;">
       ${meeting.has_minute
         ? renderMinuteDetail(meeting.minute)
-        : `<button class="btn primary add-minute-btn" data-meeting-id="${meeting.id}"
-            style="width:100%;padding:10px;font-size:13px;">📝 Add Minute</button>`}
+        : leader
+          ? `<button class="btn primary add-minute-btn" data-meeting-id="${meeting.id}"
+              style="width:100%;padding:10px;font-size:13px;">📝 Add Minute</button>`
+          : `<div style="padding:10px 12px;background:#f9fafb;border:1px solid #e5e7eb;
+              border-radius:8px;font-size:12px;color:#9ca3af;text-align:center;">
+              No minute recorded yet.</div>`}
     </div>
   `;
 }
@@ -5367,28 +5394,14 @@ bottomContent.addEventListener('click', (e) => {
 
 
 // ███████████████████████████████████████████████████████████████████████
-//  WORK CENTER — redesigned frontend
-//
-//  Changes from previous version:
-//  • Status is DERIVED, never set in create/edit form:
-//      before start_date   → Not Yet Started
-//      on/after start_date → Ongoing
-//      progress_pct >= 100 → Completed  (auto via backend)
-//      leader marks closed → Closed
-//  • Create form: status field removed
-//  • Collapsed card: shows only assigned member count (not all chips)
-//  • Expanded plan section: read-only by default, Edit button for leaders only
-//  • Edit mode: member picker + all editable fields revealed inline
-//  • Aesthetic: clean, refined, consistent with PE module style
+//  WORK CENTER
 // ███████████████████████████████████████████████████████████████████████
 
-// ── Date helper ───────────────────────────────────────────────────────────────
 function _wcFmtDate(raw) {
   if (!raw) return '—';
   return new Date(raw.slice(0, 10) + 'T00:00:00').toLocaleDateString();
 }
 
-// ── Derive status from task dates + progress (client-side, mirrors backend) ───
 function _wcDeriveStatus(task) {
   if (task.status === 'closed')     return { label: 'Closed',          color: '#6b7280' };
   if (task.status === 'completed')  return { label: 'Completed',       color: '#10b981' };
@@ -5419,7 +5432,6 @@ function _wcActivityStatusBadge(status, avgProgress) {
     border-radius:10px;padding:1px 8px;font-size:10px;font-weight:600;">${label}</span>`;
 }
 
-// ── Label style helper ────────────────────────────────────────────────────────
 function _wcLabel(text) {
   return `<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;
     text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">${text}</label>`;
@@ -5438,7 +5450,6 @@ function _wcReadField(label, value) {
   </div>`;
 }
 
-// ── Fetch ─────────────────────────────────────────────────────────────────────
 async function loadWCRecords() {
   const recordsList    = document.getElementById('recordsList');
   const placeholderDiv = document.querySelector('.no-data-placeholder');
@@ -5473,7 +5484,6 @@ async function loadWCRecords() {
   }
 }
 
-// ── Mark viewed ───────────────────────────────────────────────────────────────
 function _wcMarkViewed(recordId) {
   const projectId = localStorage.getItem('activeProjectId');
   _wcFetch(`${API}/mark-work-center-viewed`, {
@@ -5495,9 +5505,8 @@ function _wcMarkViewed(recordId) {
   }).catch(err => console.error('WC mark viewed error:', err));
 }
 
-// ── Shell ─────────────────────────────────────────────────────────────────────
 function _renderWCShell() {
-  const leader = isWCLeader(window.currentUserRole);
+  const leader = window.isCurrentUserLeader === true;
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
       ${leader ? `<button class="btn primary" id="wcAddBtn">+ Create Task</button>` : ''}
@@ -5519,7 +5528,6 @@ function _renderWCShell() {
   document.getElementById('wcAddBtn')?.addEventListener('click', _wcOpenCreateForm);
 }
 
-// ── Render list ───────────────────────────────────────────────────────────────
 function _renderWCList(records) {
   const recordsList    = document.getElementById('recordsList');
   const placeholderDiv = document.querySelector('.no-data-placeholder');
@@ -5541,11 +5549,9 @@ function _renderWCList(records) {
     const memberCount= members.length;
     const st         = _wcDeriveStatus(task);
 
-    // Priority dot
     const priColor = { low:'#10b981', normal:'#3b82f6', high:'#ef4444' }[task.priority] || '#6b7280';
     const priLabel = (task.priority||'normal').charAt(0).toUpperCase()+(task.priority||'normal').slice(1);
 
-    // Linked activity pill
     const activityPill = task.activity_id && task.activity_title ? `
       <div style="margin-top:5px;display:inline-flex;align-items:center;gap:5px;
         background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;
@@ -5598,14 +5604,13 @@ function _renderWCList(records) {
   }).join('');
 }
 
-// ── Async detail loader ───────────────────────────────────────────────────────
 async function _wcLoadDetail(recordId, tabKey) {
   const container = document.getElementById(`wc-detail-${recordId}`);
   if (!container) return;
   const task = (recordsCache[tabKey]||[]).find(r => String(r.id) === String(recordId));
   if (!task) { container.innerHTML=`<p style="color:#ef4444;text-align:center;">Task not found.</p>`; return; }
 
-  const leader         = isWCLeader(window.currentUserRole);
+  const leader         = window.isCurrentUserLeader === true;
   const isCreator      = String(task.creator_id) === String(window.currentUserId);
   const assignedMembers= Array.isArray(task.assigned_members) ? task.assigned_members : [];
   const isAssigned     = !leader && assignedMembers.some(m => String(m.id) === String(window.currentUserId));
@@ -5633,13 +5638,11 @@ async function _wcLoadDetail(recordId, tabKey) {
   }
 }
 
-// ── PM View ───────────────────────────────────────────────────────────────────
 function _wcPMView(task, progressEntries) {
   const members  = Array.isArray(task.assigned_members) ? task.assigned_members : [];
   const valColor = { pending:'#f59e0b', approved:'#10b981', rejected:'#ef4444' };
   const st       = _wcDeriveStatus(task);
 
-  // Linked activity block
   const activityInfo = task.activity_id && task.activity_title ? (() => {
     const pct    = Number(task.activity_progress) || 0;
     const barClr = pct >= 100 ? '#10b981' : '#3b82f6';
@@ -5663,7 +5666,6 @@ function _wcPMView(task, progressEntries) {
       </div>`;
   })() : '';
 
-  // Progress entries
   const progressHtml = progressEntries.length
     ? progressEntries.map(e => {
         const vc     = valColor[e.validation_status] || '#6b7280';
@@ -5749,11 +5751,8 @@ function _wcPMView(task, progressEntries) {
       }).join('')
     : `<div style="text-align:center;padding:24px 0;color:#9ca3af;font-size:13px;">📭 No progress entries yet.</div>`;
 
-  // Section A — read-only plan (edit revealed on button click)
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-
-      <!-- SECTION A: Task Plan (read-only + edit toggle) -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
         <div style="display:flex;align-items:center;justify-content:space-between;
           padding-bottom:10px;border-bottom:2px solid #e5e7eb;margin-bottom:14px;">
@@ -5769,7 +5768,6 @@ function _wcPMView(task, progressEntries) {
           </div>
         </div>
 
-        <!-- READ-ONLY view (default) -->
         <div id="wc-read-${task.id}" style="display:flex;flex-direction:column;gap:10px;">
           ${activityInfo}
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -5812,7 +5810,6 @@ function _wcPMView(task, progressEntries) {
             </div>`:''}
         </div>
 
-        <!-- EDIT view (hidden by default, leader only) -->
         <div id="wc-edit-${task.id}" style="display:none;flex-direction:column;gap:11px;">
           <div style="padding:8px 12px;background:#fffbeb;border:1px solid #fcd34d;
             border-radius:8px;font-size:12px;color:#92400e;margin-bottom:2px;">
@@ -5850,7 +5847,6 @@ function _wcPMView(task, progressEntries) {
               <option value="high"   ${(task.priority||'normal')==='high'  ?'selected':''}>High</option>
             </select>
           </div>
-          <!-- Close activity toggle (only option for status editing) -->
           <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
             background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer;"
             onclick="document.getElementById('wc-ed-close-${task.id}').click()">
@@ -5888,7 +5884,6 @@ function _wcPMView(task, progressEntries) {
         </div>
       </div>
 
-      <!-- SECTION B: Progress entries -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;padding-bottom:10px;
           border-bottom:2px solid #e5e7eb;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;">
@@ -5901,7 +5896,6 @@ function _wcPMView(task, progressEntries) {
     </div>`;
 }
 
-// ── Member View ───────────────────────────────────────────────────────────────
 function _wcMemberView(task, myEntries) {
   const members  = Array.isArray(task.assigned_members) ? task.assigned_members : [];
   const valColor = { pending:'#f59e0b', approved:'#10b981', rejected:'#ef4444' };
@@ -5944,7 +5938,6 @@ function _wcMemberView(task, myEntries) {
 
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-      <!-- Section A read-only for member -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;padding-bottom:10px;
           border-bottom:2px solid #e5e7eb;margin-bottom:14px;">
@@ -5976,7 +5969,6 @@ function _wcMemberView(task, myEntries) {
             </div>`:''}
         </div>
       </div>
-      <!-- Section B: submit + history -->
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;
         display:flex;flex-direction:column;gap:10px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;padding-bottom:10px;
@@ -6030,7 +6022,6 @@ function _wcMemberView(task, myEntries) {
     </div>`;
 }
 
-// ── Not-assigned View ─────────────────────────────────────────────────────────
 function _wcNotAssignedView() {
   return `
     <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;
@@ -6043,12 +6034,10 @@ function _wcNotAssignedView() {
     </div>`;
 }
 
-// ── Wire detail buttons ───────────────────────────────────────────────────────
 function _wcWireDetailButtons(recordId, task, leader, progressEntries) {
   const container = document.getElementById(`wc-detail-${recordId}`);
   if (!container) return;
 
-  // Toggle edit/read (leader only)
   container.querySelector(`[data-action="wc-toggle-edit"]`)
     ?.addEventListener('click', () => {
       const readEl = document.getElementById(`wc-read-${recordId}`);
@@ -6089,7 +6078,6 @@ function _wcWireDetailButtons(recordId, task, leader, progressEntries) {
   });
 }
 
-// ── Wire PM member checkboxes (edit mode) ─────────────────────────────────────
 async function _wcWirePMMembers(taskId, currentAssigned) {
   const container = document.getElementById(`wc-members-${taskId}`);
   if (!container) return;
@@ -6126,7 +6114,6 @@ async function _wcWirePMMembers(taskId, currentAssigned) {
   }
 }
 
-// ── Handler: Update Task ──────────────────────────────────────────────────────
 async function _wcHandleUpdate(taskId, tabKey) {
   try {
     const title     = document.getElementById(`wc-ed-title-${taskId}`)?.value.trim();
@@ -6152,7 +6139,6 @@ async function _wcHandleUpdate(taskId, tabKey) {
     });
     if (!assignedMembers.length) return alert('Please assign at least one team member.');
 
-    // Derive status: only allow closed override; rest is automatic
     const status = markClose ? 'closed' : undefined;
 
     const form = new FormData();
@@ -6177,7 +6163,6 @@ async function _wcHandleUpdate(taskId, tabKey) {
   } catch (err) { alert('Failed to update task: ' + err.message); }
 }
 
-// ── Handler: Submit Progress ──────────────────────────────────────────────────
 async function _wcHandleSubmitProgress(taskId, tabKey) {
   try {
     const reportDate = document.getElementById(`wc-pr-date-${taskId}`)?.value;
@@ -6216,7 +6201,6 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
   } catch (err) { alert('Failed to submit progress: ' + err.message); }
 }
 
-// ── Handler: Validate Progress ────────────────────────────────────────────────
 async function _wcHandleValidate(tabKey, progressId, validateAction) {
   try {
     const notes = document.getElementById(`wc-val-notes-${progressId}`)?.value.trim() || '';
@@ -6234,7 +6218,6 @@ async function _wcHandleValidate(tabKey, progressId, validateAction) {
   } catch (err) { alert('Failed to validate: ' + err.message); }
 }
 
-// ── Handler: Delete Task ──────────────────────────────────────────────────────
 async function _wcHandleDelete(taskId, tabKey) {
   if (!confirm('Delete this task? All progress entries will also be deleted. Cannot be undone.')) return;
   try {
@@ -6250,7 +6233,6 @@ async function _wcHandleDelete(taskId, tabKey) {
   } catch (err) { alert('Failed to delete task: ' + err.message); }
 }
 
-// ── Download helpers ──────────────────────────────────────────────────────────
 async function _wcDownloadProgress(progressId, fileName) {
   try {
     const projectId = localStorage.getItem('activeProjectId');
@@ -6285,15 +6267,13 @@ async function _wcDownloadTaskFile(taskId, fileName) {
 
 // ███████████████████████████████████████████████████████████████████████
 //  CREATE FORM — gray panel
-//  Status field removed — derived automatically from dates
 // ███████████████████████████████████████████████████████████████████████
 async function _wcOpenCreateForm() {
-  if (!isWCLeader(window.currentUserRole)) {
+  if (window.isCurrentUserLeader !== true) {
     alert('Only side leaders can create tasks.'); return;
   }
   const projectId = localStorage.getItem('activeProjectId');
 
-  // Fetch P&E activities
   let peActivities = [];
   try {
     const res = await _wcFetch(`${API}/planning-execution?projectId=${encodeURIComponent(projectId)}`);
@@ -6324,7 +6304,6 @@ async function _wcOpenCreateForm() {
       </div>
       <div style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
 
-        <!-- Link to P&E activity -->
         <div>
           <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;
             text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">
@@ -6402,7 +6381,6 @@ async function _wcOpenCreateForm() {
           </div>
         </div>
 
-        <!-- Status info note (no input) -->
         <div style="padding:10px 14px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;font-size:12px;color:#0369a1;">
           ℹ️ <strong>Status is automatic:</strong> Not Yet Started → Ongoing (on start date) → Completed (on 100% progress) → Closed (manually marked).
         </div>
@@ -6434,7 +6412,6 @@ async function _wcOpenCreateForm() {
       </div>
     </div>`);
 
-  // Wire activity picker
   window._wcActivityPicker = function() {
     const dd = document.getElementById('wc-activity-dropdown');
     if (dd) dd.style.display = dd.style.display==='none' ? 'block' : 'none';
@@ -6468,7 +6445,6 @@ async function _wcOpenCreateForm() {
         : { background:'#f3f4f6', color:'#374151', border:'1px solid #d1d5db' });
   };
 
-  // Load team members
   try {
     const res     = await _wcFetch(`${API}/work-center/team-members?projectId=${encodeURIComponent(projectId)}`);
     const members = res && res.ok ? (await res.json()).members || [] : [];
@@ -6537,7 +6513,6 @@ async function _wcOpenCreateForm() {
       form.append('end_date',         endDate);
       form.append('priority',         priority);
       form.append('assigned_members', JSON.stringify(assignedMembers));
-      // status intentionally omitted — backend derives it
       if (activityId)            form.append('activity_id', activityId);
       if (fileInput?.files?.[0]) form.append('linked_file', fileInput.files[0]);
 
