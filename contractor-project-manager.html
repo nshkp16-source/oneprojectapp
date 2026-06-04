@@ -1125,6 +1125,36 @@ function isTeamMemberRole(role) {
   return String(role || '').trim().toLowerCase().replace(/[-_ ]+/g, '') === 'teammember';
 }
 
+// Apply frontend restrictions for TeamMember role (hide buttons and block actions)
+function applyRoleRestrictions() {
+  const role = window.currentUserRole || contractorPMRole;
+  const isTM = isTeamMemberRole(role);
+
+  // Hide static/dynamically-rendered add buttons
+  ['#addRecordBtn', '#addRecordBtnRendered'].forEach(sel => {
+    document.querySelectorAll(sel).forEach(el => el.style.display = isTM ? 'none' : '');
+  });
+  document.querySelectorAll('.add-doc-btn').forEach(el => el.style.display = isTM ? 'none' : '');
+
+  // Hide meeting plan and minute creation controls
+  document.querySelectorAll('.meeting-btn[data-view="plan"]').forEach(el => el.style.display = isTM ? 'none' : '');
+  document.querySelectorAll('.add-minute-btn').forEach(el => el.style.display = isTM ? 'none' : '');
+}
+
+// Global click interceptor to block restricted actions client-side for TeamMember users
+document.addEventListener('click', function (e) {
+  const role = window.currentUserRole || contractorPMRole;
+  if (!isTeamMemberRole(role)) return;
+
+  const tg = e.target;
+  if (tg.closest('.add-doc-btn') || tg.closest('#addRecordBtnRendered') || tg.closest('.meeting-btn[data-view="plan"]') || tg.closest('.add-minute-btn') || tg.closest('#savePlanMeetingBtn') || (tg.id && tg.id.startsWith('saveMinuteBtn_'))) {
+    e.preventDefault();
+    e.stopPropagation();
+    alert('Action not permitted: Team Members cannot perform this operation.');
+    return false;
+  }
+}, true);
+
 // =========================
 // API request wrapper with auto-refresh
 // =========================
@@ -1201,9 +1231,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (profileRole)  profileRole.textContent  = `Role: ${contractorPMRole}`;
 
   const addRecordBtn = document.getElementById('addRecordBtn');
-  if (addRecordBtn && isTeamMemberRole(contractorPMRole)) {
-    addRecordBtn.style.display = 'none';
-  }
+  // Apply initial role-based UI restrictions (JWT + later backend fetch will re-run)
+  applyRoleRestrictions();
 
   // 2. Fetch user identity from backend
   const storedToken = localStorage.getItem('authToken');
@@ -1216,9 +1245,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         const user = await res.json();
         window.currentUserId   = user.id;
         window.currentUserRole = user.role;
-        if (addRecordBtn && isTeamMemberRole(user.role)) {
-          addRecordBtn.style.display = 'none';
-        }
+        // Re-apply restrictions now that backend role is known
+        applyRoleRestrictions();
       } else {
         console.error('Failed to fetch user info:', res.status);
       }
@@ -3802,6 +3830,14 @@ function renderBottomContent(description, placeholder) {
     const activeTab = getNavTabs()?.querySelector('li.active');
     openAddRecordPanel(null, activeTab?.getAttribute('data-tab') || 'contractual');
   });
+  // Enforce role restrictions for newly rendered controls
+  const renderedBtn = document.getElementById('addRecordBtnRendered');
+  if (renderedBtn) {
+    if (isTeamMemberRole(window.currentUserRole || contractorPMRole)) {
+      renderedBtn.style.display = 'none';
+    }
+  }
+  applyRoleRestrictions();
 }
 
 // =======================================================================
@@ -3829,9 +3865,16 @@ function renderMeetingContent(activeView = 'minutes', context = 'global') {
     <div class="bottom-scroll-area" id="meetingViewContainer"></div>
   `;
   bottomContent.querySelectorAll('.meeting-btn[data-view]').forEach(btn => {
+    const view = btn.getAttribute('data-view');
+    if (view === 'plan' && isTeamMemberRole(window.currentUserRole || contractorPMRole)) {
+      btn.style.display = 'none';
+      return;
+    }
     btn.addEventListener('click', () => renderMeetingContent(btn.getAttribute('data-view'), context));
   });
   updateMeetingView(activeView, context);
+  // Reapply role restrictions after meeting view renders
+  applyRoleRestrictions();
 }
 
 async function updateMeetingView(activeView = 'minutes', context = 'global') {
