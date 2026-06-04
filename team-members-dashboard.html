@@ -3638,21 +3638,9 @@ async function bootstrapUser() {
   try {
     const res = await authFetch(`${API}/me`);
     if (!res || !res.ok) { window.location.href = '/login.html'; return; }
-    const meData = await res.json();
-    window.currentUserId = meData.id;
-    window.currentUserRole = meData.role;
-
-    // Fetch user assignment to get side and leader status
-    const projectId = localStorage.getItem('activeProjectId');
-    if (projectId) {
-      const assignRes = await authFetch(`${API}/user-assignment?projectId=${encodeURIComponent(projectId)}`);
-      if (assignRes && assignRes.ok) {
-        const assignData = await assignRes.json();
-        window.currentUserSide = assignData.side;
-        window.isCurrentUserLeader = assignData.isLeader;
-      }
-    }
-
+    // ── CHANGE 1: store role globally so all functions can check it ──
+    const me = await res.json();
+    window._currentUserRole = (me.role || '').toLowerCase();
     loadHomeTabs();
     updateNotificationBadge();
     setInterval(updateNotificationBadge, 30000);
@@ -3722,14 +3710,14 @@ function loadReportTabs() {
     return;
   }
   tabs.innerHTML = `
-    <li data-tab="work-center" class="active">Work Center</li>
-    <li data-tab="planning-execution">Planning &amp; Execution</li>
+    <li data-tab="work-centel">work centel</li>
+    <li data-tab="planning-execution" class="active">Planning &amp; Execution</li>
     <li data-tab="document-approval">document &amp; approval</li>
     <li data-tab="control-reports">control &amp; report</li>
     <li data-tab="communication-meetings">Communication &amp; Meetings</li>
   `;
   attachTabEvents();
-  setTabContent('work-center');
+  setTabContent('planning-execution');
 }
 
 function setTabContent(tabKey) {
@@ -3740,7 +3728,7 @@ function setTabContent(tabKey) {
     operational:              'Daily site reports, progress reports, BoQ, technical specs, submittals, drawings.',
     financial:                'Interim payment certificates, contractor claims, final account reports.',
     meeting:                  null,
-    'work-center':            'Leader assigns tasks, members execute and report progress for validation.',
+    'work-centel':            'Leader assigns tasks, members execute and report progress for validation.',
     'planning-execution':     'Leader sets planned milestones, members log actual execution for comparison.',
     'document-approval':      'Members draft reports, leader reviews and approves before records move forward.',
     'control-reports':        'Leader consolidates approved drafts, members monitor validated information.',
@@ -3762,19 +3750,25 @@ function setTabContent(tabKey) {
 //  BOTTOM CONTENT SHELL
 // =======================================================================
 function renderBottomContent(description, placeholder) {
+  // ── CHANGE 2: hide Add button for team members ──
+  const isTeamMember = window._currentUserRole === 'team_member';
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
-      <button class="btn primary add-doc-btn" type="button" id="addRecordBtnRendered">➕ Add</button>
+      ${isTeamMember ? '' : '<button class="btn primary add-doc-btn" type="button" id="addRecordBtnRendered">➕ Add</button>'}
       <div class="bottom-description"><p>${description}</p></div>
     </div>
     <div class="bottom-scroll-area">
       <ul class="doc-list" id="recordsList"></ul>
       <div class="no-data-placeholder"><p>${placeholder}</p></div>
     </div>`;
-  document.getElementById('addRecordBtnRendered').addEventListener('click', () => {
-    const activeTab = getNavTabs()?.querySelector('li.active');
-    openAddRecordPanel(null, activeTab?.getAttribute('data-tab') || 'contractual');
-  });
+  // guard: button only exists for non-team-members
+  const addBtn = document.getElementById('addRecordBtnRendered');
+  if (addBtn) {
+    addBtn.addEventListener('click', () => {
+      const activeTab = getNavTabs()?.querySelector('li.active');
+      openAddRecordPanel(null, activeTab?.getAttribute('data-tab') || 'contractual');
+    });
+  }
 }
 
 // =======================================================================
@@ -3792,12 +3786,22 @@ async function getMeetingScope(context) {
   return { scope: 'side', scopeValue: user.role || null };
 }
 
+// ── CHANGE 3: hide Plan Meeting tab for team members; force away from 'plan' view ──
 function renderMeetingContent(activeView = 'minutes', context = 'global') {
+  const isTeamMember = window._currentUserRole === 'team_member';
+
+  // if a team member somehow lands on 'plan', redirect to 'minutes'
+  if (isTeamMember && activeView === 'plan') activeView = 'minutes';
+
+  const planBtn = isTeamMember
+    ? ''
+    : `<button class="meeting-btn ${activeView === 'plan' ? 'active' : ''}" data-view="plan">✏️ Plan Meeting</button>`;
+
   bottomContent.innerHTML = `
     <div class="meeting-options">
       <button class="meeting-btn ${activeView === 'minutes'   ? 'active' : ''}" data-view="minutes">📋 Meeting Minutes</button>
       <button class="meeting-btn ${activeView === 'scheduled' ? 'active' : ''}" data-view="scheduled">📅 Scheduled Meetings</button>
-      <button class="meeting-btn ${activeView === 'plan'      ? 'active' : ''}" data-view="plan">✏️ Plan Meeting</button>
+      ${planBtn}
     </div>
     <div class="bottom-scroll-area" id="meetingViewContainer"></div>
   `;
@@ -3849,6 +3853,7 @@ async function displayMeetingList(view, scope, scopeValue, context) {
 
     container.innerHTML = meetings.map(m => renderMeetingCard(m, view)).join('');
 
+    // only wire up Add Minute buttons if they exist (non-team-members only)
     container.querySelectorAll('.add-minute-btn').forEach(btn => {
       btn.addEventListener('click', e => {
         e.stopPropagation();
@@ -3995,13 +4000,17 @@ document.addEventListener('click', e => {
   arrow.textContent  = isOpen ? '▼'   : '▲';
 });
 
+// ── CHANGE 4: team members see minute details (or a notice) but no Add Minute button ──
 function renderMinuteSection(meeting) {
+  const isTeamMember = window._currentUserRole === 'team_member';
+  const noMinuteContent = isTeamMember
+    ? `<p style="font-size:12px;color:#9ca3af;text-align:center;padding:8px 0;font-style:italic;">No minute recorded yet.</p>`
+    : `<button class="btn primary add-minute-btn" data-meeting-id="${meeting.id}"
+        style="width:100%;padding:10px;font-size:13px;">📝 Add Minute</button>`;
+
   return `
     <div class="minute-section" id="minute-section-${meeting.id}" style="margin-top:14px;border-top:1px solid #e2e8f0;padding-top:12px;">
-      ${meeting.has_minute
-        ? renderMinuteDetail(meeting.minute)
-        : `<button class="btn primary add-minute-btn" data-meeting-id="${meeting.id}"
-            style="width:100%;padding:10px;font-size:13px;">📝 Add Minute</button>`}
+      ${meeting.has_minute ? renderMinuteDetail(meeting.minute) : noMinuteContent}
     </div>
   `;
 }
@@ -4324,13 +4333,16 @@ function renderRecordsList(records, tabKey) {
 
     } else if (btnState === 'can_approve') {
       const approveLabel  = doc.approve_label || 'Approve';
-      const approveAction = approveLabel.toLowerCase().includes('accept') ? 'accepted' : 'approved';
+      const isAcceptance  = approveLabel.toLowerCase().includes('accept');
 
       actionButtons = `
-        <button data-action="approve" data-review-action="${approveAction}"
+        <button data-action="${isAcceptance ? 'accept' : 'approve'}"
           style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
-          background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:6px;cursor:pointer;">
-          ✅ ${approveLabel}
+          background:${isAcceptance ? '#dbeafe' : '#d1fae5'};
+          color:${isAcceptance ? '#1d4ed8' : '#065f46'};
+          border:1px solid ${isAcceptance ? '#93c5fd' : '#6ee7b7'};
+          border-radius:6px;cursor:pointer;">
+          ${isAcceptance ? '✅ Accept' : '✅ Approve'}
         </button>
         <button data-action="reject"
           style="flex:1;min-width:100px;padding:8px 12px;font-size:12px;font-weight:600;
@@ -4414,12 +4426,14 @@ function renderRecordsList(records, tabKey) {
             }).join('')}
            </ul>`
         : '<p style="font-size:12px;color:#9ca3af;margin:0;">No decision-maker reviews yet.</p>'}
+
       ${decisionViewersHtml ? `
         <div style="margin-top:10px;">
           <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
             letter-spacing:.5px;margin-bottom:6px;">👁️ Viewed (Decision Makers)</div>
           <ul style="margin:0;padding:0;list-style:none;">${decisionViewersHtml}</ul>
         </div>` : ''}
+
       ${teamMemberViewersHtml}
     ` : '<p style="font-size:12px;color:#9ca3af;margin:0;">No reviews yet.</p>';
 
@@ -4563,12 +4577,18 @@ bottomContent.addEventListener('click', (e) => {
   const tabKey   = item.getAttribute('data-tab-key');
 
   switch (action) {
-    case 'approve': {
-      const reviewAction = actionEl.getAttribute('data-review-action') || 'approved';
-      handleDecisionMakerAction(recordId, tabKey, reviewAction);
+    case 'approve':
+      handleDecisionMakerAction(recordId, tabKey, 'approved');
       break;
-    }
-    case 'reject':       handleDecisionMakerAction(recordId, tabKey, 'rejected'); break;
+
+    case 'accept':
+      handleDecisionMakerAction(recordId, tabKey, 'accepted');
+      break;
+
+    case 'reject':
+      handleDecisionMakerAction(recordId, tabKey, 'rejected');
+      break;
+
     case 'tm-approve':   handleTeamMemberAction(recordId, tabKey, 'approved');    break;
     case 'tm-reject':    handleTeamMemberAction(recordId, tabKey, 'rejected');    break;
     case 'comment':      openTeamMemberComment(recordId, tabKey);                 break;
