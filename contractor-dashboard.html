@@ -5459,8 +5459,17 @@ async function loadWCRecords() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data    = await res.json();
     const records = (data.records || []).map(r => ({ ...r, _tabKey: 'work-center' }));
-    recordsCache['work-center'] = records;
-    _renderWCList(records);
+    const uniqueRecords = [];
+    const seenTaskIds = new Set();
+    for (const record of records) {
+      const recordId = String(record.id);
+      if (!seenTaskIds.has(recordId)) {
+        seenTaskIds.add(recordId);
+        uniqueRecords.push(record);
+      }
+    }
+    recordsCache['work-center'] = uniqueRecords;
+    _renderWCList(uniqueRecords);
   } catch (err) {
     console.error('loadWCRecords error:', err);
     const pl = document.querySelector('.no-data-placeholder');
@@ -5605,7 +5614,18 @@ async function _wcLoadDetail(recordId, tabKey) {
       `${API}/work-center-progress/${recordId}?projectId=${encodeURIComponent(projectId)}`
     );
     let progressEntries = [];
-    if (res && res.ok) { const d = await res.json(); progressEntries = d.entries || []; }
+    if (res && res.ok) {
+      const d = await res.json();
+      const entries = Array.isArray(d.entries) ? d.entries : [];
+      const seenProgressIds = new Set();
+      for (const entry of entries) {
+        const entryId = String(entry.id || '');
+        if (entryId && !seenProgressIds.has(entryId)) {
+          seenProgressIds.add(entryId);
+          progressEntries.push(entry);
+        }
+      }
+    }
 
     const myEntries = leader ? progressEntries
       : progressEntries.filter(e => String(e.member_id) === String(window.currentUserId));
