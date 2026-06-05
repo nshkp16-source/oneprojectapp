@@ -1298,11 +1298,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     console.error("Projects fetch error:", err);
     activeProject.textContent = "Error loading projects";
   }
-
-  // Initialize the summary panel on page load
-  initializeSummaryPanel();
-  loadSummaryWeather();
-  loadSummaryPanelData();
 });
 
 // =========================
@@ -1517,7 +1512,7 @@ window.ProjectContext = {
   }
 };
 
-// =========================
+  // =========================
 // Settings dialog
 // =========================
 const settingsToggle   = document.getElementById('settingsToggle');
@@ -1671,7 +1666,7 @@ document.getElementById('searchBox').addEventListener('keyup', (e) => {
   });
 });
 
-// // =======================================================================
+// =======================================================================
 //  GRAY PANEL — expand / collapse / hide
 // =======================================================================
 let expandedGrayPart = false;
@@ -1990,702 +1985,1033 @@ grayToggleBtn.addEventListener('click', (e) => {
 });
 
 // ============================================================
-//  SCHEDULE MODULE v7
-//  Fixes from v6:
-//  1. Dependency label staleness — refreshed from live list on save
-//  2. Global window._sf* collision — namespaced per render
-//  3. Double-edit corruption in editedIdsMap — guard blocks 2nd edit
-//  4. Smart save: only sends genuinely changed/new/deleted ids
-//     Milestones not touched (unchanged) are sent as unchangedIds
-//     so the backend skips them entirely — no delete/re-insert
-//  5. Extension dates shown in Gantt with distinct orange header
-//     columns, matching the extension bar colors
-//  6. Photos fetch deferred until section is expanded
-//  7. extMs stale-closure fixed — always reads from shared ref
-//  8. Gantt rebuild guarded — only when open AND data changed
-//  9. ISO week numbers corrected
+//  SCHEDULE MODULE v8
+//  Architecture: clean single-file, sectioned, no window.* leaks
+//
+//  Changes from v7:
+//  1. Role-gating — decoded from JWT, all write actions guarded
+//     Roles allowed to write: contractor, consultant,
+//     consultant project manager, contractor project manager
+//  2. Location picker — country → Open-Meteo geocoding → station
+//     dropdown → lat/lng saved with schedule
+//  3. Section 3 top bar — "Days Left (Project)" + "Days Left
+//     (Selected Milestone)" added as live stat cards
+//  4. Edit plan — start/end pre-filled, editable, duration shown
+//  5. Architecture — shared AppState, one _ns per render cycle,
+//     helper fns extracted, zero global window.* mutations
+//  6. All HTML templates are builder functions returning strings,
+//     event binding always done in a separate wiring step after
+//     innerHTML assignment
 // ============================================================
 
+// ============================================================
+//  CONSTANTS
+// ============================================================
 const BACKEND = 'https://oneprojectapp-backend.onrender.com';
 
+const WRITE_ROLES = new Set([
+  'contractor',
+  'consultant',
+  'consultant project manager',
+  'contractor project manager',
+]);
+
+// Open-Meteo geocoding endpoint (free, no key)
+const GEOCODE_URL = 'https://geocoding-api.open-meteo.com/v1/search';
+
+// ============================================================
+//  SHARED STATE  (reset each panel open)
+// ============================================================
+let AppState = {
+  user:        null,   // { id, name, role, email }
+  projectId:   null,
+  token:       null,
+  canWrite:    false,
+};
+
+// ============================================================
+//  AUTH HELPERS
+// ============================================================
+
+/** Decode a JWT payload without verifying (frontend only). */
+function _decodeJwt(token) {
+  try {
+    const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(b64));
+  } catch (_) { return {}; }
+}
+
+/** Populate AppState from localStorage. Returns false if missing. */
+function _initAppState() {
+  const token     = localStorage.getItem('authToken');
+  const projectId = localStorage.getItem('activeProjectId');
+  if (!token || !projectId) return false;
+  const payload = _decodeJwt(token);
+  const role = (payload.role || payload.userRole || payload.user_role || '').toLowerCase().trim();
+  AppState = {
+    user:      { id: payload.sub || payload.id || null, name: payload.name || payload.username || 'User', role, email: payload.email || '' },
+    projectId,
+    token,
+    canWrite:  WRITE_ROLES.has(role),
+  };
+  return true;
+}
+
 function _authHeaders(json = false) {
-  const h = { 'Authorization': `Bearer ${localStorage.getItem('authToken')}` };
+  const h = { 'Authorization': `Bearer ${AppState.token}` };
   if (json) h['Content-Type'] = 'application/json';
   return h;
+}
+
+// ============================================================
+//  SHARED UTILITIES
+// ============================================================
+
+const _daysBetween = (a, b) =>
+  Math.max(0, Math.round((new Date(b) - new Date(a)) / 86400000) + 1);
+
+const _daysUntil = (dateStr) => {
+  const t = new Date(); t.setHours(0,0,0,0);
+  const d = new Date(dateStr); d.setHours(0,0,0,0);
+  return Math.round((d - t) / 86400000);
+};
+
+const _today = () => new Date().toISOString().slice(0, 10);
+
+function _isoWeekNum(d) {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  return Math.ceil(((date - yearStart) / 86400000 + 1) / 7);
+}
+
+/** Format a number of days as a human-readable countdown. */
+function _fmtDaysLeft(n) {
+  if (n === null || n === undefined) return '—';
+  if (n < 0)  return `${Math.abs(n)}d overdue`;
+  if (n === 0) return 'Due today';
+  return `${n}d left`;
+}
+
+/** Show a temporary toast inside any element */
+function _toast(parentEl, msg, isError = false) {
+  if (!parentEl) return;
+  const t = document.createElement('div');
+  t.style.cssText = `padding:10px 20px;background:${isError ? '#fde8e0' : '#e0f4ee'};
+    color:${isError ? '#a33a15' : '#0a6b5e'};font-size:12px;font-weight:600;
+    border-radius:0;animation:fadeIn .2s;`;
+  t.textContent = msg;
+  parentEl.prepend(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
+// ============================================================
+//  SHARED CSS  (injected once per render)
+// ============================================================
+const _css = `
+<style id="sched-shared-css">
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap');
+:root{
+  --c-bg:#f5f7f6;--c-surface:#fff;--c-border:#e2ecea;
+  --c-brand:#0a7b6c;--c-brand-light:#e0f4ee;--c-brand-dark:#07584d;
+  --c-ext:#e67e22;--c-ext-light:#fef0da;
+  --c-danger:#c0392b;--c-danger-light:#fde8e0;
+  --c-warn:#a06a00;--c-warn-light:#fdf0e0;
+  --c-text:#1a2e2b;--c-muted:#6b9490;--c-faint:#9ab0ac;
+  --c-dark:#0d2420;--c-dark2:#1a3530;
+  --radius:8px;--radius-lg:12px;
+  --font:'DM Sans',sans-serif;--font-mono:'DM Mono',monospace;
+  --shadow:0 1px 6px rgba(10,123,108,0.07);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+.sc-wrap{font-family:var(--font);display:flex;flex-direction:column;height:100%;
+         background:var(--c-bg);color:var(--c-text);overflow:hidden;}
+/* TOPBAR */
+.sc-tb{background:var(--c-surface);border-bottom:1px solid var(--c-border);
+       padding:0 24px;height:58px;display:flex;align-items:center;
+       justify-content:space-between;flex-shrink:0;box-shadow:var(--shadow);}
+.sc-tb-dark{background:var(--c-dark);border-bottom:1px solid rgba(255,255,255,0.07);}
+.sc-tb-lft{display:flex;align-items:center;gap:12px;}
+.sc-badge{width:34px;height:34px;background:var(--c-brand);border-radius:var(--radius);
+          display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;flex-shrink:0;}
+.sc-tb-title{font-size:15px;font-weight:600;letter-spacing:-0.01em;}
+.sc-tb-sub{font-size:11px;font-family:var(--font-mono);margin-top:1px;}
+/* BUTTONS */
+.sc-btn{font-family:var(--font);font-size:13px;font-weight:500;border:none;
+        border-radius:var(--radius);cursor:pointer;padding:8px 16px;
+        transition:all 0.15s;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;}
+.sc-btn:disabled{opacity:0.45;cursor:not-allowed;}
+.sc-btn-primary{background:var(--c-brand);color:#fff;}
+.sc-btn-primary:hover:not(:disabled){background:var(--c-brand-dark);}
+.sc-btn-ghost{background:transparent;color:#3d6560;border:1px solid var(--c-border);}
+.sc-btn-ghost:hover:not(:disabled){border-color:var(--c-brand);color:var(--c-brand);background:#f0f9f7;}
+.sc-btn-ghost-dark{background:transparent;color:#a0d4cc;border:1px solid rgba(255,255,255,0.15);}
+.sc-btn-ghost-dark:hover:not(:disabled){background:rgba(255,255,255,0.07);}
+.sc-btn-danger{background:transparent;color:var(--c-danger);border:1px solid #f5c4b3;}
+.sc-btn-danger:hover:not(:disabled){background:var(--c-danger-light);}
+.sc-btn-warn{background:transparent;color:var(--c-warn);border:1px solid #f5d48a;}
+.sc-btn-warn:hover:not(:disabled){background:var(--c-warn-light);}
+.sc-btn-ext{background:var(--c-ext);color:#fff;}
+.sc-btn-ext:hover:not(:disabled){background:#d06918;}
+/* CARDS */
+.sc-card{background:var(--c-surface);border:1px solid var(--c-border);
+         border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow);}
+.sc-card-hdr{padding:12px 20px;border-bottom:1px solid var(--c-border);
+             display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
+.sc-card-label{font-size:10px;font-weight:600;letter-spacing:0.08em;
+               text-transform:uppercase;color:var(--c-brand);font-family:var(--font-mono);}
+/* FORM FIELDS */
+.sc-fw{display:flex;flex-direction:column;gap:5px;}
+.sc-fl{font-size:10px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;
+       color:var(--c-muted);font-family:var(--font-mono);}
+.sc-wrap input[type=date],.sc-wrap input[type=text],
+.sc-wrap input[type=number],.sc-wrap input[type=search],
+.sc-wrap select,.sc-wrap textarea{
+  font-family:var(--font);font-size:13px;color:var(--c-text);
+  background:#f8faf9;border:1px solid var(--c-border);border-radius:var(--radius);
+  padding:9px 12px;outline:none;width:100%;transition:border-color 0.15s;}
+.sc-wrap input:focus,.sc-wrap select:focus,.sc-wrap textarea:focus{
+  border-color:var(--c-brand);box-shadow:0 0 0 3px rgba(10,123,108,0.09);background:#fff;}
+.sc-wrap input[readonly]{background:#f0f4f3;color:var(--c-muted);cursor:not-allowed;border-style:dashed;}
+/* TAGS */
+.sc-tag{font-size:10px;font-weight:600;padding:3px 8px;border-radius:20px;font-family:var(--font-mono);}
+.sc-tag-ok{background:var(--c-brand-light);color:#0a6b5e;}
+.sc-tag-crit{background:var(--c-danger-light);color:#a33a15;}
+.sc-tag-warn{background:var(--c-warn-light);color:var(--c-warn);}
+.sc-tag-ns{background:#f0f4f3;color:#5a7a76;}
+.sc-tag-ext{background:var(--c-ext-light);color:var(--c-ext);}
+/* PROGRESS BAR */
+.sc-pbar{height:6px;background:var(--c-border);border-radius:3px;overflow:hidden;}
+.sc-pfill{height:100%;border-radius:3px;background:var(--c-brand);transition:width 0.4s;}
+/* FILE ZONE */
+.sc-fzone{border:1.5px dashed var(--c-border);border-radius:var(--radius);background:#f8faf9;
+          padding:9px 12px;display:flex;align-items:center;gap:8px;cursor:pointer;
+          min-height:40px;transition:all 0.15s;}
+.sc-fzone:hover{border-color:var(--c-brand);background:#f0f9f7;}
+.sc-fzone input[type=file]{display:none;}
+/* ROLE BADGE */
+.role-badge{font-size:10px;font-weight:600;padding:3px 10px;border-radius:20px;
+            font-family:var(--font-mono);background:#1e3f38;color:#7dd3c4;border:1px solid rgba(125,211,196,0.2);}
+/* LOCK BANNER */
+.lock-banner{background:#fff8e1;border-bottom:1px solid #f5d48a;padding:8px 20px;
+             font-size:12px;color:var(--c-warn);display:flex;align-items:center;gap:8px;}
+/* SPINNER */
+@keyframes sc-spin{to{transform:rotate(360deg)}}
+.sc-spinner{width:32px;height:32px;border:3px solid var(--c-brand);
+            border-top-color:transparent;border-radius:50%;
+            animation:sc-spin 0.8s linear infinite;}
+/* GANTT */
+.gtt-body{display:none;height:360px;}
+.gtt-body.open{display:flex;}
+.gtt-labels{width:200px;flex-shrink:0;border-right:1px solid var(--c-border);overflow-y:auto;overflow-x:hidden;}
+.gtt-scroll{flex:1;overflow:auto;}
+.gtt-inner{position:relative;min-width:max-content;}
+.gtt-hdr-month{height:26px;position:sticky;top:0;z-index:5;background:var(--c-dark2);display:flex;}
+.gtt-hdr-week{height:20px;position:sticky;top:26px;z-index:4;background:#1e3f38;display:flex;}
+.gtt-hdr-day{height:20px;position:sticky;top:46px;z-index:4;background:#204039;display:flex;}
+.gtt-month-cell{height:26px;display:flex;align-items:center;justify-content:center;
+                font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;
+                color:#7dd3c4;font-family:var(--font-mono);border-right:1px solid rgba(255,255,255,0.1);flex-shrink:0;}
+.gtt-month-cell.ext-zone{background:#4a2a00;color:#f5a623;}
+.gtt-week-cell{height:20px;display:flex;align-items:center;justify-content:center;
+               font-size:9px;color:#5aafa5;font-family:var(--font-mono);
+               border-right:1px solid rgba(255,255,255,0.06);flex-shrink:0;}
+.gtt-week-cell.ext-zone{background:#3d2200;color:#e8960a;}
+.gtt-day-cell-hdr{height:20px;display:flex;align-items:center;justify-content:center;
+                  font-size:9px;font-family:var(--font-mono);
+                  border-right:1px solid rgba(255,255,255,0.05);flex-shrink:0;}
+.gtt-day-cell-hdr.ext-zone{background:#3a2100;color:#c87d08;}
+.gtt-row{height:40px;display:flex;position:relative;border-bottom:1px solid #f0f5f4;}
+.gtt-cell{flex-shrink:0;border-right:1px solid #f5faf9;}
+.gtt-cell.weekend{background:#f8fcfb;}.gtt-cell.today-col{background:rgba(10,123,108,0.06);}
+.gtt-cell.ext-col{background:rgba(230,126,34,0.05);}
+.gtt-bar{position:absolute;height:14px;top:13px;border-radius:3px;z-index:2;}
+.gtt-bar-plan{background:#b2d4d0;opacity:0.7;}.gtt-bar-actual{background:var(--c-brand);}
+.gtt-bar-ext-plan{background:#f5a623;opacity:0.7;}.gtt-bar-ext-actual{background:var(--c-ext);}
+.gtt-bar-delay{background:#f28c5e;opacity:0.8;height:6px;top:31px;border-radius:2px;}
+.gtt-lbl-hdr{height:66px;position:sticky;top:0;z-index:6;background:var(--c-dark2);
+             display:flex;align-items:flex-end;padding:0 12px 8px;font-size:10px;font-weight:600;
+             letter-spacing:0.06em;text-transform:uppercase;color:#7dd3c4;
+             font-family:var(--font-mono);border-right:1px solid rgba(255,255,255,0.1);
+             border-bottom:1px solid var(--c-border);}
+.gtt-lbl-row{height:40px;padding:0 12px;display:flex;align-items:center;
+             border-bottom:1px solid #f0f5f4;gap:8px;}
+.gtt-lbl-txt{font-size:11px;font-weight:500;color:var(--c-text);white-space:nowrap;
+             overflow:hidden;text-overflow:ellipsis;flex:1;}
+.gtt-lbl-badge{font-size:10px;font-family:var(--font-mono);font-weight:600;
+               padding:2px 6px;border-radius:10px;flex-shrink:0;}
+.gtt-legend{padding:8px 16px;border-top:1px solid var(--c-border);display:none;
+            align-items:center;gap:16px;background:#f8faf9;flex-shrink:0;flex-wrap:wrap;}
+.gtt-legend.open{display:flex;}
+.gtt-leg-item{display:flex;align-items:center;gap:6px;font-size:11px;color:#5a7a76;}
+/* PHOTOS */
+.photos-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));
+             gap:10px;padding:14px 20px;overflow-x:hidden;}
+.photo-thumb{aspect-ratio:1;border-radius:var(--radius);overflow:hidden;background:#f0f4f3;
+             position:relative;cursor:pointer;border:2px solid transparent;transition:border-color 0.15s;}
+.photo-thumb:hover{border-color:var(--c-brand);}
+.photo-thumb img{width:100%;height:100%;object-fit:cover;}
+.photo-thumb .del-btn{position:absolute;top:4px;right:4px;background:rgba(0,0,0,0.55);
+                      color:#fff;border:none;border-radius:50%;width:20px;height:20px;
+                      font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.photo-add{aspect-ratio:1;border-radius:var(--radius);border:2px dashed var(--c-border);
+           background:#f8faf9;display:flex;align-items:center;justify-content:center;
+           flex-direction:column;cursor:pointer;gap:4px;transition:all 0.15s;}
+.photo-add:hover{border-color:var(--c-brand);background:#f0f9f7;}
+/* LOCATION */
+.loc-station-item{padding:8px 12px;border-bottom:1px solid var(--c-border);cursor:pointer;
+                  font-size:12px;transition:background 0.1s;}
+.loc-station-item:hover{background:#f0f9f7;}
+.loc-station-item.selected{background:var(--c-brand-light);border-left:3px solid var(--c-brand);}
+/* DAYS LEFT CARD */
+.days-left-card{background:var(--c-dark);border-radius:var(--radius);padding:10px 16px;
+                display:flex;flex-direction:column;gap:2px;min-width:100px;}
+.days-left-label{font-size:9px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;
+                 color:#4a7a74;font-family:var(--font-mono);}
+.days-left-value{font-size:15px;font-weight:600;font-family:var(--font-mono);color:#e8f4f2;}
+.days-left-value.overdue{color:#f28c5e;}
+.days-left-value.today{color:#f5c400;}
+/* MILESTONE LIST ITEMS */
+.p3ms{padding:10px 14px;border-bottom:1px solid #f0f5f4;cursor:pointer;transition:background 0.1s;}
+.p3ms:hover{background:#f5faf9;}
+.p3ms.active{background:#e8f6f3;border-left:3px solid var(--c-brand);}
+.p3ms.ext-ms{border-left:3px solid var(--c-ext);}
+.p3ms.ext-ms.active{background:#fef3e2;}
+/* VIEW-ONLY overlay hint */
+.view-only-hint{background:#fff8e1;border:1px solid #f5d48a;border-radius:var(--radius);
+                padding:8px 14px;font-size:12px;color:var(--c-warn);
+                display:flex;align-items:center;gap:6px;}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+</style>`;
+
+// ============================================================
+//  LOADING / ERROR SCREENS
+// ============================================================
+function _loadingHTML(msg = 'Loading…') {
+  return _css + `
+  <div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;
+              flex-direction:column;gap:16px;background:var(--c-bg);">
+    <div class="sc-spinner"></div>
+    <div style="font-size:13px;color:var(--c-muted);font-family:var(--font-mono);">${msg}</div>
+  </div>`;
+}
+
+function _errorHTML(msg, retryFn) {
+  const id = 'sc-retry-' + Date.now();
+  if (retryFn) setTimeout(() => document.getElementById(id)?.addEventListener('click', retryFn), 50);
+  return _css + `
+  <div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;
+              flex-direction:column;gap:16px;padding:32px;background:var(--c-bg);">
+    <div style="font-size:14px;color:var(--c-danger);">${msg}</div>
+    ${retryFn ? `<button id="${id}" class="sc-btn sc-btn-primary">Retry</button>` : ''}
+  </div>`;
 }
 
 // ============================================================
 //  ENTRY POINT
 // ============================================================
 async function openSchedulePanel() {
-  const projectId = localStorage.getItem('activeProjectId');
-  const token     = localStorage.getItem('authToken');
-  if (!projectId || !token) {
+  if (!_initAppState()) {
     expandGrayPart(_errorHTML('Session expired. Please log in again.', null));
     return;
   }
-  expandGrayPart(`
-    <div style="width:100%;height:100%;display:flex;align-items:center;
-                justify-content:center;flex-direction:column;gap:16px;background:#f0f4f3;">
-      <div style="width:36px;height:36px;border:3px solid #0a7b6c;border-top-color:transparent;
-                  border-radius:50%;animation:sched-spin 0.8s linear infinite;"></div>
-      <div style="font-size:13px;color:#6b8f8a;font-family:monospace;">Checking schedule…</div>
-      <style>@keyframes sched-spin{to{transform:rotate(360deg)}}</style>
-    </div>`);
+  expandGrayPart(_loadingHTML('Checking schedule…'));
   try {
     const res = await fetch(
-      `${BACKEND}/api/get-schedule?projectId=${encodeURIComponent(projectId)}`,
+      `${BACKEND}/api/get-schedule?projectId=${encodeURIComponent(AppState.projectId)}`,
       { headers: _authHeaders(true) }
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const result = await res.json();
-    if (result.schedule && result.schedule.milestones?.length > 0) {
+    if (result.schedule?.milestones?.length > 0) {
       openActualProgressPage(result.schedule);
     } else {
-      openCreateScheduleIntro();
+      openCreateScheduleIntro(result.schedule || null);
     }
   } catch (err) {
-    console.error('Schedule fetch error:', err);
+    console.error('Schedule fetch:', err);
     expandGrayPart(_errorHTML('Could not load schedule.', openSchedulePanel));
   }
 }
 
-function _errorHTML(msg, retryFn) {
-  const id = 'retryBtn_' + Date.now();
-  setTimeout(() => { document.getElementById(id)?.addEventListener('click', retryFn); }, 50);
-  return `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;
-              flex-direction:column;gap:16px;padding:32px;">
-    <div style="font-size:14px;color:#c0392b;">${msg}</div>
-    ${retryFn ? `<button id="${id}" style="padding:10px 22px;background:#0a7b6c;color:#fff;border:none;
-      border-radius:8px;cursor:pointer;font-size:13px;">Retry</button>` : ''}
-  </div>`;
-}
-
-// ============================================================
-//  SHARED STYLES
-// ============================================================
-const _css = `
-<style id="sched-shared-css">
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
-.sc-wrap{font-family:'Inter',sans-serif;display:flex;flex-direction:column;height:100%;
-         background:#f5f7f6;color:#1a2e2b;overflow:hidden;}
-.sc-wrap *{box-sizing:border-box;}
-.sc-tb{background:#fff;border-bottom:1px solid #e2ecea;padding:0 24px;height:58px;
-       display:flex;align-items:center;justify-content:space-between;flex-shrink:0;
-       box-shadow:0 1px 4px rgba(0,0,0,0.04);}
-.sc-tb-lft{display:flex;align-items:center;gap:12px;}
-.sc-badge{width:34px;height:34px;background:#0a7b6c;border-radius:8px;display:flex;
-          align-items:center;justify-content:center;color:#fff;font-size:16px;flex-shrink:0;}
-.sc-tb-title{font-size:16px;font-weight:600;color:#1a2e2b;letter-spacing:-0.01em;}
-.sc-tb-sub{font-size:11px;color:#6b9490;margin-top:1px;font-family:monospace;}
-.sc-btn{font-family:'Inter',sans-serif;font-size:13px;font-weight:500;border:none;
-        border-radius:7px;cursor:pointer;padding:8px 16px;transition:all 0.15s;white-space:nowrap;}
-.sc-btn-primary{background:#0a7b6c;color:#fff;}
-.sc-btn-primary:hover{background:#0c9a88;}
-.sc-btn-primary:disabled{background:#a8cfc9;cursor:not-allowed;}
-.sc-btn-ghost{background:transparent;color:#3d6560;border:1px solid #d0e4e1;}
-.sc-btn-ghost:hover{border-color:#0a7b6c;color:#0a7b6c;background:#f0f9f7;}
-.sc-btn-danger{background:transparent;color:#b83c00;border:1px solid #f5c4b3;}
-.sc-btn-danger:hover{background:#fef0e8;}
-.sc-btn-warn{background:transparent;color:#a06a00;border:1px solid #f5d48a;}
-.sc-btn-warn:hover{background:#fffbf0;}
-.sc-card{background:#fff;border:1px solid #e2ecea;border-radius:12px;overflow:hidden;
-         box-shadow:0 1px 6px rgba(10,123,108,0.05);}
-.sc-card-hdr{padding:14px 20px;border-bottom:1px solid #e2ecea;display:flex;
-             align-items:center;justify-content:space-between;flex-shrink:0;}
-.sc-card-label{font-size:11px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;
-               color:#0a7b6c;font-family:monospace;}
-.sc-wrap input[type=date],.sc-wrap input[type=text],
-.sc-wrap input[type=number],.sc-wrap select,.sc-wrap textarea{
-  font-family:'Inter',sans-serif;font-size:13px;color:#1a2e2b;
-  background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;
-  padding:9px 12px;outline:none;width:100%;transition:border-color 0.15s;}
-.sc-wrap input:focus,.sc-wrap select:focus,.sc-wrap textarea:focus{
-  border-color:#0a7b6c;box-shadow:0 0 0 3px rgba(10,123,108,0.08);background:#fff;}
-.sc-wrap input[readonly]{background:#f0f4f3;color:#7a9e9a;cursor:not-allowed;border-style:dashed;}
-.sc-fw{display:flex;flex-direction:column;gap:5px;}
-.sc-fl{font-size:10px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;
-       color:#7a9e9a;font-family:monospace;}
-.sc-tag{font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;font-family:monospace;}
-.sc-tag-crit{background:#fde8e0;color:#a33a15;}
-.sc-tag-ok{background:#e0f4ee;color:#0a6b5e;}
-.sc-tag-warn{background:#fdf0e0;color:#a06a00;}
-.sc-tag-ns{background:#f0f4f3;color:#5a7a76;}
-.sc-pbar{height:6px;background:#e2ecea;border-radius:3px;overflow:hidden;}
-.sc-pfill{height:100%;border-radius:3px;background:#0a7b6c;transition:width 0.4s;}
-.sc-fzone{border:1.5px dashed #d0e4e1;border-radius:7px;background:#f8faf9;padding:9px 12px;
-          display:flex;align-items:center;gap:8px;cursor:pointer;min-height:40px;transition:all 0.15s;}
-.sc-fzone:hover{border-color:#0a7b6c;background:#f0f9f7;}
-.sc-fzone input[type=file]{display:none;}
-</style>`;
-
 // ============================================================
 //  SECTION 1 — No plan yet
 // ============================================================
-function openCreateScheduleIntro() {
-  const name = (typeof activeProject !== 'undefined' && activeProject) ? activeProject.textContent : 'Project';
+function openCreateScheduleIntro(existingSchedule) {
+  const name = _projectName();
   expandGrayPart(_css + `
-    <div class="sc-wrap">
-      <div class="sc-tb">
-        <div class="sc-tb-lft">
-          <div class="sc-badge">📅</div>
-          <div><div class="sc-tb-title">Project Schedule</div><div class="sc-tb-sub">${name}</div></div>
+  <div class="sc-wrap">
+    ${_topbar('📅', 'Project Schedule', name, [], AppState.canWrite ? '' : _viewOnlyBanner())}
+    <div style="flex:1;overflow-y:auto;display:flex;align-items:center;justify-content:center;padding:40px;">
+      <div style="width:min(700px,100%);text-align:center;">
+        <div style="width:64px;height:64px;background:var(--c-brand-light);border-radius:16px;
+                    display:flex;align-items:center;justify-content:center;font-size:28px;
+                    margin:0 auto 20px;">📋</div>
+        <div style="font-size:22px;font-weight:600;margin-bottom:10px;">No baseline schedule yet</div>
+        <div style="font-size:14px;color:var(--c-muted);line-height:1.7;
+                    max-width:480px;margin:0 auto 32px;">
+          Build the project timeline and define each milestone. Once saved you'll land on the daily progress tracker.
         </div>
-      </div>
-      <div style="flex:1;overflow-y:auto;display:flex;align-items:center;justify-content:center;padding:40px;">
-        <div style="width:min(700px,100%);text-align:center;">
-          <div style="width:64px;height:64px;background:#e0f4ee;border-radius:16px;display:flex;
-                      align-items:center;justify-content:center;font-size:28px;margin:0 auto 20px;">📋</div>
-          <div style="font-size:22px;font-weight:600;color:#1a2e2b;margin-bottom:10px;">No baseline schedule yet</div>
-          <div style="font-size:14px;color:#5a7a76;line-height:1.7;max-width:480px;margin:0 auto 32px;">
-            Build the project timeline and define each milestone. Once saved, you'll land directly on the daily progress tracker.
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:32px;">
-            ${[['Project',name],['Status','Pre-execution'],['Schedule','Not created']].map(([l,v],i)=>`
-            <div style="background:#fff;border:1px solid #e2ecea;border-radius:10px;padding:16px;">
-              <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:#7a9e9a;font-family:monospace;margin-bottom:6px;">${l}</div>
-              <div style="font-size:14px;font-weight:600;color:${i===2?'#c0392b':'#1a2e2b'};">${v}</div>
-            </div>`).join('')}
-          </div>
-          <button class="sc-btn sc-btn-primary" id="s1CreateBtn" style="font-size:14px;padding:12px 28px;">
-            + Create Project Schedule
-          </button>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:32px;">
+          ${[['Project', name], ['Role', AppState.user.role], ['Schedule', 'Not created']].map(([l, v], i) => `
+          <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:10px;padding:16px;">
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;
+                 color:var(--c-muted);font-family:var(--font-mono);margin-bottom:6px;">${l}</div>
+            <div style="font-size:14px;font-weight:600;color:${i===2?'var(--c-danger)':'var(--c-text)'};">${v}</div>
+          </div>`).join('')}
         </div>
+        ${AppState.canWrite
+          ? `<button class="sc-btn sc-btn-primary" id="s1CreateBtn" style="font-size:14px;padding:12px 28px;">+ Create Project Schedule</button>`
+          : `<div class="view-only-hint" style="justify-content:center;">🔒 Your role (${AppState.user.role}) can view only. A project manager must create the schedule.</div>`}
       </div>
-    </div>`);
-  document.getElementById('s1CreateBtn')?.addEventListener('click', () => openProjectScheduleForm(null));
+    </div>
+  </div>`);
+  document.getElementById('s1CreateBtn')?.addEventListener('click', () => openProjectScheduleForm(existingSchedule || null));
 }
 
 // ============================================================
-//  SECTION 2 — Baseline builder
-//
-//  FIX 3 (double-edit guard):
-//  - editingId tracks which single milestone is currently loaded
-//    into the form. _sfEd blocks a second edit while one is pending.
-//
-//  FIX 4 (smart save — no unintended deletes):
-//  - originalIds = Set of DB ids at load time (never changes)
-//  - touchedIds  = Set of DB ids the user actually edited/re-added
-//  - newIds      = milestones with _isNew:true (INSERT)
-//  - editedIds   = milestones with _isNew:false AND id in touchedIds (UPDATE metadata)
-//  - unchangedIds= milestones with _isNew:false AND id NOT in touchedIds (skip entirely)
-//  - deletedIds  = DB ids the user clicked Delete on
-//  Backend contract: only act on what we send. Unchanged rows are untouched.
-//
-//  FIX 1 (dep label staleness):
-//  - depLabel is NOT stored on the milestone object at add-time.
-//    It is recomputed from the live milestones array on every render
-//    and on save, so it always reflects the current title.
+//  HELPERS FOR TOPBAR, BANNERS
+// ============================================================
+function _projectName() {
+  return (typeof activeProject !== 'undefined' && activeProject)
+    ? activeProject.textContent : 'Project';
+}
+
+function _topbar(icon, title, sub, buttons = [], extraHtml = '') {
+  const btnHtml = buttons.map(b =>
+    `<button class="sc-btn ${b.cls || 'sc-btn-ghost-dark'}" id="${b.id}">${b.label}</button>`
+  ).join('');
+  return `
+  <div class="sc-tb sc-tb-dark">
+    <div class="sc-tb-lft">
+      <div class="sc-badge">${icon}</div>
+      <div>
+        <div class="sc-tb-title" style="color:#e8f4f2;">${title}</div>
+        <div class="sc-tb-sub" style="color:#4a7a74;">${sub}</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span class="role-badge">${AppState.user.role}</span>
+      ${btnHtml}
+    </div>
+  </div>${extraHtml}`;
+}
+
+function _viewOnlyBanner() {
+  return `<div class="lock-banner">🔒 View-only mode — your role (${AppState.user.role}) cannot make changes.</div>`;
+}
+
+// ============================================================
+//  LOCATION PICKER MODULE
+//  Uses Open-Meteo Geocoding API (free, no key needed).
+//  Saves { countryCode, countryName, stationName, lat, lng }
+// ============================================================
+
+/** Search Open-Meteo geocoding for city-level results in a country. */
+async function _geocodeSearch(query) {
+  const url = `${GEOCODE_URL}?name=${encodeURIComponent(query)}&count=20&language=en&format=json`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Geocoding error ${res.status}`);
+  const data = await res.json();
+  return data.results || [];
+}
+
+/**
+ * Render the location picker section HTML (for use inside schedule form).
+ * id prefix: 'loc'
+ */
+function _locationPickerHTML(existing) {
+  const saved = existing || {};
+  return `
+  <div class="sc-card" id="locCard" style="flex-shrink:0;">
+    <div class="sc-card-hdr">
+      <span class="sc-card-label">📍 Project Location & Weather Station</span>
+      <span id="locSavedBadge" style="font-size:11px;color:var(--c-brand);font-family:var(--font-mono);display:${saved.stationName ? 'inline' : 'none'};">
+        ✓ ${saved.stationName || ''}
+      </span>
+    </div>
+    <div style="padding:14px 20px;display:flex;flex-direction:column;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="sc-fw">
+          <span class="sc-fl">Search City / Region</span>
+          <input type="search" id="locSearch" placeholder="e.g. Kigali, Lagos, Nairobi…"
+            value="${saved.stationName ? saved.stationName + ', ' + (saved.countryName||'') : ''}"/>
+        </div>
+        <div class="sc-fw" style="justify-content:flex-end;padding-top:18px;">
+          <button class="sc-btn sc-btn-ghost" id="locSearchBtn" type="button">🔍 Find Stations</button>
+        </div>
+      </div>
+      <div id="locResults" style="display:none;border:1px solid var(--c-border);border-radius:var(--radius);
+           max-height:200px;overflow-y:auto;background:var(--c-surface);">
+        <!-- populated dynamically -->
+      </div>
+      <div id="locSelected" style="display:${saved.stationName ? 'flex' : 'none'};
+           align-items:center;gap:10px;background:var(--c-brand-light);border-radius:var(--radius);padding:10px 14px;">
+        <span style="font-size:20px;">📡</span>
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--c-text);" id="locSelName">${saved.stationName || ''}</div>
+          <div style="font-size:11px;color:var(--c-muted);font-family:var(--font-mono);" id="locSelCoords">
+            ${saved.lat ? `${saved.lat.toFixed(4)}°, ${saved.lng.toFixed(4)}° · ${saved.countryName || ''}` : ''}
+          </div>
+        </div>
+        <button class="sc-btn sc-btn-ghost" id="locClearBtn" type="button" style="margin-left:auto;font-size:12px;">✕ Clear</button>
+      </div>
+      <div style="font-size:11px;color:var(--c-faint);">
+        Powered by <a href="https://open-meteo.com" target="_blank" style="color:var(--c-brand);text-decoration:none;">Open-Meteo</a> geocoding · coordinates saved for weather tracking
+      </div>
+    </div>
+  </div>`;
+}
+
+/** Wire all location picker events. Returns a getter fn: getLocation() → object|null */
+function _wireLocationPicker(initialLocation) {
+  let selectedLocation = initialLocation ? { ...initialLocation } : null;
+
+  const searchInput = document.getElementById('locSearch');
+  const searchBtn   = document.getElementById('locSearchBtn');
+  const resultsEl   = document.getElementById('locResults');
+  const selectedEl  = document.getElementById('locSelected');
+  const selName     = document.getElementById('locSelName');
+  const selCoords   = document.getElementById('locSelCoords');
+  const savedBadge  = document.getElementById('locSavedBadge');
+  const clearBtn    = document.getElementById('locClearBtn');
+
+  async function doSearch() {
+    const q = searchInput?.value?.trim();
+    if (!q || q.length < 2) return;
+    if (searchBtn) { searchBtn.disabled = true; searchBtn.textContent = '⏳ Searching…'; }
+    if (resultsEl) { resultsEl.style.display = 'block'; resultsEl.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:var(--c-muted);">Searching…</div>'; }
+    try {
+      const results = await _geocodeSearch(q);
+      if (!results.length) {
+        resultsEl.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:var(--c-muted);">No results found. Try a different city name.</div>';
+        return;
+      }
+      resultsEl.innerHTML = results.map((r, i) => {
+        const label = [r.name, r.admin1, r.country].filter(Boolean).join(', ');
+        const sub   = `${r.latitude.toFixed(4)}°N, ${r.longitude.toFixed(4)}°E · elevation ${r.elevation ?? '—'}m`;
+        return `<div class="loc-station-item" data-idx="${i}"
+                     data-lat="${r.latitude}" data-lng="${r.longitude}"
+                     data-name="${_esc(r.name)}" data-country="${_esc(r.country || '')}"
+                     data-cc="${_esc(r.country_code || '')}">
+          <div style="font-weight:600;color:var(--c-text);">${label}</div>
+          <div style="font-size:10px;color:var(--c-muted);font-family:var(--font-mono);margin-top:2px;">${sub}</div>
+        </div>`;
+      }).join('');
+      resultsEl.querySelectorAll('.loc-station-item').forEach(el => {
+        el.addEventListener('click', () => {
+          selectedLocation = {
+            stationName:  el.dataset.name,
+            countryName:  el.dataset.country,
+            countryCode:  el.dataset.cc,
+            lat:          parseFloat(el.dataset.lat),
+            lng:          parseFloat(el.dataset.lng),
+          };
+          if (selName)    selName.textContent   = `${el.dataset.name}, ${el.dataset.country}`;
+          if (selCoords)  selCoords.textContent = `${parseFloat(el.dataset.lat).toFixed(4)}°, ${parseFloat(el.dataset.lng).toFixed(4)}° · ${el.dataset.country}`;
+          if (selectedEl) selectedEl.style.display = 'flex';
+          if (savedBadge) { savedBadge.textContent = `✓ ${el.dataset.name}`; savedBadge.style.display = 'inline'; }
+          if (resultsEl)  resultsEl.style.display = 'none';
+          resultsEl.querySelectorAll('.loc-station-item').forEach(x => x.classList.remove('selected'));
+          el.classList.add('selected');
+        });
+      });
+    } catch (err) {
+      console.error('Location search:', err);
+      if (resultsEl) resultsEl.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:var(--c-danger);">Search failed. Check your connection.</div>';
+    } finally {
+      if (searchBtn) { searchBtn.disabled = false; searchBtn.textContent = '🔍 Find Stations'; }
+    }
+  }
+
+  searchBtn?.addEventListener('click', doSearch);
+  searchInput?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doSearch(); } });
+  clearBtn?.addEventListener('click', () => {
+    selectedLocation = null;
+    if (selectedEl)  selectedEl.style.display = 'none';
+    if (savedBadge)  savedBadge.style.display = 'none';
+    if (searchInput) searchInput.value = '';
+    if (resultsEl)   resultsEl.style.display = 'none';
+  });
+
+  return { getLocation: () => selectedLocation };
+}
+
+function _esc(str) { return String(str).replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+
+// ============================================================
+//  SECTION 2 — Baseline Schedule Builder
 // ============================================================
 function openProjectScheduleForm(existingSchedule) {
-  const projectName = (typeof activeProject !== 'undefined' && activeProject) ? activeProject.textContent : 'Project';
-  const isEdit = !!existingSchedule;
-  const scheduleId = existingSchedule?.id || existingSchedule?.schedule_id || null;
+  if (!AppState.canWrite) {
+    alert('Your role does not have permission to create or edit schedules.');
+    return;
+  }
+  const projectName = _projectName();
+  const isEdit      = !!existingSchedule;
+  const scheduleId  = existingSchedule?.id || existingSchedule?.schedule_id || null;
 
-  // Immutable set of DB ids that existed when form opened
-  const originalIds = new Set(
-    (existingSchedule?.milestones || []).map(m => m.id)
-  );
-
-  // FIX 4: track which DB milestones the user actually touched
+  // ── Immutable tracking sets ──
+  const originalIds = new Set((existingSchedule?.milestones || []).map(m => m.id));
   const touchedIds  = new Set();
   const deletedIds  = new Set();
 
-  // FIX 3: only one milestone in the edit form at a time
-  let editingId = null;   // null = form is in "add new" mode
+  // ── Single-edit guard ──
+  let editingId = null;
+
+  // ── Namespace for DOM callbacks (avoids window.* collisions) ──
+  const _ns = {};
 
   expandGrayPart(_css + `
-    <div class="sc-wrap" id="sf">
-      <div class="sc-tb" style="flex-shrink:0;">
-        <div class="sc-tb-lft">
-          <div class="sc-badge">📅</div>
-          <div>
-            <div class="sc-tb-title">${isEdit ? 'Edit Project Schedule' : 'Create Project Schedule'}</div>
-            <div class="sc-tb-sub">${projectName}</div>
+  <div class="sc-wrap" id="sf">
+    ${_topbar('📅', isEdit ? 'Edit Schedule' : 'Create Schedule', projectName, [
+      { id: 'sfCancel', label: isEdit ? '← Back' : 'Cancel', cls: 'sc-btn sc-btn-ghost-dark' },
+      { id: 'sfSave',   label: isEdit ? 'Save Changes' : 'Save Schedule', cls: 'sc-btn sc-btn-primary' },
+    ])}
+    <div id="sfBody" style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;
+                             gap:14px;padding:16px 24px;">
+
+      <!-- ── TIMELINE CARD ── -->
+      <div class="sc-card" style="flex-shrink:0;">
+        <div class="sc-card-hdr">
+          <span class="sc-card-label">Project Timeline</span>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span id="sfTlInd" style="display:none;font-size:12px;color:var(--c-brand);font-weight:500;">✓ Timeline set</span>
+            ${isEdit ? `<button class="sc-btn sc-btn-warn" id="sfUnlockDates" style="font-size:11px;padding:4px 10px;">🔒 Unlock to Edit</button>` : ''}
           </div>
         </div>
-        <div style="display:flex;gap:8px;">
-          <button class="sc-btn sc-btn-ghost" id="sfCancel">${isEdit ? '← Back' : 'Cancel'}</button>
-          <button class="sc-btn sc-btn-primary" id="sfSave">${isEdit ? 'Save Changes' : 'Save Schedule'}</button>
+        ${isEdit ? `<div class="lock-banner">⚠ Dates are locked. Click "Unlock to Edit" only if you need to change them.</div>` : ''}
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;align-items:end;padding:16px 20px;gap:16px;">
+          <div class="sc-fw"><span class="sc-fl">Planned Start</span>
+            <input type="date" id="sfPS" value="${existingSchedule?.timeline?.start || ''}" ${isEdit ? 'readonly' : ''}/></div>
+          <div class="sc-fw"><span class="sc-fl">Planned Finish</span>
+            <input type="date" id="sfPF" value="${existingSchedule?.timeline?.finish || ''}" ${isEdit ? 'readonly' : ''}/></div>
+          <div class="sc-fw"><span class="sc-fl">Total Duration</span>
+            <div id="sfDur" style="font-size:18px;font-weight:600;color:${existingSchedule?.timeline?.duration ? 'var(--c-brand)' : 'var(--c-faint)'};padding:9px 0;font-family:var(--font-mono);">
+              ${existingSchedule?.timeline?.duration ? existingSchedule.timeline.duration + ' days' : '— days'}
+            </div>
+          </div>
+          <button class="sc-btn sc-btn-primary" id="sfSetTl" style="height:38px;" ${isEdit ? 'disabled' : ''}>
+            ${isEdit ? '🔒 Locked' : 'Set Timeline'}
+          </button>
+        </div>
+        <div id="sfTlWarn" style="display:none;background:var(--c-danger-light);color:var(--c-danger);
+             font-size:12px;padding:8px 20px;border-top:1px solid #f5c4b3;">
+          ⚠ Some milestones fall outside this timeline.
         </div>
       </div>
 
-      <div id="sfBody" style="flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;
-                               gap:14px;padding:16px 24px 0;">
+      <!-- ── LOCATION CARD ── -->
+      ${_locationPickerHTML(existingSchedule?.location)}
 
-        <!-- Timeline card -->
-        <div class="sc-card" style="flex-shrink:0;">
-          <div class="sc-card-hdr">
-            <span class="sc-card-label">Project Timeline</span>
-            <div style="display:flex;align-items:center;gap:10px;">
-              <span id="sfTlInd" style="display:none;font-size:12px;color:#0a7b6c;font-weight:500;">✓ Timeline set</span>
-              ${isEdit ? `<button class="sc-btn sc-btn-warn" id="sfUnlockDates" style="font-size:11px;padding:4px 10px;">🔒 Unlock Dates to Edit</button>` : ''}
-            </div>
-          </div>
-          ${isEdit ? `<div style="background:#fff8e1;border-bottom:1px solid #f5d48a;padding:8px 20px;font-size:12px;color:#a06a00;">
-            ⚠ Baseline dates are locked to protect existing progress. Click "Unlock Dates" only if you need to change them.
-          </div>` : ''}
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;align-items:end;padding:16px 20px;gap:16px;">
-            <div class="sc-fw"><span class="sc-fl">Planned Start</span><input type="date" id="sfPS" ${isEdit?'readonly':''}/></div>
-            <div class="sc-fw"><span class="sc-fl">Planned Finish</span><input type="date" id="sfPF" ${isEdit?'readonly':''}/></div>
-            <div class="sc-fw"><span class="sc-fl">Total Duration</span>
-              <div id="sfDur" style="font-size:18px;font-weight:600;color:#9ab0ac;padding:9px 0;font-family:monospace;">— days</div>
-            </div>
-            <button class="sc-btn sc-btn-primary" id="sfSetTl" style="height:38px;" ${isEdit?'disabled':''}>
-              ${isEdit?'🔒 Locked':'Set Timeline'}
-            </button>
-          </div>
-          <div id="sfTlWarn" style="display:none;background:#fef0e8;color:#a33a15;font-size:12px;
-               padding:8px 20px;border-top:1px solid #f5c4b3;">
-            ⚠ Some milestones fall outside this timeline — highlighted in red below.
+      <!-- ── ADD/EDIT MILESTONE CARD ── -->
+      <div class="sc-card" style="flex-shrink:0;">
+        <div class="sc-card-hdr">
+          <span class="sc-card-label" id="sfFormLabel">Add Milestone</span>
+          <span id="sfHint" style="font-size:12px;color:var(--c-muted);">
+            ${isEdit ? 'Add new milestones or click Edit on existing ones.' : 'Set the project timeline first.'}
+          </span>
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 2fr 1fr 1fr 1fr 1.2fr;gap:12px;padding:16px 20px 12px;">
+          <div class="sc-fw"><span class="sc-fl">Title</span><input type="text" id="sfMsT" placeholder="e.g. Foundation works"/></div>
+          <div class="sc-fw"><span class="sc-fl">Description</span><input type="text" id="sfMsD" placeholder="Scope note"/></div>
+          <div class="sc-fw"><span class="sc-fl">Start Date</span><input type="date" id="sfMsS"/></div>
+          <div class="sc-fw"><span class="sc-fl">End Date</span><input type="date" id="sfMsE"/></div>
+          <div class="sc-fw"><span class="sc-fl">Quantity</span><input type="number" id="sfMsQ" placeholder="0" min="0"/></div>
+          <div class="sc-fw"><span class="sc-fl">Unit</span>
+            <select id="sfMsU">
+              <option>m³</option><option>tons</option><option>sqm</option>
+              <option>lm</option><option>units</option><option>hrs</option>
+            </select>
           </div>
         </div>
-
-        <!-- Add/Edit milestone card -->
-        <div class="sc-card" style="flex-shrink:0;">
-          <div class="sc-card-hdr">
-            <span class="sc-card-label" id="sfFormLabel">Add Milestone</span>
-            <span id="sfHint" style="font-size:12px;color:#7a9e9a;">
-              ${isEdit ? 'Add new milestones or click Edit on existing ones below.' : 'Set the project timeline first.'}
-            </span>
+        <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;padding:0 20px 12px;">
+          <div class="sc-fw"><span class="sc-fl">Dependency</span>
+            <select id="sfMsDep"><option value="None">None</option></select>
           </div>
-          <div style="display:grid;grid-template-columns:2fr 2fr 1fr 1fr 1fr 1.2fr;gap:12px;padding:16px 20px 12px;">
-            <div class="sc-fw"><span class="sc-fl">Title</span><input type="text" id="sfMsT" placeholder="e.g. Foundation works"/></div>
-            <div class="sc-fw"><span class="sc-fl">Description</span><input type="text" id="sfMsD" placeholder="Scope note"/></div>
-            <div class="sc-fw"><span class="sc-fl">Start Date</span><input type="date" id="sfMsS"/></div>
-            <div class="sc-fw"><span class="sc-fl">End Date</span><input type="date" id="sfMsE"/></div>
-            <div class="sc-fw"><span class="sc-fl">Quantity</span><input type="number" id="sfMsQ" placeholder="0" min="0"/></div>
-            <div class="sc-fw"><span class="sc-fl">Unit</span>
-              <select id="sfMsU">
-                <option>m³</option><option>tons</option><option>sqm</option>
-                <option>lm</option><option>units</option><option>hrs</option>
-              </select>
-            </div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;padding:0 20px 12px;">
-            <div class="sc-fw"><span class="sc-fl">Dependency</span>
-              <select id="sfMsDep"><option value="None">None</option></select>
-            </div>
-            <div class="sc-fw"><span class="sc-fl">Attachment</span>
-              <label class="sc-fzone"><input type="file" id="sfMsFile" accept="*/*"/>
-                <span style="font-size:14px;">📎</span>
-                <span id="sfFzt" style="font-size:12px;color:#7a9e9a;">Click to attach a file</span>
-              </label>
-            </div>
-          </div>
-          <!-- FIX 3: editing-mode banner -->
-          <div id="sfEditingBanner" style="display:none;background:#fff8e1;border-top:1px solid #f5d48a;
-               padding:8px 20px;font-size:12px;color:#a06a00;">
-            ✏ Editing existing milestone — click "Update Milestone" to save, or Cancel Edit to discard.
-          </div>
-          <div style="padding:12px 20px;border-top:1px solid #e2ecea;background:#f8faf9;
-                      display:flex;justify-content:flex-end;gap:8px;">
-            <button class="sc-btn sc-btn-ghost" id="sfCancelEdit" style="display:none;">✕ Cancel Edit</button>
-            <button class="sc-btn sc-btn-primary" id="sfSetMs" ${isEdit?'':'disabled'}>+ Add Milestone</button>
+          <div class="sc-fw"><span class="sc-fl">Attachment</span>
+            <label class="sc-fzone"><input type="file" id="sfMsFile" accept="*/*"/>
+              <span style="font-size:14px;">📎</span>
+              <span id="sfFzt" style="font-size:12px;color:var(--c-muted);">Click to attach a file</span>
+            </label>
           </div>
         </div>
-
-        <!-- Milestone list card -->
-        <div class="sc-card" style="flex:1;min-height:0;display:flex;flex-direction:column;margin-bottom:16px;">
-          <div class="sc-card-hdr" style="flex-shrink:0;">
-            <span class="sc-card-label">Planned Milestones</span>
-            <span id="sfMsCnt" style="font-size:12px;color:#7a9e9a;font-family:monospace;">0 milestones</span>
-          </div>
-          <div id="sfMsList" style="flex:1;min-height:0;overflow-y:auto;">
-            <div style="padding:32px;text-align:center;color:#8aa8a4;font-size:13px;">
-              No milestones yet — set the timeline and start adding above.
-            </div>
-          </div>
+        <div id="sfEditingBanner" style="display:none;" class="lock-banner">
+          ✏ Editing existing milestone — click "Update Milestone" to save or Cancel Edit to discard.
         </div>
-
+        <div style="padding:12px 20px;border-top:1px solid var(--c-border);background:#f8faf9;
+                    display:flex;justify-content:flex-end;gap:8px;">
+          <button class="sc-btn sc-btn-ghost" id="sfCancelEdit" style="display:none;">✕ Cancel Edit</button>
+          <button class="sc-btn sc-btn-primary" id="sfSetMs" ${isEdit ? '' : 'disabled'}>+ Add Milestone</button>
+        </div>
       </div>
-    </div>`);
 
-  // ── state ──
-  let tl = existingSchedule?.timeline ? { ...existingSchedule.timeline } : { start:null, finish:null, duration:0 };
+      <!-- ── MILESTONE LIST CARD ── -->
+      <div class="sc-card" style="flex-shrink:0;margin-bottom:16px;">
+        <div class="sc-card-hdr" style="flex-shrink:0;">
+          <span class="sc-card-label">Planned Milestones</span>
+          <span id="sfMsCnt" style="font-size:12px;color:var(--c-muted);font-family:var(--font-mono);">0 milestones</span>
+        </div>
+        <div id="sfMsList">
+          <div style="padding:32px;text-align:center;color:#8aa8a4;font-size:13px;">
+            No milestones yet — set the timeline and start adding above.
+          </div>
+        </div>
+      </div>
 
-  let milestones = existingSchedule?.milestones
-    ? existingSchedule.milestones.map(ms => ({
-        id:              ms.id,
-        title:           ms.title,
-        desc:            ms.description || ms.desc || '',
-        start:           ms.start || ms.planned_start || '',
-        end:             ms.end   || ms.planned_end   || '',
-        qty:             ms.quantity || ms.qty || '',
-        unit:            ms.unit || 'm³',
-        dep:             ms.depends_on || ms.dep || 'None',
-        fileName:        ms.fileName || null,
-        fileObject:      null,
-        executed:        ms.executed || 0,
-        progress_pct:    ms.progress_pct || 0,
-        activity_status: ms.activity_status || 'not_started',
-        entries:         ms.entries || [],
-        _isNew:          false,
-      }))
-    : [];
+    </div>
+  </div>`);
+
+  // ── State ──
+  let tl = existingSchedule?.timeline
+    ? { ...existingSchedule.timeline }
+    : { start: null, finish: null, duration: 0 };
+
+  let milestones = (existingSchedule?.milestones || []).map(ms => ({
+    id:              ms.id,
+    title:           ms.title,
+    desc:            ms.description || ms.desc || '',
+    start:           ms.start || ms.planned_start || '',
+    end:             ms.end   || ms.planned_end   || '',
+    qty:             ms.quantity || ms.qty || '',
+    unit:            ms.unit || 'm³',
+    dep:             ms.depends_on || ms.dep || 'None',
+    fileName:        ms.fileName || null,
+    fileObject:      null,
+    executed:        ms.executed || 0,
+    progress_pct:    ms.progress_pct || 0,
+    activity_status: ms.activity_status || 'not_started',
+    entries:         ms.entries || [],
+    _isNew:          false,
+  }));
 
   let attached = null;
 
-  const pS     = () => document.getElementById('sfPS');
-  const pF     = () => document.getElementById('sfPF');
-  const durEl  = () => document.getElementById('sfDur');
-  const tlInd  = () => document.getElementById('sfTlInd');
-  const tlWarn = () => document.getElementById('sfTlWarn');
-  const addBtn = () => document.getElementById('sfSetMs');
-  const msCnt  = () => document.getElementById('sfMsCnt');
-  const listEl = () => document.getElementById('sfMsList');
-  const mDep   = () => document.getElementById('sfMsDep');
+  // Wire location picker — returns getLocation()
+  const locPicker = _wireLocationPicker(existingSchedule?.location || null);
 
-  const cDur = (s,e) => Math.max(0, Math.round((new Date(e)-new Date(s))/86400000)+1);
+  // ── Getters ──
+  const _el = id => document.getElementById(id);
+  const _val = id => _el(id)?.value?.trim() || '';
 
-  if (isEdit && tl.start) {
-    setTimeout(() => {
-      if (pS()) pS().value = tl.start;
-      if (pF()) pF().value = tl.finish;
-      if (durEl()) { durEl().textContent=`${tl.duration} days`; durEl().style.color='#0a7b6c'; }
-      if (tlInd()) tlInd().style.display='inline';
-      _sfRefDep(); _sfRender();
-    }, 50);
-  }
+  // ── Dep label resolved live ──
+  const _depLabel = id => {
+    if (!id || id === 'None') return 'None';
+    return milestones.find(m => m.id === id)?.title || 'None';
+  };
 
-  document.getElementById('sfUnlockDates')?.addEventListener('click', () => {
-    if (!confirm('Unlocking dates lets you change the project timeline. Continue?')) return;
-    if (pS()) pS().removeAttribute('readonly');
-    if (pF()) pF().removeAttribute('readonly');
-    const btn = document.getElementById('sfSetTl');
-    if (btn) { btn.disabled=false; btn.textContent='Set Timeline'; }
-    const ub = document.getElementById('sfUnlockDates');
-    if (ub) { ub.textContent='🔓 Dates Unlocked'; ub.disabled=true; }
-  });
-
-  document.getElementById('sfMsFile')?.addEventListener('change', function() {
-    attached = this.files[0] || null;
-    const fzt = document.getElementById('sfFzt');
-    if (fzt) fzt.textContent = attached ? attached.name : 'Click to attach a file';
-  });
-
-  document.getElementById('sfSetTl')?.addEventListener('click', () => {
-    const s=pS()?.value, f=pF()?.value;
-    if (!s||!f) return alert('Select both start and finish dates.');
-    const d=cDur(s,f);
-    if (d<=0) return alert('Finish must be after start.');
-    tl={start:s,finish:f,duration:d};
-    durEl().textContent=`${d} days`; durEl().style.color='#0a7b6c';
-    tlInd().style.display='inline';
-    addBtn().disabled=false;
-    _sfRefDep(); _sfRender();
-  });
-
-  // FIX 1: dep options built from live milestones list — exclude the one
-  // currently being edited so a milestone can't depend on itself
+  // ── Refresh dep dropdown ──
   function _sfRefDep() {
-    const sel=mDep(); if (!sel) return;
-    const candidates = milestones.filter(ms => ms.id !== editingId);
-    sel.innerHTML='<option value="None">None</option>'+
-      candidates.map(ms=>`<option value="${ms.id}">${ms.title} (${ms.start}→${ms.end})</option>`).join('');
-  }
-
-  // FIX 1: resolve dep label at call-time from live list, not from stored label
-  function _depLabel(depId) {
-    if (!depId || depId === 'None') return 'None';
-    return milestones.find(m => m.id === depId)?.title || 'None';
+    const sel = _el('sfMsDep'); if (!sel) return;
+    const candidates = milestones.filter(m => m.id !== editingId);
+    sel.innerHTML = '<option value="None">None</option>' +
+      candidates.map(m => `<option value="${m.id}">${m.title} (${m.start}→${m.end})</option>`).join('');
   }
 
   function _isOutOfRange(ms) {
-    if (!tl.start||!tl.finish) return false;
-    return new Date(ms.start)<new Date(tl.start) || new Date(ms.end)>new Date(tl.finish);
+    if (!tl.start || !tl.finish) return false;
+    return new Date(ms.start) < new Date(tl.start) || new Date(ms.end) > new Date(tl.finish);
   }
 
-  function _sfMeta(ms) {
-    const d=ms.start&&ms.end?cDur(ms.start,ms.end):0;
-    const w=tl.duration>0?(d/tl.duration)*100:0;
-    const f=tl.finish&&ms.end?Math.max(0,Math.round((new Date(tl.finish)-new Date(ms.end))/86400000)):0;
-    return {d, w:Math.min(w,100), f, crit:f===0};
+  function _msMeta(ms) {
+    const d = ms.start && ms.end ? _daysBetween(ms.start, ms.end) : 0;
+    const w = tl.duration > 0 ? (d / tl.duration) * 100 : 0;
+    const f = tl.finish && ms.end
+      ? Math.max(0, Math.round((new Date(tl.finish) - new Date(ms.end)) / 86400000)) : 0;
+    return { d, w: Math.min(w, 100), f, crit: f === 0 };
   }
 
+  // ── Render milestone list ──
   function _sfRender() {
-    const cnt=msCnt(); if (cnt) cnt.textContent=`${milestones.length} milestone${milestones.length!==1?'s':''}`;
-    const el=listEl(); if (!el) return;
+    const cnt = _el('sfMsCnt');
+    if (cnt) cnt.textContent = `${milestones.length} milestone${milestones.length !== 1 ? 's' : ''}`;
+    const el = _el('sfMsList'); if (!el) return;
     if (!milestones.length) {
-      el.innerHTML=`<div style="padding:32px;text-align:center;color:#8aa8a4;font-size:13px;">No milestones yet.</div>`;
+      el.innerHTML = `<div style="padding:32px;text-align:center;color:#8aa8a4;font-size:13px;">No milestones yet.</div>`;
       return;
     }
-    el.innerHTML=milestones.map((ms,i)=>{
-      const m=_sfMeta(ms), oor=_isOutOfRange(ms);
-      const pct=Number(ms.progress_pct||0), hasProgress=pct>0||ms.executed>0;
-      const isDBItem = !ms._isNew && originalIds.has(ms.id);
-      const isTouched = touchedIds.has(ms.id);
-      // FIX 3: dim if another milestone is being edited
-      const dimmed = editingId !== null && editingId !== ms.id;
+    el.innerHTML = milestones.map((ms, i) => {
+      const m   = _msMeta(ms);
+      const oor = _isOutOfRange(ms);
+      const pct = Number(ms.progress_pct || 0);
+      const hasProgress   = pct > 0 || ms.executed > 0;
+      const isDB          = !ms._isNew && originalIds.has(ms.id);
+      const isTouched     = touchedIds.has(ms.id);
+      const dimmed        = editingId !== null && editingId !== ms.id;
       const isBeingEdited = editingId === ms.id;
+
       return `
-        <div style="border-bottom:1px solid #e2ecea;opacity:${dimmed?0.45:1};transition:opacity 0.2s;">
-          <div style="display:flex;align-items:center;gap:12px;padding:12px 20px;cursor:pointer;
-                      ${oor?'background:#fff9f7;':''}${isBeingEdited?'background:#fffde7;':''}
-                      border-left:3px solid ${isBeingEdited?'#f5c400':oor?'#f28c5e':'transparent'};"
-               onclick="_sfNS.tog('${ms.id}')">
-            <div style="width:26px;height:26px;border-radius:50%;
-                        background:${ms._isNew?'#fef0da':isTouched?'#e8f4ff':'#e0f4ee'};
-                        color:${ms._isNew?'#e67e22':isTouched?'#1a6fba':'#0a6b5e'};
-                        font-size:11px;font-weight:700;font-family:monospace;
-                        display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-              ${String(i+1).padStart(2,'0')}
-            </div>
-            <div style="flex:1;min-width:0;">
-              <div style="font-size:13px;font-weight:600;color:#1a2e2b;display:flex;align-items:center;gap:6px;">
-                ${ms.title||'Untitled'}
-                ${ms._isNew
-                  ? '<span style="font-size:9px;background:#fef0da;color:#e67e22;border-radius:4px;padding:1px 5px;font-family:monospace;font-weight:700;">NEW</span>'
-                  : isTouched
-                  ? '<span style="font-size:9px;background:#e8f4ff;color:#1a6fba;border-radius:4px;padding:1px 5px;font-family:monospace;font-weight:700;">EDITED</span>'
-                  : '<span style="font-size:9px;background:#e0f4ee;color:#0a6b5e;border-radius:4px;padding:1px 5px;font-family:monospace;font-weight:700;">DB</span>'
-                }
-                ${isBeingEdited ? '<span style="font-size:9px;background:#fff9c4;color:#a06a00;border-radius:4px;padding:1px 5px;font-family:monospace;font-weight:700;">EDITING…</span>' : ''}
-              </div>
-              <div style="font-size:11px;color:#7a9e9a;font-family:monospace;margin-top:2px;">
-                ${ms.start} → ${ms.end} · ${m.d}d · Dep: ${_depLabel(ms.dep)}
-                ${oor?'<span style="color:#c0392b;margin-left:6px;">⚠ Outside timeline</span>':''}
-              </div>
-              ${hasProgress?`<div style="margin-top:6px;">
-                <div class="sc-pbar" style="height:4px;"><div class="sc-pfill" style="width:${pct}%;"></div></div>
-                <div style="font-size:10px;color:#0a7b6c;font-family:monospace;margin-top:2px;">
-                  ${pct.toFixed(1)}% executed — progress preserved on save
-                </div>
-              </div>`:''}
-            </div>
-            <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
-              <span class="sc-tag ${m.crit?'sc-tag-crit':'sc-tag-ok'}">${m.crit?'Critical':'Float '+m.f+'d'}</span>
-              <span class="sc-tag sc-tag-ns">${m.w.toFixed(1)}%</span>
-            </div>
-            <div style="display:flex;gap:6px;flex-shrink:0;" onclick="event.stopPropagation()">
-              ${!dimmed?`<button class="sc-btn sc-btn-ghost" style="padding:5px 10px;font-size:12px;"
-                      onclick="_sfNS.ed('${ms.id}')">Edit</button>`:''}
-              ${!hasProgress&&!dimmed?`<button class="sc-btn sc-btn-danger" style="padding:5px 10px;font-size:12px;"
-                      onclick="_sfNS.del('${ms.id}')">Delete</button>`:''}
-            </div>
-            <span id="sfChv-${ms.id}" style="color:#aac4c0;font-size:11px;transition:transform 0.2s;">▼</span>
+      <div class="sf-ms-row" data-id="${ms.id}" style="border-bottom:1px solid var(--c-border);opacity:${dimmed ? 0.4 : 1};transition:opacity 0.2s;">
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 20px;cursor:pointer;
+                    ${oor ? 'background:#fff9f7;' : ''}${isBeingEdited ? 'background:#fffde7;' : ''}
+                    border-left:3px solid ${isBeingEdited ? '#f5c400' : oor ? '#f28c5e' : 'transparent'};">
+          <div style="width:26px;height:26px;border-radius:50%;
+                      background:${ms._isNew ? 'var(--c-ext-light)' : isTouched ? '#e8f4ff' : 'var(--c-brand-light)'};
+                      color:${ms._isNew ? 'var(--c-ext)' : isTouched ? '#1a6fba' : 'var(--c-brand-dark)'};
+                      font-size:11px;font-weight:700;font-family:var(--font-mono);
+                      display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            ${String(i + 1).padStart(2, '0')}
           </div>
-          <div id="sfDet-${ms.id}" style="display:none;padding:8px 20px 14px 58px;
-               background:#f8faf9;border-top:1px solid #e2ecea;">
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">
-              ${[['Description',ms.desc||'—'],['Quantity',(ms.qty||'—')+' '+(ms.unit||'')],
-                 ['Duration',m.d+' days'],['Attachment',ms.fileName?'📎 '+ms.fileName:'—']
-                ].map(([l,v])=>`
-                <div>
-                  <div style="font-size:10px;font-weight:600;text-transform:uppercase;
-                       letter-spacing:0.07em;color:#7a9e9a;font-family:monospace;">${l}</div>
-                  <div style="font-size:12px;color:#1a2e2b;margin-top:3px;">${v}</div>
-                </div>`).join('')}
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:600;color:var(--c-text);display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              ${ms.title || 'Untitled'}
+              ${ms._isNew ? `<span class="sc-tag sc-tag-ext">NEW</span>` : isTouched ? `<span class="sc-tag" style="background:#e8f4ff;color:#1a6fba;">EDITED</span>` : `<span class="sc-tag sc-tag-ok">DB</span>`}
+              ${isBeingEdited ? `<span class="sc-tag sc-tag-warn">EDITING…</span>` : ''}
             </div>
+            <div style="font-size:11px;color:var(--c-muted);font-family:var(--font-mono);margin-top:2px;">
+              ${ms.start} → ${ms.end} · ${m.d}d · Dep: ${_depLabel(ms.dep)}
+              ${oor ? '<span style="color:var(--c-danger);margin-left:6px;">⚠ Outside timeline</span>' : ''}
+            </div>
+            ${hasProgress ? `<div style="margin-top:6px;">
+              <div class="sc-pbar" style="height:4px;"><div class="sc-pfill" style="width:${pct}%;"></div></div>
+              <div style="font-size:10px;color:var(--c-brand);font-family:var(--font-mono);margin-top:2px;">${pct.toFixed(1)}% — progress locked, preserved on save</div>
+            </div>` : ''}
           </div>
-        </div>`;
+          <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+            <span class="sc-tag ${m.crit ? 'sc-tag-crit' : 'sc-tag-ok'}">${m.crit ? 'Critical' : 'Float ' + m.f + 'd'}</span>
+            <span class="sc-tag sc-tag-ns">${m.w.toFixed(1)}%</span>
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0;">
+            ${!dimmed ? `<button class="sc-btn sc-btn-ghost sf-edit-btn" data-id="${ms.id}" style="padding:5px 10px;font-size:12px;">Edit</button>` : ''}
+            ${!hasProgress && !dimmed ? `<button class="sc-btn sc-btn-danger sf-del-btn" data-id="${ms.id}" style="padding:5px 10px;font-size:12px;">Delete</button>` : ''}
+          </div>
+          <span class="sf-chv" data-id="${ms.id}" style="color:var(--c-faint);font-size:11px;transition:transform 0.2s;cursor:pointer;">▼</span>
+        </div>
+        <div class="sf-det" data-id="${ms.id}" style="display:none;padding:8px 20px 14px 58px;background:#f8faf9;border-top:1px solid var(--c-border);">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">
+            ${[['Description', ms.desc || '—'], ['Quantity', (ms.qty || '—') + ' ' + (ms.unit || '')],
+               ['Duration', m.d + ' days'], ['Attachment', ms.fileName ? '📎 ' + ms.fileName : '—']]
+              .map(([l, v]) => `<div>
+                <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--c-muted);font-family:var(--font-mono);">${l}</div>
+                <div style="font-size:12px;color:var(--c-text);margin-top:3px;">${v}</div>
+              </div>`).join('')}
+          </div>
+        </div>
+      </div>`;
     }).join('');
-    if (tlWarn()) tlWarn().style.display=milestones.some(_isOutOfRange)?'block':'none';
+
+    // Wire row toggle (chevron / row click)
+    el.querySelectorAll('.sf-chv').forEach(chv => {
+      chv.addEventListener('click', e => {
+        e.stopPropagation();
+        const id  = chv.dataset.id;
+        const det = el.querySelector(`.sf-det[data-id="${id}"]`);
+        if (!det) return;
+        const open = det.style.display === 'block';
+        det.style.display = open ? 'none' : 'block';
+        chv.style.transform = open ? '' : 'rotate(180deg)';
+      });
+    });
+
+    // Wire edit buttons
+    el.querySelectorAll('.sf-edit-btn').forEach(btn => {
+      btn.addEventListener('click', e => { e.stopPropagation(); _ns.edit(btn.dataset.id); });
+    });
+
+    // Wire delete buttons
+    el.querySelectorAll('.sf-del-btn').forEach(btn => {
+      btn.addEventListener('click', e => { e.stopPropagation(); _ns.del(btn.dataset.id); });
+    });
+
+    if (_el('sfTlWarn')) _el('sfTlWarn').style.display = milestones.some(_isOutOfRange) ? 'block' : 'none';
   }
 
-  // FIX 3: namespaced — no window.* collision when panel re-opens
-  window._sfNS = {
-    tog(id) {
-      const d=document.getElementById('sfDet-'+id), c=document.getElementById('sfChv-'+id);
-      if (d) { const open=d.style.display==='block'; d.style.display=open?'none':'block'; if(c) c.style.transform=open?'':'rotate(180deg)'; }
-    },
-
-    // FIX 3: block editing a second milestone while one is already in the form
-    ed(id) {
-      if (editingId !== null && editingId !== id) {
-        alert('Please finish editing the current milestone first (click "Update Milestone" or "Cancel Edit").');
-        return;
-      }
-      const ms=milestones.find(m=>m.id===id); if (!ms) return;
-      editingId = id;
-
-      const get=x=>document.getElementById(x);
-      if (get('sfMsT')) get('sfMsT').value=ms.title;
-      if (get('sfMsD')) get('sfMsD').value=ms.desc;
-      if (get('sfMsS')) get('sfMsS').value=ms.start;
-      if (get('sfMsE')) get('sfMsE').value=ms.end;
-      if (get('sfMsQ')) get('sfMsQ').value=ms.qty;
-      if (get('sfMsU')) get('sfMsU').value=ms.unit;
-
-      _sfRefDep();   // rebuild dep list excluding self
-      if (get('sfMsDep')) get('sfMsDep').value=ms.dep||'None';
-
-      attached=null;
-      const fzt=document.getElementById('sfFzt');
-      if (fzt) fzt.textContent=ms.fileName||'Click to attach a file';
-
-      const addBtnEl=document.getElementById('sfSetMs');
-      if (addBtnEl) addBtnEl.textContent='✓ Update Milestone';
-      const formLabel=document.getElementById('sfFormLabel');
-      if (formLabel) formLabel.textContent='Edit Milestone';
-      const banner=document.getElementById('sfEditingBanner');
-      if (banner) banner.style.display='block';
-      const cancelEdit=document.getElementById('sfCancelEdit');
-      if (cancelEdit) cancelEdit.style.display='inline-flex';
-
-      _sfRender();
-      get('sfMsT')?.focus();
-    },
-
-    del(id) {
-      if (editingId !== null) {
-        alert('Please finish the current edit before deleting.');
-        return;
-      }
-      const ms=milestones.find(m=>m.id===id); if (!ms) return;
-      if ((ms.executed>0||ms.progress_pct>0) &&
-          !confirm('This milestone has recorded progress. The backend will refuse deletion. Continue anyway?')) return;
-      if (originalIds.has(ms.id)) deletedIds.add(ms.id);
-      touchedIds.delete(ms.id);
-      milestones=milestones.filter(m=>m.id!==id);
-      _sfRender(); _sfRefDep();
-    },
+  // ── Namespace actions ──
+  _ns.edit = function(id) {
+    if (editingId !== null && editingId !== id) {
+      alert('Please finish editing the current milestone first.');
+      return;
+    }
+    const ms = milestones.find(m => m.id === id); if (!ms) return;
+    editingId = id;
+    if (_el('sfMsT')) _el('sfMsT').value = ms.title;
+    if (_el('sfMsD')) _el('sfMsD').value = ms.desc;
+    if (_el('sfMsS')) _el('sfMsS').value = ms.start;
+    if (_el('sfMsE')) _el('sfMsE').value = ms.end;
+    if (_el('sfMsQ')) _el('sfMsQ').value = ms.qty;
+    if (_el('sfMsU')) _el('sfMsU').value = ms.unit;
+    _sfRefDep();
+    if (_el('sfMsDep')) _el('sfMsDep').value = ms.dep || 'None';
+    attached = null;
+    if (_el('sfFzt')) _el('sfFzt').textContent = ms.fileName || 'Click to attach a file';
+    if (_el('sfSetMs'))        _el('sfSetMs').textContent        = '✓ Update Milestone';
+    if (_el('sfFormLabel'))    _el('sfFormLabel').textContent    = 'Edit Milestone';
+    if (_el('sfEditingBanner')) _el('sfEditingBanner').style.display = 'flex';
+    if (_el('sfCancelEdit'))   _el('sfCancelEdit').style.display    = 'inline-flex';
+    _sfRender();
+    _el('sfMsT')?.focus();
+    // Scroll form into view
+    _el('sfFormLabel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  // Cancel edit — restore form to add-new mode without touching the list
-  document.getElementById('sfCancelEdit')?.addEventListener('click', () => {
+  _ns.del = function(id) {
+    if (editingId !== null) { alert('Please finish the current edit before deleting.'); return; }
+    const ms = milestones.find(m => m.id === id); if (!ms) return;
+    if ((ms.executed > 0 || ms.progress_pct > 0) &&
+        !confirm('This milestone has recorded progress. The backend may refuse deletion. Continue?')) return;
+    if (originalIds.has(ms.id)) deletedIds.add(ms.id);
+    touchedIds.delete(ms.id);
+    milestones = milestones.filter(m => m.id !== id);
+    _sfRender(); _sfRefDep();
+  };
+
+  // ── Reset form to add-new mode ──
+  function _resetForm() {
     editingId = null;
-    ['sfMsT','sfMsD','sfMsS','sfMsE','sfMsQ'].forEach(elId=>{
-      const el=document.getElementById(elId); if(el) el.value='';
-    });
-    if (document.getElementById('sfMsU')) document.getElementById('sfMsU').value='m³';
-    attached=null;
-    const fzt=document.getElementById('sfFzt'); if(fzt) fzt.textContent='Click to attach a file';
-    const addBtnEl=document.getElementById('sfSetMs'); if(addBtnEl) addBtnEl.textContent='+ Add Milestone';
-    const formLabel=document.getElementById('sfFormLabel'); if(formLabel) formLabel.textContent='Add Milestone';
-    const banner=document.getElementById('sfEditingBanner'); if(banner) banner.style.display='none';
-    const cancelEdit=document.getElementById('sfCancelEdit'); if(cancelEdit) cancelEdit.style.display='none';
+    ['sfMsT','sfMsD','sfMsS','sfMsE','sfMsQ'].forEach(id => { const e = _el(id); if (e) e.value = ''; });
+    if (_el('sfMsU')) _el('sfMsU').value = 'm³';
+    attached = null;
+    if (_el('sfFzt'))          _el('sfFzt').textContent          = 'Click to attach a file';
+    if (_el('sfSetMs'))        _el('sfSetMs').textContent        = '+ Add Milestone';
+    if (_el('sfFormLabel'))    _el('sfFormLabel').textContent    = 'Add Milestone';
+    if (_el('sfEditingBanner')) _el('sfEditingBanner').style.display = 'none';
+    if (_el('sfCancelEdit'))   _el('sfCancelEdit').style.display    = 'none';
+    _sfRefDep(); _sfRender();
+  }
+
+  // ── Timeline ──
+  if (isEdit && tl.start) {
+    if (_el('sfTlInd')) _el('sfTlInd').style.display = 'inline';
+    _sfRefDep(); _sfRender();
+  }
+
+  _el('sfUnlockDates')?.addEventListener('click', () => {
+    if (!confirm('Unlock dates? This lets you change the project timeline.')) return;
+    _el('sfPS')?.removeAttribute('readonly');
+    _el('sfPF')?.removeAttribute('readonly');
+    const btn = _el('sfSetTl');
+    if (btn) { btn.disabled = false; btn.textContent = 'Set Timeline'; }
+    const ub = _el('sfUnlockDates');
+    if (ub) { ub.textContent = '🔓 Unlocked'; ub.disabled = true; }
+  });
+
+  _el('sfMsFile')?.addEventListener('change', function() {
+    attached = this.files[0] || null;
+    if (_el('sfFzt')) _el('sfFzt').textContent = attached ? attached.name : 'Click to attach a file';
+  });
+
+  _el('sfSetTl')?.addEventListener('click', () => {
+    const s = _el('sfPS')?.value, f = _el('sfPF')?.value;
+    if (!s || !f) return alert('Select both start and finish dates.');
+    const d = _daysBetween(s, f);
+    if (d <= 0) return alert('Finish must be after start.');
+    tl = { start: s, finish: f, duration: d };
+    const dur = _el('sfDur');
+    if (dur) { dur.textContent = `${d} days`; dur.style.color = 'var(--c-brand)'; }
+    if (_el('sfTlInd')) _el('sfTlInd').style.display = 'inline';
+    if (_el('sfSetMs')) _el('sfSetMs').disabled = false;
     _sfRefDep(); _sfRender();
   });
 
-  document.getElementById('sfSetMs')?.addEventListener('click', () => {
-    const get=x=>document.getElementById(x)?.value?.trim();
-    const title=get('sfMsT'), desc=get('sfMsD');
-    const start=get('sfMsS'), end=get('sfMsE');
-    const qty=get('sfMsQ'), unit=document.getElementById('sfMsU')?.value;
-    const depId=document.getElementById('sfMsDep')?.value||'None';
+  _el('sfCancelEdit')?.addEventListener('click', _resetForm);
 
-    if (!title) return alert('Title is required.');
-    if (!start||!end) return alert('Start and end dates are required.');
-    if (new Date(end)<new Date(start)) return alert('End date must be after start.');
-    if (tl.start&&new Date(start)<new Date(tl.start)) return alert(`Start date cannot be before project start (${tl.start}).`);
-    if (tl.finish&&new Date(end)>new Date(tl.finish)) return alert(`End date cannot exceed project finish (${tl.finish}).`);
+  // ── Add / Update milestone ──
+  _el('sfSetMs')?.addEventListener('click', () => {
+    const title = _val('sfMsT'), desc  = _val('sfMsD');
+    const start = _val('sfMsS'), end   = _val('sfMsE');
+    const qty   = _val('sfMsQ'), unit  = _el('sfMsU')?.value;
+    const depId = _el('sfMsDep')?.value || 'None';
+
+    if (!title)         return alert('Title is required.');
+    if (!start || !end) return alert('Start and end dates are required.');
+    if (new Date(end) < new Date(start)) return alert('End date must be after start.');
+    if (tl.start && new Date(start) < new Date(tl.start))   return alert(`Start cannot be before project start (${tl.start}).`);
+    if (tl.finish && new Date(end) > new Date(tl.finish))    return alert(`End cannot exceed project finish (${tl.finish}).`);
 
     if (editingId !== null) {
-      // ── UPDATE EXISTING MILESTONE IN LIST ──
       const idx = milestones.findIndex(m => m.id === editingId);
       if (idx === -1) { editingId = null; return; }
-      const origMs = existingSchedule?.milestones?.find(m=>m.id===editingId);
+      const origMs = existingSchedule?.milestones?.find(m => m.id === editingId);
       milestones[idx] = {
         ...milestones[idx],
-        title, desc:desc||'', start, end,
-        qty:qty||'', unit:unit||'m³',
-        dep:depId,
-        fileName:  attached ? attached.name : (milestones[idx].fileName||null),
-        fileObject:attached || null,
-        // preserve progress from DB record
+        title, desc: desc || '', start, end,
+        qty: qty || '', unit: unit || 'm³', dep: depId,
+        fileName:   attached ? attached.name : (milestones[idx].fileName || null),
+        fileObject: attached || null,
         executed:        origMs?.executed        ?? milestones[idx].executed,
         progress_pct:    origMs?.progress_pct    ?? milestones[idx].progress_pct,
         activity_status: origMs?.activity_status ?? milestones[idx].activity_status,
         entries:         origMs?.entries         ?? milestones[idx].entries,
         _isNew:          milestones[idx]._isNew,
       };
-      // FIX 4: mark as touched so it goes into editedIds
       if (originalIds.has(editingId)) touchedIds.add(editingId);
-      editingId = null;
     } else {
-      // ── ADD NEW MILESTONE ──
-      const milestoneId = 'ms-'+Date.now()+'-'+Math.random().toString(36).slice(2,6);
       milestones.push({
-        id:milestoneId, title, desc:desc||'', start, end,
-        qty:qty||'', unit:unit||'m³',
-        dep:depId,
-        fileName:attached?attached.name:null, fileObject:attached||null,
-        executed:0, progress_pct:0, activity_status:'not_started', entries:[],
-        _isNew:true,
+        id:        'ms-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+        title, desc: desc || '', start, end,
+        qty: qty || '', unit: unit || 'm³', dep: depId,
+        fileName: attached ? attached.name : null, fileObject: attached || null,
+        executed: 0, progress_pct: 0, activity_status: 'not_started', entries: [],
+        _isNew: true,
       });
     }
-
-    ['sfMsT','sfMsD','sfMsS','sfMsE','sfMsQ'].forEach(elId=>{
-      const el=document.getElementById(elId); if(el) el.value='';
-    });
-    if (document.getElementById('sfMsU')) document.getElementById('sfMsU').value='m³';
-    attached=null;
-    const fzt=document.getElementById('sfFzt'); if(fzt) fzt.textContent='Click to attach a file';
-
-    // Reset form labels
-    const addBtnEl=document.getElementById('sfSetMs'); if(addBtnEl) addBtnEl.textContent='+ Add Milestone';
-    const formLabel=document.getElementById('sfFormLabel'); if(formLabel) formLabel.textContent='Add Milestone';
-    const banner=document.getElementById('sfEditingBanner'); if(banner) banner.style.display='none';
-    const cancelEdit=document.getElementById('sfCancelEdit'); if(cancelEdit) cancelEdit.style.display='none';
-
-    _sfRefDep(); _sfRender();
-    document.getElementById('sfMsT')?.focus();
+    _resetForm();
+    _el('sfMsT')?.focus();
   });
 
-  document.getElementById('sfCancel')?.addEventListener('click', () => {
-    if (isEdit&&existingSchedule) { openActualProgressPage(existingSchedule); } else { collapseGrayPart(); }
+  // ── Cancel / back ──
+  _el('sfCancel')?.addEventListener('click', () => {
+    if (isEdit && existingSchedule) openActualProgressPage(existingSchedule);
+    else collapseGrayPart();
   });
 
-  document.getElementById('sfSave')?.addEventListener('click', async () => {
-    if (editingId !== null) return alert('Please finish editing the current milestone (click "Update Milestone") before saving.');
-    if (!tl.duration) return alert('Please set the project timeline first.');
+  // ── Save ──
+  _el('sfSave')?.addEventListener('click', async () => {
+    if (editingId !== null) return alert('Please finish editing the current milestone before saving.');
+    if (!tl.duration)       return alert('Please set the project timeline first.');
     if (!milestones.length) return alert('Add at least one milestone before saving.');
-    if (milestones.some(_isOutOfRange)) return alert('Some milestones fall outside the project timeline. Fix highlighted items first.');
+    if (milestones.some(_isOutOfRange)) return alert('Some milestones fall outside the project timeline.');
 
-    const projectId=localStorage.getItem('activeProjectId');
-    const form=new FormData();
-    form.append('projectId', projectId);
+    const form = new FormData();
+    form.append('projectId', AppState.projectId);
     if (scheduleId) form.append('scheduleId', scheduleId);
     form.append('timeline', JSON.stringify(tl));
 
-    // FIX 4: smart categorisation
-    // newIds      → backend INSERTs
-    // editedIds   → backend UPDATEs metadata only (progress untouched)
-    // unchangedIds→ backend skips entirely (no delete, no re-insert)
-    // deletedIds  → backend DELETEs (already a Set)
-    const newMilestones       = milestones.filter(m => m._isNew);
-    const editedMilestones    = milestones.filter(m => !m._isNew && originalIds.has(m.id) && touchedIds.has(m.id));
-    const unchangedMilestones = milestones.filter(m => !m._isNew && originalIds.has(m.id) && !touchedIds.has(m.id));
+    // Smart categorisation
+    const newMs       = milestones.filter(m => m._isNew);
+    const editedMs    = milestones.filter(m => !m._isNew && originalIds.has(m.id) && touchedIds.has(m.id));
+    const unchangedMs = milestones.filter(m => !m._isNew && originalIds.has(m.id) && !touchedIds.has(m.id));
 
-    // FIX 1: recompute depLabel from live list before serialising
-    const payload = milestones.map(({fileObject,_isNew,...rest})=>({
-      ...rest,
-      // resolve current dep label from live milestone titles
-      depLabel: _depLabel(rest.dep),
+    const payload = milestones.map(({ fileObject, _isNew, ...rest }) => ({
+      ...rest, depLabel: _depLabel(rest.dep),
     }));
 
     form.append('milestones',    JSON.stringify(payload));
-    form.append('newIds',        JSON.stringify(newMilestones.map(m=>m.id)));
-    form.append('editedIds',     JSON.stringify(editedMilestones.map(m=>m.id)));
-    form.append('unchangedIds',  JSON.stringify(unchangedMilestones.map(m=>m.id)));
+    form.append('newIds',        JSON.stringify(newMs.map(m => m.id)));
+    form.append('editedIds',     JSON.stringify(editedMs.map(m => m.id)));
+    form.append('unchangedIds',  JSON.stringify(unchangedMs.map(m => m.id)));
     form.append('deletedIds',    JSON.stringify([...deletedIds]));
 
-    milestones.forEach(ms=>{
+    // Location
+    const loc = locPicker.getLocation();
+    if (loc) form.append('location', JSON.stringify(loc));
+
+    milestones.forEach(ms => {
       if (ms.fileObject) form.append(`file_${ms.id}`, ms.fileObject, ms.fileName);
     });
 
-    const saveBtn=document.getElementById('sfSave');
-    if (saveBtn) { saveBtn.disabled=true; saveBtn.textContent='Saving…'; }
+    const saveBtn = _el('sfSave');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
 
     try {
-      const res=await fetch(`${BACKEND}/api/save-schedule`,{
-        method:'POST',
-        headers:{'Authorization':`Bearer ${localStorage.getItem('authToken')}`},
-        body:form,
+      const res = await fetch(`${BACKEND}/api/save-schedule`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${AppState.token}` },
+        body: form,
       });
       if (!res.ok) {
-        const errBody=await res.json().catch(()=>({}));
-        throw new Error(errBody.message||`HTTP ${res.status}`);
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.message || `HTTP ${res.status}`);
       }
-      const result=await res.json();
+      const result = await res.json();
       if (result.success) {
-        openActualProgressPage(result.schedule || { milestones, timeline:tl });
-      } else throw new Error(result.message||'Unable to save.');
-    } catch(err) {
-      console.error('Save error:',err);
-      alert('Failed to save schedule: '+err.message);
-      if (saveBtn) { saveBtn.disabled=false; saveBtn.textContent=isEdit?'Save Changes':'Save Schedule'; }
+        openActualProgressPage(result.schedule || { milestones, timeline: tl, location: loc });
+      } else throw new Error(result.message || 'Unable to save.');
+    } catch (err) {
+      console.error('Save error:', err);
+      alert('Failed to save: ' + err.message);
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = isEdit ? 'Save Changes' : 'Save Schedule'; }
     }
   });
 
@@ -2693,420 +3019,372 @@ function openProjectScheduleForm(existingSchedule) {
 }
 
 // ============================================================
-//  EXTENSION PANEL (FIX 2 from v6 preserved, no new changes)
+//  EXTENSION PANEL
 // ============================================================
 function openExtensionPanel(existingSchedule) {
+  if (!AppState.canWrite) { alert('Your role cannot add extensions.'); return; }
   document.getElementById('extOverlay')?.remove();
-  const baselineFinish      = existingSchedule?.timeline?.finish||null;
-  const baselineMilestones  = existingSchedule?.milestones||[];
-  const scheduleId          = existingSchedule?.id || existingSchedule?.schedule_id || null;
-  const depOptions = baselineMilestones.map(ms=>`<option value="${ms.id}">${ms.title}</option>`).join('');
 
-  const overlay=document.createElement('div');
-  overlay.id='extOverlay';
-  overlay.style.cssText=`position:fixed;inset:0;background:rgba(10,30,28,0.60);z-index:9999;
-                          display:flex;align-items:center;justify-content:center;padding:20px;`;
+  const baselineFinish     = existingSchedule?.timeline?.finish || null;
+  const baselineMilestones = existingSchedule?.milestones || [];
+  const scheduleId         = existingSchedule?.id || existingSchedule?.schedule_id || null;
+  const depOptions         = baselineMilestones.map(ms =>
+    `<option value="${ms.id}">${ms.title}</option>`).join('');
 
-  overlay.innerHTML=`${_css}
-    <div id="extModal" style="background:#fff;border-radius:16px;width:min(700px,96vw);max-height:90vh;
-         display:flex;flex-direction:column;box-shadow:0 16px 60px rgba(0,0,0,0.35);
-         font-family:'Inter',sans-serif;overflow:hidden;">
-      <div style="padding:20px 24px;border-bottom:1px solid #e2ecea;display:flex;align-items:center;
-                  justify-content:space-between;flex-shrink:0;background:#0d2420;border-radius:16px 16px 0 0;">
-        <div>
-          <div style="font-size:16px;font-weight:600;color:#e8f4f2;">Add Schedule Extension</div>
-          <div style="font-size:12px;color:#4a7a74;margin-top:3px;font-family:monospace;">
-            Baseline finish: ${baselineFinish||'Not set'}
-          </div>
+  const overlay = document.createElement('div');
+  overlay.id = 'extOverlay';
+  overlay.style.cssText = `position:fixed;inset:0;background:rgba(10,30,28,0.65);z-index:9999;
+                            display:flex;align-items:center;justify-content:center;padding:20px;`;
+
+  overlay.innerHTML = _css + `
+  <div id="extModal" style="background:var(--c-surface);border-radius:16px;width:min(720px,96vw);
+       max-height:90vh;display:flex;flex-direction:column;box-shadow:0 16px 60px rgba(0,0,0,0.35);
+       font-family:var(--font);overflow:hidden;">
+    <div style="padding:20px 24px;border-bottom:1px solid var(--c-border);display:flex;
+                align-items:center;justify-content:space-between;flex-shrink:0;
+                background:var(--c-dark);border-radius:16px 16px 0 0;">
+      <div>
+        <div style="font-size:15px;font-weight:600;color:#e8f4f2;">Add Schedule Extension</div>
+        <div style="font-size:11px;color:#4a7a74;margin-top:3px;font-family:var(--font-mono);">
+          Baseline finish: ${baselineFinish || 'Not set'}
         </div>
-        <button id="extClose" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);
-          color:#a0d4cc;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;
-          font-family:'Inter',sans-serif;">✕ Close</button>
       </div>
-      <div style="flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px;">
-        <div class="sc-fw">
-          <span class="sc-fl">Extension Type</span>
-          <select id="extType" style="font-family:'Inter',sans-serif;font-size:13px;color:#1a2e2b;
-            background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;">
-            <option value="delay">Delay — extend existing milestone dates</option>
-            <option value="scope_addition">Scope Addition — add new milestones to project</option>
-            <option value="force_majeure">Force Majeure — extend due to unforeseeable event</option>
-          </select>
-        </div>
-        <div class="sc-fw">
-          <span class="sc-fl">What does this extension apply to?</span>
-          <div style="display:flex;gap:10px;margin-top:4px;">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;
-              background:#f8faf9;border:1px solid #d0e4e1;border-radius:8px;padding:10px 14px;flex:1;">
-              <input type="radio" name="extScope" value="existing" checked style="width:auto;"/>
-              <div>
-                <div style="font-weight:500;color:#1a2e2b;">Existing milestones</div>
-                <div style="font-size:11px;color:#6b9490;">Extend duration of work already in plan</div>
-              </div>
-            </label>
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;
-              background:#f8faf9;border:1px solid #d0e4e1;border-radius:8px;padding:10px 14px;flex:1;">
-              <input type="radio" name="extScope" value="new" style="width:auto;"/>
-              <div>
-                <div style="font-weight:500;color:#1a2e2b;">New scope / milestones</div>
-                <div style="font-size:11px;color:#6b9490;">Additional work not in original plan</div>
-              </div>
-            </label>
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div class="sc-fw">
-            <span class="sc-fl">Extension Days</span>
-            <input type="number" id="extDays" min="1" placeholder="e.g. 30"
-              style="font-family:'Inter',sans-serif;font-size:13px;color:#1a2e2b;background:#f8faf9;
-                     border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;"/>
-          </div>
-          <div class="sc-fw">
-            <span class="sc-fl">New Planned Finish</span>
-            <input type="date" id="extNewFinish"
-              style="font-family:'Inter',sans-serif;font-size:13px;color:#1a2e2b;background:#f8faf9;
-                     border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;"/>
-          </div>
-        </div>
-        <div class="sc-fw">
-          <span class="sc-fl">Reason / Description <span style="color:#c0392b;">*</span></span>
-          <textarea id="extReason" rows="4"
-            style="resize:vertical;font-family:'Inter',sans-serif;font-size:13px;color:#1a2e2b;
-                   background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;
-                   outline:none;width:100%;min-height:90px;"
-            placeholder="Required — describe why this extension is needed."></textarea>
-        </div>
-        <div id="extNewMsSection" style="display:none;">
-          <div style="font-size:11px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;
-               color:#0a7b6c;font-family:monospace;margin-bottom:10px;padding-bottom:8px;
-               border-bottom:1px solid #e2ecea;">New Milestones (additional_milestones table)</div>
-          <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:10px;margin-bottom:8px;">
-            <div class="sc-fw"><span class="sc-fl">Title</span>
-              <input type="text" id="extMsT" placeholder="New milestone"
-                style="font-size:13px;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;"/></div>
-            <div class="sc-fw"><span class="sc-fl">Start</span>
-              <input type="date" id="extMsS" style="font-size:13px;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;"/></div>
-            <div class="sc-fw"><span class="sc-fl">End</span>
-              <input type="date" id="extMsE" style="font-size:13px;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;"/></div>
-            <div class="sc-fw"><span class="sc-fl">Qty</span>
-              <input type="number" id="extMsQ" placeholder="0"
-                style="font-size:13px;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;"/></div>
-            <div class="sc-fw"><span class="sc-fl">Unit</span>
-              <select id="extMsU" style="font-size:13px;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;">
-                <option>m³</option><option>tons</option><option>sqm</option>
-                <option>lm</option><option>units</option><option>hrs</option>
-              </select></div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
-            <div class="sc-fw">
-              <span class="sc-fl">Depends On baseline milestone</span>
-              <select id="extMsDep" style="font-size:13px;background:#f8faf9;border:1px solid #d0e4e1;border-radius:7px;padding:9px 12px;outline:none;width:100%;">
-                <option value="None">None</option>${depOptions}
-              </select>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="role-badge">${AppState.user.role}</span>
+        <button id="extClose" class="sc-btn sc-btn-ghost-dark">✕ Close</button>
+      </div>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px;">
+      <div class="sc-fw">
+        <span class="sc-fl">Extension Type</span>
+        <select id="extType">
+          <option value="delay">Delay — extend existing milestone dates</option>
+          <option value="scope_addition">Scope Addition — add new milestones</option>
+          <option value="force_majeure">Force Majeure — unforeseeable event</option>
+        </select>
+      </div>
+      <div class="sc-fw">
+        <span class="sc-fl">Applies to</span>
+        <div style="display:flex;gap:10px;margin-top:4px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;
+            background:#f8faf9;border:1px solid var(--c-border);border-radius:var(--radius);padding:10px 14px;flex:1;">
+            <input type="radio" name="extScope" value="existing" checked style="width:auto;"/>
+            <div>
+              <div style="font-weight:500;">Existing milestones</div>
+              <div style="font-size:11px;color:var(--c-muted);">Extend duration of planned work</div>
             </div>
-            <div class="sc-fw">
-              <span class="sc-fl">Attachment</span>
-              <label style="border:1.5px dashed #d0e4e1;border-radius:7px;background:#f8faf9;
-                     padding:9px 12px;display:flex;align-items:center;gap:8px;cursor:pointer;min-height:40px;">
-                <input type="file" id="extMsFile" accept="*/*" style="display:none;"/>
-                <span style="font-size:14px;">📎</span>
-                <span id="extMsFileTxt" style="font-size:12px;color:#7a9e9a;">Click to attach</span>
-              </label>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;
+            background:#f8faf9;border:1px solid var(--c-border);border-radius:var(--radius);padding:10px 14px;flex:1;">
+            <input type="radio" name="extScope" value="new" style="width:auto;"/>
+            <div>
+              <div style="font-weight:500;">New scope / milestones</div>
+              <div style="font-size:11px;color:var(--c-muted);">Additional work not in original plan</div>
             </div>
-          </div>
-          <button id="extAddMs" style="background:#0a7b6c;color:#fff;border:none;border-radius:7px;
-            padding:9px 16px;cursor:pointer;font-size:13px;font-family:'Inter',sans-serif;margin-bottom:10px;">
-            + Add to list
-          </button>
-          <div id="extMsList" style="font-size:12px;color:#5a7a76;"></div>
+          </label>
         </div>
       </div>
-      <div style="flex-shrink:0;display:flex;justify-content:flex-end;gap:8px;padding:14px 24px;
-                  border-top:1px solid #e2ecea;background:#fff;border-radius:0 0 16px 16px;">
-        <button id="extCancelBtn" style="background:transparent;color:#3d6560;border:1px solid #d0e4e1;border-radius:7px;
-               padding:9px 18px;cursor:pointer;font-size:13px;font-family:'Inter',sans-serif;">Cancel</button>
-        <button id="extSubmitBtn" style="background:#0a7b6c;color:#fff;border:none;border-radius:7px;
-               padding:9px 18px;cursor:pointer;font-size:13px;font-family:'Inter',sans-serif;font-weight:600;">
-          Submit Extension
-        </button>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="sc-fw">
+          <span class="sc-fl">Extension Days</span>
+          <input type="number" id="extDays" min="1" placeholder="e.g. 30"/>
+        </div>
+        <div class="sc-fw">
+          <span class="sc-fl">New Planned Finish</span>
+          <input type="date" id="extNewFinish"/>
+        </div>
       </div>
-    </div>`;
+      <div class="sc-fw">
+        <span class="sc-fl">Reason / Description <span style="color:var(--c-danger);">*</span></span>
+        <textarea id="extReason" rows="4" style="resize:vertical;min-height:90px;"
+          placeholder="Required — describe why this extension is needed."></textarea>
+      </div>
+      <div id="extNewMsSection" style="display:none;">
+        <div style="font-size:10px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;
+             color:var(--c-brand);font-family:var(--font-mono);margin-bottom:10px;padding-bottom:8px;
+             border-bottom:1px solid var(--c-border);">New Milestones</div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:10px;margin-bottom:8px;">
+          <div class="sc-fw"><span class="sc-fl">Title</span><input type="text" id="extMsT" placeholder="New milestone"/></div>
+          <div class="sc-fw"><span class="sc-fl">Start</span><input type="date" id="extMsS"/></div>
+          <div class="sc-fw"><span class="sc-fl">End</span><input type="date" id="extMsE"/></div>
+          <div class="sc-fw"><span class="sc-fl">Qty</span><input type="number" id="extMsQ" placeholder="0"/></div>
+          <div class="sc-fw"><span class="sc-fl">Unit</span>
+            <select id="extMsU">
+              <option>m³</option><option>tons</option><option>sqm</option>
+              <option>lm</option><option>units</option><option>hrs</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+          <div class="sc-fw">
+            <span class="sc-fl">Depends on baseline milestone</span>
+            <select id="extMsDep"><option value="None">None</option>${depOptions}</select>
+          </div>
+          <div class="sc-fw">
+            <span class="sc-fl">Attachment</span>
+            <label class="sc-fzone">
+              <input type="file" id="extMsFile" accept="*/*"/>
+              <span style="font-size:14px;">📎</span>
+              <span id="extMsFileTxt" style="font-size:12px;color:var(--c-muted);">Click to attach</span>
+            </label>
+          </div>
+        </div>
+        <button id="extAddMs" class="sc-btn sc-btn-ext" style="margin-bottom:10px;">+ Add to list</button>
+        <div id="extMsList" style="font-size:12px;color:#5a7a76;"></div>
+      </div>
+    </div>
+    <div style="flex-shrink:0;display:flex;justify-content:flex-end;gap:8px;padding:14px 24px;
+                border-top:1px solid var(--c-border);background:var(--c-surface);border-radius:0 0 16px 16px;">
+      <button id="extCancelBtn" class="sc-btn sc-btn-ghost">Cancel</button>
+      <button id="extSubmitBtn" class="sc-btn sc-btn-primary" style="background:var(--c-ext);">Submit Extension</button>
+    </div>
+  </div>`;
 
   document.body.appendChild(overlay);
 
-  let newMsList=[], extMsAttached=null;
+  let newMsList = [], extMsAttached = null;
 
-  document.getElementById('extDays')?.addEventListener('input', function() {
-    const days=parseInt(this.value);
-    if (!days||days<1||!baselineFinish) return;
-    const fin=new Date(baselineFinish); fin.setDate(fin.getDate()+days);
-    const nf=document.getElementById('extNewFinish'); if (nf) nf.value=fin.toISOString().slice(0,10);
+  const _el = id => overlay.querySelector('#' + id);
+
+  _el('extDays')?.addEventListener('input', function() {
+    const days = parseInt(this.value);
+    if (!days || days < 1 || !baselineFinish) return;
+    const fin = new Date(baselineFinish); fin.setDate(fin.getDate() + days);
+    const nf = _el('extNewFinish'); if (nf) nf.value = fin.toISOString().slice(0, 10);
   });
 
-  document.getElementById('extNewFinish')?.addEventListener('input', function() {
-    const newDate=this.value; if (!newDate||!baselineFinish) return;
-    const days=Math.round((new Date(newDate)-new Date(baselineFinish))/86400000);
-    const dEl=document.getElementById('extDays'); if (dEl&&days>0) dEl.value=days;
+  _el('extNewFinish')?.addEventListener('input', function() {
+    if (!this.value || !baselineFinish) return;
+    const days = Math.round((new Date(this.value) - new Date(baselineFinish)) / 86400000);
+    const dEl = _el('extDays'); if (dEl && days > 0) dEl.value = days;
   });
 
-  document.querySelectorAll('input[name="extScope"]').forEach(r=>{
+  overlay.querySelectorAll('input[name="extScope"]').forEach(r => {
     r.addEventListener('change', function() {
-      const sec=document.getElementById('extNewMsSection');
-      if (sec) sec.style.display=this.value==='new'?'block':'none';
+      const sec = _el('extNewMsSection');
+      if (sec) sec.style.display = this.value === 'new' ? 'block' : 'none';
     });
   });
 
-  document.getElementById('extMsFile')?.addEventListener('change', function() {
-    extMsAttached=this.files[0]||null;
-    const txt=document.getElementById('extMsFileTxt');
-    if (txt) txt.textContent=extMsAttached?extMsAttached.name:'Click to attach';
+  _el('extMsFile')?.addEventListener('change', function() {
+    extMsAttached = this.files[0] || null;
+    const txt = _el('extMsFileTxt');
+    if (txt) txt.textContent = extMsAttached ? extMsAttached.name : 'Click to attach';
   });
 
   function renderExtMsList() {
-    const listEl=document.getElementById('extMsList'); if (!listEl) return;
-    listEl.innerHTML=newMsList.map((m,idx)=>`
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;
-           background:#f8faf9;border-radius:8px;margin-bottom:6px;border:1px solid #e2ecea;">
-        <div>
-          <strong style="color:#1a2e2b;">${m.title}</strong>
-          <span style="color:#7a9e9a;font-size:11px;font-family:monospace;margin-left:8px;">
-            ${m.planned_start} → ${m.planned_end} · ${m.quantity} ${m.unit}
-          </span>
-          ${m.depLabel!=='None'?`<span style="font-size:11px;color:#0a7b6c;margin-left:6px;">⤷ ${m.depLabel}</span>`:''}
-        </div>
-        <button onclick="window._extDelMs(${idx})"
-          style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:14px;padding:4px 8px;">✕</button>
-      </div>`).join('');
+    const listEl = _el('extMsList'); if (!listEl) return;
+    listEl.innerHTML = newMsList.map((m, idx) => `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;
+         background:#f8faf9;border-radius:var(--radius);margin-bottom:6px;border:1px solid var(--c-border);">
+      <div>
+        <strong style="color:var(--c-text);">${m.title}</strong>
+        <span style="color:var(--c-muted);font-size:11px;font-family:var(--font-mono);margin-left:8px;">
+          ${m.planned_start} → ${m.planned_end} · ${m.quantity} ${m.unit}
+        </span>
+        ${m.depLabel !== 'None' ? `<span style="font-size:11px;color:var(--c-brand);margin-left:6px;">⤷ ${m.depLabel}</span>` : ''}
+      </div>
+      <button class="ext-del-ms" data-idx="${idx}"
+        style="background:none;border:none;color:var(--c-danger);cursor:pointer;font-size:14px;padding:4px 8px;">✕</button>
+    </div>`).join('');
+    listEl.querySelectorAll('.ext-del-ms').forEach(btn => {
+      btn.addEventListener('click', () => { newMsList.splice(parseInt(btn.dataset.idx), 1); renderExtMsList(); });
+    });
   }
 
-  document.getElementById('extAddMs')?.addEventListener('click', () => {
-    const t=document.getElementById('extMsT')?.value.trim();
-    const s=document.getElementById('extMsS')?.value;
-    const e=document.getElementById('extMsE')?.value;
-    const q=document.getElementById('extMsQ')?.value;
-    const u=document.getElementById('extMsU')?.value;
-    const dep=document.getElementById('extMsDep')?.value||'None';
-    const depLabel=dep==='None'?'None':(baselineMilestones.find(m=>m.id===dep)?.title||'None');
-    if (!t||!s||!e) return alert('Title, start and end are required.');
-    if (new Date(e)<new Date(s)) return alert('End must be after start.');
+  _el('extAddMs')?.addEventListener('click', () => {
+    const t   = _el('extMsT')?.value.trim();
+    const s   = _el('extMsS')?.value;
+    const e   = _el('extMsE')?.value;
+    const q   = _el('extMsQ')?.value;
+    const u   = _el('extMsU')?.value;
+    const dep = _el('extMsDep')?.value || 'None';
+    const depLabel = dep === 'None' ? 'None' : (baselineMilestones.find(m => m.id === dep)?.title || 'None');
+    if (!t || !s || !e) return alert('Title, start and end are required.');
+    if (new Date(e) < new Date(s)) return alert('End must be after start.');
     newMsList.push({
-      title:t, planned_start:s, planned_end:e,
-      duration_days:Math.max(1,Math.round((new Date(e)-new Date(s))/86400000)+1),
-      quantity:parseFloat(q)||0, unit:u,
-      depends_on_baseline:dep==='None'?null:dep, depLabel,
-      fileName:extMsAttached?extMsAttached.name:null, fileObject:extMsAttached||null,
+      title: t, planned_start: s, planned_end: e,
+      duration_days: Math.max(1, Math.round((new Date(e) - new Date(s)) / 86400000) + 1),
+      quantity: parseFloat(q) || 0, unit: u,
+      depends_on_baseline: dep === 'None' ? null : dep, depLabel,
+      fileName: extMsAttached ? extMsAttached.name : null, fileObject: extMsAttached || null,
     });
-    ['extMsT','extMsS','extMsE','extMsQ'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-    extMsAttached=null;
-    const txt=document.getElementById('extMsFileTxt'); if(txt) txt.textContent='Click to attach';
+    ['extMsT','extMsS','extMsE','extMsQ'].forEach(id => { const el = _el(id); if (el) el.value = ''; });
+    extMsAttached = null;
+    const txt = _el('extMsFileTxt'); if (txt) txt.textContent = 'Click to attach';
     renderExtMsList();
   });
 
-  window._extDelMs = i => { newMsList.splice(i,1); renderExtMsList(); };
+  const closeOverlay = () => overlay.remove();
+  _el('extClose')?.addEventListener('click', closeOverlay);
+  _el('extCancelBtn')?.addEventListener('click', closeOverlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeOverlay(); });
 
-  const closeOverlay=()=>overlay.remove();
-  document.getElementById('extClose')?.addEventListener('click', closeOverlay);
-  document.getElementById('extCancelBtn')?.addEventListener('click', closeOverlay);
-  overlay.addEventListener('click', e=>{ if(e.target===overlay) closeOverlay(); });
+  _el('extSubmitBtn')?.addEventListener('click', async () => {
+    const days   = parseInt(_el('extDays')?.value);
+    const finish = _el('extNewFinish')?.value;
+    const reason = _el('extReason')?.value?.trim();
+    const type   = _el('extType')?.value;
+    const scope  = overlay.querySelector('input[name="extScope"]:checked')?.value;
 
-  document.getElementById('extSubmitBtn')?.addEventListener('click', async () => {
-    const days    = parseInt(document.getElementById('extDays')?.value);
-    const finish  = document.getElementById('extNewFinish')?.value;
-    const reason  = document.getElementById('extReason')?.value?.trim();
-    const type    = document.getElementById('extType')?.value;
-    const scope   = document.querySelector('input[name="extScope"]:checked')?.value;
+    if (!days || days < 1) return alert('Enter a valid number of extension days.');
+    if (!finish)            return alert('New planned finish date is required.');
+    if (!reason)            return alert('Reason is required.');
+    if (scope === 'new' && newMsList.length === 0) return alert('Add at least one new milestone for a scope extension.');
 
-    if (!days||days<1) return alert('Enter a valid number of extension days.');
-    if (!finish)        return alert('New planned finish date is required.');
-    if (!reason)        return alert('Reason is required — it is NOT NULL in the database.');
-    if (scope==='new'&&newMsList.length===0) return alert('Add at least one new milestone for a scope extension.');
-
-    const projectId=localStorage.getItem('activeProjectId');
-    const form=new FormData();
-    form.append('projectId', projectId);
+    const form = new FormData();
+    form.append('projectId',       AppState.projectId);
     if (scheduleId) form.append('scheduleId', scheduleId);
-    form.append('extension_days', String(days));
-    form.append('extensionDays', String(days));
+    form.append('extension_days',    String(days));
+    form.append('extensionDays',     String(days));
     form.append('new_planned_finish', finish);
-    form.append('newPlannedFinish', finish);
-    form.append('reason', reason);
+    form.append('newPlannedFinish',   finish);
+    form.append('reason',       reason);
     form.append('extension_type', type);
-    form.append('extensionType', type);
-    form.append('scope_type', scope);
-    form.append('scopeType', scope);
-    const newMsPayload = scope==='new' ? newMsList.map(({fileObject,depLabel,...rest})=>rest) : [];
+    form.append('extensionType',  type);
+    form.append('scope_type',  scope);
+    form.append('scopeType',   scope);
+    const newMsPayload = scope === 'new' ? newMsList.map(({ fileObject, depLabel, ...rest }) => rest) : [];
     form.append('newMilestones', JSON.stringify(newMsPayload));
-    if (scope==='new') {
-      newMsList.forEach((ms,i)=>{ if (ms.fileObject) form.append(`extFile_${i}`, ms.fileObject, ms.fileName); });
+    if (scope === 'new') {
+      newMsList.forEach((ms, i) => { if (ms.fileObject) form.append(`extFile_${i}`, ms.fileObject, ms.fileName); });
     }
 
-    const btn=document.getElementById('extSubmitBtn');
-    if (btn) { btn.disabled=true; btn.textContent='Submitting…'; }
+    const btn = _el('extSubmitBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Submitting…'; }
     try {
-      const res=await fetch(`${BACKEND}/api/save-extension`,{
-        method:'POST',
-        headers:{'Authorization':`Bearer ${localStorage.getItem('authToken')}`},
-        body:form,
+      const res = await fetch(`${BACKEND}/api/save-extension`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${AppState.token}` },
+        body: form,
       });
-      const rawText=await res.text();
-      let result={};
-      try { result=JSON.parse(rawText); } catch(_) {
-        throw new Error(`Server error ${res.status}: ${rawText.slice(0,200)}`);
+      const rawText = await res.text();
+      let result = {};
+      try { result = JSON.parse(rawText); } catch(_) {
+        throw new Error(`Server error ${res.status}: ${rawText.slice(0, 200)}`);
       }
-      if (!res.ok) throw new Error(result.message||`HTTP ${res.status}`);
+      if (!res.ok) throw new Error(result.message || `HTTP ${res.status}`);
       if (result.success) {
         alert('Extension submitted successfully.');
         closeOverlay();
         openSchedulePanel();
-      } else throw new Error(result.message||'Failed to submit extension.');
-    } catch(err) {
-      console.error('Extension submit error:',err);
-      alert('Failed to submit extension: '+err.message);
-      if (btn) { btn.disabled=false; btn.textContent='Submit Extension'; }
+      } else throw new Error(result.message || 'Failed to submit extension.');
+    } catch (err) {
+      console.error('Extension submit:', err);
+      alert('Failed to submit extension: ' + err.message);
+      if (btn) { btn.disabled = false; btn.textContent = 'Submit Extension'; }
     }
   });
 }
 
 // ============================================================
 //  SECTION 3 — Daily tracking + Gantt
-//
-//  FIX 5: Extension date columns in Gantt get a distinct orange
-//    header tint. Days that fall within the extension window
-//    (between baseline finish and the latest new_planned_finish)
-//    are highlighted with a warm background in month/week/day
-//    headers and a subtle column tint in the row grid.
-//
-//  FIX 6: Photos fetch deferred until section is expanded.
-//
-//  FIX 7: extMs is a shared object reference passed through
-//    closures; no stale re-capture.
-//
-//  FIX 8: buildGantt() only rebuilds when open AND data changed.
-//    ganttDirty flag is set true after any progress/complete call.
 // ============================================================
 function openActualProgressPage(savedSchedule) {
-  const pms=(savedSchedule.milestones||[]).map(ms=>({
-    ...ms, executed:Number(ms.executed||0),
-    progress_pct:Number(ms.progress_pct||0),
-    activity_status:ms.activity_status||'not_started', entries:ms.entries||[],
+  const pms = (savedSchedule.milestones || []).map(ms => ({
+    ...ms,
+    executed:        Number(ms.executed || 0),
+    progress_pct:    Number(ms.progress_pct || 0),
+    activity_status: ms.activity_status || 'not_started',
+    entries:         ms.entries || [],
   }));
 
-  // FIX 7: shared mutable reference — all closures read from this array
-  const extMsRef = { list: (savedSchedule.extension_milestones||savedSchedule.additional_milestones||[]).map(ms=>({
-    ...ms, executed:Number(ms.executed||0),
-    progress_pct:Number(ms.progress_pct||0),
-    activity_status:ms.activity_status||'not_started', entries:ms.entries||[],
-    isExtension:true,
-  })) };
+  // Shared mutable ref — all closures read from this
+  const extMsRef = {
+    list: (savedSchedule.extension_milestones || savedSchedule.additional_milestones || []).map(ms => ({
+      ...ms,
+      executed:        Number(ms.executed || 0),
+      progress_pct:    Number(ms.progress_pct || 0),
+      activity_status: ms.activity_status || 'not_started',
+      entries:         ms.entries || [],
+      isExtension:     true,
+    })),
+  };
 
-  const tl=savedSchedule.timeline||{};
-
-  // FIX 5: determine extension window from schedule_extensions data
-  // The backend should return extensions array on savedSchedule; fall back gracefully
+  const tl         = savedSchedule.timeline || {};
+  const location   = savedSchedule.location || null;
   const extensions = savedSchedule.extensions || savedSchedule.schedule_extensions || [];
-  const approvedExts = extensions.filter(e => e.status === 'approved' || !e.status); // treat missing status as approved for display
+
+  // Extension zone
+  const approvedExts    = extensions.filter(e => e.status === 'approved' || !e.status);
   const latestExtFinish = approvedExts.length
     ? approvedExts.reduce((latest, e) => {
         const d = new Date(e.new_planned_finish || e.newPlannedFinish || 0);
         return d > latest ? d : latest;
       }, new Date(0))
     : null;
-  // Extension zone: days strictly after baseline finish up to latestExtFinish
   const baselineFinishDate = tl.finish ? new Date(tl.finish) : null;
 
-  const projectName=(typeof activeProject!=='undefined'&&activeProject)?activeProject.textContent:'Project';
-
-  // FIX 8: dirty flag
-  let ganttDirty = true;
+  const projectName = _projectName();
+  let ganttDirty    = true;
 
   expandGrayPart(_css + `
   <style>
-  .p3root{font-family:'Inter',sans-serif;display:flex;flex-direction:column;height:100%;background:#f5f7f6;overflow:hidden;}
-  .p3root *{box-sizing:border-box;}
-  .p3-topbar{flex-shrink:0;position:sticky;top:0;z-index:20;}
-  .p3sum{background:#0d2420;padding:10px 24px;display:flex;gap:0;flex-shrink:0;position:sticky;top:58px;z-index:19;}
-  .p3sk{flex:1;padding:0 16px;border-right:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:2px;}
-  .p3sk:first-child{padding-left:0;} .p3sk:last-child{border-right:none;}
-  .p3sk-l{font-size:9px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#4a7a74;font-family:monospace;}
-  .p3sk-v{font-size:16px;font-weight:600;color:#e8f4f2;font-family:monospace;}
-  .p3sk-v.ahead{color:#3dd6b5;} .p3sk-v.behind{color:#f28c5e;}
+  .p3root{font-family:var(--font);display:flex;flex-direction:column;height:100%;background:var(--c-bg);overflow:hidden;}
+  .p3-topbar{flex-shrink:0;}
+  .p3sum{background:var(--c-dark);padding:10px 24px;display:flex;gap:0;flex-shrink:0;flex-wrap:wrap;}
+  .p3sk{flex:1;min-width:90px;padding:6px 16px;border-right:1px solid rgba(255,255,255,0.08);
+        display:flex;flex-direction:column;gap:2px;}
+  .p3sk:last-child{border-right:none;}
+  .p3sk-l{font-size:9px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#4a7a74;font-family:var(--font-mono);}
+  .p3sk-v{font-size:16px;font-weight:600;color:#e8f4f2;font-family:var(--font-mono);}
+  .p3sk-v.ahead{color:#3dd6b5;}.p3sk-v.behind{color:#f28c5e;}.p3sk-v.overdue{color:#f28c5e;}.p3sk-v.today{color:#f5c400;}
   .p3scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;}
   .p3content{display:flex;align-items:flex-start;min-height:100%;}
-  .p3list{width:260px;flex-shrink:0;background:#fff;border-right:1px solid #e2ecea;position:sticky;left:0;top:0;align-self:flex-start;max-height:calc(100vh - 120px);overflow-y:auto;}
-  .p3list-hdr{padding:12px 16px;border-bottom:1px solid #e2ecea;font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#0a7b6c;font-family:monospace;position:sticky;top:0;background:#fff;z-index:2;}
-  .p3ms{padding:10px 14px;border-bottom:1px solid #f0f5f4;cursor:pointer;transition:background 0.1s;}
-  .p3ms:hover{background:#f5faf9;}
-  .p3ms.active{background:#e8f6f3;border-left:3px solid #0a7b6c;}
-  .p3ms.ext-ms{border-left:3px solid #e67e22;}
-  .p3ms.ext-ms.active{background:#fef3e2;border-left:3px solid #e67e22;}
+  .p3list{width:260px;flex-shrink:0;background:var(--c-surface);border-right:1px solid var(--c-border);
+          position:sticky;left:0;top:0;align-self:flex-start;max-height:calc(100vh - 130px);overflow-y:auto;}
+  .p3list-hdr{padding:12px 16px;border-bottom:1px solid var(--c-border);font-size:10px;font-weight:600;
+              letter-spacing:0.08em;text-transform:uppercase;color:var(--c-brand);font-family:var(--font-mono);
+              position:sticky;top:0;background:var(--c-surface);z-index:2;}
   .p3detail{flex:1;padding:16px;display:flex;flex-direction:column;gap:14px;min-width:0;overflow-x:hidden;}
-  .p3-gantt{border-top:2px solid #e2ecea;background:#fff;}
+  .p3-gantt{border-top:2px solid var(--c-border);background:var(--c-surface);}
   .gtt-toggle{padding:12px 20px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;}
   .gtt-toggle:hover{background:#f8faf9;}
-  .gtt-body{display:none;height:360px;}
-  .gtt-body.open{display:flex;}
-  .gtt-labels{width:200px;flex-shrink:0;border-right:1px solid #e2ecea;overflow-y:auto;}
-  .gtt-scroll{flex:1;overflow:auto;}
-  .gtt-inner{position:relative;min-width:max-content;}
-  /* FIX 5: Gantt header rows — extension zone gets orange tint */
-  .gtt-hdr-month{height:26px;position:sticky;top:0;z-index:5;background:#1a3530;display:flex;}
-  .gtt-hdr-week{height:20px;position:sticky;top:26px;z-index:4;background:#1e3f38;display:flex;}
-  .gtt-hdr-day{height:20px;position:sticky;top:46px;z-index:4;background:#204039;display:flex;}
-  .gtt-month-cell{height:26px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7dd3c4;font-family:monospace;border-right:1px solid rgba(255,255,255,0.1);flex-shrink:0;}
-  .gtt-month-cell.ext-zone{background:#4a2a00;color:#f5a623;border-right-color:rgba(245,166,35,0.25);}
-  .gtt-week-cell{height:20px;display:flex;align-items:center;justify-content:center;font-size:9px;color:#5aafa5;font-family:monospace;border-right:1px solid rgba(255,255,255,0.06);flex-shrink:0;}
-  .gtt-week-cell.ext-zone{background:#3d2200;color:#e8960a;border-right-color:rgba(245,166,35,0.2);}
-  .gtt-day-cell-hdr{height:20px;display:flex;align-items:center;justify-content:center;font-size:9px;font-family:monospace;border-right:1px solid rgba(255,255,255,0.05);flex-shrink:0;}
-  .gtt-day-cell-hdr.ext-zone{background:#3a2100;color:#c87d08;}
-  .gtt-row{height:40px;display:flex;position:relative;border-bottom:1px solid #f0f5f4;}
-  .gtt-cell{flex-shrink:0;border-right:1px solid #f5faf9;}
-  .gtt-cell.weekend{background:#f8fcfb;} .gtt-cell.today-col{background:rgba(10,123,108,0.06);}
-  /* FIX 5: extension zone column tint in grid rows */
-  .gtt-cell.ext-col{background:rgba(230,126,34,0.06);}
-  .gtt-cell.ext-col.weekend{background:rgba(230,126,34,0.10);}
-  .gtt-bar{position:absolute;height:14px;top:13px;border-radius:3px;z-index:2;}
-  .gtt-bar-plan{background:#b2d4d0;opacity:0.7;} .gtt-bar-actual{background:#0a7b6c;}
-  .gtt-bar-ext-plan{background:#f5a623;opacity:0.7;} .gtt-bar-ext-actual{background:#e67e22;}
-  .gtt-bar-delay{background:#f28c5e;opacity:0.8;height:6px;top:31px;border-radius:2px;}
-  .gtt-legend{padding:8px 16px;border-top:1px solid #e2ecea;display:none;align-items:center;gap:16px;background:#f8faf9;flex-shrink:0;}
-  .gtt-legend.open{display:flex;flex-wrap:wrap;}
-  .gtt-leg-item{display:flex;align-items:center;gap:6px;font-size:11px;color:#5a7a76;}
-  .gtt-lbl-hdr{height:66px;position:sticky;top:0;z-index:6;background:#1a3530;display:flex;align-items:flex-end;padding:0 12px 8px;font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7dd3c4;font-family:monospace;border-right:1px solid rgba(255,255,255,0.1);border-bottom:1px solid #e2ecea;}
-  .gtt-lbl-row{height:40px;padding:0 12px;display:flex;align-items:center;border-bottom:1px solid #f0f5f4;gap:8px;}
-  .gtt-lbl-txt{font-size:11px;font-weight:500;color:#1a2e2b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;}
-  .gtt-lbl-badge{font-size:10px;font-family:monospace;font-weight:600;padding:2px 6px;border-radius:10px;flex-shrink:0;}
-  .photos-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:10px;padding:14px 20px;overflow-x:hidden;}
-  .photo-thumb{aspect-ratio:1;border-radius:8px;overflow:hidden;background:#f0f4f3;position:relative;cursor:pointer;border:2px solid transparent;transition:border-color 0.15s;}
-  .photo-thumb:hover{border-color:#0a7b6c;}
-  .photo-thumb img{width:100%;height:100%;object-fit:cover;}
-  .photo-thumb .del-btn{position:absolute;top:4px;right:4px;background:rgba(0,0,0,0.55);color:#fff;border:none;border-radius:50%;width:20px;height:20px;font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
-  .photo-add{aspect-ratio:1;border-radius:8px;border:2px dashed #d0e4e1;background:#f8faf9;display:flex;align-items:center;justify-content:center;flex-direction:column;cursor:pointer;gap:4px;transition:all 0.15s;}
-  .photo-add:hover{border-color:#0a7b6c;background:#f0f9f7;}
+  /* VIEW-ONLY MODE in section 3 */
+  .p3-viewonly-bar{background:var(--c-warn-light);border-bottom:1px solid #f5d48a;
+                   padding:8px 20px;font-size:12px;color:var(--c-warn);flex-shrink:0;
+                   display:flex;align-items:center;gap:8px;}
   </style>
 
   <div class="p3root" id="p3root">
-    <div class="p3-topbar sc-tb" style="background:#0d2420;border-bottom:1px solid rgba(255,255,255,0.08);">
-      <div class="sc-tb-lft">
-        <div class="sc-badge" style="background:#0a7b6c;">🏗</div>
-        <div>
-          <div class="sc-tb-title" style="color:#e8f4f2;">Actual Progress Reporting</div>
-          <div class="sc-tb-sub" style="color:#4a7a74;">${projectName}</div>
-        </div>
-      </div>
-      <div style="display:flex;gap:8px;">
-        <button class="sc-btn sc-btn-ghost" id="p3EditPlan" style="color:#a0d4cc;border-color:rgba(255,255,255,0.15);">✏ Edit Plan</button>
-        <button class="sc-btn sc-btn-ghost" id="p3Extension" style="color:#a0d4cc;border-color:rgba(255,255,255,0.15);">+ Extension</button>
-        <button class="sc-btn sc-btn-ghost" id="p3Back" style="color:#a0d4cc;border-color:rgba(255,255,255,0.15);">← Back</button>
-      </div>
+    <div class="p3-topbar">
+      ${_topbar('🏗', 'Actual Progress Reporting', projectName, [
+        ...(AppState.canWrite ? [
+          { id: 'p3EditPlan',  label: '✏ Edit Plan',   cls: 'sc-btn sc-btn-ghost-dark' },
+          { id: 'p3Extension', label: '+ Extension',    cls: 'sc-btn sc-btn-ghost-dark' },
+        ] : []),
+        { id: 'p3Back', label: '← Back', cls: 'sc-btn sc-btn-ghost-dark' },
+      ])}
     </div>
-    <div class="p3sum">
-      <div class="p3sk"><span class="p3sk-l">Overall</span><span class="p3sk-v" id="p3OverallPct">0%</span></div>
-      <div class="p3sk"><span class="p3sk-l">Plan Today</span><span class="p3sk-v" id="p3PlanPct">0%</span></div>
-      <div class="p3sk"><span class="p3sk-l">Variance</span><span class="p3sk-v" id="p3Var">0%</span></div>
-      <div class="p3sk"><span class="p3sk-l">Milestones</span><span class="p3sk-v" id="p3MsCnt">0</span></div>
-      <div class="p3sk"><span class="p3sk-l">Completed</span><span class="p3sk-v" id="p3MsDone">0</span></div>
-      <div class="p3sk"><span class="p3sk-l">In Progress</span><span class="p3sk-v" id="p3MsIP">0</span></div>
+    ${!AppState.canWrite ? `<div class="p3-viewonly-bar">🔒 View-only — your role (${AppState.user.role}) can view progress but cannot edit.</div>` : ''}
+    <!-- SUMMARY BAR (includes days-left cards) -->
+    <div class="p3sum" id="p3Sum">
+      <div class="p3sk"><span class="p3sk-l">Overall</span><span class="p3sk-v" id="p3OverallPct">—</span></div>
+      <div class="p3sk"><span class="p3sk-l">Plan Today</span><span class="p3sk-v" id="p3PlanPct">—</span></div>
+      <div class="p3sk"><span class="p3sk-l">Variance</span><span class="p3sk-v" id="p3Var">—</span></div>
+      <div class="p3sk"><span class="p3sk-l">Milestones</span><span class="p3sk-v" id="p3MsCnt">—</span></div>
+      <div class="p3sk"><span class="p3sk-l">Completed</span><span class="p3sk-v" id="p3MsDone">—</span></div>
+      <div class="p3sk"><span class="p3sk-l">In Progress</span><span class="p3sk-v" id="p3MsIP">—</span></div>
+      <!-- DAYS LEFT — project -->
+      <div class="p3sk" id="p3DaysLeftProject">
+        <span class="p3sk-l">Project Ends</span>
+        <span class="p3sk-v" id="p3DaysLeftProjectVal">—</span>
+        <span style="font-size:10px;color:#4a7a74;font-family:var(--font-mono);" id="p3DaysLeftProjectDate">${_effectiveFinish(tl, latestExtFinish) || '—'}</span>
+      </div>
+      <!-- DAYS LEFT — selected milestone -->
+      <div class="p3sk" id="p3DaysLeftMs">
+        <span class="p3sk-l">Selected Milestone</span>
+        <span class="p3sk-v" id="p3DaysLeftMsVal">—</span>
+        <span style="font-size:10px;color:#4a7a74;font-family:var(--font-mono);" id="p3DaysLeftMsName" title="">—</span>
+      </div>
+      ${location ? `
+      <div class="p3sk" style="cursor:pointer;" id="p3LocCard" title="Weather station: ${_esc(location.stationName || '')}">
+        <span class="p3sk-l">📍 Location</span>
+        <span class="p3sk-v" style="font-size:12px;color:#7dd3c4;">${_esc(location.stationName || '—')}</span>
+        <span style="font-size:10px;color:#4a7a74;font-family:var(--font-mono);">${location.lat ? location.lat.toFixed(3)+'°, '+location.lng.toFixed(3)+'°' : ''}</span>
+      </div>` : ''}
     </div>
+
     <div class="p3scroll" id="p3Scroll">
       <div class="p3content">
         <div class="p3list">
@@ -3115,17 +3393,19 @@ function openActualProgressPage(savedSchedule) {
         </div>
         <div class="p3detail" id="p3Detail">
           <div style="color:#8aa8a4;text-align:center;padding:60px 40px;font-size:13px;">
-            Select a milestone from the left to start reporting progress.
+            Select a milestone from the left to view progress.
           </div>
         </div>
       </div>
+
+      <!-- GANTT -->
       <div class="p3-gantt">
         <div class="gtt-toggle" id="p3GanttToggle">
-          <span style="font-size:13px;font-weight:600;color:#1a2e2b;display:flex;align-items:center;gap:8px;">
+          <span style="font-size:13px;font-weight:600;color:var(--c-text);display:flex;align-items:center;gap:8px;">
             📊 Gantt Chart — Timeline Overview
-            <span style="font-size:11px;font-weight:400;color:#7a9e9a;">(click to expand)</span>
+            <span style="font-size:11px;font-weight:400;color:var(--c-muted);">(click to expand)</span>
           </span>
-          <span id="p3GanttChv" style="color:#7a9e9a;font-size:11px;transition:transform 0.2s;">▼</span>
+          <span id="p3GanttChv" style="color:var(--c-faint);font-size:11px;transition:transform 0.2s;">▼</span>
         </div>
         <div class="gtt-body" id="p3GanttBody">
           <div class="gtt-labels"><div class="gtt-lbl-hdr">Activity</div><div id="p3GttLabels"></div></div>
@@ -3133,13 +3413,12 @@ function openActualProgressPage(savedSchedule) {
         </div>
         <div class="gtt-legend" id="p3GttLegend">
           <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:#b2d4d0;opacity:0.8;"></div>Planned</div>
-          <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:#0a7b6c;"></div>Actual</div>
+          <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:var(--c-brand);"></div>Actual</div>
           <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:#f5a623;opacity:0.7;"></div>Ext. Planned</div>
-          <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:#e67e22;"></div>Ext. Actual</div>
+          <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:var(--c-ext);"></div>Ext. Actual</div>
           <div class="gtt-leg-item"><div style="width:16px;height:6px;border-radius:2px;background:#f28c5e;"></div>Delay</div>
-          <div class="gtt-leg-item"><div style="width:2px;height:14px;background:#0a7b6c;opacity:0.5;"></div>Today</div>
-          <div class="gtt-leg-item"><div style="width:2px;height:14px;background:#e67e22;opacity:0.5;"></div>Baseline Finish</div>
-          <!-- FIX 5: legend entry for extension zone -->
+          <div class="gtt-leg-item"><div style="width:2px;height:14px;background:var(--c-brand);opacity:0.5;"></div>Today</div>
+          <div class="gtt-leg-item"><div style="width:2px;height:14px;background:var(--c-ext);opacity:0.5;"></div>Baseline Finish</div>
           <div class="gtt-leg-item">
             <div style="width:16px;height:14px;border-radius:2px;background:rgba(230,126,34,0.18);border:1px solid rgba(230,126,34,0.4);"></div>
             Extension period
@@ -3149,551 +3428,635 @@ function openActualProgressPage(savedSchedule) {
     </div>
   </div>`);
 
-  let msList=pms.map(ms=>({...ms}));
-  let activeId=msList.length?msList[0].id:null;
-  let activeIsExt=false;
-  let _renderToken=0;
+  // ── Mutable state ──
+  let msList   = pms.map(ms => ({ ...ms }));
+  let activeId = msList.length ? msList[0].id : null;
+  let activeIsExt = false;
+  let _renderToken = 0;
 
-  const listEl  =document.getElementById('p3MsList');
-  const detailEl=document.getElementById('p3Detail');
+  // ── DOM helpers (scoped to p3root) ──
+  const _el = id => document.getElementById(id);
 
-  document.getElementById('p3EditPlan')?.addEventListener('click',()=>openProjectScheduleForm(savedSchedule));
-  document.getElementById('p3Extension')?.addEventListener('click',()=>openExtensionPanel(savedSchedule));
-  document.getElementById('p3Back')?.addEventListener('click',()=>collapseGrayPart());
+  // ── Topbar wiring ──
+  _el('p3Back')?.addEventListener('click', () => collapseGrayPart());
+  _el('p3EditPlan')?.addEventListener('click', () => openProjectScheduleForm(savedSchedule));
+  _el('p3Extension')?.addEventListener('click', () => openExtensionPanel(savedSchedule));
 
+  // ── Location card click — open-meteo weather link ──
+  _el('p3LocCard')?.addEventListener('click', () => {
+    if (!location?.lat) return;
+    const url = `https://open-meteo.com/en/docs#latitude=${location.lat}&longitude=${location.lng}`;
+    window.open(url, '_blank');
+  });
+
+  // ── All milestones combined ──
   function _allMs() { return [...msList, ...extMsRef.list]; }
 
-  function updateSummary() {
-    const all=_allMs();
-    const total=all.length, done=all.filter(m=>m.activity_status==='completed').length;
-    const ip=all.filter(m=>m.activity_status==='in_progress').length;
-    const totalW=all.reduce((a,m)=>a+(Number(m.weight_pct)||0),0)||1;
-    const overall=all.reduce((a,m)=>a+(Number(m.weight_pct)||0)*(Number(m.progress_pct)||0)/100,0);
-    const overallPct=(overall/totalW*100).toFixed(1);
-    let planPct='0.0';
-    if (tl.start&&tl.finish) {
-      const elapsed=Math.max(0,(new Date()-new Date(tl.start))/86400000);
-      const dur=Math.max(1,(new Date(tl.finish)-new Date(tl.start))/86400000);
-      planPct=Math.min(100,elapsed/dur*100).toFixed(1);
-    }
-    const variance=(parseFloat(overallPct)-parseFloat(planPct)).toFixed(1);
-    document.getElementById('p3OverallPct').textContent=overallPct+'%';
-    document.getElementById('p3PlanPct').textContent=planPct+'%';
-    const varEl=document.getElementById('p3Var');
-    varEl.textContent=(parseFloat(variance)>=0?'+':'')+variance+'%';
-    varEl.className='p3sk-v '+(parseFloat(variance)>=0?'ahead':'behind');
-    document.getElementById('p3MsCnt').textContent=total;
-    document.getElementById('p3MsDone').textContent=done;
-    document.getElementById('p3MsIP').textContent=ip;
+  // ── Days-left helpers ──
+  function _effectiveProjFinish() {
+    return _effectiveFinish(tl, latestExtFinish);
   }
 
+  // ── Summary bar update ──
+  function updateSummary(selectedMs) {
+    const all   = _allMs();
+    const total = all.length;
+    const done  = all.filter(m => m.activity_status === 'completed').length;
+    const ip    = all.filter(m => m.activity_status === 'in_progress').length;
+    const totalW = all.reduce((a, m) => a + (Number(m.weight_pct) || 0), 0) || 1;
+    const overall = all.reduce((a, m) => a + (Number(m.weight_pct) || 0) * (Number(m.progress_pct) || 0) / 100, 0);
+    const overallPct = (overall / totalW * 100).toFixed(1);
+
+    let planPct = '0.0';
+    if (tl.start && tl.finish) {
+      const elapsed = Math.max(0, (new Date() - new Date(tl.start)) / 86400000);
+      const dur     = Math.max(1, (new Date(tl.finish) - new Date(tl.start)) / 86400000);
+      planPct = Math.min(100, elapsed / dur * 100).toFixed(1);
+    }
+    const variance = (parseFloat(overallPct) - parseFloat(planPct)).toFixed(1);
+
+    _el('p3OverallPct').textContent = overallPct + '%';
+    _el('p3PlanPct').textContent    = planPct + '%';
+    const varEl = _el('p3Var');
+    varEl.textContent = (parseFloat(variance) >= 0 ? '+' : '') + variance + '%';
+    varEl.className   = 'p3sk-v ' + (parseFloat(variance) >= 0 ? 'ahead' : 'behind');
+    _el('p3MsCnt').textContent  = total;
+    _el('p3MsDone').textContent = done;
+    _el('p3MsIP').textContent   = ip;
+
+    // Project days left
+    const projFinish = _effectiveProjFinish();
+    if (projFinish) {
+      const dLeft = _daysUntil(projFinish);
+      const pEl   = _el('p3DaysLeftProjectVal');
+      if (pEl) {
+        pEl.textContent  = _fmtDaysLeft(dLeft);
+        pEl.className    = 'p3sk-v ' + (dLeft < 0 ? 'overdue' : dLeft === 0 ? 'today' : '');
+      }
+    }
+
+    // Selected milestone days left
+    if (selectedMs) {
+      const msEnd  = selectedMs.end || selectedMs.planned_end;
+      const dLeft  = msEnd ? _daysUntil(msEnd) : null;
+      const mEl    = _el('p3DaysLeftMsVal');
+      const mName  = _el('p3DaysLeftMsName');
+      if (mEl) {
+        mEl.textContent = dLeft !== null ? _fmtDaysLeft(dLeft) : '—';
+        mEl.className   = 'p3sk-v ' + (dLeft !== null && dLeft < 0 ? 'overdue' : dLeft === 0 ? 'today' : '');
+      }
+      if (mName) {
+        mName.textContent = selectedMs.title ? selectedMs.title.slice(0, 22) + (selectedMs.title.length > 22 ? '…' : '') : '—';
+        mName.title       = selectedMs.title || '';
+      }
+    }
+  }
+
+  // ── Milestone list render ──
   function renderList() {
-    if (!listEl) return;
-    const combined=[
-      ...msList.map(ms=>({...ms,isExtension:false})),
-      ...extMsRef.list.map(ms=>({...ms,isExtension:true})),
+    const el = _el('p3MsList'); if (!el) return;
+    const combined = [
+      ...msList.map(ms => ({ ...ms, isExtension: false })),
+      ...extMsRef.list.map(ms => ({ ...ms, isExtension: true })),
     ];
-    listEl.innerHTML=combined.map(ms=>{
-      const pct=Number(ms.progress_pct||0);
-      const fillColor=ms.activity_status==='completed'?'#0a7b6c':ms.isExtension?'#e67e22':pct>0?'#1a9e8c':'#b2d4d0';
-      const stCls=ms.activity_status==='completed'?'sc-tag-ok':ms.activity_status==='in_progress'?'sc-tag-ok':'sc-tag-ns';
-      const stLbl=ms.activity_status==='completed'?'Done':ms.activity_status==='in_progress'?'Active':'Pending';
-      const extBadge=ms.isExtension?`<span style="font-size:9px;background:#fef0da;color:#e67e22;border-radius:4px;padding:1px 5px;font-weight:700;margin-right:4px;font-family:monospace;">EXT</span>`:'';
-      return `<div class="p3ms ${ms.isExtension?'ext-ms':''} ${ms.id===activeId?'active':''}" data-id="${ms.id}" data-ext="${ms.isExtension}">
+    el.innerHTML = combined.map(ms => {
+      const pct = Number(ms.progress_pct || 0);
+      const fillColor = ms.activity_status === 'completed' ? 'var(--c-brand)'
+        : ms.isExtension ? 'var(--c-ext)' : pct > 0 ? '#1a9e8c' : '#b2d4d0';
+      const stCls = ms.activity_status === 'completed' ? 'sc-tag-ok'
+        : ms.activity_status === 'in_progress' ? 'sc-tag-ok' : 'sc-tag-ns';
+      const stLbl = ms.activity_status === 'completed' ? 'Done'
+        : ms.activity_status === 'in_progress' ? 'Active' : 'Pending';
+      return `
+      <div class="p3ms ${ms.isExtension ? 'ext-ms' : ''} ${ms.id === activeId ? 'active' : ''}"
+           data-id="${ms.id}" data-ext="${ms.isExtension}">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
-          <div style="font-size:12px;font-weight:600;color:#1a2e2b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:155px;">${extBadge}${ms.title||'Untitled'}</div>
+          <div style="font-size:12px;font-weight:600;color:var(--c-text);white-space:nowrap;
+                      overflow:hidden;text-overflow:ellipsis;max-width:155px;">
+            ${ms.isExtension ? `<span style="font-size:9px;background:var(--c-ext-light);color:var(--c-ext);border-radius:4px;padding:1px 5px;font-weight:700;margin-right:4px;font-family:var(--font-mono);">EXT</span>` : ''}
+            ${ms.title || 'Untitled'}
+          </div>
           <span class="sc-tag ${stCls}" style="font-size:9px;padding:2px 6px;">${stLbl}</span>
         </div>
-        <div style="font-size:10px;color:#7a9e9a;font-family:monospace;margin-bottom:6px;">${ms.start||ms.planned_start||'—'} → ${ms.end||ms.planned_end||'—'}</div>
+        <div style="font-size:10px;color:var(--c-muted);font-family:var(--font-mono);margin-bottom:6px;">
+          ${ms.start || ms.planned_start || '—'} → ${ms.end || ms.planned_end || '—'}
+        </div>
         <div class="sc-pbar" style="height:4px;"><div class="sc-pfill" style="width:${pct}%;background:${fillColor};"></div></div>
-        <div style="font-size:10px;font-family:monospace;font-weight:600;color:${fillColor};margin-top:2px;">${pct.toFixed(1)}%</div>
+        <div style="font-size:10px;font-family:var(--font-mono);font-weight:600;color:${fillColor};margin-top:2px;">${pct.toFixed(1)}%</div>
       </div>`;
     }).join('');
-    listEl.querySelectorAll('.p3ms').forEach(el=>
-      el.addEventListener('click',()=>{
-        const id=el.getAttribute('data-id');
-        const isE=el.getAttribute('data-ext')==='true';
-        selectMs(id,isE);
-      })
-    );
+    el.querySelectorAll('.p3ms').forEach(item => {
+      item.addEventListener('click', () => {
+        selectMs(item.dataset.id, item.dataset.ext === 'true');
+      });
+    });
   }
 
-  function selectMs(id,isExt=false) {
-    activeId=id; activeIsExt=isExt;
-    const ms=isExt?extMsRef.list.find(m=>m.id===id):msList.find(m=>m.id===id);
+  function selectMs(id, isExt = false) {
+    activeId = id; activeIsExt = isExt;
+    const ms = isExt ? extMsRef.list.find(m => m.id === id) : msList.find(m => m.id === id);
     if (!ms) return;
-    renderList(); renderDetail(ms,isExt); updateSummary();
+    renderList(); renderDetail(ms, isExt); updateSummary(ms);
   }
 
-  function renderDetail(ms,isExt) {
-    if (!detailEl) return;
+  // ── Detail panel ──
+  function renderDetail(ms, isExt) {
+    const el = _el('p3Detail'); if (!el) return;
     _renderToken++;
-    const token=_renderToken;
-    const pct=Number(ms.progress_pct||0);
-    const planned=parseFloat(ms.quantity||ms.qty)||0;
-    const exec=Number(ms.executed||0);
-    const completed=ms.activity_status==='completed';
-    const accentColor=isExt?'#e67e22':'#0a7b6c';
-    const progressEndpoint=isExt?`${BACKEND}/api/report-additional-progress`:`${BACKEND}/api/report-progress`;
+    const token       = _renderToken;
+    const pct         = Number(ms.progress_pct || 0);
+    const planned     = parseFloat(ms.quantity || ms.qty) || 0;
+    const exec        = Number(ms.executed || 0);
+    const completed   = ms.activity_status === 'completed';
+    const accentColor = isExt ? 'var(--c-ext)' : 'var(--c-brand)';
+    const msEnd       = ms.end || ms.planned_end;
+    const dLeft       = msEnd ? _daysUntil(msEnd) : null;
+    const progressEndpoint = isExt
+      ? `${BACKEND}/api/report-additional-progress`
+      : `${BACKEND}/api/report-progress`;
 
-    detailEl.innerHTML=`
-      <div class="sc-card">
-        <div class="sc-card-hdr">
-          <span class="sc-card-label" style="color:${accentColor};">${isExt?'Extension Milestone':'Active Milestone'}</span>
-          <span class="sc-tag ${completed?'sc-tag-ok':ms.activity_status==='in_progress'?'sc-tag-ok':'sc-tag-ns'}">
-            ${completed?'Completed':ms.activity_status==='in_progress'?'In Progress':'Not Started'}
+    el.innerHTML = `
+    <div class="sc-card">
+      <div class="sc-card-hdr">
+        <span class="sc-card-label" style="color:${accentColor};">${isExt ? 'Extension Milestone' : 'Active Milestone'}</span>
+        <div style="display:flex;align-items:center;gap:8px;">
+          ${dLeft !== null ? `<span class="sc-tag ${dLeft < 0 ? 'sc-tag-crit' : dLeft === 0 ? 'sc-tag-warn' : 'sc-tag-ns'}"
+            style="${dLeft < 0 ? '' : ''}">
+            ⏱ ${_fmtDaysLeft(dLeft)}
+          </span>` : ''}
+          <span class="sc-tag ${completed ? 'sc-tag-ok' : ms.activity_status === 'in_progress' ? 'sc-tag-ok' : 'sc-tag-ns'}">
+            ${completed ? 'Completed' : ms.activity_status === 'in_progress' ? 'In Progress' : 'Not Started'}
           </span>
         </div>
-        <div style="padding:16px 20px;">
-          <div style="font-size:16px;font-weight:600;color:#1a2e2b;margin-bottom:4px;">
-            ${isExt?`<span style="font-size:12px;background:#fef0da;color:#e67e22;border-radius:4px;padding:2px 6px;margin-right:6px;font-family:monospace;font-weight:700;">EXT</span>`:''}
-            ${ms.title||'Untitled'}
+      </div>
+      <div style="padding:16px 20px;">
+        <div style="font-size:16px;font-weight:600;color:var(--c-text);margin-bottom:4px;">
+          ${isExt ? `<span style="font-size:12px;background:var(--c-ext-light);color:var(--c-ext);border-radius:4px;padding:2px 6px;margin-right:6px;font-family:var(--font-mono);font-weight:700;">EXT</span>` : ''}
+          ${ms.title || 'Untitled'}
+        </div>
+        <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;">${ms.description || ms.desc || '—'}</div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+          ${[
+            ['Planned Start', ms.start || ms.planned_start || '—'],
+            ['Planned End',   ms.end   || ms.planned_end   || '—'],
+            ['Planned Qty',   `${planned} ${ms.unit || ''}`],
+            ['Executed',      `${exec} ${ms.unit || ''}`],
+          ].map(([l, v]) => `
+          <div style="background:#f5f7f6;border-radius:var(--radius);padding:10px;">
+            <div style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;
+                 color:var(--c-muted);font-family:var(--font-mono);margin-bottom:4px;">${l}</div>
+            <div style="font-size:14px;font-weight:600;color:var(--c-text);font-family:var(--font-mono);">${v}</div>
+          </div>`).join('')}
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div style="font-size:12px;color:var(--c-muted);min-width:70px;">${pct.toFixed(1)}% done</div>
+          <div class="sc-pbar" style="flex:1;height:10px;">
+            <div class="sc-pfill" style="width:${pct}%;background:${accentColor};"></div>
           </div>
-          <div style="font-size:12px;color:#7a9e9a;margin-bottom:14px;">${ms.description||ms.desc||'—'}</div>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
-            ${[['Planned Start',ms.start||ms.planned_start||'—'],
-               ['Planned End',ms.end||ms.planned_end||'—'],
-               ['Planned Qty',`${planned} ${ms.unit||''}`],
-               ['Executed',`${exec} ${ms.unit||''}`]
-              ].map(([l,v])=>`<div style="background:#f5f7f6;border-radius:8px;padding:10px;">
-                <div style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:#7a9e9a;font-family:monospace;margin-bottom:4px;">${l}</div>
-                <div style="font-size:14px;font-weight:600;color:#1a2e2b;font-family:monospace;">${v}</div>
-              </div>`).join('')}
-          </div>
-          <div style="display:flex;align-items:center;gap:12px;">
-            <div style="font-size:12px;color:#7a9e9a;min-width:70px;">${pct.toFixed(1)}% done</div>
-            <div class="sc-pbar" style="flex:1;height:10px;"><div class="sc-pfill" style="width:${pct}%;background:${accentColor};"></div></div>
-            <div style="font-size:11px;color:#7a9e9a;min-width:90px;text-align:right;font-family:monospace;">${exec} / ${planned} ${ms.unit||''}</div>
+          <div style="font-size:11px;color:var(--c-muted);min-width:90px;text-align:right;font-family:var(--font-mono);">
+            ${exec} / ${planned} ${ms.unit || ''}
           </div>
         </div>
       </div>
+    </div>
 
-      ${!completed?`
-      <div class="sc-card" id="p3DailyCard">
-        <div class="sc-card-hdr">
-          <span class="sc-card-label" style="color:${accentColor};">Daily Progress Entry</span>
-          <span style="font-size:11px;color:#7a9e9a;font-family:monospace;">${new Date().toISOString().slice(0,10)}</span>
+    ${AppState.canWrite && !completed ? `
+    <div class="sc-card" id="p3DailyCard">
+      <div class="sc-card-hdr">
+        <span class="sc-card-label" style="color:${accentColor};">Daily Progress Entry</span>
+        <span style="font-size:11px;color:var(--c-muted);font-family:var(--font-mono);">${_today()}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px 20px 12px;">
+        <div class="sc-fw">
+          <span class="sc-fl">Executed Qty Today (${ms.unit || 'unit'})</span>
+          <input type="number" id="p3ExecQty" min="0.01" step="any" placeholder="e.g. 50"/>
+          <span style="font-size:10px;color:var(--c-muted);font-family:var(--font-mono);margin-top:2px;">
+            Remaining: <strong style="color:${accentColor};">${Math.max(0, planned - exec).toFixed(3)} ${ms.unit || ''}</strong>
+          </span>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px 20px 12px;">
-          <div class="sc-fw">
-            <span class="sc-fl">Executed Qty Today (${ms.unit||'unit'})</span>
-            <input type="number" id="p3ExecQty" min="0.01" step="any" placeholder="e.g. 50"/>
-            <span style="font-size:10px;color:#7a9e9a;font-family:monospace;margin-top:2px;">
-              Remaining: <strong style="color:${accentColor};">${Math.max(0,planned-exec).toFixed(3)} ${ms.unit||''}</strong>
-            </span>
-          </div>
-          <div class="sc-fw">
-            <span class="sc-fl">Remarks / Notes</span>
-            <textarea id="p3Remarks" style="min-height:60px;resize:vertical;" placeholder="Site conditions, issues, weather…"></textarea>
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;
-             padding:10px 20px 14px;border-top:1px solid #e2ecea;background:#f8faf9;">
-          <div style="font-size:11px;color:#6b8f8a;font-family:monospace;">
-            Progress = Cumulative ÷ Planned × 100 &nbsp;·&nbsp; (${exec} + today) / ${planned} × 100
-          </div>
-          <div style="display:flex;gap:8px;flex-shrink:0;">
-            <button class="sc-btn sc-btn-ghost" id="p3MarkEndBtn"
-              ${Number(ms.executed||0)<planned?'disabled style="opacity:0.5;cursor:not-allowed;"':''}>✓ Mark Ended</button>
-            <button class="sc-btn sc-btn-primary" id="p3UpdateBtn"
-              style="background:${accentColor};font-size:14px;padding:10px 22px;">💾 Save Progress</button>
-          </div>
-        </div>
-      </div>`:`
-      <div class="sc-card">
-        <div style="padding:20px;text-align:center;color:${accentColor};font-weight:500;font-size:14px;">
-          ✅ Milestone completed — ${exec} ${ms.unit||''} executed in total.
-        </div>
-      </div>`}
-
-      <!-- FIX 6: photos section — deferred fetch, only loads on expand -->
-      <div class="sc-card" id="p3PhotosCard">
-        <div class="sc-card-hdr" style="cursor:pointer;" id="p3PhotosToggleHdr">
-          <span class="sc-card-label">📷 Site Photos</span>
-          <div style="display:flex;align-items:center;gap:10px;">
-            <span id="p3PhotoCount" style="font-size:12px;color:#7a9e9a;font-family:monospace;">Click to load</span>
-            <span id="p3PhotoChv" style="color:#aac4c0;font-size:11px;">▼</span>
-          </div>
-        </div>
-        <div id="p3PhotosBody" style="display:none;">
-          <div class="photos-grid" id="p3PhotosGrid">
-            <div style="padding:20px;color:#8aa8a4;font-size:13px;">Click the header to load photos.</div>
-          </div>
+        <div class="sc-fw">
+          <span class="sc-fl">Remarks / Notes</span>
+          <textarea id="p3Remarks" style="min-height:60px;resize:vertical;" placeholder="Site conditions, issues, weather…"></textarea>
         </div>
       </div>
-
-      <div class="sc-card">
-        <div class="sc-card-hdr">
-          <span class="sc-card-label">Progress Log</span>
-          <span style="font-size:11px;color:#7a9e9a;font-family:monospace;">${(ms.entries||[]).length} entries</span>
+      <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;
+           padding:10px 20px 14px;border-top:1px solid var(--c-border);background:#f8faf9;">
+        <div style="font-size:11px;color:#6b8f8a;font-family:var(--font-mono);">
+          Progress = Cumulative ÷ Planned × 100 &nbsp;·&nbsp; (${exec} + today) / ${planned} × 100
         </div>
-        <div id="p3EntriesLog">
-          ${(ms.entries||[]).length===0
-            ?'<div style="padding:20px;text-align:center;color:#8aa8a4;font-size:13px;">No entries yet.</div>'
-            :[...(ms.entries||[])].reverse().map(e=>`
-              <div style="display:flex;align-items:center;gap:12px;padding:10px 20px;border-bottom:1px solid #f0f5f4;">
-                <div style="font-size:11px;font-family:monospace;color:${accentColor};font-weight:500;min-width:90px;">${e.date}</div>
-                <div style="font-size:13px;font-weight:600;color:#1a2e2b;min-width:80px;">+${e.qty} ${ms.unit||''}</div>
-                <div style="font-size:12px;color:#6b8f8a;flex:1;">${e.remarks||'—'}</div>
-                <div style="font-size:11px;font-family:monospace;color:#9ab0ac;">${e.cumulative} ${ms.unit||''} total</div>
-              </div>`).join('')
-          }
+        <div style="display:flex;gap:8px;flex-shrink:0;">
+          <button class="sc-btn sc-btn-ghost" id="p3MarkEndBtn"
+            ${exec < planned ? 'disabled title="Execute full quantity first"' : ''}>
+            ✓ Mark Ended
+          </button>
+          <button class="sc-btn sc-btn-primary" id="p3UpdateBtn"
+            style="background:${accentColor};font-size:14px;padding:10px 22px;">
+            💾 Save Progress
+          </button>
         </div>
-      </div>`;
+      </div>
+    </div>` : completed ? `
+    <div class="sc-card">
+      <div style="padding:20px;text-align:center;color:${accentColor};font-weight:500;font-size:14px;">
+        ✅ Milestone completed — ${exec} ${ms.unit || ''} executed in total.
+      </div>
+    </div>` : `
+    <div class="sc-card">
+      <div style="padding:20px;text-align:center;" class="view-only-hint">
+        🔒 Progress entry is disabled in view-only mode.
+      </div>
+    </div>`}
 
-    if (!completed) {
-      document.getElementById('p3UpdateBtn')?.addEventListener('click',()=>{
-        if (_renderToken!==token) return;
+    <!-- PHOTOS (deferred load on expand) -->
+    <div class="sc-card" id="p3PhotosCard">
+      <div class="sc-card-hdr" style="cursor:pointer;" id="p3PhotosToggleHdr">
+        <span class="sc-card-label">📷 Site Photos</span>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span id="p3PhotoCount" style="font-size:12px;color:var(--c-muted);font-family:var(--font-mono);">Click to load</span>
+          <span id="p3PhotoChv" style="color:var(--c-faint);font-size:11px;">▼</span>
+        </div>
+      </div>
+      <div id="p3PhotosBody" style="display:none;">
+        <div class="photos-grid" id="p3PhotosGrid">
+          <div style="padding:20px;color:#8aa8a4;font-size:13px;">Click the header to load photos.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PROGRESS LOG -->
+    <div class="sc-card">
+      <div class="sc-card-hdr">
+        <span class="sc-card-label">Progress Log</span>
+        <span style="font-size:11px;color:var(--c-muted);font-family:var(--font-mono);">${(ms.entries || []).length} entries</span>
+      </div>
+      <div id="p3EntriesLog">
+        ${!(ms.entries || []).length
+          ? '<div style="padding:20px;text-align:center;color:#8aa8a4;font-size:13px;">No entries yet.</div>'
+          : [...(ms.entries || [])].reverse().map(e => `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 20px;border-bottom:1px solid #f0f5f4;">
+            <div style="font-size:11px;font-family:var(--font-mono);color:${accentColor};font-weight:500;min-width:90px;">${e.date}</div>
+            <div style="font-size:13px;font-weight:600;color:var(--c-text);min-width:80px;">+${e.qty} ${ms.unit || ''}</div>
+            <div style="font-size:12px;color:#6b8f8a;flex:1;">${e.remarks || '—'}</div>
+            <div style="font-size:11px;font-family:var(--font-mono);color:var(--c-faint);">${e.cumulative} ${ms.unit || ''} total</div>
+          </div>`).join('')
+        }
+      </div>
+    </div>`;
+
+    // Wire progress buttons (only if canWrite and not completed)
+    if (AppState.canWrite && !completed) {
+      _el('p3UpdateBtn')?.addEventListener('click', () => {
+        if (_renderToken !== token) return;
         submitDailyProgress(ms, progressEndpoint, isExt);
       });
-      document.getElementById('p3MarkEndBtn')?.addEventListener('click',()=>{
-        if (_renderToken!==token) return;
+      _el('p3MarkEndBtn')?.addEventListener('click', () => {
+        if (_renderToken !== token) return;
         markEnded(ms, isExt);
       });
     }
 
-    // FIX 6: photos only fetched on first expand per milestone select
+    // Photos toggle (deferred)
     let photosLoaded = false;
-    document.getElementById('p3PhotosToggleHdr')?.addEventListener('click',()=>{
-      const body=document.getElementById('p3PhotosBody');
-      const chv=document.getElementById('p3PhotoChv');
-      if (body) {
-        const open=body.style.display==='block';
-        body.style.display=open?'none':'block';
-        if(chv) chv.style.transform=open?'':'rotate(180deg)';
-        // FIX 6: only fetch once per milestone selection
-        if (!open && !photosLoaded) {
-          photosLoaded = true;
-          const countEl=document.getElementById('p3PhotoCount');
-          if (countEl) countEl.textContent='Loading…';
-          loadMilestonePhotos(ms.id, isExt, token);
-        }
+    _el('p3PhotosToggleHdr')?.addEventListener('click', () => {
+      const body = _el('p3PhotosBody');
+      const chv  = _el('p3PhotoChv');
+      if (!body) return;
+      const open = body.style.display === 'block';
+      body.style.display = open ? 'none' : 'block';
+      if (chv) chv.style.transform = open ? '' : 'rotate(180deg)';
+      if (!open && !photosLoaded) {
+        photosLoaded = true;
+        const countEl = _el('p3PhotoCount');
+        if (countEl) countEl.textContent = 'Loading…';
+        loadMilestonePhotos(ms.id, isExt, token);
       }
     });
+  }
+
+  // ── Photo functions ──
+  async function loadMilestonePhotos(milestoneId, isExt, token) {
+    const countEl = _el('p3PhotoCount');
+    const gridEl  = _el('p3PhotosGrid');
+    if (!gridEl) return;
+    try {
+      const endpoint = isExt
+        ? `${BACKEND}/api/milestone-photos?additionalMilestoneId=${encodeURIComponent(milestoneId)}`
+        : `${BACKEND}/api/milestone-photos?milestoneId=${encodeURIComponent(milestoneId)}`;
+      const res = await fetch(endpoint, { headers: _authHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const result = await res.json();
+      const photos = result.photos || [];
+      if (_renderToken !== token) return;
+      if (countEl) countEl.textContent = `${photos.length} photo${photos.length !== 1 ? 's' : ''}`;
+      _renderPhotosGrid(photos, milestoneId, isExt, gridEl, token);
+    } catch (err) {
+      console.error('Photo load:', err);
+      if (_renderToken === token && countEl) countEl.textContent = '— photos';
+      if (_renderToken === token && gridEl) _renderPhotosGrid([], milestoneId, isExt, gridEl, token);
+    }
   }
 
   async function uploadMilestonePhotos(milestoneId, isExt, files, token) {
     if (!files.length) return;
-    const countEl=document.getElementById('p3PhotoCount');
-    if (countEl) countEl.textContent=`Uploading ${files.length} photo${files.length>1?'s':''}…`;
-    const form=new FormData();
-    form.append('projectId', localStorage.getItem('activeProjectId'));
-    if (isExt) { form.append('additionalMilestoneId', milestoneId); }
-    else        { form.append('milestoneId', milestoneId); }
+    const countEl = _el('p3PhotoCount');
+    if (countEl) countEl.textContent = `Uploading ${files.length} photo${files.length > 1 ? 's' : ''}…`;
+    const form = new FormData();
+    form.append('projectId', AppState.projectId);
+    if (isExt) form.append('additionalMilestoneId', milestoneId);
+    else        form.append('milestoneId', milestoneId);
     files.forEach(f => form.append('photos', f, f.name));
     try {
-      const res=await fetch(`${BACKEND}/api/milestone-photos`,{
-        method:'POST',
-        headers:{'Authorization':`Bearer ${localStorage.getItem('authToken')}`},
-        body:form,
+      const res = await fetch(`${BACKEND}/api/milestone-photos`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${AppState.token}` }, body: form,
       });
-      if (!res.ok) {
-        const e=await res.json().catch(()=>({}));
-        throw new Error(e.message||`HTTP ${res.status}`);
-      }
-      if (_renderToken===token) await loadMilestonePhotos(milestoneId, isExt, token);
-    } catch(err) {
-      console.error('Photo upload error:',err);
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.message || `HTTP ${res.status}`); }
+      if (_renderToken === token) await loadMilestonePhotos(milestoneId, isExt, token);
+    } catch (err) {
+      console.error('Photo upload:', err);
       alert(`Failed to upload photo(s): ${err.message}`);
-      if (_renderToken===token&&countEl) countEl.textContent='— photos';
-    }
-  }
-
-  async function loadMilestonePhotos(milestoneId, isExt, token) {
-    const countEl=document.getElementById('p3PhotoCount');
-    const gridEl=document.getElementById('p3PhotosGrid');
-    if (!gridEl) return;
-    try {
-      const endpoint=isExt
-        ?`${BACKEND}/api/milestone-photos?additionalMilestoneId=${encodeURIComponent(milestoneId)}`
-        :`${BACKEND}/api/milestone-photos?milestoneId=${encodeURIComponent(milestoneId)}`;
-      const res=await fetch(endpoint,{headers:_authHeaders()});
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const result=await res.json();
-      const photos=result.photos||[];
-      if (_renderToken!==token) return;
-      if (countEl) countEl.textContent=`${photos.length} photo${photos.length!==1?'s':''}`;
-      _renderPhotosGrid(photos, milestoneId, isExt, gridEl, token);
-    } catch(err) {
-      console.error('Photo load error:',err);
-      if (_renderToken===token&&countEl) countEl.textContent='— photos';
-      if (_renderToken===token&&gridEl) _renderPhotosGrid([], milestoneId, isExt, gridEl, token);
+      if (_renderToken === token && countEl) countEl.textContent = '— photos';
     }
   }
 
   function _renderPhotosGrid(photos, milestoneId, isExt, gridEl, token) {
-    const inputId='p3PhotoInput_'+token;
-    const thumbs=photos.map(p=>`
-      <div class="photo-thumb" data-url="${p.cloudinary_url}" data-pid="${p.id}">
-        <img src="${p.cloudinary_url}" alt="${p.file_name||''}" loading="lazy"/>
-        <button class="del-btn" data-pid="${p.id}" title="Delete photo">✕</button>
-      </div>`).join('');
-    gridEl.innerHTML=thumbs+`
-      <div class="photo-add">
-        <label style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;cursor:pointer;gap:4px;">
-          <input type="file" id="${inputId}" accept="image/*" multiple style="display:none;"/>
-          <span style="font-size:22px;">📸</span>
-          <span style="font-size:11px;color:#7a9e9a;text-align:center;">Add Photos</span>
-        </label>
-      </div>`;
-    gridEl.querySelectorAll('.photo-thumb').forEach(thumb=>{
-      thumb.addEventListener('click', e=>{
+    const inputId   = 'p3PhotoInput_' + token;
+    const canUpload = AppState.canWrite;
+    const thumbs    = photos.map(p => `
+    <div class="photo-thumb" data-url="${p.cloudinary_url}" data-pid="${p.id}">
+      <img src="${p.cloudinary_url}" alt="${p.file_name || ''}" loading="lazy"/>
+      ${canUpload ? `<button class="del-btn" data-pid="${p.id}" title="Delete photo">✕</button>` : ''}
+    </div>`).join('');
+
+    gridEl.innerHTML = thumbs + (canUpload ? `
+    <div class="photo-add">
+      <label style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;cursor:pointer;gap:4px;">
+        <input type="file" id="${inputId}" accept="image/*" multiple style="display:none;"/>
+        <span style="font-size:22px;">📸</span>
+        <span style="font-size:11px;color:var(--c-muted);text-align:center;">Add Photos</span>
+      </label>
+    </div>` : '');
+
+    gridEl.querySelectorAll('.photo-thumb').forEach(thumb => {
+      thumb.addEventListener('click', e => {
         if (e.target.classList.contains('del-btn')) return;
-        const url=thumb.getAttribute('data-url');
-        const lb=document.createElement('div');
-        lb.style.cssText=`position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10000;display:flex;align-items:center;justify-content:center;cursor:zoom-out;`;
-        lb.innerHTML=`<img src="${url}" style="max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.5);"/>`;
-        lb.addEventListener('click',()=>lb.remove());
+        const lb = document.createElement('div');
+        lb.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10000;
+                             display:flex;align-items:center;justify-content:center;cursor:zoom-out;`;
+        lb.innerHTML = `<img src="${thumb.dataset.url}" style="max-width:90vw;max-height:90vh;border-radius:8px;"/>`;
+        lb.addEventListener('click', () => lb.remove());
         document.body.appendChild(lb);
       });
-      thumb.querySelector('.del-btn')?.addEventListener('click', async e=>{
+      thumb.querySelector('.del-btn')?.addEventListener('click', async e => {
         e.stopPropagation();
-        if (_renderToken!==token) return;
+        if (_renderToken !== token) return;
         if (!confirm('Delete this photo? This cannot be undone.')) return;
-        const pid=thumb.getAttribute('data-pid');
         try {
-          const res=await fetch(`${BACKEND}/api/milestone-photos/${pid}`,{method:'DELETE',headers:_authHeaders(true)});
+          const res = await fetch(`${BACKEND}/api/milestone-photos/${thumb.dataset.pid}`, {
+            method: 'DELETE', headers: _authHeaders(true),
+          });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           await loadMilestonePhotos(milestoneId, isExt, token);
-        } catch(err) { console.error('Photo delete error:',err); alert('Failed to delete photo.'); }
+        } catch (err) { alert('Failed to delete photo.'); }
       });
     });
+
     document.getElementById(inputId)?.addEventListener('change', function() {
-      if (_renderToken!==token) return;
-      const files=Array.from(this.files); this.value='';
+      if (_renderToken !== token) return;
+      const files = Array.from(this.files); this.value = '';
       if (files.length) uploadMilestonePhotos(milestoneId, isExt, files, token);
     });
   }
 
+  // ── Submit daily progress ──
   async function submitDailyProgress(ms, endpoint, isExt) {
-    const qty=parseFloat(document.getElementById('p3ExecQty')?.value);
-    const remarks=document.getElementById('p3Remarks')?.value||'';
-    if (!qty||qty<=0) return alert('Enter a valid executed quantity.');
-    const planned=parseFloat(ms.quantity||ms.qty)||0;
-    const newTotal=Number(ms.executed||0)+qty;
-    if (planned>0&&newTotal>planned)
-      return alert(`Cannot exceed planned quantity of ${planned} ${ms.unit||''}. Remaining: ${(planned-ms.executed).toFixed(3)}`);
-    const today=new Date().toISOString().slice(0,10);
-    const newPct=planned>0?Math.min(100,(newTotal/planned)*100):0;
-    const form=new FormData();
-    form.append('projectId',localStorage.getItem('activeProjectId'));
-    form.append('milestoneId',ms.id);
-    form.append('reportDate',today);
-    form.append('qtyExecuted',qty);
-    form.append('remarks',remarks);
-    form.append('progressPct',newPct.toFixed(2));
-    form.append('cumulativeAfterEntry',newTotal.toFixed(3));
-    form.append('progressPctAfterEntry',newPct.toFixed(2));
-    const btn=document.getElementById('p3UpdateBtn');
-    if (btn) { btn.disabled=true; btn.textContent='Saving…'; }
+    const qty     = parseFloat(_el('p3ExecQty')?.value);
+    const remarks = _el('p3Remarks')?.value || '';
+    if (!qty || qty <= 0) return alert('Enter a valid executed quantity.');
+    const planned  = parseFloat(ms.quantity || ms.qty) || 0;
+    const newTotal = Number(ms.executed || 0) + qty;
+    if (planned > 0 && newTotal > planned)
+      return alert(`Cannot exceed planned quantity of ${planned} ${ms.unit || ''}. Remaining: ${(planned - ms.executed).toFixed(3)}`);
+
+    const today  = _today();
+    const newPct = planned > 0 ? Math.min(100, (newTotal / planned) * 100) : 0;
+
+    const form = new FormData();
+    form.append('projectId',                AppState.projectId);
+    form.append('milestoneId',              ms.id);
+    form.append('reportDate',               today);
+    form.append('qtyExecuted',              qty);
+    form.append('remarks',                  remarks);
+    form.append('progressPct',              newPct.toFixed(2));
+    form.append('cumulativeAfterEntry',     newTotal.toFixed(3));
+    form.append('progressPctAfterEntry',    newPct.toFixed(2));
+
+    const btn = _el('p3UpdateBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     try {
-      const res=await fetch(endpoint,{method:'POST',headers:{'Authorization':`Bearer ${localStorage.getItem('authToken')}`},body:form});
-      if (!res.ok) { const e=await res.json().catch(()=>({})); throw new Error(e.message||`HTTP ${res.status}`); }
-      const result=await res.json();
-      const updated=result.milestone||{};
-      ms.executed        =Number(updated.executed      ??newTotal);
-      ms.progress_pct    =Number(updated.progress_pct  ??newPct);
-      ms.activity_status =updated.activity_status||(ms.executed>0?'in_progress':ms.activity_status);
-      ms.entries=updated.entries||[...(ms.entries||[]),{date:today,qty,remarks,cumulative:ms.executed}];
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${AppState.token}` },
+        body: form,
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.message || `HTTP ${res.status}`); }
+      const result  = await res.json();
+      const updated = result.milestone || {};
+      ms.executed        = Number(updated.executed       ?? newTotal);
+      ms.progress_pct    = Number(updated.progress_pct   ?? newPct);
+      ms.activity_status = updated.activity_status || (ms.executed > 0 ? 'in_progress' : ms.activity_status);
+      ms.entries         = updated.entries || [...(ms.entries || []), { date: today, qty, remarks, cumulative: ms.executed }];
 
-      // FIX 7: update shared ref, not a stale local variable
-      if (isExt) { const idx=extMsRef.list.findIndex(m=>m.id===ms.id); if (idx>=0) extMsRef.list[idx]=ms; }
-      else       { const idx=msList.findIndex(m=>m.id===ms.id); if (idx>=0) msList[idx]=ms; }
+      if (isExt) { const idx = extMsRef.list.findIndex(m => m.id === ms.id); if (idx >= 0) extMsRef.list[idx] = ms; }
+      else       { const idx = msList.findIndex(m => m.id === ms.id);         if (idx >= 0) msList[idx] = ms; }
 
-      // FIX 8: mark gantt dirty, rebuild only if already open
       ganttDirty = true;
-      renderList(); renderDetail(ms,isExt); updateSummary();
-      if (document.getElementById('p3GanttBody')?.classList.contains('open')) buildGantt();
-      const logEl=document.getElementById('p3EntriesLog');
-      if (logEl) {
-        const flash=document.createElement('div');
-        flash.style.cssText='padding:10px 20px;background:#e0f4ee;color:#0a6b5e;font-size:12px;font-weight:600;border-radius:0;';
-        flash.textContent=`✓ Saved — +${qty} ${ms.unit||''} recorded. Cumulative: ${ms.executed} ${ms.unit||''} (${ms.progress_pct.toFixed(1)}%)`;
-        logEl.prepend(flash); setTimeout(()=>flash.remove(),4000);
-      }
-    } catch(err) {
-      console.error('Progress submit error:',err);
-      alert('Failed to save progress: '+err.message);
+      renderList(); renderDetail(ms, isExt); updateSummary(ms);
+      if (_el('p3GanttBody')?.classList.contains('open')) buildGantt();
+
+      _toast(_el('p3EntriesLog'), `✓ Saved — +${qty} ${ms.unit || ''} recorded. Cumulative: ${ms.executed} ${ms.unit || ''} (${ms.progress_pct.toFixed(1)}%)`);
+    } catch (err) {
+      console.error('Progress submit:', err);
+      alert('Failed to save progress: ' + err.message);
     } finally {
-      if (btn) { btn.disabled=false; btn.textContent='💾 Save Progress'; }
+      if (btn) { btn.disabled = false; btn.textContent = '💾 Save Progress'; }
     }
   }
 
+  // ── Mark ended ──
   async function markEnded(ms, isExt) {
-    const planned=parseFloat(ms.quantity||ms.qty)||0;
-    if (Number(ms.executed||0)<planned) return alert('Cannot mark ended: executed quantity is less than planned.');
-    const btn=document.getElementById('p3MarkEndBtn');
-    if (btn) { btn.disabled=true; btn.textContent='Marking…'; }
+    const planned = parseFloat(ms.quantity || ms.qty) || 0;
+    if (Number(ms.executed || 0) < planned) return alert('Cannot mark ended: executed quantity is less than planned.');
+    const btn = _el('p3MarkEndBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Marking…'; }
     try {
-      const res=await fetch(`${BACKEND}/api/complete-milestone`,{method:'POST',headers:_authHeaders(true),
-        body:JSON.stringify({milestoneId:ms.id,projectId:localStorage.getItem('activeProjectId'),isExtensionMilestone:isExt})});
+      const res = await fetch(`${BACKEND}/api/complete-milestone`, {
+        method: 'POST', headers: _authHeaders(true),
+        body: JSON.stringify({ milestoneId: ms.id, projectId: AppState.projectId, isExtensionMilestone: isExt }),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      ms.activity_status='completed'; ms.completed_at=new Date().toISOString();
-      // FIX 7: update shared ref
-      if (isExt) { const idx=extMsRef.list.findIndex(m=>m.id===ms.id); if(idx>=0) extMsRef.list[idx]=ms; }
-      else       { const idx=msList.findIndex(m=>m.id===ms.id); if(idx>=0) msList[idx]=ms; }
+      ms.activity_status = 'completed'; ms.completed_at = new Date().toISOString();
+      if (isExt) { const idx = extMsRef.list.findIndex(m => m.id === ms.id); if (idx >= 0) extMsRef.list[idx] = ms; }
+      else       { const idx = msList.findIndex(m => m.id === ms.id);         if (idx >= 0) msList[idx] = ms; }
       ganttDirty = true;
-      renderList(); renderDetail(ms,isExt); updateSummary();
-      if (document.getElementById('p3GanttBody')?.classList.contains('open')) buildGantt();
-    } catch(err) {
-      console.error('Complete error:',err); alert('Failed to mark as completed.');
-      if (btn) { btn.disabled=false; btn.textContent='✓ Mark Ended'; }
+      renderList(); renderDetail(ms, isExt); updateSummary(ms);
+      if (_el('p3GanttBody')?.classList.contains('open')) buildGantt();
+    } catch (err) {
+      console.error('Complete error:', err); alert('Failed to mark as completed.');
+      if (btn) { btn.disabled = false; btn.textContent = '✓ Mark Ended'; }
     }
   }
 
-  // ============================================================
-  //  GANTT BUILDER — FIX 5 (extension zone columns)
-  // ============================================================
+  // ── Gantt builder ──
   function buildGantt() {
-    // FIX 8: skip rebuild if nothing changed
     if (!ganttDirty) return;
     ganttDirty = false;
 
-    const allForGantt=[...msList.map(ms=>({...ms,isExtension:false})),...extMsRef.list.map(ms=>({...ms,isExtension:true}))];
-    if (!allForGantt.length||!tl.start||!tl.finish) return;
-    const DAY_W=20, ganttStart=new Date(tl.start);
-    let ganttEndDate=new Date(tl.finish);
-    allForGantt.forEach(ms=>{ const e=new Date(ms.end||ms.planned_end||tl.finish); if(e>ganttEndDate) ganttEndDate=new Date(e); });
-    // FIX 5: extend gantt to cover extension finish
+    const allForGantt = [
+      ...msList.map(ms => ({ ...ms, isExtension: false })),
+      ...extMsRef.list.map(ms => ({ ...ms, isExtension: true })),
+    ];
+    if (!allForGantt.length || !tl.start || !tl.finish) return;
+
+    const DAY_W       = 20;
+    const ganttStart  = new Date(tl.start);
+    let   ganttEndDate= new Date(tl.finish);
+    allForGantt.forEach(ms => {
+      const e = new Date(ms.end || ms.planned_end || tl.finish);
+      if (e > ganttEndDate) ganttEndDate = new Date(e);
+    });
     if (latestExtFinish && latestExtFinish > ganttEndDate) ganttEndDate = new Date(latestExtFinish);
-    ganttEndDate.setDate(ganttEndDate.getDate()+14);
+    ganttEndDate.setDate(ganttEndDate.getDate() + 14);
 
-    const days=[];
-    for(let d=new Date(ganttStart);d<=ganttEndDate;d.setDate(d.getDate()+1)) days.push(new Date(d));
+    const days = [];
+    for (let d = new Date(ganttStart); d <= ganttEndDate; d.setDate(d.getDate() + 1)) days.push(new Date(d));
 
-    // FIX 5: helper — is a day in the extension zone?
-    function _isExtDay(d) {
-      if (!baselineFinishDate || !latestExtFinish) return false;
-      return d > baselineFinishDate && d <= latestExtFinish;
-    }
+    const _isExtDay = d => baselineFinishDate && latestExtFinish && d > baselineFinishDate && d <= latestExtFinish;
 
-    // Build month groups, tagging each as ext-zone if majority days are extension
-    const months=[]; let curM=null;
-    days.forEach(d=>{ const mk=d.getFullYear()+'-'+d.getMonth();
-      const isExt=_isExtDay(d);
-      if (!curM||curM.key!==mk){if(curM)months.push(curM);curM={key:mk,label:d.toLocaleString('default',{month:'short',year:'2-digit'}),count:1,extCount:isExt?1:0};}
-      else{curM.count++;if(isExt)curM.extCount++;}
+    // Month groups
+    const months = []; let curM = null;
+    days.forEach(d => {
+      const mk = d.getFullYear() + '-' + d.getMonth(), isExt = _isExtDay(d);
+      if (!curM || curM.key !== mk) { if (curM) months.push(curM); curM = { key: mk, label: d.toLocaleString('default', { month: 'short', year: '2-digit' }), count: 1, extCount: isExt ? 1 : 0 }; }
+      else { curM.count++; if (isExt) curM.extCount++; }
     });
-    if(curM)months.push(curM);
+    if (curM) months.push(curM);
 
-    const weeks=[]; let curW=null;
-    days.forEach(d=>{ const mon=new Date(d); mon.setDate(d.getDate()-(d.getDay()===0?6:d.getDay()-1)); const wk=mon.toISOString().slice(0,10);
-      const isExt=_isExtDay(d);
-      if(!curW||curW.key!==wk){if(curW)weeks.push(curW);curW={key:wk,label:`W${_isoWeekNum(d)}`,count:1,extCount:isExt?1:0};}
-      else{curW.count++;if(isExt)curW.extCount++;}
+    // Week groups
+    const weeks = []; let curW = null;
+    days.forEach(d => {
+      const mon = new Date(d); mon.setDate(d.getDate() - (d.getDay() === 0 ? 6 : d.getDay() - 1));
+      const wk = mon.toISOString().slice(0, 10), isExt = _isExtDay(d);
+      if (!curW || curW.key !== wk) { if (curW) weeks.push(curW); curW = { key: wk, label: `W${_isoWeekNum(d)}`, count: 1, extCount: isExt ? 1 : 0 }; }
+      else { curW.count++; if (isExt) curW.extCount++; }
     });
-    if(curW)weeks.push(curW);
+    if (curW) weeks.push(curW);
 
-    const totalW=days.length*DAY_W;
-    const today=new Date(); today.setHours(0,0,0,0);
+    const totalW = days.length * DAY_W;
+    const today  = new Date(); today.setHours(0, 0, 0, 0);
 
-    // FIX 5: month header — ext-zone months get orange class
-    const monthHdr=`<div class="gtt-hdr-month" style="width:${totalW}px;">${
-      months.map(m=>{
-        const isExtM = m.extCount > 0;  // any ext day in this month gets the tint
-        return `<div class="gtt-month-cell${isExtM?' ext-zone':''}" style="width:${m.count*DAY_W}px;">${m.label}${isExtM?' ⬤':''}</div>`;
+    const monthHdr = `<div class="gtt-hdr-month" style="width:${totalW}px;">${
+      months.map(m => `<div class="gtt-month-cell${m.extCount > 0 ? ' ext-zone' : ''}" style="width:${m.count * DAY_W}px;">${m.label}${m.extCount > 0 ? ' ⬤' : ''}</div>`).join('')
+    }</div>`;
+
+    const weekHdr = `<div class="gtt-hdr-week" style="width:${totalW}px;">${
+      weeks.map(w => `<div class="gtt-week-cell${w.extCount > 0 ? ' ext-zone' : ''}" style="width:${w.count * DAY_W}px;">${w.label}</div>`).join('')
+    }</div>`;
+
+    const dayHdr = `<div class="gtt-hdr-day" style="width:${totalW}px;">${
+      days.map(d => {
+        const isExt = _isExtDay(d);
+        const txt   = d.getDate() % 5 === 0 || d.getDate() === 1 ? d.getDate() : '';
+        return `<div class="gtt-day-cell-hdr${isExt ? ' ext-zone' : ''}" style="width:${DAY_W}px;">${txt}</div>`;
       }).join('')
     }</div>`;
 
-    // FIX 5: week header
-    const weekHdr=`<div class="gtt-hdr-week" style="width:${totalW}px;">${
-      weeks.map(w=>{
-        const isExtW = w.extCount > 0;
-        return `<div class="gtt-week-cell${isExtW?' ext-zone':''}" style="width:${w.count*DAY_W}px;">${w.label}</div>`;
-      }).join('')
-    }</div>`;
-
-    // FIX 5: day header — ext days get orange bg
-    const dayHdr=`<div class="gtt-hdr-day" style="width:${totalW}px;">${
-      days.map(d=>{
-        const isW=d.getDay()===0||d.getDay()===6;
-        const isExt=_isExtDay(d);
-        const txt=d.getDate()%5===0||d.getDate()===1?d.getDate():'';
-        return `<div class="gtt-day-cell-hdr${isExt?' ext-zone':''}" style="width:${DAY_W}px;">${txt}</div>`;
-      }).join('')
-    }</div>`;
-
-    // FIX 5: grid rows — ext columns get ext-col class
-    const rows=allForGantt.map(ms=>{
-      const pStart=new Date(ms.start||ms.planned_start), pEnd=new Date(ms.end||ms.planned_end);
-      const pct=Number(ms.progress_pct||0)/100, isExt=ms.isExtension;
-      let planBar='',actualBar='',delayBar='';
-      if(pStart&&pEnd){
-        const ps=Math.round((pStart-ganttStart)/86400000), pe=Math.round((pEnd-ganttStart)/86400000);
-        const pw=Math.max(1,pe-ps+1)*DAY_W;
-        planBar=`<div class="gtt-bar ${isExt?'gtt-bar-ext-plan':'gtt-bar-plan'}" style="left:${ps*DAY_W}px;width:${pw}px;" title="${ms.title}"></div>`;
-        if(pct>0){ const aw=Math.max(6,Math.round(pw*pct)); actualBar=`<div class="gtt-bar ${isExt?'gtt-bar-ext-actual':'gtt-bar-actual'}" style="left:${ps*DAY_W}px;width:${aw}px;" title="${(pct*100).toFixed(1)}%"></div>`; }
-        if(today>pEnd&&ms.activity_status!=='completed'){ const ds=pe+1,de=Math.max(ds,Math.round((today-ganttStart)/86400000)),dw=Math.max(DAY_W,(de-ds+1)*DAY_W); delayBar=`<div class="gtt-bar gtt-bar-delay" style="left:${ds*DAY_W}px;width:${dw}px;"></div>`; }
+    const rows = allForGantt.map(ms => {
+      const pStart = new Date(ms.start || ms.planned_start);
+      const pEnd   = new Date(ms.end   || ms.planned_end);
+      const pct    = Number(ms.progress_pct || 0) / 100;
+      const isExt  = ms.isExtension;
+      let planBar = '', actualBar = '', delayBar = '';
+      if (pStart && pEnd) {
+        const ps = Math.round((pStart - ganttStart) / 86400000);
+        const pe = Math.round((pEnd   - ganttStart) / 86400000);
+        const pw = Math.max(1, pe - ps + 1) * DAY_W;
+        planBar   = `<div class="gtt-bar ${isExt ? 'gtt-bar-ext-plan' : 'gtt-bar-plan'}" style="left:${ps * DAY_W}px;width:${pw}px;"></div>`;
+        if (pct > 0) { const aw = Math.max(6, Math.round(pw * pct)); actualBar = `<div class="gtt-bar ${isExt ? 'gtt-bar-ext-actual' : 'gtt-bar-actual'}" style="left:${ps * DAY_W}px;width:${aw}px;"></div>`; }
+        if (today > pEnd && ms.activity_status !== 'completed') {
+          const ds = pe + 1, de = Math.max(ds, Math.round((today - ganttStart) / 86400000)), dw = Math.max(DAY_W, (de - ds + 1) * DAY_W);
+          delayBar = `<div class="gtt-bar gtt-bar-delay" style="left:${ds * DAY_W}px;width:${dw}px;"></div>`;
+        }
       }
-      const cells=days.map(d=>{
-        const isW=d.getDay()===0||d.getDay()===6;
-        const isT=d.getTime()===today.getTime();
-        const isExtD=_isExtDay(d);
-        let cls='gtt-cell';
-        if(isExtD) cls+=' ext-col';
-        if(isW) cls+=' weekend';
-        if(isT) cls+=' today-col';
-        return`<div class="${cls}" style="width:${DAY_W}px;height:40px;"></div>`;
+      const cells = days.map(d => {
+        const isW    = d.getDay() === 0 || d.getDay() === 6;
+        const isT    = d.getTime() === today.getTime();
+        const isExtD = _isExtDay(d);
+        let cls = 'gtt-cell';
+        if (isExtD) cls += ' ext-col';
+        if (isW)    cls += ' weekend';
+        if (isT)    cls += ' today-col';
+        return `<div class="${cls}" style="width:${DAY_W}px;height:40px;"></div>`;
       }).join('');
-      return`<div class="gtt-row" style="width:${totalW}px;">${cells}${planBar}${actualBar}${delayBar}</div>`;
+      return `<div class="gtt-row" style="width:${totalW}px;">${cells}${planBar}${actualBar}${delayBar}</div>`;
     }).join('');
 
-    const todayOff=Math.round((today-ganttStart)/86400000);
-    const todayLine=(todayOff>=0&&todayOff<days.length)?`<div style="position:absolute;left:${todayOff*DAY_W+10}px;top:66px;bottom:0;width:2px;background:#0a7b6c;opacity:0.6;z-index:4;pointer-events:none;"></div>`:'';
-    const baselineOff=tl.finish?Math.round((new Date(tl.finish)-ganttStart)/86400000):-1;
-    const baselineLine=(baselineOff>=0&&baselineOff<days.length)?`<div style="position:absolute;left:${baselineOff*DAY_W+10}px;top:66px;bottom:0;width:2px;background:#e67e22;opacity:0.5;z-index:4;pointer-events:none;" title="Baseline Finish"></div>`:'';
-
-    // FIX 5: extension finish line in Gantt
-    let extFinishLine='';
+    const todayOff    = Math.round((today - ganttStart) / 86400000);
+    const todayLine   = (todayOff >= 0 && todayOff < days.length)
+      ? `<div style="position:absolute;left:${todayOff * DAY_W + 10}px;top:66px;bottom:0;width:2px;background:var(--c-brand);opacity:0.6;z-index:4;pointer-events:none;"></div>` : '';
+    const baseOff     = tl.finish ? Math.round((new Date(tl.finish) - ganttStart) / 86400000) : -1;
+    const baselineLine= (baseOff >= 0 && baseOff < days.length)
+      ? `<div style="position:absolute;left:${baseOff * DAY_W + 10}px;top:66px;bottom:0;width:2px;background:var(--c-ext);opacity:0.5;z-index:4;pointer-events:none;" title="Baseline Finish"></div>` : '';
+    let extFinishLine = '';
     if (latestExtFinish) {
-      const extOff=Math.round((latestExtFinish-ganttStart)/86400000);
-      if(extOff>=0&&extOff<days.length) {
-        extFinishLine=`<div style="position:absolute;left:${extOff*DAY_W+10}px;top:66px;bottom:0;width:2px;background:#e67e22;opacity:0.9;z-index:4;pointer-events:none;border-left:2px dashed #e67e22;" title="Extension Finish"></div>
-        <div style="position:absolute;left:${extOff*DAY_W+14}px;top:70px;background:#e67e22;color:#fff;font-size:9px;font-family:monospace;padding:2px 5px;border-radius:3px;z-index:5;pointer-events:none;white-space:nowrap;">EXT END</div>`;
+      const extOff = Math.round((latestExtFinish - ganttStart) / 86400000);
+      if (extOff >= 0 && extOff < days.length) {
+        extFinishLine = `
+        <div style="position:absolute;left:${extOff * DAY_W + 10}px;top:66px;bottom:0;width:2px;border-left:2px dashed var(--c-ext);opacity:0.9;z-index:4;pointer-events:none;" title="Extension Finish"></div>
+        <div style="position:absolute;left:${extOff * DAY_W + 14}px;top:70px;background:var(--c-ext);color:#fff;font-size:9px;font-family:var(--font-mono);padding:2px 5px;border-radius:3px;z-index:5;pointer-events:none;white-space:nowrap;">EXT END</div>`;
       }
     }
 
-    document.getElementById('p3GttInner').innerHTML=`<div style="position:relative;">${monthHdr}${weekHdr}${dayHdr}${rows}${todayLine}${baselineLine}${extFinishLine}</div>`;
+    _el('p3GttInner').innerHTML = `<div style="position:relative;">${monthHdr}${weekHdr}${dayHdr}${rows}${todayLine}${baselineLine}${extFinishLine}</div>`;
 
-    document.getElementById('p3GttLabels').innerHTML=allForGantt.map(ms=>{
-      const pct=Number(ms.progress_pct||0), isExt=ms.isExtension;
-      const isDelay=(ms.end||ms.planned_end)&&today>new Date(ms.end||ms.planned_end)&&ms.activity_status!=='completed';
-      const badgeBg=ms.activity_status==='completed'?'#e0f4ee':isDelay?'#fde8e0':isExt?'#fef0da':ms.activity_status==='in_progress'?'#e0f4ee':'#f0f4f3';
-      const badgeColor=ms.activity_status==='completed'?'#0a6b5e':isDelay?'#a33a15':isExt?'#e67e22':ms.activity_status==='in_progress'?'#0a6b5e':'#5a7a76';
-      const badgeTxt=ms.activity_status==='completed'?'✓':isDelay?'!':pct.toFixed(0)+'%';
-      return`<div class="gtt-lbl-row" style="border-left:3px solid ${isExt?'#e67e22':'transparent'};">
-        <div class="gtt-lbl-txt" title="${ms.title||''}">${ms.title||'Untitled'}</div>
-        <span class="gtt-lbl-badge" style="background:${badgeBg};color:${badgeColor};">${badgeTxt}</span>
+    _el('p3GttLabels').innerHTML = allForGantt.map(ms => {
+      const pct = Number(ms.progress_pct || 0), isExt = ms.isExtension;
+      const isDelay = (ms.end || ms.planned_end) && today > new Date(ms.end || ms.planned_end) && ms.activity_status !== 'completed';
+      const bg  = ms.activity_status === 'completed' ? 'var(--c-brand-light)' : isDelay ? 'var(--c-danger-light)' : isExt ? 'var(--c-ext-light)' : ms.activity_status === 'in_progress' ? 'var(--c-brand-light)' : '#f0f4f3';
+      const col = ms.activity_status === 'completed' ? '#0a6b5e' : isDelay ? '#a33a15' : isExt ? 'var(--c-ext)' : ms.activity_status === 'in_progress' ? '#0a6b5e' : '#5a7a76';
+      const badgeTxt = ms.activity_status === 'completed' ? '✓' : isDelay ? '!' : pct.toFixed(0) + '%';
+      return `<div class="gtt-lbl-row" style="border-left:3px solid ${isExt ? 'var(--c-ext)' : 'transparent'};">
+        <div class="gtt-lbl-txt" title="${ms.title || ''}">${ms.title || 'Untitled'}</div>
+        <span class="gtt-lbl-badge" style="background:${bg};color:${col};">${badgeTxt}</span>
       </div>`;
     }).join('');
   }
 
-  // FIX 9: ISO 8601 week number
-  function _isoWeekNum(d) {
-    const date=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));
-    const dayNum=date.getUTCDay()||7;
-    date.setUTCDate(date.getUTCDate()+4-dayNum);
-    const yearStart=new Date(Date.UTC(date.getUTCFullYear(),0,1));
-    return Math.ceil(((date-yearStart)/86400000+1)/7);
-  }
-
-  document.getElementById('p3GttScroll')?.addEventListener('scroll', function() {
-    const labels=document.querySelector('.gtt-labels'); if(labels) labels.scrollTop=this.scrollTop;
+  // Sync gantt label scroll
+  _el('p3GttScroll')?.addEventListener('scroll', function() {
+    const labels = document.querySelector('.gtt-labels');
+    if (labels) labels.scrollTop = this.scrollTop;
   });
 
-  document.getElementById('p3GanttToggle')?.addEventListener('click', () => {
-    const body=document.getElementById('p3GanttBody');
-    const chv=document.getElementById('p3GanttChv');
-    const leg=document.getElementById('p3GttLegend');
-    const isOpen=body.classList.toggle('open');
-    chv.style.transform=isOpen?'rotate(180deg)':'';
-    if(leg) leg.classList.toggle('open',isOpen);
-    // FIX 8: only build when opening AND dirty
-    if(isOpen) buildGantt();
+  _el('p3GanttToggle')?.addEventListener('click', () => {
+    const body  = _el('p3GanttBody');
+    const chv   = _el('p3GanttChv');
+    const leg   = _el('p3GttLegend');
+    const isOpen= body.classList.toggle('open');
+    chv.style.transform = isOpen ? 'rotate(180deg)' : '';
+    if (leg) leg.classList.toggle('open', isOpen);
+    if (isOpen) buildGantt();
   });
 
-  updateSummary(); renderList();
+  // ── Initial render ──
+  updateSummary(null);
+  renderList();
   if (activeId) selectMs(activeId, false);
+}
+
+// ── Helper: effective project finish (ext takes precedence) ──
+function _effectiveFinish(tl, latestExtFinish) {
+  if (latestExtFinish && latestExtFinish > new Date(0)) return latestExtFinish.toISOString().slice(0, 10);
+  return tl?.finish || null;
 }
 
 // =======================================================================
@@ -5583,8 +5946,17 @@ async function loadWCRecords() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data    = await res.json();
     const records = (data.records || []).map(r => ({ ...r, _tabKey: 'work-center' }));
-    recordsCache['work-center'] = records;
-    _renderWCList(records);
+    const uniqueRecords = [];
+    const seenTaskIds = new Set();
+    for (const record of records) {
+      const recordId = String(record.id);
+      if (!seenTaskIds.has(recordId)) {
+        seenTaskIds.add(recordId);
+        uniqueRecords.push(record);
+      }
+    }
+    recordsCache['work-center'] = uniqueRecords;
+    _renderWCList(uniqueRecords);
   } catch (err) {
     console.error('loadWCRecords error:', err);
     const pl = document.querySelector('.no-data-placeholder');
@@ -5729,7 +6101,18 @@ async function _wcLoadDetail(recordId, tabKey) {
       `${API}/work-center-progress/${recordId}?projectId=${encodeURIComponent(projectId)}`
     );
     let progressEntries = [];
-    if (res && res.ok) { const d = await res.json(); progressEntries = d.entries || []; }
+    if (res && res.ok) {
+      const d = await res.json();
+      const entries = Array.isArray(d.entries) ? d.entries : [];
+      const seenProgressIds = new Set();
+      for (const entry of entries) {
+        const entryId = String(entry.id || '');
+        if (entryId && !seenProgressIds.has(entryId)) {
+          seenProgressIds.add(entryId);
+          progressEntries.push(entry);
+        }
+      }
+    }
 
     const myEntries = leader ? progressEntries
       : progressEntries.filter(e => String(e.member_id) === String(window.currentUserId));
