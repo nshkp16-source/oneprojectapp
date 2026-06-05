@@ -2338,6 +2338,9 @@ function _locationPickerHTML(existing) {
         </div>
         <button class="sc-btn sc-btn-ghost" id="locClearBtn" type="button" style="margin-left:auto;font-size:12px;">✕ Clear</button>
       </div>
+      <button class="sc-btn sc-btn-ghost" id="locRestoreBtn" type="button" style="display:${saved.stationName ? 'inline-flex' : 'none'};font-size:12px;max-width:240px;">
+        ↺ Restore saved weather location
+      </button>
       <div style="font-size:11px;color:var(--c-faint);">
         Powered by <a href="https://open-meteo.com" target="_blank" style="color:var(--c-brand);text-decoration:none;">Open-Meteo</a> geocoding · coordinates saved for weather tracking
       </div>
@@ -2347,7 +2350,8 @@ function _locationPickerHTML(existing) {
 
 /** Wire all location picker events. Returns a getter fn: getLocation() → object|null */
 function _wireLocationPicker(initialLocation) {
-  let selectedLocation = initialLocation ? { ...initialLocation } : null;
+  const lastLocation = initialLocation ? { ...initialLocation } : null;
+  let selectedLocation = lastLocation ? { ...lastLocation } : null;
 
   const searchInput = document.getElementById('locSearch');
   const searchBtn   = document.getElementById('locSearchBtn');
@@ -2357,6 +2361,23 @@ function _wireLocationPicker(initialLocation) {
   const selCoords   = document.getElementById('locSelCoords');
   const savedBadge  = document.getElementById('locSavedBadge');
   const clearBtn    = document.getElementById('locClearBtn');
+  const restoreBtn  = document.getElementById('locRestoreBtn');
+
+  function updateLocationUi() {
+    if (selectedLocation) {
+      if (selectedEl) selectedEl.style.display = 'flex';
+      if (savedBadge) { savedBadge.textContent = `✓ ${selectedLocation.stationName}`; savedBadge.style.display = 'inline'; }
+      if (selName)    selName.textContent   = `${selectedLocation.stationName || ''}, ${selectedLocation.countryName || ''}`;
+      if (selCoords)  selCoords.textContent = selectedLocation.lat != null ? `${selectedLocation.lat.toFixed(4)}°, ${selectedLocation.lng.toFixed(4)}° · ${selectedLocation.countryName || ''}` : '';
+      if (restoreBtn) restoreBtn.style.display = lastLocation ? 'inline-flex' : 'none';
+    } else {
+      if (selectedEl) selectedEl.style.display = 'none';
+      if (savedBadge) savedBadge.style.display = 'none';
+      if (restoreBtn) restoreBtn.style.display = lastLocation ? 'inline-flex' : 'none';
+      if (selName)    selName.textContent = '';
+      if (selCoords)  selCoords.textContent = '';
+    }
+  }
 
   async function doSearch() {
     const q = searchInput?.value?.trim();
@@ -2389,10 +2410,7 @@ function _wireLocationPicker(initialLocation) {
             lat:          parseFloat(el.dataset.lat),
             lng:          parseFloat(el.dataset.lng),
           };
-          if (selName)    selName.textContent   = `${el.dataset.name}, ${el.dataset.country}`;
-          if (selCoords)  selCoords.textContent = `${parseFloat(el.dataset.lat).toFixed(4)}°, ${parseFloat(el.dataset.lng).toFixed(4)}° · ${el.dataset.country}`;
-          if (selectedEl) selectedEl.style.display = 'flex';
-          if (savedBadge) { savedBadge.textContent = `✓ ${el.dataset.name}`; savedBadge.style.display = 'inline'; }
+          updateLocationUi();
           if (resultsEl)  resultsEl.style.display = 'none';
           resultsEl.querySelectorAll('.loc-station-item').forEach(x => x.classList.remove('selected'));
           el.classList.add('selected');
@@ -2410,12 +2428,19 @@ function _wireLocationPicker(initialLocation) {
   searchInput?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doSearch(); } });
   clearBtn?.addEventListener('click', () => {
     selectedLocation = null;
-    if (selectedEl)  selectedEl.style.display = 'none';
-    if (savedBadge)  savedBadge.style.display = 'none';
+    updateLocationUi();
     if (searchInput) searchInput.value = '';
     if (resultsEl)   resultsEl.style.display = 'none';
   });
+  restoreBtn?.addEventListener('click', () => {
+    if (!lastLocation) return;
+    selectedLocation = { ...lastLocation };
+    if (searchInput) searchInput.value = `${selectedLocation.stationName || ''}, ${selectedLocation.countryName || ''}`;
+    updateLocationUi();
+    if (resultsEl) resultsEl.style.display = 'none';
+  });
 
+  updateLocationUi();
   return { getLocation: () => selectedLocation };
 }
 
@@ -2866,7 +2891,7 @@ function openProjectScheduleForm(existingSchedule) {
 
     // Location
     const loc = locPicker.getLocation();
-    if (loc) form.append('location', JSON.stringify(loc));
+    form.append('location', JSON.stringify(loc));
 
     milestones.forEach(ms => {
       if (ms.fileObject) form.append(`file_${ms.id}`, ms.fileObject, ms.fileName);
