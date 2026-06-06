@@ -1666,7 +1666,66 @@ document.getElementById('searchBox').addEventListener('keyup', (e) => {
   });
 });
 
-// =======================================================================
+// =========================
+// EXPANDED CHART MODAL
+// =========================
+let expandedChartData = null;
+let expandedChartCurrentIndex = 0;
+
+function renderExpandedChartAtIndex(idx) {
+  if (!expandedChartData || !expandedChartData.all_milestones_for_modal) return;
+  const milestones = expandedChartData.all_milestones_for_modal;
+  if (idx < 0 || idx >= milestones.length) return;
+  
+  expandedChartCurrentIndex = idx;
+  const ms = milestones[idx];
+  
+  // Update title and progress
+  document.getElementById('expandChartTitle').textContent = `${ms.title} (${idx + 1} of ${milestones.length})`;
+  document.getElementById('expandChartProgress').textContent = 
+    `Planned: ${ms.planned_pct.toFixed(1)}% · Actual: ${ms.actual_pct.toFixed(1)}% · Status: ${ms.activity_status}`;
+  
+  // Render chart bars
+  const chartH = 300;
+  const isLate = ms.actual_pct < ms.planned_pct - 5 && ms.planned_pct > 0;
+  const actualColor = ms.activity_status === 'completed' ? '#007B8A' : isLate ? '#dc3545' : '#28a745';
+  const planH = Math.round((ms.planned_pct / 100) * chartH);
+  const actualH = Math.round((ms.actual_pct / 100) * chartH);
+  
+  const container = document.getElementById('expandChartContainer');
+  container.innerHTML = `
+    <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:${chartH}px; gap:12px;">
+      <div style="display:flex; flex-direction:row; align-items:flex-end; justify-content:center; gap:8px; height:${chartH}px;">
+        <div style="width:60px; height:${Math.max(planH,2)}px; background:#007B8A; opacity:0.35; border-radius:4px 4px 0 0;" title="Planned: ${ms.planned_pct.toFixed(1)}%"></div>
+        <div style="width:60px; height:${Math.max(actualH,2)}px; background:${actualColor}; border-radius:4px 4px 0 0;" title="${ms.title}: ${ms.actual_pct.toFixed(1)}% actual"></div>
+      </div>
+      <div style="display:flex; gap:12px; font-size:11px; color:#666;">
+        <span>Planned: ${ms.planned_pct.toFixed(1)}%</span>
+        <span>Actual: ${ms.actual_pct.toFixed(1)}%</span>
+      </div>
+    </div>
+  `;
+  
+  // Update nav buttons
+  document.getElementById('chartPrevBtn').disabled = idx === 0;
+  document.getElementById('chartNextBtn').disabled = idx === milestones.length - 1;
+  document.getElementById('chartPrevBtn').style.opacity = idx === 0 ? '0.5' : '1';
+  document.getElementById('chartNextBtn').style.opacity = idx === milestones.length - 1 ? '0.5' : '1';
+}
+
+function expandChartNavPrev() {
+  if (expandedChartCurrentIndex > 0) {
+    renderExpandedChartAtIndex(expandedChartCurrentIndex - 1);
+  }
+}
+
+function expandChartNavNext() {
+  if (expandedChartData && expandedChartCurrentIndex < expandedChartData.all_milestones_for_modal.length - 1) {
+    renderExpandedChartAtIndex(expandedChartCurrentIndex + 1);
+  }
+}
+
+// // =======================================================================
 //  GRAY PANEL — expand / collapse / hide
 // =======================================================================
 let expandedGrayPart = false;
@@ -1698,82 +1757,101 @@ function initializeSummaryPanel() {
 // =========================
 // LIVE WEATHER via Open-Meteo (no API key needed)
 // =========================
-async function loadSummaryWeather() {
-  const el = document.getElementById('summaryWeather');
-  if (!el) return;
+function _weatherCodeIcon(code) {
+  if (code === 0) return '☀️';
+  if (code === 1 || code === 2) return '🌤️';
+  if (code === 3) return '☁️';
+  if (code === 45 || code === 48) return '🌫️';
+  if ([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return '🌧️';
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return '❄️';
+  if ([95, 96, 99].includes(code)) return '⛈️';
+  return '🌡️';
+}
 
-  const WMO = {
-    0:'☀️ Clear sky', 1:'🌤 Mainly clear', 2:'⛅ Partly cloudy', 3:'☁️ Overcast',
-    45:'🌫 Foggy', 48:'🌫 Icy fog',
-    51:'🌦 Light drizzle', 53:'🌦 Drizzle', 55:'🌧 Heavy drizzle',
-    61:'🌧 Light rain', 63:'🌧 Rain', 65:'🌧 Heavy rain',
-    71:'🌨 Light snow', 73:'🌨 Snow', 75:'❄️ Heavy snow',
-    80:'🌦 Light showers', 81:'🌧 Showers', 82:'⛈ Heavy showers',
-    95:'⛈ Thunderstorm', 96:'⛈ Thunderstorm+hail', 99:'⛈ Heavy thunderstorm',
+function _weatherCodeLabel(code) {
+  const map = {
+    0: 'Clear sky',
+    1: 'Mainly clear',
+    2: 'Partly cloudy',
+    3: 'Overcast',
+    45: 'Fog',
+    48: 'Depositing rime fog',
+    51: 'Light drizzle',
+    53: 'Moderate drizzle',
+    55: 'Dense drizzle',
+    56: 'Freezing drizzle',
+    57: 'Dense freezing drizzle',
+    61: 'Slight rain',
+    63: 'Moderate rain',
+    65: 'Heavy rain',
+    66: 'Freezing rain',
+    67: 'Heavy freezing rain',
+    71: 'Slight snow',
+    73: 'Moderate snow',
+    75: 'Heavy snow',
+    77: 'Snow grains',
+    80: 'Slight rain showers',
+    81: 'Moderate rain showers',
+    82: 'Violent rain showers',
+    85: 'Slight snow showers',
+    86: 'Heavy snow showers',
+    95: 'Thunderstorm',
+    96: 'Thunderstorm with slight hail',
+    99: 'Thunderstorm with heavy hail',
   };
+  return map[code] || 'Unknown';
+}
+
+async function loadSummaryWeather(location) {
+  const weatherText = document.getElementById('summaryWeatherText');
+  const weatherForecast = document.getElementById('summaryWeatherForecast');
+  
+  // Validate location has numeric coordinates
+  if (!location || typeof location.lat !== 'number' || typeof location.lng !== 'number') {
+    if (weatherText) weatherText.textContent = 'No saved coordinates available for weather.';
+    if (weatherForecast) weatherForecast.textContent = 'Set a project location to display weather.';
+    return;
+  }
+
+  if (weatherText) weatherText.textContent = 'Loading weather…';
+  if (weatherForecast) weatherForecast.textContent = '';
 
   try {
-    const coords = await new Promise((resolve, reject) => {
-      if (!navigator.geolocation) return reject(new Error('no geolocation'));
-      navigator.geolocation.getCurrentPosition(
-        pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-        () => reject(new Error('denied'))
-      );
-    });
+    // Send coordinates to Open-Meteo API for current and 2-day forecast
+    const lat = location.lat;  // numeric value
+    const lon = location.lng;  // numeric value
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=auto&forecast_days=2`;
+    
+    console.log('[Weather API] Fetching from Open-Meteo:', {lat, lon, url});
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Weather fetch failed (${res.status})`);
+    const weather = await res.json();
+    const current = weather.current_weather;
+    const daily = weather.daily;
+    if (!current || !daily) throw new Error('Incomplete weather response');
 
-    let cityName = '';
-    try {
-      const geo = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?lat=${coords.lat}&lon=${coords.lon}&format=json`,
-        { headers: { 'Accept-Language': 'en' } }
-      );
-      const geoData = await geo.json();
-      cityName = geoData.address?.city || geoData.address?.town || geoData.address?.village || geoData.address?.county || '';
-    } catch (_) {}
+    // Display current weather with icon
+    const currentLabel = _weatherCodeLabel(current.weathercode);
+    const currentIcon = _weatherCodeIcon(current.weathercode);
+    const currentDisplay = `${currentIcon} ${currentLabel}, ${current.temperature.toFixed(0)}°C · Wind ${current.windspeed.toFixed(0)} km/h`;
+    if (weatherText) weatherText.textContent = currentDisplay;
+    console.log('[Weather] Current:', currentDisplay);
 
-    const wx = await fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}` +
-      `&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weathercode` +
-      `&wind_speed_unit=kmh&temperature_unit=celsius&timezone=auto`
-    );
-    const wxData = await wx.json();
-    const cur  = wxData.current;
-    const desc = WMO[cur.weathercode] || '🌡 Unknown';
-
-    el.innerHTML = `
-      <div style="font-size:15px; font-weight:bold; color:#333; margin-bottom:4px;">
-        ${desc}${cityName ? ' · ' + cityName : ''}
-      </div>
-      <div style="font-size:12px; color:#666; display:flex; gap:12px; flex-wrap:wrap;">
-        <span>🌡 ${cur.temperature_2m}°C</span>
-        <span>💧 ${cur.relative_humidity_2m}%</span>
-        <span>🌬 ${cur.wind_speed_10m} km/h</span>
-      </div>`;
-
+    // Display today + tomorrow forecast with icons
+    const todayHigh = daily.temperature_2m_max?.[0];
+    const todayLow = daily.temperature_2m_min?.[0];
+    const tomorrowCode = daily.weathercode?.[1];
+    const tomorrowLabel = tomorrowCode != null ? _weatherCodeLabel(tomorrowCode) : null;
+    const tomorrowIcon = tomorrowCode != null ? _weatherCodeIcon(tomorrowCode) : '';
+    const tomorrowHigh = daily.temperature_2m_max?.[1];
+    const tomorrowLow = daily.temperature_2m_min?.[1];
+    const forecastDisplay = `Today ${todayHigh != null ? Math.round(todayHigh) : '—'}°C / ${todayLow != null ? Math.round(todayLow) : '—'}°C<br>Tomorrow ${tomorrowIcon} ${tomorrowLabel || '—'} ${tomorrowHigh != null ? Math.round(tomorrowHigh) : '—'}°C / ${tomorrowLow != null ? Math.round(tomorrowLow) : '—'}°C`;
+    if (weatherForecast) weatherForecast.innerHTML = forecastDisplay;
+    console.log('[Weather] Forecast:', forecastDisplay);
   } catch (err) {
-    try {
-      const ipRes  = await fetch('https://ipapi.co/json/');
-      const ipData = await ipRes.json();
-      const wx = await fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${ipData.latitude}&longitude=${ipData.longitude}` +
-        `&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weathercode` +
-        `&wind_speed_unit=kmh&temperature_unit=celsius&timezone=auto`
-      );
-      const wxData = await wx.json();
-      const cur  = wxData.current;
-      const desc = WMO[cur.weathercode] || '🌡 Unknown';
-      el.innerHTML = `
-        <div style="font-size:15px; font-weight:bold; color:#333; margin-bottom:4px;">
-          ${desc} · ${ipData.city || ''}
-        </div>
-        <div style="font-size:12px; color:#666; display:flex; gap:12px; flex-wrap:wrap;">
-          <span>🌡 ${cur.temperature_2m}°C</span>
-          <span>💧 ${cur.relative_humidity_2m}%</span>
-          <span>🌬 ${cur.wind_speed_10m} km/h</span>
-        </div>`;
-    } catch (_) {
-      el.textContent = 'Weather unavailable.';
-    }
+    console.error('[Weather] Error fetching from Open-Meteo:', err);
+    if (weatherText) weatherText.textContent = 'Unable to load weather.';
+    if (weatherForecast) weatherForecast.textContent = 'Check network connection and location coordinates.';
   }
 }
 
@@ -1785,12 +1863,33 @@ async function loadSummaryPanelData() {
   if (!projectId) return;
 
   try {
-    const res = await fetch(
-      `${BACKEND}/api/project-summary?projectId=${encodeURIComponent(projectId)}`,
-      { headers: _authHeaders(true) }
+    const res = await authFetch(
+      `${BACKEND}/api/project-summary?projectId=${encodeURIComponent(projectId)}`
     );
-    if (!res.ok) return;
+    if (!res || !res.ok) return;
     const data = await res.json();
+    
+    // Display saved location
+    const locEl = document.getElementById('summaryLocation');
+    if (locEl) {
+      if (data.location?.displayName) {
+        locEl.textContent = `${data.location.displayName}${data.location.country ? ', ' + data.location.country : ''}`;
+      } else if (data.location?.stationName) {
+        locEl.textContent = `${data.location.stationName}${data.location.countryName ? ', ' + data.location.countryName : ''}`;
+      } else {
+        locEl.textContent = 'No location set yet';
+      }
+    }
+    
+    // Load weather from saved project location with coordinates
+    if (data.location && typeof data.location.lat === 'number' && typeof data.location.lng === 'number') {
+      console.log('[Summary] Weather: Using location coordinates', {lat: data.location.lat, lng: data.location.lng});
+      await loadSummaryWeather(data.location);
+    } else {
+      console.log('[Summary] Weather: No valid coordinates in location data', data.location);
+      const weatherText = document.getElementById('summaryWeatherText');
+      if (weatherText) weatherText.textContent = 'No location coordinates available.';
+    }
 
     if (!data.hasSchedule) {
       ['summaryProgress', 'summaryVariance', 'summaryLastMs'].forEach(id => {
@@ -1823,6 +1922,23 @@ async function loadSummaryPanelData() {
       varEl.style.color = progress.variance_pct >= 0 ? '#28a745' : '#dc3545';
     }
 
+    // ── Remaining days + current milestone ──
+    const remainingEl = document.getElementById('summaryRemainingDays');
+    if (remainingEl) {
+      const remainingText = data.project_remaining_days != null
+        ? `${data.project_remaining_days} day${data.project_remaining_days !== 1 ? 's' : ''} until project finish`
+        : 'Remaining days unknown';
+      remainingEl.textContent = remainingText;
+    }
+    const currentMsEl = document.getElementById('summaryCurrentMilestone');
+    if (currentMsEl) {
+      if (data.current_milestone) {
+        currentMsEl.textContent = `${data.current_milestone.title} · ${data.current_milestone.remaining_days} day${data.current_milestone.remaining_days !== 1 ? 's' : ''} remaining`;
+      } else {
+        currentMsEl.textContent = 'No active milestone found.';
+      }
+    }
+
     // ── Last completed milestone ──
     const lastMsEl = document.getElementById('summaryLastMs');
     if (lastMsEl) {
@@ -1832,37 +1948,37 @@ async function loadSummaryPanelData() {
       lastMsEl.style.color = progress.last_completed ? '#28a745' : '#888';
     }
 
-    // ── Progress chart ──
+    // ── Progress chart (all milestones, no modal) ──
     const chartEl  = document.getElementById('summaryChart');
-    const labelsEl = document.getElementById('summaryChartLabels');
-    if (chartEl && chart_milestones.length) {
-      const chartH = 124;
-      chartEl.innerHTML = chart_milestones.map(ms => {
+    if (chartEl && data.all_milestones_for_modal && data.all_milestones_for_modal.length) {
+      const allMilestones = data.all_milestones_for_modal;
+      chartEl.innerHTML = allMilestones.map((ms, idx) => {
         const isLate      = ms.actual_pct < ms.planned_pct - 5 && ms.planned_pct > 0;
         const actualColor = ms.activity_status === 'completed' ? '#007B8A'
                           : isLate ? '#dc3545' : '#28a745';
-        const planH   = Math.round((ms.planned_pct / 100) * chartH);
-        const actualH = Math.round((ms.actual_pct  / 100) * chartH);
-        return `<div style="flex:1; display:flex; flex-direction:row; align-items:flex-end;
-                  justify-content:center; height:${chartH}px; gap:2px;">
-          <div style="width:44%; height:${Math.max(planH,1)}px; background:#007B8A; opacity:0.35;
-               border-radius:3px 3px 0 0;" title="Planned: ${ms.planned_pct.toFixed(1)}%"></div>
-          <div style="width:44%; height:${Math.max(actualH,1)}px; background:${actualColor};
-               border-radius:3px 3px 0 0;" title="${ms.title}: ${ms.actual_pct.toFixed(1)}% actual"></div>
-        </div>`;
+        const planH   = Math.round((ms.planned_pct / 100) * 100);
+        const actualH = Math.round((ms.actual_pct  / 100) * 100);
+        const statusBadge = ms.activity_status === 'completed' ? '✓' : ms.activity_status === 'in_progress' ? '▶' : '◯';
+        return `
+          <div style="padding:8px; background:#fff; border-radius:6px; border-left:3px solid ${actualColor}; font-size:12px; scroll-snap-align:start;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <div style="font-weight:600; color:#333; flex:1;">${statusBadge} ${ms.title}</div>
+              <div style="font-size:10px; color:#666; white-space:nowrap; margin-left:8px;">${ms.actual_pct.toFixed(0)}%</div>
+            </div>
+            <div style="display:flex; gap:2px; height:24px; align-items:flex-end; background:#f0f0f0; border-radius:4px; padding:2px; overflow:hidden;">
+              <div style="flex:${Math.max(planH, 5)}%; height:${Math.max(planH*0.6, 4)}px; background:#007B8A; opacity:0.35; border-radius:2px; min-width:2px;" title="Planned: ${ms.planned_pct.toFixed(1)}%"></div>
+              <div style="flex:${Math.max(actualH, 5)}%; height:${Math.max(actualH*0.6, 4)}px; background:${actualColor}; border-radius:2px; min-width:2px;" title="Actual: ${ms.actual_pct.toFixed(1)}%"></div>
+            </div>
+            <div style="font-size:10px; color:#666; margin-top:4px; display:flex; justify-content:space-between;">
+              <span>Planned: ${ms.planned_pct.toFixed(1)}%</span>
+              <span>Actual: ${ms.actual_pct.toFixed(1)}%</span>
+            </div>
+          </div>
+        `;
       }).join('');
-      chartEl.style.cssText += 'display:flex;align-items:flex-end;gap:3px;padding:8px 8px 0;';
-
-      if (labelsEl) {
-        labelsEl.innerHTML = chart_milestones.map(ms =>
-          `<div style="flex:1;font-size:9px;color:#888;text-align:center;overflow:hidden;
-             text-overflow:ellipsis;white-space:nowrap;" title="${ms.title}">
-            ${ms.title.length > 7 ? ms.title.slice(0, 6) + '…' : ms.title}
-          </div>`
-        ).join('');
-      }
+      chartEl.style.cssText = 'width:100%; max-height:300px; overflow-y:auto; background:#f4f9fc; border-radius:8px; display:flex; flex-direction:column; gap:8px; padding:12px; scroll-snap-type:y mandatory;';
     } else if (chartEl) {
-      chartEl.innerHTML = '<div style="font-size:11px;color:#bbb;padding:12px;width:100%;text-align:center;">No milestones yet</div>';
+      chartEl.innerHTML = '<div style="font-size:12px;color:#bbb;padding:20px;text-align:center;">No milestones yet</div>';
     }
 
     // ── Photos ──
@@ -1966,7 +2082,6 @@ function showGrayPanel() {
   expandedGrayPart = false;
   setGrayToggleArrow('>');
   loadSummaryPanelData();   // ← refresh live data when panel reopens
-  loadSummaryWeather();     // ← refresh weather when panel reopens
 }
 
 // =======================================================================
@@ -3128,7 +3243,9 @@ function openProjectScheduleForm(existingSchedule) {
     if (milestones.some(_isOutOfRange)) return alert('Some milestones fall outside the project timeline.');
 
     const form = new FormData();
-    form.append('projectId', AppState.projectId);
+    const projectId = AppState.projectId || localStorage.getItem('activeProjectId');
+    if (!projectId) { alert('No active project selected. Please re-open the project.'); return; }
+    form.append('projectId', projectId);
     if (scheduleId) form.append('scheduleId', scheduleId);
     form.append('timeline', JSON.stringify(tl));
 
@@ -3182,11 +3299,11 @@ function openProjectScheduleForm(existingSchedule) {
     const saveBtn = _el('sfSave');
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
     try {
-      const res = await fetch(`${BACKEND}/api/save-schedule`, {
+      const res = await authFetch(`${BACKEND}/api/save-schedule`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${AppState.token}` },
         body: form,
       });
+      if (!res) return;
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
         throw new Error(errBody.message || `HTTP ${res.status}`);
@@ -3374,7 +3491,9 @@ function openExtensionPanel(existingSchedule) {
       return alert('Please select a valid extension type.');
 
     const form = new FormData();
-    form.append('projectId',          AppState.projectId);
+    const projectId = AppState.projectId || localStorage.getItem('activeProjectId');
+    if (!projectId) { alert('No active project selected. Please re-open the project.'); return; }
+    form.append('projectId',          projectId);
     if (scheduleId) form.append('scheduleId', scheduleId);
     form.append('extension_days',     String(days));
     form.append('extensionDays',      String(days));
@@ -3389,11 +3508,11 @@ function openExtensionPanel(existingSchedule) {
     const btn = _el('extSubmitBtn');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     try {
-      const res = await fetch(`${BACKEND}/api/save-extension`, {
+      const res = await authFetch(`${BACKEND}/api/save-extension`, {
         method:  'POST',
-        headers: { 'Authorization': `Bearer ${AppState.token}` },
         body:    form,
       });
+      if (!res) return;
       const raw = await res.text();
       let result = {};
       try { result = JSON.parse(raw); } catch (_) {
@@ -6085,17 +6204,8 @@ async function loadWCRecords() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data    = await res.json();
     const records = (data.records || []).map(r => ({ ...r, _tabKey: 'work-center' }));
-    const uniqueRecords = [];
-    const seenTaskIds = new Set();
-    for (const record of records) {
-      const recordId = String(record.id);
-      if (!seenTaskIds.has(recordId)) {
-        seenTaskIds.add(recordId);
-        uniqueRecords.push(record);
-      }
-    }
-    recordsCache['work-center'] = uniqueRecords;
-    _renderWCList(uniqueRecords);
+    recordsCache['work-center'] = records;
+    _renderWCList(records);
   } catch (err) {
     console.error('loadWCRecords error:', err);
     const pl = document.querySelector('.no-data-placeholder');
@@ -6240,18 +6350,7 @@ async function _wcLoadDetail(recordId, tabKey) {
       `${API}/work-center-progress/${recordId}?projectId=${encodeURIComponent(projectId)}`
     );
     let progressEntries = [];
-    if (res && res.ok) {
-      const d = await res.json();
-      const entries = Array.isArray(d.entries) ? d.entries : [];
-      const seenProgressIds = new Set();
-      for (const entry of entries) {
-        const entryId = String(entry.id || '');
-        if (entryId && !seenProgressIds.has(entryId)) {
-          seenProgressIds.add(entryId);
-          progressEntries.push(entry);
-        }
-      }
-    }
+    if (res && res.ok) { const d = await res.json(); progressEntries = d.entries || []; }
 
     const myEntries = leader ? progressEntries
       : progressEntries.filter(e => String(e.member_id) === String(window.currentUserId));
