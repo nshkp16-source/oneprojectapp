@@ -1819,21 +1819,20 @@ grayToggleBtn.addEventListener('click', (e) => {
 });
 
 // ============================================================
-//  SCHEDULE MODULE v9
-//  Architecture: clean single-file, sectioned, no window.* leaks
-//
-//  Changes from v8:
-//  1. Location picker — Nominatim (OpenStreetMap) text search.
-//     User types city/district/village name; coordinates saved
-//     silently. No maps, no lat/lng shown to user.
-//  2. Extension panel — time-only (days + reason).
-//     New milestones after an extension go through Edit Plan.
-//  3. Edit Plan — reads approved extensions to compute real
-//     deadline; milestone validation checks baseline + ext time.
-//     Extension banner shown when editing an extended schedule.
-//  4. Milestone model unified — no more extension_milestones
-//     as a separate concept; all milestones render the same way
-//     in the list, detail panel, and Gantt chart.
+//  SCHEDULE MODULE v10
+//  Fixes from v9:
+//  1. Edit Plan — merges milestones + extension_milestones so
+//     extension milestones are visible and editable.
+//  2. Total Duration — always computed from tl.start → effective
+//     deadline (baseline finish + all ext days); never mixed.
+//  3. Extensions count — shows ALL extensions (pending + approved);
+//     "approved" filter removed from the count badge.
+//  4. Gantt — extension-period COLUMNS (cells) get a distinct
+//     amber background even when no bar sits there.
+//  5. Complete-milestone — sends isExtensionMilestone flag so
+//     backend hits the right table.
+//  6. Report-progress — routes to /api/report-additional-progress
+//     for milestones whose source table is additional_milestones.
 // ============================================================
 
 // ============================================================
@@ -1850,7 +1849,7 @@ const WRITE_ROLES = new Set([
 ]);
 
 // ============================================================
-//  SHARED STATE  (reset each panel open)
+//  SHARED STATE
 // ============================================================
 let AppState = {
   user:      null,
@@ -1862,7 +1861,6 @@ let AppState = {
 // ============================================================
 //  AUTH HELPERS
 // ============================================================
-
 function _decodeJwt(token) {
   try {
     const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
@@ -1894,7 +1892,6 @@ function _authHeaders(json = false) {
 // ============================================================
 //  SHARED UTILITIES
 // ============================================================
-
 const _daysBetween = (a, b) =>
   Math.max(0, Math.round((new Date(b) - new Date(a)) / 86400000) + 1);
 
@@ -1936,6 +1933,41 @@ function _esc(str) {
   return String(str).replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 
+// ── FIX 1 helper: merge both milestone arrays into one flat list ──
+// Extension milestones from `additional_milestones` table carry
+// isExtension:true (set by backend mapMs). We tag them so progress
+// routing and complete-milestone can pick the right endpoint.
+function _mergeAllMilestones(schedule) {
+  const base = (schedule.milestones || []).map(ms => ({
+    ...ms,
+    _sourceTable: 'milestones',      // routes to /api/report-progress
+    added_via_extension: ms.isExtension || ms.added_via_extension || false,
+  }));
+  const ext  = (schedule.extension_milestones || []).map(ms => ({
+    ...ms,
+    _sourceTable: 'additional_milestones', // routes to /api/report-additional-progress
+    added_via_extension: true,
+  }));
+  return [...base, ...ext];
+}
+
+// ── FIX 2 helper: compute effective deadline from timeline + extensions ──
+// Returns YYYY-MM-DD string. Never mixes extension days into tl.duration.
+function _computeEffectiveDeadline(tl, extensions) {
+  if (!extensions || !extensions.length) return tl?.finish || null;
+  const latest = extensions.reduce((best, e) => {
+    const d = e.new_planned_finish || e.newPlannedFinish || null;
+    if (!d) return best;
+    return (!best || new Date(d) > new Date(best)) ? d : best;
+  }, null);
+  return latest || tl?.finish || null;
+}
+
+// ── FIX 3 helper: count ALL extensions regardless of status ──
+function _countAllExtensions(extensions) {
+  return (extensions || []).length;
+}
+
 // ============================================================
 //  SHARED CSS
 // ============================================================
@@ -1945,7 +1977,7 @@ const _css = `
 :root{
   --c-bg:#f5f7f6;--c-surface:#fff;--c-border:#e2ecea;
   --c-brand:#0a7b6c;--c-brand-light:#e0f4ee;--c-brand-dark:#07584d;
-  --c-ext:#e67e22;--c-ext-light:#fef0da;
+  --c-ext:#e67e22;--c-ext-light:#fef0da;--c-ext-col:rgba(230,126,34,0.13);
   --c-danger:#c0392b;--c-danger-light:#fde8e0;
   --c-warn:#a06a00;--c-warn-light:#fdf0e0;
   --c-text:#1a2e2b;--c-muted:#6b9490;--c-faint:#9ab0ac;
@@ -2023,6 +2055,8 @@ const _css = `
 .sc-spinner{width:32px;height:32px;border:3px solid var(--c-brand);
             border-top-color:transparent;border-radius:50%;
             animation:sc-spin 0.8s linear infinite;}
+
+/* ── Gantt ── */
 .gtt-body{display:none;height:360px;}
 .gtt-body.open{display:flex;}
 .gtt-labels{width:200px;flex-shrink:0;border-right:1px solid var(--c-border);overflow-y:auto;overflow-x:hidden;}
@@ -2034,22 +2068,39 @@ const _css = `
 .gtt-month-cell{height:26px;display:flex;align-items:center;justify-content:center;
                 font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;
                 color:#7dd3c4;font-family:var(--font-mono);border-right:1px solid rgba(255,255,255,0.1);flex-shrink:0;}
-.gtt-month-cell.ext-zone{background:linear-gradient(135deg, #5a3a00 0%, #4a2a00 100%);color:#ffa500;border:1px solid #e67e22;border-radius:3px;box-shadow:inset 0 0 8px rgba(230,126,34,0.2);}
+/* FIX 4 — extension header cells */
+.gtt-month-cell.ext-zone{background:linear-gradient(135deg,#5a3a00,#4a2a00);color:#ffa500;
+  border:1px solid #e67e22;border-radius:3px;box-shadow:inset 0 0 8px rgba(230,126,34,0.2);}
 .gtt-week-cell{height:20px;display:flex;align-items:center;justify-content:center;
                font-size:9px;color:#5aafa5;font-family:var(--font-mono);
                border-right:1px solid rgba(255,255,255,0.06);flex-shrink:0;}
-.gtt-week-cell.ext-zone{background:linear-gradient(135deg, #4a3a00 0%, #3a2a00 100%);color:#ffb84d;border:1px solid #e67e22;border-radius:2px;box-shadow:inset 0 0 6px rgba(230,126,34,0.15);}
+.gtt-week-cell.ext-zone{background:linear-gradient(135deg,#4a3a00,#3a2a00);color:#ffb84d;
+  border:1px solid #e67e22;border-radius:2px;box-shadow:inset 0 0 6px rgba(230,126,34,0.15);}
 .gtt-day-cell-hdr{height:20px;display:flex;align-items:center;justify-content:center;
                   font-size:9px;font-family:var(--font-mono);
                   border-right:1px solid rgba(255,255,255,0.05);flex-shrink:0;}
-.gtt-day-cell-hdr.ext-zone{background:linear-gradient(135deg, #4a3a00 0%, #3a2a00 100%);color:#ffb84d;border-top:2px solid #e67e22;border-bottom:1px solid #e67e22;box-shadow:inset 0 0 6px rgba(230,126,34,0.15);}
+.gtt-day-cell-hdr.ext-zone{background:linear-gradient(135deg,#4a3a00,#3a2a00);color:#ffb84d;
+  border-top:2px solid #e67e22;border-bottom:1px solid #e67e22;
+  box-shadow:inset 0 0 6px rgba(230,126,34,0.15);}
 .gtt-row{height:40px;display:flex;position:relative;border-bottom:1px solid #f0f5f4;}
+/* FIX 4 — body cells in extension period get amber background */
 .gtt-cell{flex-shrink:0;border-right:1px solid #f5faf9;}
-.gtt-cell.weekend{background:#f8fcfb;}.gtt-cell.today-col{background:rgba(10,123,108,0.06);}
-.gtt-cell.ext-col{background:rgba(230,126,34,0.12);border-right:1px solid rgba(230,126,34,0.25);}
+.gtt-cell.weekend{background:#f8fcfb;}
+.gtt-cell.today-col{background:rgba(10,123,108,0.06);}
+.gtt-cell.ext-col{
+  background:var(--c-ext-col);
+  border-right:1px solid rgba(230,126,34,0.18);
+}
+/* weekend inside extension gets a slightly deeper amber */
+.gtt-cell.ext-col.weekend{background:rgba(230,126,34,0.20);}
+
 .gtt-bar{position:absolute;height:14px;top:13px;border-radius:3px;z-index:2;}
-.gtt-bar-plan{background:#b2d4d0;opacity:0.7;border:1px solid #7fa89f;}.gtt-bar-actual{background:var(--c-brand);border:1px solid #005544;}
-.gtt-bar-ext-plan{background:#f5a623;opacity:0.85;border:2px solid #e67e22;box-shadow:0 0 6px rgba(230,126,34,0.4);}.gtt-bar-ext-actual{background:var(--c-ext);border:2px solid #c76d1a;box-shadow:0 0 6px rgba(230,126,34,0.3);}
+.gtt-bar-plan{background:#b2d4d0;opacity:0.7;border:1px solid #7fa89f;}
+.gtt-bar-actual{background:var(--c-brand);border:1px solid #005544;}
+.gtt-bar-ext-plan{background:#f5a623;opacity:0.85;border:2px solid #e67e22;
+  box-shadow:0 0 6px rgba(230,126,34,0.4);}
+.gtt-bar-ext-actual{background:var(--c-ext);border:2px solid #c76d1a;
+  box-shadow:0 0 6px rgba(230,126,34,0.3);}
 .gtt-bar-delay{background:#f28c5e;opacity:0.9;height:6px;top:31px;border-radius:2px;border:1px solid #dd6a3e;}
 .gtt-lbl-hdr{height:66px;position:sticky;top:0;z-index:6;background:var(--c-dark2);
              display:flex;align-items:flex-end;padding:0 12px 8px;font-size:10px;font-weight:600;
@@ -2066,6 +2117,8 @@ const _css = `
             align-items:center;gap:16px;background:#f8faf9;flex-shrink:0;flex-wrap:wrap;}
 .gtt-legend.open{display:flex;}
 .gtt-leg-item{display:flex;align-items:center;gap:6px;font-size:11px;color:#5a7a76;}
+
+/* Photos */
 .photos-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));
              gap:10px;padding:14px 20px;overflow-x:hidden;}
 .photo-thumb{aspect-ratio:1;border-radius:var(--radius);overflow:hidden;background:#f0f4f3;
@@ -2083,13 +2136,6 @@ const _css = `
                   font-size:12px;transition:background 0.1s;}
 .loc-station-item:hover{background:#f0f9f7;}
 .loc-station-item.selected{background:var(--c-brand-light);border-left:3px solid var(--c-brand);}
-.days-left-card{background:var(--c-dark);border-radius:var(--radius);padding:10px 16px;
-                display:flex;flex-direction:column;gap:2px;min-width:100px;}
-.days-left-label{font-size:9px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;
-                 color:#4a7a74;font-family:var(--font-mono);}
-.days-left-value{font-size:15px;font-weight:600;font-family:var(--font-mono);color:#e8f4f2;}
-.days-left-value.overdue{color:#f28c5e;}
-.days-left-value.today{color:#f5c400;}
 .p3ms{padding:10px 14px;border-bottom:1px solid #f0f5f4;cursor:pointer;transition:background 0.1s;}
 .p3ms:hover{background:#f5faf9;}
 .p3ms.active{background:#e8f6f3;border-left:3px solid var(--c-brand);}
@@ -2138,10 +2184,16 @@ async function openSchedulePanel() {
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const result = await res.json();
-    if (result.schedule?.milestones?.length > 0) {
-      openActualProgressPage(result.schedule);
+    const sched  = result.schedule;
+    // Has either baseline milestones OR extension milestones
+    const hasMilestones =
+      (sched?.milestones?.length > 0) ||
+      (sched?.extension_milestones?.length > 0);
+
+    if (hasMilestones) {
+      openActualProgressPage(sched);
     } else {
-      openCreateScheduleIntro(result.schedule || null);
+      openCreateScheduleIntro(sched || null);
     }
   } catch (err) {
     console.error('Schedule fetch:', err);
@@ -2163,9 +2215,8 @@ function openCreateScheduleIntro(existingSchedule) {
                     display:flex;align-items:center;justify-content:center;font-size:28px;
                     margin:0 auto 20px;">📋</div>
         <div style="font-size:22px;font-weight:600;margin-bottom:10px;">No baseline schedule yet</div>
-        <div style="font-size:14px;color:var(--c-muted);line-height:1.7;
-                    max-width:480px;margin:0 auto 32px;">
-          Build the project timeline and define each milestone. Once saved you'll land on the daily progress tracker.
+        <div style="font-size:14px;color:var(--c-muted);line-height:1.7;max-width:480px;margin:0 auto 32px;">
+          Build the project timeline and define each milestone.
         </div>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:32px;">
           ${[['Project', name], ['Role', AppState.user.role], ['Schedule', 'Not created']].map(([l, v], i) => `
@@ -2177,7 +2228,7 @@ function openCreateScheduleIntro(existingSchedule) {
         </div>
         ${AppState.canWrite
           ? `<button class="sc-btn sc-btn-primary" id="s1CreateBtn" style="font-size:14px;padding:12px 28px;">+ Create Project Schedule</button>`
-          : `<div class="view-only-hint" style="justify-content:center;">🔒 Your role (${AppState.user.role}) can view only. A project manager must create the schedule.</div>`}
+          : `<div class="view-only-hint" style="justify-content:center;">🔒 Your role (${AppState.user.role}) can view only.</div>`}
       </div>
     </div>
   </div>`);
@@ -2218,22 +2269,12 @@ function _viewOnlyBanner() {
 
 // ============================================================
 //  LOCATION PICKER — Nominatim (OpenStreetMap)
-//  User types a city/district/village name.
-//  Coordinates saved silently; never shown to the user.
-//  Saved shape: { displayName, city, state, country, countryCode, lat, lng }
 // ============================================================
-
 async function _nominatimSearch(query) {
   const params = new URLSearchParams({
-    q:               query,
-    format:          'json',
-    addressdetails:  '1',
-    limit:           '12',
-    'accept-language': 'en',
+    q: query, format: 'json', addressdetails: '1', limit: '12', 'accept-language': 'en',
   });
-  const res = await fetch(`${NOMINATIM_URL}?${params}`, {
-    headers: { 'User-Agent': 'OneProjectApp/1.0' },
-  });
+  const res = await fetch(`${NOMINATIM_URL}?${params}`, { headers: { 'User-Agent': 'OneProjectApp/1.0' } });
   if (!res.ok) throw new Error(`Nominatim error ${res.status}`);
   return res.json();
 }
@@ -2266,8 +2307,7 @@ function _locationPickerHTML(existing) {
       <div style="display:flex;gap:12px;">
         <div class="sc-fw" style="flex:1;">
           <span class="sc-fl">Type a city, district, or region</span>
-          <input type="search" id="locSearch"
-            placeholder="e.g. Kigali, Huye, Musanze, Lagos…"
+          <input type="search" id="locSearch" placeholder="e.g. Kigali, Huye, Musanze, Lagos…"
             value="${saved.displayName ? _esc(saved.displayName) : ''}"/>
         </div>
         <div style="display:flex;align-items:flex-end;">
@@ -2292,18 +2332,12 @@ function _locationPickerHTML(existing) {
                   style="padding:4px 10px;font-size:12px;">✕ Clear</button>
         </div>
       </div>
-      <div style="font-size:10px;color:var(--c-faint);line-height:1.6;">
-        💡 Select the nearest known location to the project site.
-        Powered by <a href="https://nominatim.openstreetmap.org" target="_blank"
-        style="color:var(--c-brand);text-decoration:none;">OpenStreetMap Nominatim</a>.
-      </div>
     </div>
   </div>`;
 }
 
 function _wireLocationPicker(initialLocation) {
   let selectedLocation = initialLocation ? { ...initialLocation } : null;
-
   const searchInput = document.getElementById('locSearch');
   const searchBtn   = document.getElementById('locSearchBtn');
   const resultsEl   = document.getElementById('locResults');
@@ -2312,9 +2346,7 @@ function _wireLocationPicker(initialLocation) {
   const selSub      = document.getElementById('locSelSub');
   const savedBadge  = document.getElementById('locSavedBadge');
   const clearBtn    = document.getElementById('locClearBtn');
-
   let _debounceTimer = null;
-  let _abortCtrl     = null;
 
   function _updateUi() {
     if (selectedLocation) {
@@ -2331,8 +2363,6 @@ function _wireLocationPicker(initialLocation) {
   async function _doSearch() {
     const q = searchInput?.value?.trim();
     if (!q || q.length < 2) return;
-    if (_abortCtrl) _abortCtrl.abort();
-    _abortCtrl = new AbortController();
     if (searchBtn) { searchBtn.disabled = true; searchBtn.textContent = '⏳'; }
     if (resultsEl) {
       resultsEl.style.display = 'block';
@@ -2341,8 +2371,7 @@ function _wireLocationPicker(initialLocation) {
     try {
       const results = await _nominatimSearch(q);
       if (!results.length) {
-        resultsEl.innerHTML = `<div style="padding:10px 12px;font-size:12px;color:var(--c-muted);">
-          No results. Try a broader name (e.g. a city or province).</div>`;
+        resultsEl.innerHTML = `<div style="padding:10px 12px;font-size:12px;color:var(--c-muted);">No results.</div>`;
         return;
       }
       resultsEl.innerHTML = results.map((r, i) => {
@@ -2378,10 +2407,8 @@ function _wireLocationPicker(initialLocation) {
         });
       });
     } catch (err) {
-      if (err.name === 'AbortError') return;
       console.error('Location search:', err);
-      if (resultsEl) resultsEl.innerHTML = `<div style="padding:10px 12px;font-size:12px;color:var(--c-danger);">
-        Search failed. Check your connection.</div>`;
+      if (resultsEl) resultsEl.innerHTML = `<div style="padding:10px 12px;font-size:12px;color:var(--c-danger);">Search failed.</div>`;
     } finally {
       if (searchBtn) { searchBtn.disabled = false; searchBtn.textContent = '🔍 Search'; }
     }
@@ -2406,6 +2433,16 @@ function _wireLocationPicker(initialLocation) {
 
 // ============================================================
 //  SECTION 2 — Baseline Schedule Builder / Edit Plan
+//
+//  FIX 1: When editing, we merge milestones + extension_milestones
+//  into one flat array so the user sees and can edit all of them.
+//  Extension-sourced milestones are tagged _sourceTable so save
+//  logic can keep them in the right DB table.
+//
+//  FIX 2: totalDurDisplay is always computed from
+//          tl.start → effectiveDeadline (baseline + all ext days).
+//          The "duration" field in tl only stores the BASELINE days;
+//          extension days are shown separately as "+Nd ext".
 // ============================================================
 function openProjectScheduleForm(existingSchedule) {
   if (!AppState.canWrite) {
@@ -2416,50 +2453,65 @@ function openProjectScheduleForm(existingSchedule) {
   const isEdit      = !!existingSchedule;
   const scheduleId  = existingSchedule?.id || existingSchedule?.schedule_id || null;
 
-  const originalIds = new Set((existingSchedule?.milestones || []).map(m => m.id));
-  const touchedIds  = new Set();
-  const deletedIds  = new Set();
-  let   editingId   = null;
-  const _ns         = {};
+  // ── Extension metadata ──
+  const extensions    = existingSchedule?.extensions || existingSchedule?.schedule_extensions || [];
+  const totalExtDays  = extensions.reduce((s, e) => s + (parseInt(e.extension_days || e.extensionDays) || 0), 0);
 
-  // ── Compute extension deadline ──
-  const extensions         = existingSchedule?.extensions || existingSchedule?.schedule_extensions || [];
-  const approvedExtensions = extensions.filter(e => e.status === 'approved' || !e.status);
-  const totalExtensions    = extensions.length;
-  const totalExtDays       = extensions.reduce(
-    (sum, e) => sum + (parseInt(e.extension_days || e.extensionDays) || 0), 0
+  const effectiveDeadline = _computeEffectiveDeadline(
+    existingSchedule?.timeline,
+    extensions
   );
 
-  // Extension banner HTML (shown in timeline card when editing)
-  const _extBannerHTML = (() => {
-    if (!extensions.length) return '';
-    // build a list showing each extension's start and end (start = previous effective finish + 1)
-    let prev = existingSchedule?.timeline?.finish || null;
-    const listItems = extensions.map((e, i) => {
-      const end = e.new_planned_finish || e.newPlannedFinish || '';
-      let start = '';
-      if (prev) {
-        const sd = new Date(prev);
-        sd.setDate(sd.getDate() + 1);
-        start = sd.toISOString().slice(0, 10);
-      }
-      prev = end || prev;
-      return `<div style="font-family:var(--font-mono);">${i + 1}. ${start || '—'} → ${end || '—'} <span style="color:var(--c-muted);font-size:12px;margin-left:6px;">(+${parseInt(e.extension_days||e.extensionDays||0)}d)</span></div>`;
-    }).join('');
-    return `<div style="background:var(--c-ext-light);border-bottom:1px solid #f5c68a;padding:8px 20px;font-size:12px;color:var(--c-ext);display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
-      <div style="min-width:180px;">📊 ${totalExtensions} extension${totalExtensions > 1 ? 's' : ''} (${approvedExtensions.length} approved)<br><span style="font-family:var(--font-mono);font-weight:600;">+${totalExtDays} days</span></div>
-      <div style="flex:1;display:flex;flex-direction:column;gap:6px;">${listItems}</div>
-      <div style="margin-left:auto;font-size:11px;color:#a06a00;align-self:flex-start;">New milestones validated against extended date.</div>
-    </div>`;
-  })();
+  // ── FIX 1: merge all milestones into one flat list for the editor ──
+  const _allExistingMs = isEdit ? _mergeAllMilestones(existingSchedule) : [];
+  const originalIds    = new Set(_allExistingMs.map(m => m.id));
+  const touchedIds     = new Set();
+  const deletedIds     = new Set();
+  let   editingId      = null;
+  const _ns            = {};
 
-  // helper: format any date-like value to `YYYY-MM-DD` for <input type="date" />
   const _fmtDate = v => {
     if (!v && v !== 0) return '';
     const d = new Date(v);
     if (isNaN(d)) return '';
     return d.toISOString().slice(0, 10);
   };
+
+  // Extension banner
+  const _extBannerHTML = (() => {
+    if (!extensions.length) return '';
+    let prev = existingSchedule?.timeline?.finish || null;
+    const listItems = extensions.map((e, i) => {
+      const end = e.new_planned_finish || e.newPlannedFinish || '';
+      let start = '';
+      if (prev) {
+        const sd = new Date(prev); sd.setDate(sd.getDate() + 1);
+        start = sd.toISOString().slice(0, 10);
+      }
+      prev = end || prev;
+      return `<div style="font-family:var(--font-mono);">${i + 1}. ${start || '—'} → ${end || '—'} <span style="color:var(--c-muted);font-size:12px;margin-left:6px;">(+${parseInt(e.extension_days||e.extensionDays||0)}d)</span></div>`;
+    }).join('');
+    return `<div style="background:var(--c-ext-light);border-bottom:1px solid #f5c68a;padding:8px 20px;font-size:12px;color:var(--c-ext);display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+      <div style="min-width:180px;">📊 ${extensions.length} extension${extensions.length > 1 ? 's' : ''}<br>
+        <span style="font-family:var(--font-mono);font-weight:600;">+${totalExtDays} days total</span></div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:6px;">${listItems}</div>
+      <div style="margin-left:auto;font-size:11px;color:#a06a00;align-self:flex-start;">
+        Milestones validated against extended deadline (${effectiveDeadline || '—'}).
+      </div>
+    </div>`;
+  })();
+
+  // ── FIX 2: Compute display duration correctly ──
+  // baselineDur = days between tl.start and tl.finish (never includes ext)
+  // totalDisplayDur = days between tl.start and effectiveDeadline
+  const tl0 = existingSchedule?.timeline || {};
+  const baselineDur = (tl0.start && tl0.finish)
+    ? _daysBetween(_fmtDate(tl0.start), _fmtDate(tl0.finish))
+    : (tl0.duration || 0);
+  const totalDisplayDur = (tl0.start && effectiveDeadline)
+    ? _daysBetween(_fmtDate(tl0.start), effectiveDeadline)
+    : baselineDur;
+  const extDisplayDays = totalDisplayDur - baselineDur; // extension-only days for badge
 
   expandGrayPart(_css + `
   <div class="sc-wrap" id="sf">
@@ -2470,42 +2522,37 @@ function openProjectScheduleForm(existingSchedule) {
     <div id="sfBody" style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;
                              gap:18px;padding:20px 28px;background:linear-gradient(to bottom,var(--c-surface) 0%,#fafaf9 100%);">
 
-      <!-- SCHEDULE SUMMARY INFO (for redirects) -->
-      ${isEdit && existingSchedule?.timeline ? `
-      <div style="background:linear-gradient(135deg, rgba(10,123,108,0.08) 0%, rgba(115,194,251,0.08) 100%);
+      <!-- TIMELINE SUMMARY (edit mode) -->
+      ${isEdit && tl0.start ? `
+      <div style="background:linear-gradient(135deg,rgba(10,123,108,0.08) 0%,rgba(115,194,251,0.08) 100%);
                   border:1px solid rgba(10,123,108,0.2);border-radius:12px;padding:16px 20px;
                   display:flex;align-items:center;gap:24px;flex-wrap:wrap;">
         <div style="display:flex;gap:16px;align-items:center;flex:1;">
           <div style="text-align:center;font-family:var(--font-mono);">
-            <div style="font-size:12px;color:var(--c-muted);margin-bottom:4px;">📅 Planned Days</div>
-            <div style="font-size:24px;font-weight:700;color:var(--c-brand);">${existingSchedule.timeline.duration || 0}</div>
+            <div style="font-size:12px;color:var(--c-muted);margin-bottom:4px;">📅 Baseline Days</div>
+            <div style="font-size:24px;font-weight:700;color:var(--c-brand);">${baselineDur}</div>
           </div>
-          ${totalExtDays > 0 ? `
+          ${extDisplayDays > 0 ? `
           <div style="display:flex;align-items:center;gap:8px;color:var(--c-muted);">
             <span style="font-size:18px;">+</span>
             <div style="text-align:center;font-family:var(--font-mono);">
-              <div style="font-size:12px;color:var(--c-ext);margin-bottom:4px;">⏱ Extensions</div>
-              <div style="font-size:24px;font-weight:700;color:var(--c-ext);">${totalExtDays}</div>
+              <div style="font-size:12px;color:var(--c-ext);margin-bottom:4px;">⏱ Ext Days</div>
+              <div style="font-size:24px;font-weight:700;color:var(--c-ext);">${extDisplayDays}</div>
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;color:var(--c-muted);">
             <span style="font-size:18px;">=</span>
             <div style="text-align:center;font-family:var(--font-mono);">
               <div style="font-size:12px;color:var(--c-brand);margin-bottom:4px;">📊 Total</div>
-              <div style="font-size:24px;font-weight:700;color:var(--c-brand);">${existingSchedule.timeline.duration + totalExtDays}</div>
+              <div style="font-size:24px;font-weight:700;color:var(--c-brand);">${totalDisplayDur}</div>
             </div>
+          </div>
+          <div style="border-left:1px solid rgba(10,123,108,0.15);padding-left:16px;font-size:12px;color:var(--c-text);">
+            <div style="margin-bottom:6px;"><strong>Baseline:</strong> <span style="font-family:var(--font-mono);">${_fmtDate(tl0.finish)}</span></div>
+            <div><strong>Extended to:</strong> <span style="font-family:var(--font-mono);color:var(--c-ext);">${effectiveDeadline}</span></div>
           </div>
           ` : ''}
         </div>
-        ${totalExtDays > 0 ? `
-        <div style="border-left:1px solid rgba(10,123,108,0.15);padding-left:16px;font-size:12px;color:var(--c-text);">
-          <div style="margin-bottom:6px;"><strong>From:</strong> <span style="font-family:var(--font-mono);">${existingSchedule.timeline.finish}</span></div>
-          <div><strong>To:</strong> <span style="font-family:var(--font-mono);color:var(--c-ext);">${approvedExtensions.reduce((latest, e) => {
-            const d = e.new_planned_finish || e.newPlannedFinish;
-            return (!latest || (d && d > latest)) ? d : latest;
-          }, null)}</span></div>
-        </div>
-        ` : ''}
       </div>
       ` : ''}
 
@@ -2514,7 +2561,7 @@ function openProjectScheduleForm(existingSchedule) {
         <div class="sc-card-hdr">
           <span class="sc-card-label">Project Timeline</span>
           <div style="display:flex;align-items:center;gap:10px;">
-            <span id="sfTlInd" style="display:none;font-size:12px;color:var(--c-brand);font-weight:500;">✓ Timeline set</span>
+            <span id="sfTlInd" style="display:${isEdit && tl0.start ? 'inline' : 'none'};font-size:12px;color:var(--c-brand);font-weight:500;">✓ Timeline set</span>
             ${isEdit ? `<button class="sc-btn sc-btn-warn" id="sfUnlockDates" style="font-size:11px;padding:4px 10px;">🔒 Unlock to Edit</button>` : ''}
           </div>
         </div>
@@ -2522,15 +2569,15 @@ function openProjectScheduleForm(existingSchedule) {
         ${_extBannerHTML}
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;align-items:end;padding:18px 20px;gap:16px;">
           <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">Planned Start</span>
-            <input type="date" id="sfPS" value="${_fmtDate(existingSchedule?.timeline?.start)}" ${isEdit ? 'readonly' : ''} style="padding:10px 12px;"/></div>
-          <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">Planned Finish</span>
-            <input type="date" id="sfPF" value="${_fmtDate(existingSchedule?.timeline?.finish)}" ${isEdit ? 'readonly' : ''} style="padding:10px 12px;"/></div>
+            <input type="date" id="sfPS" value="${_fmtDate(tl0.start)}" ${isEdit ? 'readonly' : ''} style="padding:10px 12px;"/></div>
+          <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">Planned Finish (baseline)</span>
+            <input type="date" id="sfPF" value="${_fmtDate(tl0.finish)}" ${isEdit ? 'readonly' : ''} style="padding:10px 12px;"/></div>
           <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">Total Duration</span>
-            <div id="sfDur" style="font-size:20px;font-weight:700;
-                 color:${(totalDurDays) ? 'var(--c-brand)' : 'var(--c-faint)'};
+            <!-- FIX 2: show baseline + ext separately -->
+            <div id="sfDur" style="font-size:18px;font-weight:700;
+                 color:${totalDisplayDur ? 'var(--c-brand)' : 'var(--c-faint)'};
                  padding:8px 12px;font-family:var(--font-mono);background:var(--c-brand-light);border-radius:8px;">
-              ${totalDurDays ? totalDurDays + 'd' : '—'}
-              ${currentTotalExtDays > 0 ? `<span style="font-size:12px;color:var(--c-ext);margin-left:6px;">+${currentTotalExtDays}d ext</span>` : ''}
+              ${totalDisplayDur ? `${baselineDur}d baseline${extDisplayDays > 0 ? ` <span style="font-size:12px;color:var(--c-ext);margin-left:4px;">+${extDisplayDays}d ext</span>` : ''}` : '—'}
             </div>
           </div>
           <button class="sc-btn sc-btn-primary" id="sfSetTl" style="height:40px;padding:0 18px;" ${isEdit ? 'disabled' : ''}>
@@ -2596,7 +2643,7 @@ function openProjectScheduleForm(existingSchedule) {
       <!-- MILESTONE LIST CARD -->
       <div class="sc-card" style="flex-shrink:0;margin-bottom:18px;">
         <div class="sc-card-hdr" style="flex-shrink:0;">
-          <span class="sc-card-label">📋 Planned Milestones</span>
+          <span class="sc-card-label">📋 Planned Milestones (baseline + extension)</span>
           <span id="sfMsCnt" style="font-size:12px;color:var(--c-brand);font-weight:600;font-family:var(--font-mono);">0 milestones</span>
         </div>
         <div id="sfMsList" style="background:#fafaf9;">
@@ -2605,39 +2652,16 @@ function openProjectScheduleForm(existingSchedule) {
           </div>
         </div>
       </div>
-
     </div>
   </div>`);
 
   // ── State ──
-  let tl = existingSchedule?.timeline
-    ? { ...existingSchedule.timeline }
+  let tl = tl0.start
+    ? { start: _fmtDate(tl0.start), finish: _fmtDate(tl0.finish), duration: baselineDur }
     : { start: null, finish: null, duration: 0 };
 
-  // Initialize currentTotalExtDays from existing extensions for display
-  let currentTotalExtDays = totalExtDays;
-
-  // normalize timeline dates to `YYYY-MM-DD` for consistent use in inputs
-  if (tl.start)  tl.start  = _fmtDate(tl.start);
-  if (tl.finish) tl.finish = _fmtDate(tl.finish);
-
-  // Find latest extension finish among all extensions (if any)
-  const latestExtFinishDate = (() => {
-    if (!extensions.length) return null;
-    return extensions.reduce((latest, e) => {
-      const dstr = e.new_planned_finish || e.newPlannedFinish || null;
-      if (!dstr) return latest;
-      const d = new Date(dstr);
-      if (isNaN(d)) return latest;
-      return (!latest || d > latest) ? d : latest;
-    }, null);
-  })();
-
-  const effectiveDeadline = latestExtFinishDate ? latestExtFinishDate.toISOString().slice(0,10) : (tl.finish || null);
-
-  const totalDurDays = (tl.start && effectiveDeadline) ? _daysBetween(tl.start, effectiveDeadline) : ((tl.duration || 0) + totalExtDays);
-
-  let milestones = (existingSchedule?.milestones || []).map(ms => ({
+  // FIX 1: start with merged milestone list
+  let milestones = _allExistingMs.map(ms => ({
     id:              ms.id,
     title:           ms.title,
     desc:            ms.description || ms.desc || '',
@@ -2645,20 +2669,20 @@ function openProjectScheduleForm(existingSchedule) {
     end:             _fmtDate(ms.end   || ms.planned_end)   || '',
     qty:             ms.quantity || ms.qty || '',
     unit:            ms.unit || 'm³',
-    dep:             ms.depends_on || ms.dep || 'None',
+    dep:             ms.dep || ms.depends_on || 'None',
     fileName:        ms.fileName || null,
     fileObject:      null,
-    executed:        ms.executed || 0,
-    progress_pct:    ms.progress_pct || 0,
+    executed:        Number(ms.executed || 0),
+    progress_pct:    Number(ms.progress_pct || 0),
     activity_status: ms.activity_status || 'not_started',
     entries:         ms.entries || [],
     added_via_extension: ms.added_via_extension || false,
+    _sourceTable:    ms._sourceTable || 'milestones',
     _isNew:          false,
   }));
 
   let attached = null;
   const locPicker = _wireLocationPicker(existingSchedule?.location || null);
-
   const _el  = id => document.getElementById(id);
   const _val = id => _el(id)?.value?.trim() || '';
 
@@ -2675,17 +2699,17 @@ function openProjectScheduleForm(existingSchedule) {
   }
 
   function _isOutOfRange(ms) {
-    const deadline = effectiveDeadline;
     if (!tl.start) return false;
     if (new Date(ms.start) < new Date(tl.start)) return true;
-    if (deadline && new Date(ms.end) > new Date(deadline)) return true;
+    // Validate against effectiveDeadline (includes extension days)
+    if (effectiveDeadline && new Date(ms.end) > new Date(effectiveDeadline)) return true;
     return false;
   }
 
   function _msMeta(ms) {
     const d = ms.start && ms.end ? _daysBetween(ms.start, ms.end) : 0;
     const deadline = effectiveDeadline || tl.finish;
-    const totalDur = totalDurDays;
+    const totalDur = totalDisplayDur || 1;
     const w = totalDur > 0 ? (d / totalDur) * 100 : 0;
     const f = deadline && ms.end
       ? Math.max(0, Math.round((new Date(deadline) - new Date(ms.end)) / 86400000)) : 0;
@@ -2708,7 +2732,7 @@ function openProjectScheduleForm(existingSchedule) {
       const isTouched     = touchedIds.has(ms.id);
       const dimmed        = editingId !== null && editingId !== ms.id;
       const isBeingEdited = editingId === ms.id;
-      const isPostExt     = ms.added_via_extension || (!ms._isNew && !originalIds.has(ms.id));
+      const isPostExt     = ms.added_via_extension;
 
       return `
       <div class="sf-ms-row" data-id="${ms.id}"
@@ -2727,8 +2751,11 @@ function openProjectScheduleForm(existingSchedule) {
           <div style="flex:1;min-width:0;">
             <div style="font-size:13px;font-weight:600;color:var(--c-text);display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
               ${ms.title || 'Untitled'}
-              ${ms._isNew ? `<span class="sc-tag sc-tag-ext">+ NEW</span>` : isTouched ? `<span class="sc-tag" style="background:#e8f4ff;color:#1a6fba;font-weight:600;">✎ EDITED</span>` : `<span class="sc-tag sc-tag-ok">✓ DB</span>`}
+              ${ms._isNew ? `<span class="sc-tag sc-tag-ext">+ NEW</span>`
+                : isTouched ? `<span class="sc-tag" style="background:#e8f4ff;color:#1a6fba;font-weight:600;">✎ EDITED</span>`
+                : `<span class="sc-tag sc-tag-ok">✓ DB</span>`}
               ${isPostExt ? `<span class="sc-tag sc-tag-ext">EXT</span>` : ''}
+              ${ms._sourceTable === 'additional_milestones' ? `<span class="sc-tag" style="background:#f3e8ff;color:#7c3aed;font-size:9px;">ADD'L TABLE</span>` : ''}
               ${isBeingEdited ? `<span class="sc-tag sc-tag-warn">⏳ EDITING</span>` : ''}
             </div>
             <div style="font-size:11px;color:#888;font-family:var(--font-mono);margin-top:4px;">
@@ -2737,7 +2764,7 @@ function openProjectScheduleForm(existingSchedule) {
             </div>
             ${pct > 0 || ms.executed > 0 ? `<div style="margin-top:8px;">
               <div class="sc-pbar" style="height:5px;"><div class="sc-pfill" style="width:${pct}%;"></div></div>
-              <div style="font-size:10px;color:var(--c-brand);font-family:var(--font-mono);margin-top:2px;font-weight:600;">${pct.toFixed(1)}% progress (locked on save)</div>
+              <div style="font-size:10px;color:var(--c-brand);font-family:var(--font-mono);margin-top:2px;font-weight:600;">${pct.toFixed(1)}% progress</div>
             </div>` : ''}
           </div>
           <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
@@ -2779,7 +2806,6 @@ function openProjectScheduleForm(existingSchedule) {
     el.querySelectorAll('.sf-del-btn').forEach(btn => {
       btn.addEventListener('click', e => { e.stopPropagation(); _ns.del(btn.dataset.id); });
     });
-
     if (_el('sfTlWarn')) _el('sfTlWarn').style.display = milestones.some(_isOutOfRange) ? 'block' : 'none';
   }
 
@@ -2830,10 +2856,7 @@ function openProjectScheduleForm(existingSchedule) {
     _sfRefDep(); _sfRender();
   }
 
-  if (isEdit && tl.start) {
-    if (_el('sfTlInd')) _el('sfTlInd').style.display = 'inline';
-    _sfRefDep(); _sfRender();
-  }
+  if (isEdit && tl.start) { _sfRefDep(); _sfRender(); }
 
   _el('sfUnlockDates')?.addEventListener('click', () => {
     if (!confirm('Unlock dates? This lets you change the project timeline.')) return;
@@ -2858,7 +2881,8 @@ function openProjectScheduleForm(existingSchedule) {
     tl = { start: s, finish: f, duration: d };
     const dur = _el('sfDur');
     if (dur) {
-      dur.innerHTML = `${d} days${totalExtDays > 0 ? ` <span style="font-size:12px;color:var(--c-ext);margin-left:6px;">+${totalExtDays}d ext</span>` : ''}`;
+      // FIX 2: recompute with fresh values; no extensions apply to new schedule
+      dur.innerHTML = `${d}d baseline`;
       dur.style.color = 'var(--c-brand)';
     }
     if (_el('sfTlInd')) _el('sfTlInd').style.display = 'inline';
@@ -2881,18 +2905,19 @@ function openProjectScheduleForm(existingSchedule) {
     if (tl.start && new Date(start) < new Date(tl.start))
       return alert(`Start cannot be before project start (${tl.start}).`);
 
-    const hardDeadline = effectiveDeadline;
+    // FIX 2: validate against effectiveDeadline, not bare tl.finish
+    const hardDeadline = effectiveDeadline || tl.finish;
     if (hardDeadline && new Date(end) > new Date(hardDeadline)) {
-      const extNote = totalExtDays > 0 ? ` (includes ${totalExtDays} extension days)` : '';
-      return alert(`End cannot exceed project finish (${hardDeadline})${extNote}.`);
+      return alert(`End cannot exceed project deadline (${hardDeadline}).`);
     }
 
+    // Tag new milestones that fall after baseline finish as extension-sourced
     const isAfterBaseline = tl.finish && new Date(end) > new Date(tl.finish);
 
     if (editingId !== null) {
       const idx = milestones.findIndex(m => m.id === editingId);
       if (idx === -1) { editingId = null; return; }
-      const origMs = existingSchedule?.milestones?.find(m => m.id === editingId);
+      const origMs = _allExistingMs.find(m => m.id === editingId);
       milestones[idx] = {
         ...milestones[idx],
         title, desc: desc || '', start, end,
@@ -2903,8 +2928,9 @@ function openProjectScheduleForm(existingSchedule) {
         progress_pct:    origMs?.progress_pct    ?? milestones[idx].progress_pct,
         activity_status: origMs?.activity_status ?? milestones[idx].activity_status,
         entries:         origMs?.entries         ?? milestones[idx].entries,
-        added_via_extension: milestones[idx].added_via_extension || false,
-        _isNew: milestones[idx]._isNew,
+        added_via_extension: milestones[idx].added_via_extension || isAfterBaseline,
+        _sourceTable:    milestones[idx]._sourceTable,
+        _isNew:          milestones[idx]._isNew,
       };
       if (originalIds.has(editingId)) touchedIds.add(editingId);
     } else {
@@ -2915,6 +2941,8 @@ function openProjectScheduleForm(existingSchedule) {
         fileName: attached ? attached.name : null, fileObject: attached || null,
         executed: 0, progress_pct: 0, activity_status: 'not_started', entries: [],
         added_via_extension: isAfterBaseline,
+        // New milestones after baseline go into additional_milestones on server
+        _sourceTable: isAfterBaseline ? 'additional_milestones' : 'milestones',
         _isNew: true,
       });
     }
@@ -2938,20 +2966,48 @@ function openProjectScheduleForm(existingSchedule) {
     if (scheduleId) form.append('scheduleId', scheduleId);
     form.append('timeline', JSON.stringify(tl));
 
-    const newMs       = milestones.filter(m => m._isNew);
-    const editedMs    = milestones.filter(m => !m._isNew && originalIds.has(m.id) && touchedIds.has(m.id));
-    const unchangedMs = milestones.filter(m => !m._isNew && originalIds.has(m.id) && !touchedIds.has(m.id));
+    // Split milestones by source table for backend routing
+    const baseMs    = milestones.filter(m => m._sourceTable !== 'additional_milestones');
+    const addlMs    = milestones.filter(m => m._sourceTable === 'additional_milestones');
 
-    const payload = milestones.map(({ fileObject, _isNew, ...rest }) => ({
+    const newBaseIds     = new Set(baseMs.filter(m => m._isNew).map(m => m.id));
+    const editedBaseIds  = new Set(baseMs.filter(m => !m._isNew && originalIds.has(m.id) && touchedIds.has(m.id)).map(m => m.id));
+    const unchangedBaseIds = new Set(baseMs.filter(m => !m._isNew && originalIds.has(m.id) && !touchedIds.has(m.id)).map(m => m.id));
+
+    const newAddlIds     = new Set(addlMs.filter(m => m._isNew).map(m => m.id));
+    const editedAddlIds  = new Set(addlMs.filter(m => !m._isNew && touchedIds.has(m.id)).map(m => m.id));
+    const unchangedAddlIds = new Set(addlMs.filter(m => !m._isNew && !touchedIds.has(m.id)).map(m => m.id));
+
+    // deletedIds: split by original source table
+    const deletedBaseIds = [...deletedIds].filter(id => {
+      const orig = _allExistingMs.find(m => m.id === id);
+      return !orig || orig._sourceTable !== 'additional_milestones';
+    });
+    const deletedAddlIds = [...deletedIds].filter(id => {
+      const orig = _allExistingMs.find(m => m.id === id);
+      return orig && orig._sourceTable === 'additional_milestones';
+    });
+
+    const basePayload = baseMs.map(({ fileObject, _isNew, _sourceTable, ...rest }) => ({
+      ...rest, depLabel: _depLabel(rest.dep),
+    }));
+    const addlPayload = addlMs.map(({ fileObject, _isNew, _sourceTable, ...rest }) => ({
       ...rest, depLabel: _depLabel(rest.dep),
     }));
 
-    form.append('milestones',   JSON.stringify(payload));
-    form.append('newIds',       JSON.stringify(newMs.map(m => m.id)));
-    form.append('editedIds',    JSON.stringify(editedMs.map(m => m.id)));
-    form.append('unchangedIds', JSON.stringify(unchangedMs.map(m => m.id)));
-    form.append('deletedIds',   JSON.stringify([...deletedIds]));
-    form.append('location',     JSON.stringify(locPicker.getLocation()));
+    form.append('milestones',          JSON.stringify(basePayload));
+    form.append('newIds',              JSON.stringify([...newBaseIds]));
+    form.append('editedIds',           JSON.stringify([...editedBaseIds]));
+    form.append('unchangedIds',        JSON.stringify([...unchangedBaseIds]));
+    form.append('deletedIds',          JSON.stringify(deletedBaseIds));
+
+    form.append('additionalMilestones',     JSON.stringify(addlPayload));
+    form.append('newAddlIds',               JSON.stringify([...newAddlIds]));
+    form.append('editedAddlIds',            JSON.stringify([...editedAddlIds]));
+    form.append('unchangedAddlIds',         JSON.stringify([...unchangedAddlIds]));
+    form.append('deletedAddlIds',           JSON.stringify(deletedAddlIds));
+
+    form.append('location', JSON.stringify(locPicker.getLocation()));
 
     milestones.forEach(ms => {
       if (ms.fileObject) form.append(`file_${ms.id}`, ms.fileObject, ms.fileName);
@@ -2984,7 +3040,7 @@ function openProjectScheduleForm(existingSchedule) {
 }
 
 // ============================================================
-//  EXTENSION PANEL — time-only, no new milestones here
+//  EXTENSION PANEL — time-only, no milestone creation here
 // ============================================================
 function openExtensionPanel(existingSchedule) {
   if (!AppState.canWrite) { alert('Your role cannot add extensions.'); return; }
@@ -2992,14 +3048,13 @@ function openExtensionPanel(existingSchedule) {
 
   const baselineFinish = existingSchedule?.timeline?.finish || null;
   const scheduleId     = existingSchedule?.id || existingSchedule?.schedule_id || null;
-
   const existingExts   = existingSchedule?.extensions || existingSchedule?.schedule_extensions || [];
-  const approvedExts   = existingExts.filter(e => e.status === 'approved' || !e.status);
-  let   effectiveFinish = baselineFinish;
-  approvedExts.forEach(e => {
+
+  // effectiveFinish = latest extension finish or baseline
+  let effectiveFinish = existingExts.reduce((latest, e) => {
     const d = e.new_planned_finish || e.newPlannedFinish;
-    if (d && (!effectiveFinish || new Date(d) > new Date(effectiveFinish))) effectiveFinish = d;
-  });
+    return (d && (!latest || new Date(d) > new Date(latest))) ? d : latest;
+  }, baselineFinish);
 
   const overlay = document.createElement('div');
   overlay.id = 'extOverlay';
@@ -3009,7 +3064,6 @@ function openExtensionPanel(existingSchedule) {
   <div id="extModal" style="background:var(--c-surface);border-radius:16px;width:min(600px,96vw);
        max-height:88vh;display:flex;flex-direction:column;box-shadow:0 16px 60px rgba(0,0,0,0.35);
        font-family:var(--font);overflow:hidden;">
-
     <div style="padding:20px 24px;border-bottom:1px solid var(--c-border);display:flex;
                 align-items:center;justify-content:space-between;flex-shrink:0;
                 background:var(--c-dark);border-radius:16px 16px 0 0;">
@@ -3018,8 +3072,7 @@ function openExtensionPanel(existingSchedule) {
         <div style="font-size:11px;color:#4a7a74;margin-top:3px;font-family:var(--font-mono);">
           Current finish: <strong style="color:#7dd3c4;">${effectiveFinish || 'Not set'}</strong>
           ${effectiveFinish !== baselineFinish
-            ? `<span style="color:#f5a623;margin-left:8px;">(baseline: ${baselineFinish})</span>`
-            : ''}
+            ? `<span style="color:#f5a623;margin-left:8px;">(baseline: ${baselineFinish})</span>` : ''}
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
@@ -3027,27 +3080,21 @@ function openExtensionPanel(existingSchedule) {
         <button id="extClose" class="sc-btn sc-btn-ghost-dark">✕ Close</button>
       </div>
     </div>
-
     <div style="flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px;">
-
       <div style="background:#fff8e1;border:1px solid #f5d48a;border-radius:var(--radius);
                   padding:12px 16px;font-size:12px;color:var(--c-warn);line-height:1.7;">
-        <strong>How extensions work:</strong><br>
-        This panel adds extra calendar days to the project deadline. After saving, go to
-        <strong>Edit Plan</strong> to add any new milestones — they will be validated
-        against the extended deadline automatically.
+        <strong>How extensions work:</strong> This adds calendar days to the project deadline.
+        After saving, use <strong>Edit Plan</strong> to add milestones in the extended period.
       </div>
-
       <div class="sc-fw">
         <span class="sc-fl">Extension Type</span>
         <select id="extType">
-          <option value="delay">Delay — existing work taking longer than planned</option>
-          <option value="scope_addition">Scope Addition — additional work approved by client</option>
-          <option value="force_majeure">Force Majeure — unforeseeable event (weather, permits…)</option>
-          <option value="design_change">Design Change — client or engineer-driven revision</option>
+          <option value="delay">Delay — existing work taking longer</option>
+          <option value="scope_addition">Scope Addition — additional approved work</option>
+          <option value="force_majeure">Force Majeure — unforeseeable event</option>
+          <option value="design_change">Design Change — client/engineer revision</option>
         </select>
       </div>
-
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         <div class="sc-fw">
           <span class="sc-fl">Additional Days <span style="color:var(--c-danger);">*</span></span>
@@ -3064,7 +3111,6 @@ function openExtensionPanel(existingSchedule) {
           </span>
         </div>
       </div>
-
       <div id="extPreview" style="display:none;background:var(--c-brand-light);border-radius:var(--radius);
            padding:12px 16px;font-size:12px;color:var(--c-text);">
         <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
@@ -3076,42 +3122,34 @@ function openExtensionPanel(existingSchedule) {
           <div><strong style="font-family:var(--font-mono);color:var(--c-ext);" id="extPreviewDays">—</strong></div>
         </div>
       </div>
-
       <div class="sc-fw">
         <span class="sc-fl">Reason / Justification <span style="color:var(--c-danger);">*</span></span>
         <textarea id="extReason" rows="4" style="resize:vertical;min-height:90px;"
-          placeholder="Required — describe in detail why this time extension is needed."></textarea>
+          placeholder="Required — describe why this extension is needed."></textarea>
       </div>
-
       <div class="sc-fw">
         <span class="sc-fl">Supporting Document (optional)</span>
         <label class="sc-fzone">
           <input type="file" id="extFile" accept="*/*"/>
           <span style="font-size:14px;">📎</span>
-          <span id="extFileTxt" style="font-size:12px;color:var(--c-muted);">
-            Attach approval letter, site report, etc.
-          </span>
+          <span id="extFileTxt" style="font-size:12px;color:var(--c-muted);">Attach approval letter, site report, etc.</span>
         </label>
       </div>
-
     </div>
-
     <div style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center;
                 gap:8px;padding:14px 24px;border-top:1px solid var(--c-border);
                 background:#fafaf9;border-radius:0 0 16px 16px;">
       <div style="font-size:11px;color:var(--c-muted);">
-        After saving → use <strong>Edit Plan</strong> to add new milestones if needed.
+        After saving → use <strong>Edit Plan</strong> to add milestones in the extended period.
       </div>
       <div style="display:flex;gap:8px;">
         <button id="extCancelBtn" class="sc-btn sc-btn-ghost">Cancel</button>
-        <button id="extSubmitBtn" class="sc-btn sc-btn-primary"
-                style="background:var(--c-ext);">Save Extension</button>
+        <button id="extSubmitBtn" class="sc-btn sc-btn-primary" style="background:var(--c-ext);">Save Extension</button>
       </div>
     </div>
   </div>`;
 
   document.body.appendChild(overlay);
-
   let attached = null;
   const _el = id => overlay.querySelector('#' + id);
 
@@ -3133,7 +3171,7 @@ function openExtensionPanel(existingSchedule) {
     const days = parseInt(this.value);
     if (!days || days < 1 || !effectiveFinish) return;
     const fin = new Date(effectiveFinish); fin.setDate(fin.getDate() + days);
-    const nf  = _el('extNewFinish'); if (nf) nf.value = fin.toISOString().slice(0, 10);
+    const nf = _el('extNewFinish'); if (nf) nf.value = fin.toISOString().slice(0, 10);
     _updatePreview();
   });
 
@@ -3166,6 +3204,8 @@ function openExtensionPanel(existingSchedule) {
     if (new Date(finish) <= new Date(effectiveFinish || '1970-01-01'))
       return alert(`New finish (${finish}) must be after the current finish (${effectiveFinish}).`);
     if (!reason) return alert('A reason / justification is required.');
+    if (!['delay','scope_addition','force_majeure','design_change'].includes(type))
+      return alert('Please select a valid extension type.');
 
     const form = new FormData();
     form.append('projectId',          AppState.projectId);
@@ -3195,7 +3235,7 @@ function openExtensionPanel(existingSchedule) {
       }
       if (!res.ok) throw new Error(result.message || `HTTP ${res.status}`);
       if (result.success) {
-        alert(`Extension saved. Project now ends ${finish}.\n\nGo to Edit Plan to add any new milestones.`);
+        alert(`Extension saved. Project now ends ${finish}.\n\nGo to Edit Plan to add milestones in the extended period.`);
         closeOverlay();
         openSchedulePanel();
       } else {
@@ -3211,10 +3251,17 @@ function openExtensionPanel(existingSchedule) {
 
 // ============================================================
 //  SECTION 3 — Daily tracking + Gantt
+//
+//  FIX 1: uses _mergeAllMilestones so extension milestones appear.
+//  FIX 3: Extensions count = ALL extensions (not filtered by status).
+//  FIX 5: complete-milestone sends isExtensionMilestone flag.
+//  FIX 6: progress reporting routes to /api/report-additional-progress
+//         for milestones whose _sourceTable is additional_milestones.
+//  FIX 4: Gantt body cells in extension period get amber background.
 // ============================================================
 function openActualProgressPage(savedSchedule) {
-  // All milestones are in one flat array — no separate extension_milestones
-  const pms = (savedSchedule.milestones || []).map(ms => ({
+  // FIX 1: merge both milestone arrays
+  const pms = _mergeAllMilestones(savedSchedule).map(ms => ({
     ...ms,
     executed:        Number(ms.executed || 0),
     progress_pct:    Number(ms.progress_pct || 0),
@@ -3224,11 +3271,12 @@ function openActualProgressPage(savedSchedule) {
 
   const tl         = savedSchedule.timeline || {};
   const location   = savedSchedule.location || null;
-  const extensions = savedSchedule.extensions || savedSchedule.schedule_extensions || [];
+  // FIX 3: count ALL extensions, not just approved
+  const extensions      = savedSchedule.extensions || savedSchedule.schedule_extensions || [];
+  const totalExtCount   = _countAllExtensions(extensions);
 
-  const approvedExts    = extensions.filter(e => e.status === 'approved' || !e.status);
-  const latestExtFinish = approvedExts.length
-    ? approvedExts.reduce((latest, e) => {
+  const latestExtFinish = extensions.length
+    ? extensions.reduce((latest, e) => {
         const d = new Date(e.new_planned_finish || e.newPlannedFinish || 0);
         return d > latest ? d : latest;
       }, new Date(0))
@@ -3237,12 +3285,15 @@ function openActualProgressPage(savedSchedule) {
 
   const projectName = _projectName();
   let   ganttDirty  = true;
+
   const _fmtDateShort = v => {
     if (!v && v !== 0) return '—';
     const d = new Date(v);
     if (isNaN(d)) return '—';
     return d.toISOString().slice(0, 10);
   };
+
+  const _effectiveProjFinish = () => _effectiveFinishStr(tl, latestExtFinish);
 
   expandGrayPart(_css + `
   <style>
@@ -3292,13 +3343,15 @@ function openActualProgressPage(savedSchedule) {
       <div class="p3sk">
         <span class="p3sk-l">Project Ends</span>
         <span class="p3sk-v" id="p3DaysLeftProjectVal">—</span>
+        <!-- FIX 3: shows effective finish (baseline + extensions) as clean date -->
         <span style="font-size:10px;color:#4a7a74;font-family:var(--font-mono);" id="p3DaysLeftProjectDate">
-          ${_effectiveFinish(tl, latestExtFinish) || '—'}
+          ${_effectiveProjFinish() || '—'}
         </span>
       </div>
       <div class="p3sk"><span class="p3sk-l">Planned Start</span><span class="p3sk-v">${tl.start ? _fmtDateShort(tl.start) : '—'}</span></div>
-      <div class="p3sk"><span class="p3sk-l">Planned Finish</span><span class="p3sk-v">${tl.finish ? _fmtDateShort(tl.finish) : '—'}</span></div>
-      <div class="p3sk"><span class="p3sk-l">Extensions</span><span class="p3sk-v">${approvedExts.length ? approvedExts.length + ' (view below)' : '0'}</span></div>
+      <div class="p3sk"><span class="p3sk-l">Baseline Finish</span><span class="p3sk-v">${tl.finish ? _fmtDateShort(tl.finish) : '—'}</span></div>
+      <!-- FIX 3: count of ALL extensions (not approved-only) -->
+      <div class="p3sk"><span class="p3sk-l">Extensions</span><span class="p3sk-v">${totalExtCount > 0 ? `${totalExtCount} ext` : '0'}</span></div>
       <div class="p3sk">
         <span class="p3sk-l">Selected Milestone</span>
         <span class="p3sk-v" id="p3DaysLeftMsVal">—</span>
@@ -3315,7 +3368,7 @@ function openActualProgressPage(savedSchedule) {
     <div class="p3scroll" id="p3Scroll">
       <div class="p3content">
         <div class="p3list">
-          <div class="p3list-hdr">Milestones</div>
+          <div class="p3list-hdr">Milestones (${pms.length})</div>
           <div id="p3MsList"></div>
         </div>
         <div class="p3detail" id="p3Detail">
@@ -3342,14 +3395,14 @@ function openActualProgressPage(savedSchedule) {
           <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:#b2d4d0;opacity:0.8;border:1px solid #7fa89f;"></div>Planned</div>
           <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:var(--c-brand);border:1px solid #005544;"></div>Actual</div>
           <div class="gtt-leg-item"><div style="width:16px;height:6px;border-radius:2px;background:#f28c5e;border:1px solid #dd6a3e;"></div>Delay</div>
-          <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:#f5a623;opacity:0.85;border:2px solid #e67e22;box-shadow:0 0 4px rgba(230,126,34,0.4);"></div>Extension Plan</div>
-          <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:var(--c-ext);border:2px solid #c76d1a;box-shadow:0 0 4px rgba(230,126,34,0.3);"></div>Extension Actual</div>
-          <div class="gtt-leg-item"><div style="width:2px;height:14px;background:var(--c-brand);opacity:0.5;"></div>Today</div>
-          <div class="gtt-leg-item"><div style="width:2px;height:14px;background:var(--c-ext);opacity:0.5;border-left:2px dashed var(--c-ext);"></div>Ext Finish</div>
+          <div class="gtt-leg-item"><div style="width:16px;height:8px;border-radius:2px;background:#f5a623;opacity:0.85;border:2px solid #e67e22;"></div>Extension Bar</div>
+          <!-- FIX 4 legend item -->
           <div class="gtt-leg-item">
-            <div style="width:16px;height:14px;border-radius:2px;background:rgba(230,126,34,0.12);border:1px solid rgba(230,126,34,0.25);"></div>
-            Extension period
+            <div style="width:16px;height:14px;border-radius:2px;background:var(--c-ext-col);border:1px solid rgba(230,126,34,0.3);"></div>
+            Extension period (column)
           </div>
+          <div class="gtt-leg-item"><div style="width:2px;height:14px;background:var(--c-brand);opacity:0.5;"></div>Today</div>
+          <div class="gtt-leg-item"><div style="width:2px;height:14px;border-left:2px dashed var(--c-ext);opacity:0.9;"></div>Ext Finish</div>
         </div>
       </div>
     </div>
@@ -3362,12 +3415,9 @@ function openActualProgressPage(savedSchedule) {
   const _el = id => document.getElementById(id);
 
   _el('p3Back')?.addEventListener('click', () => collapseGrayPart());
+  // FIX 1: Edit Plan passes full savedSchedule (with both milestone arrays)
   _el('p3EditPlan')?.addEventListener('click', () => openProjectScheduleForm(savedSchedule));
   _el('p3Extension')?.addEventListener('click', () => openExtensionPanel(savedSchedule));
-
-  function _effectiveProjFinish() {
-    return _effectiveFinish(tl, latestExtFinish);
-  }
 
   function updateSummary(selectedMs) {
     const total  = msList.length;
@@ -3377,6 +3427,7 @@ function openActualProgressPage(savedSchedule) {
     const overall = msList.reduce((a, m) => a + (Number(m.weight_pct) || 0) * (Number(m.progress_pct) || 0) / 100, 0);
     const overallPct = (overall / totalW * 100).toFixed(1);
 
+    // Plan % uses baseline timeline only (extensions don't affect planned work rate)
     let planPct = '0.0';
     if (tl.start && tl.finish) {
       const elapsed = Math.max(0, (new Date() - new Date(tl.start)) / 86400000);
@@ -3402,6 +3453,9 @@ function openActualProgressPage(savedSchedule) {
         pEl.textContent = _fmtDaysLeft(dLeft);
         pEl.className   = 'p3sk-v ' + (dLeft < 0 ? 'overdue' : dLeft === 0 ? 'today' : '');
       }
+      // FIX 3: show clean date, not raw ISO string with T00:00:00.000Z
+      const dateEl = _el('p3DaysLeftProjectDate');
+      if (dateEl) dateEl.textContent = projFinish;
     }
 
     if (selectedMs) {
@@ -3477,12 +3531,14 @@ function openActualProgressPage(savedSchedule) {
     const accentColor = isPostExt ? 'var(--c-ext)' : 'var(--c-brand)';
     const msEnd       = ms.end || ms.planned_end;
     const dLeft       = msEnd ? _daysUntil(msEnd) : null;
+    // FIX 5/6: determine which table this milestone belongs to
+    const isExtMs     = ms._sourceTable === 'additional_milestones';
 
     el.innerHTML = `
     <div class="sc-card">
       <div class="sc-card-hdr">
         <span class="sc-card-label" style="color:${accentColor};">
-          ${isPostExt ? 'Post-Extension Milestone' : 'Active Milestone'}
+          ${isPostExt ? 'Post-Extension Milestone' : 'Baseline Milestone'}
         </span>
         <div style="display:flex;align-items:center;gap:8px;">
           ${dLeft !== null ? `<span class="sc-tag ${dLeft < 0 ? 'sc-tag-crit' : dLeft === 0 ? 'sc-tag-warn' : 'sc-tag-ns'}">
@@ -3546,7 +3602,7 @@ function openActualProgressPage(savedSchedule) {
       <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;
            padding:10px 20px 14px;border-top:1px solid var(--c-border);background:#f8faf9;">
         <div style="font-size:11px;color:#6b8f8a;font-family:var(--font-mono);">
-          Progress = Cumulative ÷ Planned × 100 &nbsp;·&nbsp; (${exec} + today) / ${planned} × 100
+          Progress = Cumulative ÷ Planned × 100
         </div>
         <div style="display:flex;gap:8px;flex-shrink:0;">
           <button class="sc-btn sc-btn-ghost" id="p3MarkEndBtn"
@@ -3581,9 +3637,7 @@ function openActualProgressPage(savedSchedule) {
         </div>
       </div>
       <div id="p3PhotosBody" style="display:none;">
-        <div class="photos-grid" id="p3PhotosGrid">
-          <div style="padding:20px;color:#8aa8a4;font-size:13px;">Click the header to load photos.</div>
-        </div>
+        <div class="photos-grid" id="p3PhotosGrid"></div>
       </div>
     </div>
 
@@ -3610,11 +3664,11 @@ function openActualProgressPage(savedSchedule) {
     if (AppState.canWrite && !completed) {
       _el('p3UpdateBtn')?.addEventListener('click', () => {
         if (_renderToken !== token) return;
-        submitDailyProgress(ms, token);
+        submitDailyProgress(ms, token, isExtMs);
       });
       _el('p3MarkEndBtn')?.addEventListener('click', () => {
         if (_renderToken !== token) return;
-        markEnded(ms);
+        markEnded(ms, isExtMs);
       });
     }
 
@@ -3630,56 +3684,60 @@ function openActualProgressPage(savedSchedule) {
         photosLoaded = true;
         const countEl = _el('p3PhotoCount');
         if (countEl) countEl.textContent = 'Loading…';
-        loadMilestonePhotos(ms.id, token);
+        loadMilestonePhotos(ms.id, token, isExtMs);
       }
     });
   }
 
   // ── Photo functions ──
-  async function loadMilestonePhotos(milestoneId, token) {
+  async function loadMilestonePhotos(milestoneId, token, isExtMs) {
     const countEl = _el('p3PhotoCount');
     const gridEl  = _el('p3PhotosGrid');
     if (!gridEl) return;
+    // FIX 5: send correct query param based on source table
+    const param = isExtMs
+      ? `additionalMilestoneId=${encodeURIComponent(milestoneId)}`
+      : `milestoneId=${encodeURIComponent(milestoneId)}`;
     try {
-      const res = await fetch(
-        `${BACKEND}/api/milestone-photos?milestoneId=${encodeURIComponent(milestoneId)}`,
-        { headers: _authHeaders() }
-      );
+      const res = await fetch(`${BACKEND}/api/milestone-photos?${param}`, { headers: _authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const result = await res.json();
       const photos = result.photos || [];
       if (_renderToken !== token) return;
       if (countEl) countEl.textContent = `${photos.length} photo${photos.length !== 1 ? 's' : ''}`;
-      _renderPhotosGrid(photos, milestoneId, gridEl, token);
+      _renderPhotosGrid(photos, milestoneId, gridEl, token, isExtMs);
     } catch (err) {
       console.error('Photo load:', err);
       if (_renderToken === token && countEl) countEl.textContent = '— photos';
-      if (_renderToken === token && gridEl) _renderPhotosGrid([], milestoneId, gridEl, token);
+      if (_renderToken === token && gridEl) _renderPhotosGrid([], milestoneId, gridEl, token, isExtMs);
     }
   }
 
-  async function uploadMilestonePhotos(milestoneId, files, token) {
+  async function uploadMilestonePhotos(milestoneId, files, token, isExtMs) {
     if (!files.length) return;
     const countEl = _el('p3PhotoCount');
-    if (countEl) countEl.textContent = `Uploading ${files.length} photo${files.length > 1 ? 's' : ''}…`;
+    if (countEl) countEl.textContent = `Uploading ${files.length}…`;
     const form = new FormData();
-    form.append('projectId',   AppState.projectId);
-    form.append('milestoneId', milestoneId);
+    form.append('projectId', AppState.projectId);
+    if (isExtMs) {
+      form.append('additionalMilestoneId', milestoneId);
+    } else {
+      form.append('milestoneId', milestoneId);
+    }
     files.forEach(f => form.append('photos', f, f.name));
     try {
       const res = await fetch(`${BACKEND}/api/milestone-photos`, {
         method: 'POST', headers: { 'Authorization': `Bearer ${AppState.token}` }, body: form,
       });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.message || `HTTP ${res.status}`); }
-      if (_renderToken === token) await loadMilestonePhotos(milestoneId, token);
+      if (_renderToken === token) await loadMilestonePhotos(milestoneId, token, isExtMs);
     } catch (err) {
       console.error('Photo upload:', err);
       alert(`Failed to upload photo(s): ${err.message}`);
-      if (_renderToken === token && countEl) countEl.textContent = '— photos';
     }
   }
 
-  function _renderPhotosGrid(photos, milestoneId, gridEl, token) {
+  function _renderPhotosGrid(photos, milestoneId, gridEl, token, isExtMs) {
     const inputId   = 'p3PhotoInput_' + token;
     const canUpload = AppState.canWrite;
     const thumbs    = photos.map(p => `
@@ -3716,7 +3774,7 @@ function openActualProgressPage(savedSchedule) {
             method: 'DELETE', headers: _authHeaders(true),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          await loadMilestonePhotos(milestoneId, token);
+          await loadMilestonePhotos(milestoneId, token, isExtMs);
         } catch (err) { alert('Failed to delete photo.'); }
       });
     });
@@ -3724,12 +3782,12 @@ function openActualProgressPage(savedSchedule) {
     document.getElementById(inputId)?.addEventListener('change', function() {
       if (_renderToken !== token) return;
       const files = Array.from(this.files); this.value = '';
-      if (files.length) uploadMilestonePhotos(milestoneId, files, token);
+      if (files.length) uploadMilestonePhotos(milestoneId, files, token, isExtMs);
     });
   }
 
-  // ── Submit daily progress ──
-  async function submitDailyProgress(ms, token) {
+  // ── FIX 6: Submit daily progress — routes by source table ──
+  async function submitDailyProgress(ms, token, isExtMs) {
     const qty     = parseFloat(_el('p3ExecQty')?.value);
     const remarks = _el('p3Remarks')?.value || '';
     if (!qty || qty <= 0) return alert('Enter a valid executed quantity.');
@@ -3742,19 +3800,24 @@ function openActualProgressPage(savedSchedule) {
     const newPct = planned > 0 ? Math.min(100, (newTotal / planned) * 100) : 0;
 
     const form = new FormData();
-    form.append('projectId',             AppState.projectId);
-    form.append('milestoneId',           ms.id);
-    form.append('reportDate',            today);
-    form.append('qtyExecuted',           qty);
-    form.append('remarks',               remarks);
-    form.append('progressPct',           newPct.toFixed(2));
+    form.append('projectId',  AppState.projectId);
+    form.append('milestoneId', ms.id);
+    form.append('reportDate',  today);
+    form.append('qtyExecuted', qty);
+    form.append('remarks',     remarks);
+    form.append('progressPct', newPct.toFixed(2));
     form.append('cumulativeAfterEntry',  newTotal.toFixed(3));
     form.append('progressPctAfterEntry', newPct.toFixed(2));
+
+    // FIX 6: pick the correct API endpoint
+    const endpoint = isExtMs
+      ? `${BACKEND}/api/report-additional-progress`
+      : `${BACKEND}/api/report-progress`;
 
     const btn = _el('p3UpdateBtn');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     try {
-      const res = await fetch(`${BACKEND}/api/report-progress`, {
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${AppState.token}` },
         body: form,
@@ -3781,8 +3844,8 @@ function openActualProgressPage(savedSchedule) {
     }
   }
 
-  // ── Mark ended ──
-  async function markEnded(ms) {
+  // ── FIX 5: Mark ended — sends isExtensionMilestone flag ──
+  async function markEnded(ms, isExtMs) {
     const planned = parseFloat(ms.quantity || ms.qty) || 0;
     if (Number(ms.executed || 0) < planned) return alert('Cannot mark ended: executed quantity is less than planned.');
     const btn = _el('p3MarkEndBtn');
@@ -3790,7 +3853,11 @@ function openActualProgressPage(savedSchedule) {
     try {
       const res = await fetch(`${BACKEND}/api/complete-milestone`, {
         method: 'POST', headers: _authHeaders(true),
-        body: JSON.stringify({ milestoneId: ms.id, projectId: AppState.projectId }),
+        body: JSON.stringify({
+          milestoneId:         ms.id,
+          projectId:           AppState.projectId,
+          isExtensionMilestone: isExtMs,  // FIX 5
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       ms.activity_status = 'completed'; ms.completed_at = new Date().toISOString();
@@ -3804,7 +3871,7 @@ function openActualProgressPage(savedSchedule) {
     }
   }
 
-  // ── Gantt ──
+  // ── FIX 4: Gantt with amber column backgrounds in extension period ──
   function buildGantt() {
     if (!ganttDirty) return;
     ganttDirty = false;
@@ -3823,13 +3890,20 @@ function openActualProgressPage(savedSchedule) {
     const days = [];
     for (let d = new Date(ganttStart); d <= ganttEndDate; d.setDate(d.getDate() + 1)) days.push(new Date(d));
 
-    const _isExtDay = d => baselineFinishDate && latestExtFinish && d > baselineFinishDate && d <= latestExtFinish;
+    // FIX 4: a day is in the "extension zone" when it's after the BASELINE finish
+    // but on or before the latest extension finish
+    const _isExtDay = d => {
+      if (!baselineFinishDate || !latestExtFinish) return false;
+      return d > baselineFinishDate && d <= latestExtFinish;
+    };
 
     const months = []; let curM = null;
     days.forEach(d => {
       const mk = d.getFullYear() + '-' + d.getMonth(), isExt = _isExtDay(d);
-      if (!curM || curM.key !== mk) { if (curM) months.push(curM); curM = { key: mk, label: d.toLocaleString('default', { month: 'short', year: '2-digit' }), count: 1, extCount: isExt ? 1 : 0 }; }
-      else { curM.count++; if (isExt) curM.extCount++; }
+      if (!curM || curM.key !== mk) {
+        if (curM) months.push(curM);
+        curM = { key: mk, label: d.toLocaleString('default', { month: 'short', year: '2-digit' }), count: 1, extCount: isExt ? 1 : 0 };
+      } else { curM.count++; if (isExt) curM.extCount++; }
     });
     if (curM) months.push(curM);
 
@@ -3837,8 +3911,10 @@ function openActualProgressPage(savedSchedule) {
     days.forEach(d => {
       const mon = new Date(d); mon.setDate(d.getDate() - (d.getDay() === 0 ? 6 : d.getDay() - 1));
       const wk = mon.toISOString().slice(0, 10), isExt = _isExtDay(d);
-      if (!curW || curW.key !== wk) { if (curW) weeks.push(curW); curW = { key: wk, label: `W${_isoWeekNum(d)}`, count: 1, extCount: isExt ? 1 : 0 }; }
-      else { curW.count++; if (isExt) curW.extCount++; }
+      if (!curW || curW.key !== wk) {
+        if (curW) weeks.push(curW);
+        curW = { key: wk, label: `W${_isoWeekNum(d)}`, count: 1, extCount: isExt ? 1 : 0 };
+      } else { curW.count++; if (isExt) curW.extCount++; }
     });
     if (curW) weeks.push(curW);
 
@@ -3860,9 +3936,9 @@ function openActualProgressPage(savedSchedule) {
     }</div>`;
 
     const rows = msList.map(ms => {
-      const pStart   = new Date(ms.start);
-      const pEnd     = new Date(ms.end);
-      const pct      = Number(ms.progress_pct || 0) / 100;
+      const pStart    = new Date(ms.start);
+      const pEnd      = new Date(ms.end);
+      const pct       = Number(ms.progress_pct || 0) / 100;
       const isPostExt = ms.added_via_extension || false;
       let planBar = '', actualBar = '', delayBar = '';
       if (pStart && pEnd) {
@@ -3877,12 +3953,13 @@ function openActualProgressPage(savedSchedule) {
           delayBar = `<div class="gtt-bar gtt-bar-delay" style="left:${ds * DAY_W}px;width:${dw}px;"></div>`;
         }
       }
+      // FIX 4: body cells — ext-col class gives amber background via CSS
       const cells = days.map(d => {
         const isW    = d.getDay() === 0 || d.getDay() === 6;
         const isT    = d.getTime() === today.getTime();
         const isExtD = _isExtDay(d);
         let cls = 'gtt-cell';
-        if (isExtD) cls += ' ext-col';
+        if (isExtD) cls += ' ext-col';   // amber background
         if (isW)    cls += ' weekend';
         if (isT)    cls += ' today-col';
         return `<div class="${cls}" style="width:${DAY_W}px;height:40px;"></div>`;
@@ -3949,8 +4026,8 @@ function openActualProgressPage(savedSchedule) {
   if (activeId) selectMs(activeId);
 }
 
-// ── Helper: effective project finish date (ext takes precedence) ──
-function _effectiveFinish(tl, latestExtFinish) {
+// ── Helper: effective finish date as YYYY-MM-DD string ──
+function _effectiveFinishStr(tl, latestExtFinish) {
   if (latestExtFinish && latestExtFinish > new Date(0)) return latestExtFinish.toISOString().slice(0, 10);
   return tl?.finish || null;
 }
