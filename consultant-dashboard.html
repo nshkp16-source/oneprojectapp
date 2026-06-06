@@ -986,11 +986,19 @@
     <div id="summaryLocation" style="font-size:14px; color:#333;">No location set yet</div>
   </div>
 
-  <!-- Weather summary -->
-  <div style="width:100%; padding:14px; background:rgba(255,255,255,0.95); border-radius:12px;">
-    <div style="font-size:12px; font-weight:bold; color:#007B8A; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px;">Weather</div>
-    <div id="summaryWeatherText" style="font-size:13px; color:#333;">No weather available.</div>
-    <div id="summaryWeatherForecast" style="font-size:12px; color:#666; margin-top:6px; line-height:1.4;">Select a saved location to load current weather.</div>
+  <!-- Weather summary (enhanced with icons and height) -->
+  <div style="width:100%; padding:16px; background:rgba(255,255,255,0.95); border-radius:12px;">
+    <div style="font-size:12px; font-weight:bold; color:#007B8A; margin-bottom:12px; text-transform:uppercase; letter-spacing:0.5px;">🌤️ Weather</div>
+    <div style="display:flex; flex-direction:column; gap:12px;">
+      <div style="padding:12px; background:#f0f8ff; border-radius:8px; border-left:4px solid #007B8A;">
+        <div style="font-size:11px; color:#666; margin-bottom:6px; font-weight:600;">Current Weather</div>
+        <div id="summaryWeatherText" style="font-size:16px; font-weight:bold; color:#333; line-height:1.4;">No weather available.</div>
+      </div>
+      <div style="padding:12px; background:#fff8f0; border-radius:8px; border-left:4px solid #ff9800;">
+        <div style="font-size:11px; color:#666; margin-bottom:6px; font-weight:600;">Today & Tomorrow Forecast</div>
+        <div id="summaryWeatherForecast" style="font-size:13px; color:#333; line-height:1.8; font-weight:500;">Select a saved location to load weather.</div>
+      </div>
+    </div>
   </div>
 
   <!-- Project status -->
@@ -1016,21 +1024,20 @@
     </div>
   </div>
 
-  <!-- Progress chart: current milestone only with expand button -->
+  <!-- All Milestones Progress in Summary Box (no modal) -->
   <div style="width:100%; padding:14px; background:rgba(255,255,255,0.95); border-radius:12px;">
-    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-      <div style="font-size:12px; font-weight:bold; color:#007B8A; text-transform:uppercase; letter-spacing:0.5px;">Current Milestone Progress</div>
-      <button id="chartExpandBtn" type="button" style="background:none; border:1px solid #ccc; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:14px; color:#666; transition:all 0.2s;" title="Expand chart to view all milestones">⟨⟩</button>
-    </div>
-    <div style="font-size:10px; color:#999; margin-bottom:8px; display:flex; gap:12px;">
+    <div style="font-size:12px; font-weight:bold; color:#007B8A; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:10px;">📊 All Milestones Progress</div>
+    <div style="font-size:10px; color:#999; margin-bottom:10px; display:flex; gap:12px; flex-wrap:wrap;">
       <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;background:#007B8A;opacity:0.4;border-radius:2px;display:inline-block;"></span>Planned</span>
       <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;background:#28a745;border-radius:2px;display:inline-block;"></span>Actual</span>
       <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;background:#dc3545;border-radius:2px;display:inline-block;"></span>Behind</span>
     </div>
-    <div id="summaryChart" style="width:100%; height:140px; background:#f4f9fc; border-radius:8px; position:relative; display:flex; align-items:flex-end; gap:3px; padding:8px 8px 0; overflow:hidden;">
-      <div style="font-size:11px;color:#bbb;padding:8px;">Loading…</div>
+    <div id="summaryChart" style="width:100%; max-height:300px; overflow-y:auto; background:#f4f9fc; border-radius:8px; display:flex; flex-direction:column; gap:8px; padding:12px; scroll-snap-type:y mandatory;">
+      <div style="font-size:12px;color:#bbb;padding:20px;text-align:center;">Loading milestones…</div>
     </div>
-    <div id="summaryChartLabels" style="display:flex; gap:3px; margin-top:3px; padding:0 8px;"></div>
+    <div style="font-size:9px; color:#999; text-align:center; margin-top:10px; padding:8px; background:#f0f0f0; border-radius:6px; border-left:3px solid #007B8A;">
+      💡 For detailed Gantt chart and scheduling, go to <strong>Schedule</strong> section →
+    </div>
   </div>
 
   <!-- Site photos (from milestone_photos via API) -->
@@ -1696,6 +1703,17 @@ function initializeSummaryPanel() {
 // =========================
 // LIVE WEATHER via Open-Meteo (no API key needed)
 // =========================
+function _weatherCodeIcon(code) {
+  if (code === 0) return '☀️';
+  if (code === 1 || code === 2) return '🌤️';
+  if (code === 3) return '☁️';
+  if (code === 45 || code === 48) return '🌫️';
+  if ([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return '🌧️';
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return '❄️';
+  if ([95, 96, 99].includes(code)) return '⛈️';
+  return '🌡️';
+}
+
 function _weatherCodeLabel(code) {
   const map = {
     0: 'Clear sky',
@@ -1758,21 +1776,23 @@ async function loadSummaryWeather(location) {
     const daily = weather.daily;
     if (!current || !daily) throw new Error('Incomplete weather response');
 
-    // Display current weather
+    // Display current weather with icon
     const currentLabel = _weatherCodeLabel(current.weathercode);
-    const currentDisplay = `${currentLabel}, ${current.temperature.toFixed(0)}°C · Wind ${current.windspeed.toFixed(0)} km/h`;
+    const currentIcon = _weatherCodeIcon(current.weathercode);
+    const currentDisplay = `${currentIcon} ${currentLabel}, ${current.temperature.toFixed(0)}°C · Wind ${current.windspeed.toFixed(0)} km/h`;
     if (weatherText) weatherText.textContent = currentDisplay;
     console.log('[Weather] Current:', currentDisplay);
 
-    // Display today + tomorrow forecast
+    // Display today + tomorrow forecast with icons
     const todayHigh = daily.temperature_2m_max?.[0];
     const todayLow = daily.temperature_2m_min?.[0];
-    const tomorrowLabel = daily.weathercode?.[1] != null ? _weatherCodeLabel(daily.weathercode[1]) : null;
+    const tomorrowCode = daily.weathercode?.[1];
+    const tomorrowLabel = tomorrowCode != null ? _weatherCodeLabel(tomorrowCode) : null;
+    const tomorrowIcon = tomorrowCode != null ? _weatherCodeIcon(tomorrowCode) : '';
     const tomorrowHigh = daily.temperature_2m_max?.[1];
     const tomorrowLow = daily.temperature_2m_min?.[1];
-    const forecastDisplay = `Today ${todayHigh != null ? Math.round(todayHigh) : '—'}°C / ${todayLow != null ? Math.round(todayLow) : '—'}°C` +
-      (tomorrowLabel ? ` · Tomorrow ${tomorrowLabel} ${tomorrowHigh != null ? Math.round(tomorrowHigh) : '—'}°C / ${tomorrowLow != null ? Math.round(tomorrowLow) : '—'}°C` : '');
-    if (weatherForecast) weatherForecast.textContent = forecastDisplay;
+    const forecastDisplay = `Today ${todayHigh != null ? Math.round(todayHigh) : '—'}°C / ${todayLow != null ? Math.round(todayLow) : '—'}°C<br>Tomorrow ${tomorrowIcon} ${tomorrowLabel || '—'} ${tomorrowHigh != null ? Math.round(tomorrowHigh) : '—'}°C / ${tomorrowLow != null ? Math.round(tomorrowLow) : '—'}°C`;
+    if (weatherForecast) weatherForecast.innerHTML = forecastDisplay;
     console.log('[Weather] Forecast:', forecastDisplay);
   } catch (err) {
     console.error('[Weather] Error fetching from Open-Meteo:', err);
@@ -1874,49 +1894,37 @@ async function loadSummaryPanelData() {
       lastMsEl.style.color = progress.last_completed ? '#28a745' : '#888';
     }
 
-    // ── Progress chart ──
+    // ── Progress chart (all milestones, no modal) ──
     const chartEl  = document.getElementById('summaryChart');
-    const labelsEl = document.getElementById('summaryChartLabels');
-    if (chartEl && chart_milestones.length) {
-      const chartH = 124;
-      chartEl.innerHTML = chart_milestones.map(ms => {
+    if (chartEl && data.all_milestones_for_modal && data.all_milestones_for_modal.length) {
+      const allMilestones = data.all_milestones_for_modal;
+      chartEl.innerHTML = allMilestones.map((ms, idx) => {
         const isLate      = ms.actual_pct < ms.planned_pct - 5 && ms.planned_pct > 0;
         const actualColor = ms.activity_status === 'completed' ? '#007B8A'
                           : isLate ? '#dc3545' : '#28a745';
-        const planH   = Math.round((ms.planned_pct / 100) * chartH);
-        const actualH = Math.round((ms.actual_pct  / 100) * chartH);
-        return `<div style="flex:1; display:flex; flex-direction:row; align-items:flex-end;
-                  justify-content:center; height:${chartH}px; gap:2px;">
-          <div style="width:44%; height:${Math.max(planH,1)}px; background:#007B8A; opacity:0.35;
-               border-radius:3px 3px 0 0;" title="Planned: ${ms.planned_pct.toFixed(1)}%"></div>
-          <div style="width:44%; height:${Math.max(actualH,1)}px; background:${actualColor};
-               border-radius:3px 3px 0 0;" title="${ms.title}: ${ms.actual_pct.toFixed(1)}% actual"></div>
-        </div>`;
+        const planH   = Math.round((ms.planned_pct / 100) * 100);
+        const actualH = Math.round((ms.actual_pct  / 100) * 100);
+        const statusBadge = ms.activity_status === 'completed' ? '✓' : ms.activity_status === 'in_progress' ? '▶' : '◯';
+        return `
+          <div style="padding:8px; background:#fff; border-radius:6px; border-left:3px solid ${actualColor}; font-size:12px; scroll-snap-align:start;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <div style="font-weight:600; color:#333; flex:1;">${statusBadge} ${ms.title}</div>
+              <div style="font-size:10px; color:#666; white-space:nowrap; margin-left:8px;">${ms.actual_pct.toFixed(0)}%</div>
+            </div>
+            <div style="display:flex; gap:2px; height:24px; align-items:flex-end; background:#f0f0f0; border-radius:4px; padding:2px; overflow:hidden;">
+              <div style="flex:${Math.max(planH, 5)}%; height:${Math.max(planH*0.6, 4)}px; background:#007B8A; opacity:0.35; border-radius:2px; min-width:2px;" title="Planned: ${ms.planned_pct.toFixed(1)}%"></div>
+              <div style="flex:${Math.max(actualH, 5)}%; height:${Math.max(actualH*0.6, 4)}px; background:${actualColor}; border-radius:2px; min-width:2px;" title="Actual: ${ms.actual_pct.toFixed(1)}%"></div>
+            </div>
+            <div style="font-size:10px; color:#666; margin-top:4px; display:flex; justify-content:space-between;">
+              <span>Planned: ${ms.planned_pct.toFixed(1)}%</span>
+              <span>Actual: ${ms.actual_pct.toFixed(1)}%</span>
+            </div>
+          </div>
+        `;
       }).join('');
-      chartEl.style.cssText += 'display:flex;align-items:flex-end;gap:3px;padding:8px 8px 0;';
-
-      if (labelsEl) {
-        labelsEl.innerHTML = chart_milestones.map(ms =>
-          `<div style="flex:1;font-size:9px;color:#888;text-align:center;overflow:hidden;
-             text-overflow:ellipsis;white-space:nowrap;" title="${ms.title}">
-            ${ms.title.length > 7 ? ms.title.slice(0, 6) + '…' : ms.title}
-          </div>`
-        ).join('');
-      }
+      chartEl.style.cssText = 'width:100%; max-height:300px; overflow-y:auto; background:#f4f9fc; border-radius:8px; display:flex; flex-direction:column; gap:8px; padding:12px; scroll-snap-type:y mandatory;';
     } else if (chartEl) {
-      chartEl.innerHTML = '<div style="font-size:11px;color:#bbb;padding:12px;width:100%;text-align:center;">No milestones yet</div>';
-    }
-
-    // ── Store expanded chart data and wire up expand button ──
-    expandedChartData = data;
-    const expandBtn = document.getElementById('chartExpandBtn');
-    if (expandBtn) {
-      expandBtn.onclick = () => {
-        if (data.all_milestones_for_modal && data.all_milestones_for_modal.length > 0) {
-          document.getElementById('chartExpandModal').style.display = 'flex';
-          renderExpandedChartAtIndex(0);
-        }
-      };
+      chartEl.innerHTML = '<div style="font-size:12px;color:#bbb;padding:20px;text-align:center;">No milestones yet</div>';
     }
 
     // ── Photos ──
