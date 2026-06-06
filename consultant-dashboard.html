@@ -961,10 +961,10 @@
     </div>
   </div>
 
-  <!-- Weather (live) -->
+  <!-- Location (simplified) -->
   <div style="width:100%; padding:12px; background:rgba(255,255,255,0.95); border-radius:12px;">
-    <div style="font-size:12px; color:#666; margin-bottom:4px;">Weather / Location</div>
-    <div id="summaryWeather" style="font-size:14px; color:#333;">Detecting location…</div>
+    <div style="font-size:12px; color:#666; margin-bottom:4px;">📍 Saved Location</div>
+    <div id="summaryLocation" style="font-size:14px; color:#333;">No location set yet</div>
   </div>
 
   <!-- Last completed milestone + overall progress -->
@@ -1264,7 +1264,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 // 5. Load tabs + records
   loadHomeTabs();
   initializeSummaryPanel();
-  loadSummaryWeather();
   loadSummaryPanelData();
   setTimeout(() => { loadTabRecords('contractual'); }, 50);
   updateNotificationBadge();
@@ -1580,82 +1579,8 @@ function initializeSummaryPanel() {
 // LIVE WEATHER via Open-Meteo (no API key needed)
 // =========================
 async function loadSummaryWeather() {
-  const el = document.getElementById('summaryWeather');
-  if (!el) return;
-
-  const WMO = {
-    0:'☀️ Clear sky', 1:'🌤 Mainly clear', 2:'⛅ Partly cloudy', 3:'☁️ Overcast',
-    45:'🌫 Foggy', 48:'🌫 Icy fog',
-    51:'🌦 Light drizzle', 53:'🌦 Drizzle', 55:'🌧 Heavy drizzle',
-    61:'🌧 Light rain', 63:'🌧 Rain', 65:'🌧 Heavy rain',
-    71:'🌨 Light snow', 73:'🌨 Snow', 75:'❄️ Heavy snow',
-    80:'🌦 Light showers', 81:'🌧 Showers', 82:'⛈ Heavy showers',
-    95:'⛈ Thunderstorm', 96:'⛈ Thunderstorm+hail', 99:'⛈ Heavy thunderstorm',
-  };
-
-  try {
-    const coords = await new Promise((resolve, reject) => {
-      if (!navigator.geolocation) return reject(new Error('no geolocation'));
-      navigator.geolocation.getCurrentPosition(
-        pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-        () => reject(new Error('denied'))
-      );
-    });
-
-    let cityName = '';
-    try {
-      const geo = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?lat=${coords.lat}&lon=${coords.lon}&format=json`,
-        { headers: { 'Accept-Language': 'en' } }
-      );
-      const geoData = await geo.json();
-      cityName = geoData.address?.city || geoData.address?.town || geoData.address?.village || geoData.address?.county || '';
-    } catch (_) {}
-
-    const wx = await fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}` +
-      `&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weathercode` +
-      `&wind_speed_unit=kmh&temperature_unit=celsius&timezone=auto`
-    );
-    const wxData = await wx.json();
-    const cur  = wxData.current;
-    const desc = WMO[cur.weathercode] || '🌡 Unknown';
-
-    el.innerHTML = `
-      <div style="font-size:15px; font-weight:bold; color:#333; margin-bottom:4px;">
-        ${desc}${cityName ? ' · ' + cityName : ''}
-      </div>
-      <div style="font-size:12px; color:#666; display:flex; gap:12px; flex-wrap:wrap;">
-        <span>🌡 ${cur.temperature_2m}°C</span>
-        <span>💧 ${cur.relative_humidity_2m}%</span>
-        <span>🌬 ${cur.wind_speed_10m} km/h</span>
-      </div>`;
-
-  } catch (err) {
-    try {
-      const ipRes  = await fetch('https://ipapi.co/json/');
-      const ipData = await ipRes.json();
-      const wx = await fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${ipData.latitude}&longitude=${ipData.longitude}` +
-        `&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weathercode` +
-        `&wind_speed_unit=kmh&temperature_unit=celsius&timezone=auto`
-      );
-      const wxData = await wx.json();
-      const cur  = wxData.current;
-      const desc = WMO[cur.weathercode] || '🌡 Unknown';
-      el.innerHTML = `
-        <div style="font-size:15px; font-weight:bold; color:#333; margin-bottom:4px;">
-          ${desc} · ${ipData.city || ''}
-        </div>
-        <div style="font-size:12px; color:#666; display:flex; gap:12px; flex-wrap:wrap;">
-          <span>🌡 ${cur.temperature_2m}°C</span>
-          <span>💧 ${cur.relative_humidity_2m}%</span>
-          <span>🌬 ${cur.wind_speed_10m} km/h</span>
-        </div>`;
-    } catch (_) {
-      el.textContent = 'Weather unavailable.';
-    }
-  }
+  // Removed: Weather is no longer displayed on dashboard.
+  // Location (coordinates) are saved separately for weather station reference.
 }
 
 // =========================
@@ -1672,6 +1597,16 @@ async function loadSummaryPanelData() {
     );
     if (!res.ok) return;
     const data = await res.json();
+    
+    // Display saved location
+    const locEl = document.getElementById('summaryLocation');
+    if (locEl) {
+      if (data.location?.stationName) {
+        locEl.textContent = `${data.location.stationName}, ${data.location.countryName || ''}`;
+      } else {
+        locEl.textContent = 'No location set yet';
+      }
+    }
 
     if (!data.hasSchedule) {
       ['summaryProgress', 'summaryVariance', 'summaryLastMs'].forEach(id => {
@@ -1847,7 +1782,6 @@ function showGrayPanel() {
   expandedGrayPart = false;
   setGrayToggleArrow('>');
   loadSummaryPanelData();   // ← refresh live data when panel reopens
-  loadSummaryWeather();     // ← refresh weather when panel reopens
 }
 
 // =======================================================================
@@ -2037,13 +1971,15 @@ const _css = `
 .sc-btn-ext:hover:not(:disabled){background:#d06918;}
 /* CARDS */
 .sc-card{background:var(--c-surface);border:1px solid var(--c-border);
-         border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow);}
-.sc-card-hdr{padding:12px 20px;border-bottom:1px solid var(--c-border);
-             display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
-.sc-card-label{font-size:10px;font-weight:600;letter-spacing:0.08em;
+         border-radius:var(--radius-lg);overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);}
+.sc-card-hdr{padding:14px 20px;border-bottom:1px solid var(--c-border);
+             display:flex;align-items:center;justify-content:space-between;flex-shrink:0;
+             background:linear-gradient(135deg, rgba(5,120,112,0.02) 0%, transparent 100%);
+             border-bottom:2px solid var(--c-brand-light);}
+.sc-card-label{font-size:10px;font-weight:700;letter-spacing:0.1em;
                text-transform:uppercase;color:var(--c-brand);font-family:var(--font-mono);}
 /* FORM FIELDS */
-.sc-fw{display:flex;flex-direction:column;gap:5px;}
+.sc-fw{display:flex;flex-direction:column;gap:6px;}
 .sc-fl{font-size:10px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;
        color:var(--c-muted);font-family:var(--font-mono);}
 .sc-wrap input[type=date],.sc-wrap input[type=text],
@@ -2300,6 +2236,7 @@ async function _geocodeSearch(query) {
 
 /**
  * Render the location picker section HTML (for use inside schedule form).
+ * Simplified: Just city search, no weather. Saves coordinates for later weather station reference.
  * id prefix: 'loc'
  */
 function _locationPickerHTML(existing) {
@@ -2307,42 +2244,39 @@ function _locationPickerHTML(existing) {
   return `
   <div class="sc-card" id="locCard" style="flex-shrink:0;">
     <div class="sc-card-hdr">
-      <span class="sc-card-label">📍 Project Location & Weather Station</span>
+      <span class="sc-card-label">📍 Project Location</span>
       <span id="locSavedBadge" style="font-size:11px;color:var(--c-brand);font-family:var(--font-mono);display:${saved.stationName ? 'inline' : 'none'};">
-        ✓ ${saved.stationName || ''}
+        ✓ Saved
       </span>
     </div>
     <div style="padding:14px 20px;display:flex;flex-direction:column;gap:12px;">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div class="sc-fw">
+      <div style="display:flex;gap:12px;">
+        <div class="sc-fw" style="flex:1;">
           <span class="sc-fl">Search City / Region</span>
-          <input type="search" id="locSearch" placeholder="e.g. Kigali, Lagos, Nairobi…"
+          <input type="search" id="locSearch" placeholder="e.g. Kigali, Nairobi, Lagos…"
             value="${saved.stationName ? saved.stationName + ', ' + (saved.countryName||'') : ''}"/>
         </div>
-        <div class="sc-fw" style="justify-content:flex-end;padding-top:18px;">
-          <button class="sc-btn sc-btn-ghost" id="locSearchBtn" type="button">🔍 Find Stations</button>
+        <div style="display:flex;align-items:flex-end;">
+          <button class="sc-btn sc-btn-ghost" id="locSearchBtn" type="button" style="white-space:nowrap;">🔍 Find</button>
         </div>
       </div>
       <div id="locResults" style="display:none;border:1px solid var(--c-border);border-radius:var(--radius);
-           max-height:200px;overflow-y:auto;background:var(--c-surface);">
-        <!-- populated dynamically -->
+           max-height:180px;overflow-y:auto;background:var(--c-surface);">
       </div>
-      <div id="locSelected" style="display:${saved.stationName ? 'flex' : 'none'};
-           align-items:center;gap:10px;background:var(--c-brand-light);border-radius:var(--radius);padding:10px 14px;">
-        <span style="font-size:20px;">📡</span>
-        <div>
-          <div style="font-size:13px;font-weight:600;color:var(--c-text);" id="locSelName">${saved.stationName || ''}</div>
-          <div style="font-size:11px;color:var(--c-muted);font-family:var(--font-mono);" id="locSelCoords">
-            ${saved.lat ? `${saved.lat.toFixed(4)}°, ${saved.lng.toFixed(4)}° · ${saved.countryName || ''}` : ''}
+      <div id="locSelected" style="display:${saved.stationName ? 'block' : 'none'};
+           background:var(--c-brand-light);border-radius:var(--radius);padding:12px 14px;">
+        <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;">
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--c-text);" id="locSelName">${saved.stationName || ''}</div>
+            <div style="font-size:11px;color:var(--c-muted);margin-top:2px;" id="locSelCoords">
+              ${saved.lat ? `📡 ${saved.lat.toFixed(4)}°, ${saved.lng.toFixed(4)}° | ${saved.countryName || ''}` : ''}
+            </div>
           </div>
+          <button class="sc-btn sc-btn-ghost" id="locClearBtn" type="button" style="padding:4px 10px;font-size:12px;">✕ Clear</button>
         </div>
-        <button class="sc-btn sc-btn-ghost" id="locClearBtn" type="button" style="margin-left:auto;font-size:12px;">✕ Clear</button>
       </div>
-      <button class="sc-btn sc-btn-ghost" id="locRestoreBtn" type="button" style="display:${saved.stationName ? 'inline-flex' : 'none'};font-size:12px;max-width:240px;">
-        ↺ Restore saved weather location
-      </button>
-      <div style="font-size:11px;color:var(--c-faint);">
-        Powered by <a href="https://open-meteo.com" target="_blank" style="color:var(--c-brand);text-decoration:none;">Open-Meteo</a> geocoding · coordinates saved for weather tracking
+      <div style="font-size:10px;color:var(--c-faint);line-height:1.6;">
+        💡 Select a city to save coordinates for weather station reference (used elsewhere in the app). Powered by <a href="https://open-meteo.com" target="_blank" style="color:var(--c-brand);text-decoration:none;">Open-Meteo</a>.
       </div>
     </div>
   </div>`;
@@ -2361,19 +2295,18 @@ function _wireLocationPicker(initialLocation) {
   const selCoords   = document.getElementById('locSelCoords');
   const savedBadge  = document.getElementById('locSavedBadge');
   const clearBtn    = document.getElementById('locClearBtn');
-  const restoreBtn  = document.getElementById('locRestoreBtn');
 
   function updateLocationUi() {
     if (selectedLocation) {
-      if (selectedEl) selectedEl.style.display = 'flex';
-      if (savedBadge) { savedBadge.textContent = `✓ ${selectedLocation.stationName}`; savedBadge.style.display = 'inline'; }
+      if (selectedEl) selectedEl.style.display = 'block';
+      if (savedBadge) { savedBadge.textContent = `✓ Saved`; savedBadge.style.display = 'inline'; }
       if (selName)    selName.textContent   = `${selectedLocation.stationName || ''}, ${selectedLocation.countryName || ''}`;
-      if (selCoords)  selCoords.textContent = selectedLocation.lat != null ? `${selectedLocation.lat.toFixed(4)}°, ${selectedLocation.lng.toFixed(4)}° · ${selectedLocation.countryName || ''}` : '';
-      if (restoreBtn) restoreBtn.style.display = lastLocation ? 'inline-flex' : 'none';
+      if (selCoords)  selCoords.textContent = selectedLocation.lat != null 
+        ? `📡 ${selectedLocation.lat.toFixed(4)}°, ${selectedLocation.lng.toFixed(4)}° | ${selectedLocation.countryName || ''}`
+        : '';
     } else {
       if (selectedEl) selectedEl.style.display = 'none';
       if (savedBadge) savedBadge.style.display = 'none';
-      if (restoreBtn) restoreBtn.style.display = lastLocation ? 'inline-flex' : 'none';
       if (selName)    selName.textContent = '';
       if (selCoords)  selCoords.textContent = '';
     }
@@ -2382,22 +2315,22 @@ function _wireLocationPicker(initialLocation) {
   async function doSearch() {
     const q = searchInput?.value?.trim();
     if (!q || q.length < 2) return;
-    if (searchBtn) { searchBtn.disabled = true; searchBtn.textContent = '⏳ Searching…'; }
+    if (searchBtn) { searchBtn.disabled = true; searchBtn.textContent = '⏳'; }
     if (resultsEl) { resultsEl.style.display = 'block'; resultsEl.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:var(--c-muted);">Searching…</div>'; }
     try {
       const results = await _geocodeSearch(q);
       if (!results.length) {
-        resultsEl.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:var(--c-muted);">No results found. Try a different city name.</div>';
+        resultsEl.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:var(--c-muted);">No results. Try another city.</div>';
         return;
       }
       resultsEl.innerHTML = results.map((r, i) => {
         const label = [r.name, r.admin1, r.country].filter(Boolean).join(', ');
-        const sub   = `${r.latitude.toFixed(4)}°N, ${r.longitude.toFixed(4)}°E · elevation ${r.elevation ?? '—'}m`;
+        const sub   = `${r.latitude.toFixed(4)}°N, ${r.longitude.toFixed(4)}°E`;
         return `<div class="loc-station-item" data-idx="${i}"
                      data-lat="${r.latitude}" data-lng="${r.longitude}"
                      data-name="${_esc(r.name)}" data-country="${_esc(r.country || '')}"
                      data-cc="${_esc(r.country_code || '')}">
-          <div style="font-weight:600;color:var(--c-text);">${label}</div>
+          <div style="font-weight:600;color:var(--c-text);font-size:13px;">${_esc(label)}</div>
           <div style="font-size:10px;color:var(--c-muted);font-family:var(--font-mono);margin-top:2px;">${sub}</div>
         </div>`;
       }).join('');
@@ -2420,7 +2353,7 @@ function _wireLocationPicker(initialLocation) {
       console.error('Location search:', err);
       if (resultsEl) resultsEl.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:var(--c-danger);">Search failed. Check your connection.</div>';
     } finally {
-      if (searchBtn) { searchBtn.disabled = false; searchBtn.textContent = '🔍 Find Stations'; }
+      if (searchBtn) { searchBtn.disabled = false; searchBtn.textContent = '🔍 Find'; }
     }
   }
 
@@ -2431,13 +2364,6 @@ function _wireLocationPicker(initialLocation) {
     updateLocationUi();
     if (searchInput) searchInput.value = '';
     if (resultsEl)   resultsEl.style.display = 'none';
-  });
-  restoreBtn?.addEventListener('click', () => {
-    if (!lastLocation) return;
-    selectedLocation = { ...lastLocation };
-    if (searchInput) searchInput.value = `${selectedLocation.stationName || ''}, ${selectedLocation.countryName || ''}`;
-    updateLocationUi();
-    if (resultsEl) resultsEl.style.display = 'none';
   });
 
   updateLocationUi();
@@ -2476,7 +2402,7 @@ function openProjectScheduleForm(existingSchedule) {
       { id: 'sfSave',   label: isEdit ? 'Save Changes' : 'Save Schedule', cls: 'sc-btn sc-btn-primary' },
     ])}
     <div id="sfBody" style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;
-                             gap:14px;padding:16px 24px;">
+                             gap:18px;padding:20px 28px;background:linear-gradient(to bottom, var(--c-surface) 0%, #fafaf9 100%);">
 
       <!-- ── TIMELINE CARD ── -->
       <div class="sc-card" style="flex-shrink:0;">
@@ -2488,17 +2414,17 @@ function openProjectScheduleForm(existingSchedule) {
           </div>
         </div>
         ${isEdit ? `<div class="lock-banner">⚠ Dates are locked. Click "Unlock to Edit" only if you need to change them.</div>` : ''}
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;align-items:end;padding:16px 20px;gap:16px;">
-          <div class="sc-fw"><span class="sc-fl">Planned Start</span>
-            <input type="date" id="sfPS" value="${existingSchedule?.timeline?.start || ''}" ${isEdit ? 'readonly' : ''}/></div>
-          <div class="sc-fw"><span class="sc-fl">Planned Finish</span>
-            <input type="date" id="sfPF" value="${existingSchedule?.timeline?.finish || ''}" ${isEdit ? 'readonly' : ''}/></div>
-          <div class="sc-fw"><span class="sc-fl">Total Duration</span>
-            <div id="sfDur" style="font-size:18px;font-weight:600;color:${existingSchedule?.timeline?.duration ? 'var(--c-brand)' : 'var(--c-faint)'};padding:9px 0;font-family:var(--font-mono);">
-              ${existingSchedule?.timeline?.duration ? existingSchedule.timeline.duration + ' days' : '— days'}
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;align-items:end;padding:18px 20px;gap:16px;">
+          <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">Planned Start</span>
+            <input type="date" id="sfPS" value="${existingSchedule?.timeline?.start || ''}" ${isEdit ? 'readonly' : ''} style="padding:10px 12px;"/></div>
+          <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">Planned Finish</span>
+            <input type="date" id="sfPF" value="${existingSchedule?.timeline?.finish || ''}" ${isEdit ? 'readonly' : ''} style="padding:10px 12px;"/></div>
+          <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">Total Duration</span>
+            <div id="sfDur" style="font-size:20px;font-weight:700;color:${existingSchedule?.timeline?.duration ? 'var(--c-brand)' : 'var(--c-faint)'};padding:8px 12px;font-family:var(--font-mono);background:var(--c-brand-light);border-radius:8px;">
+              ${existingSchedule?.timeline?.duration ? existingSchedule.timeline.duration + 'd' : '—'}
             </div>
           </div>
-          <button class="sc-btn sc-btn-primary" id="sfSetTl" style="height:38px;" ${isEdit ? 'disabled' : ''}>
+          <button class="sc-btn sc-btn-primary" id="sfSetTl" style="height:40px;padding:0 18px;" ${isEdit ? 'disabled' : ''}>
             ${isEdit ? '🔒 Locked' : 'Set Timeline'}
           </button>
         </div>
@@ -2514,19 +2440,19 @@ function openProjectScheduleForm(existingSchedule) {
       <!-- ── ADD/EDIT MILESTONE CARD ── -->
       <div class="sc-card" style="flex-shrink:0;">
         <div class="sc-card-hdr">
-          <span class="sc-card-label" id="sfFormLabel">Add Milestone</span>
-          <span id="sfHint" style="font-size:12px;color:var(--c-muted);">
-            ${isEdit ? 'Add new milestones or click Edit on existing ones.' : 'Set the project timeline first.'}
+          <span class="sc-card-label" id="sfFormLabel">➕ Add Milestone</span>
+          <span id="sfHint" style="font-size:11px;color:var(--c-muted);font-weight:500;">
+            ${isEdit ? '📝 Click Edit to modify • Add new ones below' : '⏳ Set the timeline first'}
           </span>
         </div>
-        <div style="display:grid;grid-template-columns:2fr 2fr 1fr 1fr 1fr 1.2fr;gap:12px;padding:16px 20px 12px;">
-          <div class="sc-fw"><span class="sc-fl">Title</span><input type="text" id="sfMsT" placeholder="e.g. Foundation works"/></div>
-          <div class="sc-fw"><span class="sc-fl">Description</span><input type="text" id="sfMsD" placeholder="Scope note"/></div>
-          <div class="sc-fw"><span class="sc-fl">Start Date</span><input type="date" id="sfMsS"/></div>
-          <div class="sc-fw"><span class="sc-fl">End Date</span><input type="date" id="sfMsE"/></div>
-          <div class="sc-fw"><span class="sc-fl">Quantity</span><input type="number" id="sfMsQ" placeholder="0" min="0"/></div>
-          <div class="sc-fw"><span class="sc-fl">Unit</span>
-            <select id="sfMsU">
+        <div style="display:grid;grid-template-columns:2fr 2fr 1fr 1fr 1fr 1.2fr;gap:14px;padding:18px 20px 14px;background:#fafaf9;">
+          <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">Title</span><input type="text" id="sfMsT" placeholder="e.g. Foundation works" style="padding:10px 12px;"/></div>
+          <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">Description</span><input type="text" id="sfMsD" placeholder="Scope details" style="padding:10px 12px;"/></div>
+          <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">Start</span><input type="date" id="sfMsS" style="padding:10px 12px;"/></div>
+          <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">End</span><input type="date" id="sfMsE" style="padding:10px 12px;"/></div>
+          <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">Qty</span><input type="number" id="sfMsQ" placeholder="0" min="0" style="padding:10px 12px;"/></div>
+          <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">Unit</span>
+            <select id="sfMsU" style="padding:10px 12px;">
               <option>m³</option><option>tons</option><option>sqm</option>
               <option>lm</option><option>units</option><option>hrs</option>
             </select>
@@ -2554,14 +2480,28 @@ function openProjectScheduleForm(existingSchedule) {
       </div>
 
       <!-- ── MILESTONE LIST CARD ── -->
-      <div class="sc-card" style="flex-shrink:0;margin-bottom:16px;">
+      <div class="sc-card" style="flex-shrink:0;margin-bottom:18px;">
         <div class="sc-card-hdr" style="flex-shrink:0;">
-          <span class="sc-card-label">Planned Milestones</span>
-          <span id="sfMsCnt" style="font-size:12px;color:var(--c-muted);font-family:var(--font-mono);">0 milestones</span>
+          <span class="sc-card-label">📋 Planned Milestones</span>
+          <span id="sfMsCnt" style="font-size:12px;color:var(--c-brand);font-weight:600;font-family:var(--font-mono);">0 milestones</span>
         </div>
-        <div id="sfMsList">
-          <div style="padding:32px;text-align:center;color:#8aa8a4;font-size:13px;">
-            No milestones yet — set the timeline and start adding above.
+        <div id="sfMsList" style="background:#fafaf9;">
+          <div style="padding:40px 20px;text-align:center;color:#8aa8a4;font-size:13px;background:linear-gradient(135deg, rgba(5,120,112,0.02) 0%, transparent 100%);">
+            ➕ No milestones yet — set the timeline and start adding above.
+          </div>
+        </div>
+      </div>
+
+      <!-- ── EXTENSION MILESTONES CARD (READ-ONLY) ── -->
+      <div class="sc-card" style="flex-shrink:0;margin-bottom:16px;display:none;" id="sfExtCard">
+        <div class="sc-card-hdr" style="flex-shrink:0;background:rgba(255,107,53,0.08);">
+          <span class="sc-card-label" style="color:var(--c-ext);">📊 Extension Timeline</span>
+          <span id="sfExtCnt" style="font-size:12px;color:var(--c-ext);font-family:var(--font-mono);">0 extension milestones</span>
+        </div>
+        <div id="sfExtList" style="background:#faf8f6;">
+          <div style="padding:16px 20px;font-size:12px;color:var(--c-muted);border-left:3px solid var(--c-ext);">
+            📌 These are extension milestones. They show the extended project timeline and cannot be edited here.
+            Approved extensions are automatically added to the schedule.
           </div>
         </div>
       </div>
@@ -2590,6 +2530,21 @@ function openProjectScheduleForm(existingSchedule) {
     activity_status: ms.activity_status || 'not_started',
     entries:         ms.entries || [],
     _isNew:          false,
+  }));
+
+  // Load extension milestones (read-only display)
+  let extensions = (existingSchedule?.extension_milestones || existingSchedule?.additional_milestones || []).map(ms => ({
+    id:              ms.id,
+    title:           ms.title,
+    desc:            ms.description || ms.desc || '',
+    start:           ms.start || ms.planned_start || '',
+    end:             ms.end   || ms.planned_end   || '',
+    qty:             ms.quantity || ms.qty || '',
+    unit:            ms.unit || 'm³',
+    executed:        ms.executed || 0,
+    progress_pct:    ms.progress_pct || 0,
+    activity_status: ms.activity_status || 'not_started',
+    isExtension:     true,
   }));
 
   let attached = null;
@@ -2648,30 +2603,31 @@ function openProjectScheduleForm(existingSchedule) {
       const isBeingEdited = editingId === ms.id;
 
       return `
-      <div class="sf-ms-row" data-id="${ms.id}" style="border-bottom:1px solid var(--c-border);opacity:${dimmed ? 0.4 : 1};transition:opacity 0.2s;">
-        <div style="display:flex;align-items:center;gap:12px;padding:12px 20px;cursor:pointer;
-                    ${oor ? 'background:#fff9f7;' : ''}${isBeingEdited ? 'background:#fffde7;' : ''}
-                    border-left:3px solid ${isBeingEdited ? '#f5c400' : oor ? '#f28c5e' : 'transparent'};">
-          <div style="width:26px;height:26px;border-radius:50%;
+      <div class="sf-ms-row" data-id="${ms.id}" style="border-bottom:1px solid var(--c-border);opacity:${dimmed ? 0.4 : 1};transition:opacity 0.2s;background:${isBeingEdited ? '#fffde7' : oor ? '#fff9f7' : '#fafaf9'};">
+        <div style="display:flex;align-items:center;gap:14px;padding:14px 20px;cursor:pointer;
+                    border-left:4px solid ${isBeingEdited ? '#f5c400' : oor ? 'var(--c-danger)' : 'transparent'};">
+          <div style="width:34px;height:34px;border-radius:8px;flex-shrink:0;
                       background:${ms._isNew ? 'var(--c-ext-light)' : isTouched ? '#e8f4ff' : 'var(--c-brand-light)'};
                       color:${ms._isNew ? 'var(--c-ext)' : isTouched ? '#1a6fba' : 'var(--c-brand-dark)'};
-                      font-size:11px;font-weight:700;font-family:var(--font-mono);
-                      display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                      font-size:12px;font-weight:700;font-family:var(--font-mono);
+                      display:flex;align-items:center;justify-content:center;
+                      border:2px solid ${ms._isNew ? 'var(--c-ext)' : isTouched ? '#1a6fba' : 'var(--c-brand)'};
+                      box-shadow:0 1px 3px rgba(0,0,0,0.05);">
             ${String(i + 1).padStart(2, '0')}
           </div>
           <div style="flex:1;min-width:0;">
             <div style="font-size:13px;font-weight:600;color:var(--c-text);display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
               ${ms.title || 'Untitled'}
-              ${ms._isNew ? `<span class="sc-tag sc-tag-ext">NEW</span>` : isTouched ? `<span class="sc-tag" style="background:#e8f4ff;color:#1a6fba;">EDITED</span>` : `<span class="sc-tag sc-tag-ok">DB</span>`}
-              ${isBeingEdited ? `<span class="sc-tag sc-tag-warn">EDITING…</span>` : ''}
+              ${ms._isNew ? `<span class="sc-tag sc-tag-ext">+ NEW</span>` : isTouched ? `<span class="sc-tag" style="background:#e8f4ff;color:#1a6fba;font-weight:600;">✎ EDITED</span>` : `<span class="sc-tag sc-tag-ok">✓ DB</span>`}
+              ${isBeingEdited ? `<span class="sc-tag sc-tag-warn">⏳ EDITING</span>` : ''}
             </div>
-            <div style="font-size:11px;color:var(--c-muted);font-family:var(--font-mono);margin-top:2px;">
-              ${ms.start} → ${ms.end} · ${m.d}d · Dep: ${_depLabel(ms.dep)}
-              ${oor ? '<span style="color:var(--c-danger);margin-left:6px;">⚠ Outside timeline</span>' : ''}
+            <div style="font-size:11px;color:#888;font-family:var(--font-mono);margin-top:4px;letter-spacing:0.02em;">
+              📅 ${ms.start} → ${ms.end} · ⏱ ${m.d}d · 🔗 ${_depLabel(ms.dep)}
+              ${oor ? '<span style="color:var(--c-danger);margin-left:6px;font-weight:600;">⚠ Outside timeline</span>' : ''}
             </div>
-            ${hasProgress ? `<div style="margin-top:6px;">
-              <div class="sc-pbar" style="height:4px;"><div class="sc-pfill" style="width:${pct}%;"></div></div>
-              <div style="font-size:10px;color:var(--c-brand);font-family:var(--font-mono);margin-top:2px;">${pct.toFixed(1)}% — progress locked, preserved on save</div>
+            ${hasProgress ? `<div style="margin-top:8px;">
+              <div class="sc-pbar" style="height:5px;border-radius:3px;"><div class="sc-pfill" style="width:${pct}%;border-radius:3px;"></div></div>
+              <div style="font-size:10px;color:var(--c-brand);font-family:var(--font-mono);margin-top:2px;font-weight:600;">${pct.toFixed(1)}% progress (locked on save)</div>
             </div>` : ''}
           </div>
           <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
@@ -2721,6 +2677,57 @@ function openProjectScheduleForm(existingSchedule) {
     });
 
     if (_el('sfTlWarn')) _el('sfTlWarn').style.display = milestones.some(_isOutOfRange) ? 'block' : 'none';
+    _sfRefreshExtensions();  // ← Also render extension milestones
+  }
+
+  // ── Render extension milestones (read-only) ──
+  function _sfRefreshExtensions() {
+    const extCard = _el('sfExtCard');
+    const extList = _el('sfExtList');
+    const extCnt  = _el('sfExtCnt');
+    
+    if (!extensions.length) {
+      if (extCard) extCard.style.display = 'none';
+      return;
+    }
+    
+    if (extCard) extCard.style.display = 'block';
+    if (extCnt) extCnt.textContent = `${extensions.length} extension milestone${extensions.length !== 1 ? 's' : ''}`;
+    
+    if (!extList) return;
+    
+    extList.innerHTML = extensions.map((ms, i) => {
+      const d = ms.start && ms.end ? _daysBetween(ms.start, ms.end) : 0;
+      const pct = Number(ms.progress_pct || 0);
+      
+      return `
+      <div class="sf-ext-row" style="border-bottom:1px solid var(--c-border);padding:12px 20px;display:flex;align-items:center;gap:12px;
+                 background:#faf8f6;opacity:0.9;">
+        <div style="width:26px;height:26px;border-radius:50%;
+                    background:var(--c-ext-light);
+                    color:var(--c-ext);
+                    font-size:11px;font-weight:700;font-family:var(--font-mono);
+                    display:flex;align-items:center;justify-content:center;flex-shrink:0;
+                    border:2px solid var(--c-ext);">
+          E${String(i + 1).padStart(1, '0')}
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:600;color:var(--c-ext);display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+            ${ms.title || 'Untitled Extension'}
+            <span class="sc-tag" style="background:var(--c-ext-light);color:var(--c-ext);font-size:11px;padding:2px 8px;">EXT</span>
+          </div>
+          <div style="font-size:11px;color:var(--c-muted);font-family:var(--font-mono);margin-top:2px;">
+            ${ms.start} → ${ms.end} · ${d}d · Qty: ${ms.qty || '—'} ${ms.unit || ''}
+          </div>
+          ${ms.desc ? `<div style="font-size:11px;color:#666;margin-top:4px;">📝 ${_esc(ms.desc)}</div>` : ''}
+          ${pct > 0 ? `<div style="margin-top:6px;">
+            <div class="sc-pbar" style="height:4px;"><div class="sc-pfill" style="width:${pct}%;background:var(--c-ext);"></div></div>
+            <div style="font-size:10px;color:var(--c-ext);font-family:var(--font-mono);margin-top:2px;">${pct.toFixed(1)}% progress</div>
+          </div>` : ''}
+        </div>
+        <span style="color:var(--c-faint);font-size:11px;white-space:nowrap;">📌 Read-only</span>
+      </div>`;
+    }).join('');
   }
 
   // ── Namespace actions ──
