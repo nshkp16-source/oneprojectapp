@@ -986,6 +986,20 @@
     <div id="summaryLocation" style="font-size:14px; color:#333;">No location set yet</div>
   </div>
 
+  <!-- Weather summary -->
+  <div style="width:100%; padding:14px; background:rgba(255,255,255,0.95); border-radius:12px;">
+    <div style="font-size:12px; font-weight:bold; color:#007B8A; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px;">Weather</div>
+    <div id="summaryWeatherText" style="font-size:13px; color:#333;">No weather available.</div>
+    <div id="summaryWeatherForecast" style="font-size:12px; color:#666; margin-top:6px; line-height:1.4;">Select a saved location to load current weather.</div>
+  </div>
+
+  <!-- Project status -->
+  <div style="width:100%; padding:14px; background:rgba(255,255,255,0.95); border-radius:12px;">
+    <div style="font-size:12px; font-weight:bold; color:#007B8A; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px;">Project status</div>
+    <div id="summaryRemainingDays" style="font-size:13px; color:#333; margin-bottom:6px;">Remaining days: —</div>
+    <div id="summaryCurrentMilestone" style="font-size:13px; color:#555;">Current milestone: —</div>
+  </div>
+
   <!-- Last completed milestone + overall progress -->
   <div style="width:100%; padding:16px; background:rgba(255,255,255,0.95); border-radius:12px; display:flex; flex-direction:column; gap:10px;">
     <div style="font-size:12px; font-weight:bold; color:#007B8A; text-transform:uppercase; letter-spacing:0.5px;">Last Completed Milestone</div>
@@ -1598,9 +1612,80 @@ function initializeSummaryPanel() {
 // =========================
 // LIVE WEATHER via Open-Meteo (no API key needed)
 // =========================
-async function loadSummaryWeather() {
-  // Removed: Weather is no longer displayed on dashboard.
-  // Location (coordinates) are saved separately for weather station reference.
+function _weatherCodeLabel(code) {
+  const map = {
+    0: 'Clear sky',
+    1: 'Mainly clear',
+    2: 'Partly cloudy',
+    3: 'Overcast',
+    45: 'Fog',
+    48: 'Depositing rime fog',
+    51: 'Light drizzle',
+    53: 'Moderate drizzle',
+    55: 'Dense drizzle',
+    56: 'Freezing drizzle',
+    57: 'Dense freezing drizzle',
+    61: 'Slight rain',
+    63: 'Moderate rain',
+    65: 'Heavy rain',
+    66: 'Freezing rain',
+    67: 'Heavy freezing rain',
+    71: 'Slight snow',
+    73: 'Moderate snow',
+    75: 'Heavy snow',
+    77: 'Snow grains',
+    80: 'Slight rain showers',
+    81: 'Moderate rain showers',
+    82: 'Violent rain showers',
+    85: 'Slight snow showers',
+    86: 'Heavy snow showers',
+    95: 'Thunderstorm',
+    96: 'Thunderstorm with slight hail',
+    99: 'Thunderstorm with heavy hail',
+  };
+  return map[code] || 'Unknown';
+}
+
+async function loadSummaryWeather(location) {
+  const weatherText = document.getElementById('summaryWeatherText');
+  const weatherForecast = document.getElementById('summaryWeatherForecast');
+  if (!location || typeof location.lat !== 'number' || typeof location.lng !== 'number') {
+    if (weatherText) weatherText.textContent = 'No saved coordinates available for weather.';
+    if (weatherForecast) weatherForecast.textContent = 'Choose a project location with latitude and longitude.';
+    return;
+  }
+
+  if (weatherText) weatherText.textContent = 'Loading weather…';
+  if (weatherForecast) weatherForecast.textContent = '';
+
+  try {
+    const lat = encodeURIComponent(location.lat);
+    const lon = encodeURIComponent(location.lng);
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=auto&forecast_days=2`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Weather fetch failed (${res.status})`);
+    const weather = await res.json();
+    const current = weather.current_weather;
+    const daily = weather.daily;
+    if (!current || !daily) throw new Error('Incomplete weather response');
+
+    const currentLabel = _weatherCodeLabel(current.weathercode);
+    if (weatherText) weatherText.textContent = `${currentLabel}, ${current.temperature.toFixed(0)}°C · Wind ${current.windspeed.toFixed(0)} km/h`;
+
+    const todayHigh = daily.temperature_2m_max?.[0];
+    const todayLow = daily.temperature_2m_min?.[0];
+    const tomorrowLabel = daily.weathercode?.[1] != null ? _weatherCodeLabel(daily.weathercode[1]) : null;
+    const tomorrowHigh = daily.temperature_2m_max?.[1];
+    const tomorrowLow = daily.temperature_2m_min?.[1];
+    if (weatherForecast) {
+      weatherForecast.textContent = `Today ${todayHigh != null ? Math.round(todayHigh) : '—'}°C / ${todayLow != null ? Math.round(todayLow) : '—'}°C` +
+        (tomorrowLabel ? ` · Tomorrow ${tomorrowLabel} ${tomorrowHigh != null ? Math.round(tomorrowHigh) : '—'}°C / ${tomorrowLow != null ? Math.round(tomorrowLow) : '—'}°C` : '');
+    }
+  } catch (err) {
+    console.error('loadSummaryWeather error:', err);
+    if (weatherText) weatherText.textContent = 'Unable to load weather.';
+    if (weatherForecast) weatherForecast.textContent = 'Check your saved location or network connection.';
+  }
 }
 
 // =========================
@@ -1621,12 +1706,15 @@ async function loadSummaryPanelData() {
     // Display saved location
     const locEl = document.getElementById('summaryLocation');
     if (locEl) {
-      if (data.location?.stationName) {
-        locEl.textContent = `${data.location.stationName}, ${data.location.countryName || ''}`;
+      if (data.location?.displayName) {
+        locEl.textContent = `${data.location.displayName}${data.location.country ? ', ' + data.location.country : ''}`;
+      } else if (data.location?.stationName) {
+        locEl.textContent = `${data.location.stationName}${data.location.countryName ? ', ' + data.location.countryName : ''}`;
       } else {
         locEl.textContent = 'No location set yet';
       }
     }
+    await loadSummaryWeather(data.location);
 
     if (!data.hasSchedule) {
       ['summaryProgress', 'summaryVariance', 'summaryLastMs'].forEach(id => {
@@ -1657,6 +1745,23 @@ async function loadSummaryPanelData() {
       const sign        = progress.variance_pct >= 0 ? '+' : '';
       varEl.textContent = `${sign}${progress.variance_pct.toFixed(1)}% vs plan today (plan: ${progress.planned_pct.toFixed(1)}%)`;
       varEl.style.color = progress.variance_pct >= 0 ? '#28a745' : '#dc3545';
+    }
+
+    // ── Remaining days + current milestone ──
+    const remainingEl = document.getElementById('summaryRemainingDays');
+    if (remainingEl) {
+      const remainingText = data.project_remaining_days != null
+        ? `${data.project_remaining_days} day${data.project_remaining_days !== 1 ? 's' : ''} until project finish`
+        : 'Remaining days unknown';
+      remainingEl.textContent = remainingText;
+    }
+    const currentMsEl = document.getElementById('summaryCurrentMilestone');
+    if (currentMsEl) {
+      if (data.current_milestone) {
+        currentMsEl.textContent = `${data.current_milestone.title} · ${data.current_milestone.remaining_days} day${data.current_milestone.remaining_days !== 1 ? 's' : ''} remaining`;
+      } else {
+        currentMsEl.textContent = 'No active milestone found.';
+      }
     }
 
     // ── Last completed milestone ──
