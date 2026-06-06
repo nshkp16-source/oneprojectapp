@@ -1733,9 +1733,11 @@ function _weatherCodeLabel(code) {
 async function loadSummaryWeather(location) {
   const weatherText = document.getElementById('summaryWeatherText');
   const weatherForecast = document.getElementById('summaryWeatherForecast');
+  
+  // Validate location has numeric coordinates
   if (!location || typeof location.lat !== 'number' || typeof location.lng !== 'number') {
     if (weatherText) weatherText.textContent = 'No saved coordinates available for weather.';
-    if (weatherForecast) weatherForecast.textContent = 'Choose a project location with latitude and longitude.';
+    if (weatherForecast) weatherForecast.textContent = 'Set a project location to display weather.';
     return;
   }
 
@@ -1743,9 +1745,12 @@ async function loadSummaryWeather(location) {
   if (weatherForecast) weatherForecast.textContent = '';
 
   try {
-    const lat = encodeURIComponent(location.lat);
-    const lon = encodeURIComponent(location.lng);
+    // Send coordinates to Open-Meteo API for current and 2-day forecast
+    const lat = location.lat;  // numeric value
+    const lon = location.lng;  // numeric value
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=auto&forecast_days=2`;
+    
+    console.log('[Weather API] Fetching from Open-Meteo:', {lat, lon, url});
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Weather fetch failed (${res.status})`);
     const weather = await res.json();
@@ -1753,22 +1758,26 @@ async function loadSummaryWeather(location) {
     const daily = weather.daily;
     if (!current || !daily) throw new Error('Incomplete weather response');
 
+    // Display current weather
     const currentLabel = _weatherCodeLabel(current.weathercode);
-    if (weatherText) weatherText.textContent = `${currentLabel}, ${current.temperature.toFixed(0)}°C · Wind ${current.windspeed.toFixed(0)} km/h`;
+    const currentDisplay = `${currentLabel}, ${current.temperature.toFixed(0)}°C · Wind ${current.windspeed.toFixed(0)} km/h`;
+    if (weatherText) weatherText.textContent = currentDisplay;
+    console.log('[Weather] Current:', currentDisplay);
 
+    // Display today + tomorrow forecast
     const todayHigh = daily.temperature_2m_max?.[0];
     const todayLow = daily.temperature_2m_min?.[0];
     const tomorrowLabel = daily.weathercode?.[1] != null ? _weatherCodeLabel(daily.weathercode[1]) : null;
     const tomorrowHigh = daily.temperature_2m_max?.[1];
     const tomorrowLow = daily.temperature_2m_min?.[1];
-    if (weatherForecast) {
-      weatherForecast.textContent = `Today ${todayHigh != null ? Math.round(todayHigh) : '—'}°C / ${todayLow != null ? Math.round(todayLow) : '—'}°C` +
-        (tomorrowLabel ? ` · Tomorrow ${tomorrowLabel} ${tomorrowHigh != null ? Math.round(tomorrowHigh) : '—'}°C / ${tomorrowLow != null ? Math.round(tomorrowLow) : '—'}°C` : '');
-    }
+    const forecastDisplay = `Today ${todayHigh != null ? Math.round(todayHigh) : '—'}°C / ${todayLow != null ? Math.round(todayLow) : '—'}°C` +
+      (tomorrowLabel ? ` · Tomorrow ${tomorrowLabel} ${tomorrowHigh != null ? Math.round(tomorrowHigh) : '—'}°C / ${tomorrowLow != null ? Math.round(tomorrowLow) : '—'}°C` : '');
+    if (weatherForecast) weatherForecast.textContent = forecastDisplay;
+    console.log('[Weather] Forecast:', forecastDisplay);
   } catch (err) {
-    console.error('loadSummaryWeather error:', err);
+    console.error('[Weather] Error fetching from Open-Meteo:', err);
     if (weatherText) weatherText.textContent = 'Unable to load weather.';
-    if (weatherForecast) weatherForecast.textContent = 'Check your saved location or network connection.';
+    if (weatherForecast) weatherForecast.textContent = 'Check network connection and location coordinates.';
   }
 }
 
@@ -1798,7 +1807,16 @@ async function loadSummaryPanelData() {
         locEl.textContent = 'No location set yet';
       }
     }
-    await loadSummaryWeather(data.location);
+    
+    // Load weather from saved project location with coordinates
+    if (data.location && typeof data.location.lat === 'number' && typeof data.location.lng === 'number') {
+      console.log('[Summary] Weather: Using location coordinates', {lat: data.location.lat, lng: data.location.lng});
+      await loadSummaryWeather(data.location);
+    } else {
+      console.log('[Summary] Weather: No valid coordinates in location data', data.location);
+      const weatherText = document.getElementById('summaryWeatherText');
+      if (weatherText) weatherText.textContent = 'No location coordinates available.';
+    }
 
     if (!data.hasSchedule) {
       ['summaryProgress', 'summaryVariance', 'summaryLastMs'].forEach(id => {
