@@ -2425,16 +2425,17 @@ function openProjectScheduleForm(existingSchedule) {
   // ── Compute extension deadline ──
   const extensions         = existingSchedule?.extensions || existingSchedule?.schedule_extensions || [];
   const approvedExtensions = extensions.filter(e => e.status === 'approved' || !e.status);
-  const totalExtDays       = approvedExtensions.reduce(
+  const totalExtensions    = extensions.length;
+  const totalExtDays       = extensions.reduce(
     (sum, e) => sum + (parseInt(e.extension_days || e.extensionDays) || 0), 0
   );
 
   // Extension banner HTML (shown in timeline card when editing)
   const _extBannerHTML = (() => {
-    if (!approvedExtensions.length) return '';
+    if (!extensions.length) return '';
     // build a list showing each extension's start and end (start = previous effective finish + 1)
     let prev = existingSchedule?.timeline?.finish || null;
-    const listItems = approvedExtensions.map((e, i) => {
+    const listItems = extensions.map((e, i) => {
       const end = e.new_planned_finish || e.newPlannedFinish || '';
       let start = '';
       if (prev) {
@@ -2445,9 +2446,8 @@ function openProjectScheduleForm(existingSchedule) {
       prev = end || prev;
       return `<div style="font-family:var(--font-mono);">${i + 1}. ${start || '—'} → ${end || '—'} <span style="color:var(--c-muted);font-size:12px;margin-left:6px;">(+${parseInt(e.extension_days||e.extensionDays||0)}d)</span></div>`;
     }).join('');
-
     return `<div style="background:var(--c-ext-light);border-bottom:1px solid #f5c68a;padding:8px 20px;font-size:12px;color:var(--c-ext);display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
-      <div style="min-width:180px;">📊 ${approvedExtensions.length} approved extension${approvedExtensions.length > 1 ? 's' : ''}<br><span style="font-family:var(--font-mono);font-weight:600;">+${totalExtDays} days</span></div>
+      <div style="min-width:180px;">📊 ${totalExtensions} extension${totalExtensions > 1 ? 's' : ''} (${approvedExtensions.length} approved)<br><span style="font-family:var(--font-mono);font-weight:600;">+${totalExtDays} days</span></div>
       <div style="flex:1;display:flex;flex-direction:column;gap:6px;">${listItems}</div>
       <div style="margin-left:auto;font-size:11px;color:#a06a00;align-self:flex-start;">New milestones validated against extended date.</div>
     </div>`;
@@ -2527,9 +2527,9 @@ function openProjectScheduleForm(existingSchedule) {
             <input type="date" id="sfPF" value="${_fmtDate(existingSchedule?.timeline?.finish)}" ${isEdit ? 'readonly' : ''} style="padding:10px 12px;"/></div>
           <div class="sc-fw"><span class="sc-fl" style="font-weight:600;font-size:12px;">Total Duration</span>
             <div id="sfDur" style="font-size:20px;font-weight:700;
-                 color:${((tl.duration || 0) + currentTotalExtDays) ? 'var(--c-brand)' : 'var(--c-faint)'};
+                 color:${(totalDurDays) ? 'var(--c-brand)' : 'var(--c-faint)'};
                  padding:8px 12px;font-family:var(--font-mono);background:var(--c-brand-light);border-radius:8px;">
-              ${((tl.duration || 0) + currentTotalExtDays) ? ((tl.duration || 0) + currentTotalExtDays) + 'd' : '—'}
+              ${totalDurDays ? totalDurDays + 'd' : '—'}
               ${currentTotalExtDays > 0 ? `<span style="font-size:12px;color:var(--c-ext);margin-left:6px;">+${currentTotalExtDays}d ext</span>` : ''}
             </div>
           </div>
@@ -2621,15 +2621,21 @@ function openProjectScheduleForm(existingSchedule) {
   if (tl.start)  tl.start  = _fmtDate(tl.start);
   if (tl.finish) tl.finish = _fmtDate(tl.finish);
 
-  // Compute effective deadline (baseline finish + approved extensions)
-  const _effectiveDeadline = () => {
-    let d = tl.finish ? new Date(tl.finish) : null;
-    approvedExtensions.forEach(e => {
-      const ed = new Date(e.new_planned_finish || e.newPlannedFinish || 0);
-      if (!d || ed > d) d = ed;
-    });
-    return d ? d.toISOString().slice(0, 10) : null;
-  };
+  // Find latest extension finish among all extensions (if any)
+  const latestExtFinishDate = (() => {
+    if (!extensions.length) return null;
+    return extensions.reduce((latest, e) => {
+      const dstr = e.new_planned_finish || e.newPlannedFinish || null;
+      if (!dstr) return latest;
+      const d = new Date(dstr);
+      if (isNaN(d)) return latest;
+      return (!latest || d > latest) ? d : latest;
+    }, null);
+  })();
+
+  const effectiveDeadline = latestExtFinishDate ? latestExtFinishDate.toISOString().slice(0,10) : (tl.finish || null);
+
+  const totalDurDays = (tl.start && effectiveDeadline) ? _daysBetween(tl.start, effectiveDeadline) : ((tl.duration || 0) + totalExtDays);
 
   let milestones = (existingSchedule?.milestones || []).map(ms => ({
     id:              ms.id,
@@ -2669,7 +2675,7 @@ function openProjectScheduleForm(existingSchedule) {
   }
 
   function _isOutOfRange(ms) {
-    const deadline = _effectiveDeadline();
+    const deadline = effectiveDeadline;
     if (!tl.start) return false;
     if (new Date(ms.start) < new Date(tl.start)) return true;
     if (deadline && new Date(ms.end) > new Date(deadline)) return true;
@@ -2678,8 +2684,8 @@ function openProjectScheduleForm(existingSchedule) {
 
   function _msMeta(ms) {
     const d = ms.start && ms.end ? _daysBetween(ms.start, ms.end) : 0;
-    const deadline = _effectiveDeadline() || tl.finish;
-    const totalDur = tl.duration + totalExtDays;
+    const deadline = effectiveDeadline || tl.finish;
+    const totalDur = totalDurDays;
     const w = totalDur > 0 ? (d / totalDur) * 100 : 0;
     const f = deadline && ms.end
       ? Math.max(0, Math.round((new Date(deadline) - new Date(ms.end)) / 86400000)) : 0;
@@ -2875,7 +2881,7 @@ function openProjectScheduleForm(existingSchedule) {
     if (tl.start && new Date(start) < new Date(tl.start))
       return alert(`Start cannot be before project start (${tl.start}).`);
 
-    const hardDeadline = _effectiveDeadline();
+    const hardDeadline = effectiveDeadline;
     if (hardDeadline && new Date(end) > new Date(hardDeadline)) {
       const extNote = totalExtDays > 0 ? ` (includes ${totalExtDays} extension days)` : '';
       return alert(`End cannot exceed project finish (${hardDeadline})${extNote}.`);
