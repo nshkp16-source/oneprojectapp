@@ -838,6 +838,25 @@
         <input type="file" id="profileUpload" accept="image/*" style="display:none;" />
       </div>
     </div>
+    ${approvedExts && approvedExts.length ? `
+    <div style="padding:8px 24px 0 24px;">
+      <div style="font-size:12px;color:var(--c-muted);margin-bottom:6px;font-weight:600;">Approved Extensions</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start;">
+        ${(() => {
+          let prev = tl.finish || null;
+          return approvedExts.map((e, i) => {
+            const end = e.new_planned_finish || e.newPlannedFinish || '—';
+            let start = '—';
+            if (prev) {
+              const sd = new Date(prev); sd.setDate(sd.getDate() + 1); start = sd.toISOString().slice(0,10);
+            }
+            prev = end || prev;
+            return `<div style="background:var(--c-surface);border:1px solid var(--c-border);padding:8px 12px;border-radius:8px;font-family:var(--font-mono);font-size:13px;color:var(--c-ext);">EXT ${i+1}: ${start} → ${end}<div style="font-size:11px;color:var(--c-muted);font-family:var(--font);">+${parseInt(e.extension_days||e.extensionDays||0)} days</div></div>`;
+          }).join('');
+        })()}
+      </div>
+    </div>
+    ` : ''}
 
     <!-- ✅ Preview container (empty by default, filled by JS) -->
     <div id="profilePreview" style="display:none;"></div>
@@ -2413,19 +2432,24 @@ function openProjectScheduleForm(existingSchedule) {
   // Extension banner HTML (shown in timeline card when editing)
   const _extBannerHTML = (() => {
     if (!approvedExtensions.length) return '';
-    const latestFinish = approvedExtensions.reduce((latest, e) => {
-      const d = e.new_planned_finish || e.newPlannedFinish;
-      return (!latest || (d && d > latest)) ? d : latest;
-    }, null);
-    return `<div style="background:var(--c-ext-light);border-bottom:1px solid #f5c68a;
-             padding:8px 20px;font-size:12px;color:var(--c-ext);
-             display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-      <span>📊 ${approvedExtensions.length} approved extension${approvedExtensions.length > 1 ? 's' : ''}</span>
-      <span style="font-family:var(--font-mono);font-weight:600;">+${totalExtDays} days</span>
-      ${latestFinish ? `<span>→ New finish: <strong>${latestFinish}</strong></span>` : ''}
-      <span style="margin-left:auto;font-size:11px;color:#a06a00;">
-        New milestones are validated against this extended date.
-      </span>
+    // build a list showing each extension's start and end (start = previous effective finish + 1)
+    let prev = existingSchedule?.timeline?.finish || null;
+    const listItems = approvedExtensions.map((e, i) => {
+      const end = e.new_planned_finish || e.newPlannedFinish || '';
+      let start = '';
+      if (prev) {
+        const sd = new Date(prev);
+        sd.setDate(sd.getDate() + 1);
+        start = sd.toISOString().slice(0, 10);
+      }
+      prev = end || prev;
+      return `<div style="font-family:var(--font-mono);">${i + 1}. ${start || '—'} → ${end || '—'} <span style="color:var(--c-muted);font-size:12px;margin-left:6px;">(+${parseInt(e.extension_days||e.extensionDays||0)}d)</span></div>`;
+    }).join('');
+
+    return `<div style="background:var(--c-ext-light);border-bottom:1px solid #f5c68a;padding:8px 20px;font-size:12px;color:var(--c-ext);display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+      <div style="min-width:180px;">📊 ${approvedExtensions.length} approved extension${approvedExtensions.length > 1 ? 's' : ''}<br><span style="font-family:var(--font-mono);font-weight:600;">+${totalExtDays} days</span></div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:6px;">${listItems}</div>
+      <div style="margin-left:auto;font-size:11px;color:#a06a00;align-self:flex-start;">New milestones validated against extended date.</div>
     </div>`;
   })();
 
@@ -3204,6 +3228,12 @@ function openActualProgressPage(savedSchedule) {
 
   const projectName = _projectName();
   let   ganttDirty  = true;
+  const _fmtDateShort = v => {
+    if (!v && v !== 0) return '—';
+    const d = new Date(v);
+    if (isNaN(d)) return '—';
+    return d.toISOString().slice(0, 10);
+  };
 
   expandGrayPart(_css + `
   <style>
@@ -3257,6 +3287,9 @@ function openActualProgressPage(savedSchedule) {
           ${_effectiveFinish(tl, latestExtFinish) || '—'}
         </span>
       </div>
+      <div class="p3sk"><span class="p3sk-l">Planned Start</span><span class="p3sk-v">${tl.start ? _fmtDateShort(tl.start) : '—'}</span></div>
+      <div class="p3sk"><span class="p3sk-l">Planned Finish</span><span class="p3sk-v">${tl.finish ? _fmtDateShort(tl.finish) : '—'}</span></div>
+      <div class="p3sk"><span class="p3sk-l">Extensions</span><span class="p3sk-v">${approvedExts.length ? approvedExts.length + ' (view below)' : '0'}</span></div>
       <div class="p3sk">
         <span class="p3sk-l">Selected Milestone</span>
         <span class="p3sk-v" id="p3DaysLeftMsVal">—</span>
