@@ -1173,6 +1173,7 @@ async function refreshAccessToken() {
     const data = await res.json();
     if (data.success && data.accessToken) {
       localStorage.setItem("authToken", data.accessToken);
+      if (AppState) AppState.token = data.accessToken;
       return true;
     }
     return false;
@@ -2962,7 +2963,9 @@ function openProjectScheduleForm(existingSchedule) {
     if (milestones.some(_isOutOfRange)) return alert('Some milestones fall outside the project timeline.');
 
     const form = new FormData();
-    form.append('projectId', AppState.projectId);
+    const projectId = AppState.projectId || localStorage.getItem('activeProjectId');
+    if (!projectId) { alert('No active project selected. Please re-open the project.'); return; }
+    form.append('projectId', projectId);
     if (scheduleId) form.append('scheduleId', scheduleId);
     form.append('timeline', JSON.stringify(tl));
 
@@ -3016,11 +3019,11 @@ function openProjectScheduleForm(existingSchedule) {
     const saveBtn = _el('sfSave');
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
     try {
-      const res = await fetch(`${BACKEND}/api/save-schedule`, {
+      const res = await authFetch(`${BACKEND}/api/save-schedule`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${AppState.token}` },
         body: form,
       });
+      if (!res) return;
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
         throw new Error(errBody.message || `HTTP ${res.status}`);
@@ -3208,7 +3211,9 @@ function openExtensionPanel(existingSchedule) {
       return alert('Please select a valid extension type.');
 
     const form = new FormData();
-    form.append('projectId',          AppState.projectId);
+    const projectId = AppState.projectId || localStorage.getItem('activeProjectId');
+    if (!projectId) { alert('No active project selected. Please re-open the project.'); return; }
+    form.append('projectId',          projectId);
     if (scheduleId) form.append('scheduleId', scheduleId);
     form.append('extension_days',     String(days));
     form.append('extensionDays',      String(days));
@@ -3223,11 +3228,11 @@ function openExtensionPanel(existingSchedule) {
     const btn = _el('extSubmitBtn');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     try {
-      const res = await fetch(`${BACKEND}/api/save-extension`, {
+      const res = await authFetch(`${BACKEND}/api/save-extension`, {
         method:  'POST',
-        headers: { 'Authorization': `Bearer ${AppState.token}` },
         body:    form,
       });
+      if (!res) return;
       const raw = await res.text();
       let result = {};
       try { result = JSON.parse(raw); } catch (_) {
