@@ -1016,9 +1016,12 @@
     </div>
   </div>
 
-  <!-- Progress chart: planned vs actual per milestone -->
+  <!-- Progress chart: current milestone only with expand button -->
   <div style="width:100%; padding:14px; background:rgba(255,255,255,0.95); border-radius:12px;">
-    <div style="font-size:12px; font-weight:bold; color:#007B8A; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">Progress Chart</div>
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+      <div style="font-size:12px; font-weight:bold; color:#007B8A; text-transform:uppercase; letter-spacing:0.5px;">Current Milestone Progress</div>
+      <button id="chartExpandBtn" type="button" style="background:none; border:1px solid #ccc; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:14px; color:#666; transition:all 0.2s;" title="Expand chart to view all milestones">⟨⟩</button>
+    </div>
     <div style="font-size:10px; color:#999; margin-bottom:8px; display:flex; gap:12px;">
       <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;background:#007B8A;opacity:0.4;border-radius:2px;display:inline-block;"></span>Planned</span>
       <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;background:#28a745;border-radius:2px;display:inline-block;"></span>Actual</span>
@@ -1053,6 +1056,28 @@
       <div class="modal-actions">
         <button class="modal-close" data-translate="confirm-close" onclick="document.getElementById('settingsDialog').classList.remove('active')">Close</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Expanded Chart Modal -->
+  <div class="modal-overlay" id="chartExpandModal" style="display:none; z-index:9999;">
+    <div class="modal-content" style="width:90vw; max-width:1000px; height:85vh; display:flex; flex-direction:column; padding:20px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h3 style="margin:0;">All Milestones Progress</h3>
+        <button onclick="document.getElementById('chartExpandModal').style.display='none';" style="background:none; border:none; font-size:24px; cursor:pointer; color:#999;">&times;</button>
+      </div>
+      <div style="display:flex; gap:12px; margin-bottom:16px; align-items:center;">
+        <button id="chartPrevBtn" onclick="expandChartNavPrev()" style="padding:8px 12px; border:1px solid #ccc; background:#f9f9f9; border-radius:4px; cursor:pointer;">← Previous</button>
+        <div style="flex:1;">
+          <div id="expandChartTitle" style="font-size:16px; font-weight:bold; color:#007B8A; text-align:center; margin-bottom:6px;">Milestone</div>
+          <div id="expandChartProgress" style="font-size:12px; color:#666; text-align:center;"></div>
+        </div>
+        <button id="chartNextBtn" onclick="expandChartNavNext()" style="padding:8px 12px; border:1px solid #ccc; background:#f9f9f9; border-radius:4px; cursor:pointer;">Next →</button>
+      </div>
+      <div id="expandChartContainer" style="flex:1; background:#f4f9fc; border-radius:8px; display:flex; align-items:flex-end; gap:6px; padding:20px; overflow-x:auto; position:relative;">
+        <div style="font-size:13px; color:#bbb;">Loading chart…</div>
+      </div>
+      <div id="expandChartLabels" style="display:flex; gap:6px; margin-top:12px; padding:0 20px; font-size:11px; color:#999; text-align:center;"></div>
     </div>
   </div>
 
@@ -1580,6 +1605,65 @@ document.getElementById('searchBox').addEventListener('keyup', (e) => {
   });
 });
 
+// =========================
+// EXPANDED CHART MODAL
+// =========================
+let expandedChartData = null;
+let expandedChartCurrentIndex = 0;
+
+function renderExpandedChartAtIndex(idx) {
+  if (!expandedChartData || !expandedChartData.all_milestones_for_modal) return;
+  const milestones = expandedChartData.all_milestones_for_modal;
+  if (idx < 0 || idx >= milestones.length) return;
+  
+  expandedChartCurrentIndex = idx;
+  const ms = milestones[idx];
+  
+  // Update title and progress
+  document.getElementById('expandChartTitle').textContent = `${ms.title} (${idx + 1} of ${milestones.length})`;
+  document.getElementById('expandChartProgress').textContent = 
+    `Planned: ${ms.planned_pct.toFixed(1)}% · Actual: ${ms.actual_pct.toFixed(1)}% · Status: ${ms.activity_status}`;
+  
+  // Render chart bars
+  const chartH = 300;
+  const isLate = ms.actual_pct < ms.planned_pct - 5 && ms.planned_pct > 0;
+  const actualColor = ms.activity_status === 'completed' ? '#007B8A' : isLate ? '#dc3545' : '#28a745';
+  const planH = Math.round((ms.planned_pct / 100) * chartH);
+  const actualH = Math.round((ms.actual_pct / 100) * chartH);
+  
+  const container = document.getElementById('expandChartContainer');
+  container.innerHTML = `
+    <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:${chartH}px; gap:12px;">
+      <div style="display:flex; flex-direction:row; align-items:flex-end; justify-content:center; gap:8px; height:${chartH}px;">
+        <div style="width:60px; height:${Math.max(planH,2)}px; background:#007B8A; opacity:0.35; border-radius:4px 4px 0 0;" title="Planned: ${ms.planned_pct.toFixed(1)}%"></div>
+        <div style="width:60px; height:${Math.max(actualH,2)}px; background:${actualColor}; border-radius:4px 4px 0 0;" title="${ms.title}: ${ms.actual_pct.toFixed(1)}% actual"></div>
+      </div>
+      <div style="display:flex; gap:12px; font-size:11px; color:#666;">
+        <span>Planned: ${ms.planned_pct.toFixed(1)}%</span>
+        <span>Actual: ${ms.actual_pct.toFixed(1)}%</span>
+      </div>
+    </div>
+  `;
+  
+  // Update nav buttons
+  document.getElementById('chartPrevBtn').disabled = idx === 0;
+  document.getElementById('chartNextBtn').disabled = idx === milestones.length - 1;
+  document.getElementById('chartPrevBtn').style.opacity = idx === 0 ? '0.5' : '1';
+  document.getElementById('chartNextBtn').style.opacity = idx === milestones.length - 1 ? '0.5' : '1';
+}
+
+function expandChartNavPrev() {
+  if (expandedChartCurrentIndex > 0) {
+    renderExpandedChartAtIndex(expandedChartCurrentIndex - 1);
+  }
+}
+
+function expandChartNavNext() {
+  if (expandedChartData && expandedChartCurrentIndex < expandedChartData.all_milestones_for_modal.length - 1) {
+    renderExpandedChartAtIndex(expandedChartCurrentIndex + 1);
+  }
+}
+
 // // =======================================================================
 //  GRAY PANEL — expand / collapse / hide
 // =======================================================================
@@ -1804,6 +1888,18 @@ async function loadSummaryPanelData() {
       }
     } else if (chartEl) {
       chartEl.innerHTML = '<div style="font-size:11px;color:#bbb;padding:12px;width:100%;text-align:center;">No milestones yet</div>';
+    }
+
+    // ── Store expanded chart data and wire up expand button ──
+    expandedChartData = data;
+    const expandBtn = document.getElementById('chartExpandBtn');
+    if (expandBtn) {
+      expandBtn.onclick = () => {
+        if (data.all_milestones_for_modal && data.all_milestones_for_modal.length > 0) {
+          document.getElementById('chartExpandModal').style.display = 'flex';
+          renderExpandedChartAtIndex(0);
+        }
+      };
     }
 
     // ── Photos ──
