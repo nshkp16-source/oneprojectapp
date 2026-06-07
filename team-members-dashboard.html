@@ -1367,6 +1367,9 @@ const profilePosition = document.getElementById("position");
 const projectSelector = document.getElementById("projectSelector");
 const projectDialog = document.getElementById("projectDialog");
 const activeProject = document.getElementById("activeProject");
+const arretBar = document.getElementById('arretBar');
+const arretCount = document.getElementById('arretCount');
+let currentArrets = [];
 
 // =========================
 // Profile updater function
@@ -4492,6 +4495,344 @@ async function authFetch(url, options = {}) {
   return res;
 }
 
+async function fetchArrets() {
+  const projectId = localStorage.getItem('activeProjectId');
+  if (!projectId) return [];
+  try {
+    const res = await authFetch(`${API}/arrets?projectId=${projectId}`);
+    if (!res || !res.ok) return [];
+    const data = await res.json();
+    currentArrets = data.arrets || [];
+    return currentArrets;
+  } catch (err) {
+    console.error('Fetch arrets error:', err);
+    return [];
+  }
+}
+
+async function updateArretBar() {
+  if (!arretBar || !arretCount) return;
+  const arrets = await fetchArrets();
+  const unviewedCount = arrets.filter(a => !a.is_viewed).length;
+  if (unviewedCount > 0) {
+    arretBar.classList.add('alert');
+    arretCount.textContent = unviewedCount;
+    arretCount.style.display = 'inline-flex';
+  } else {
+    arretBar.classList.remove('alert');
+    arretCount.textContent = '';
+    arretCount.style.display = 'none';
+  }
+}
+
+async function openArretPanel() {
+  const projectId = localStorage.getItem('activeProjectId');
+  if (!projectId) {
+    expandGrayPart('<p>Please select a project first.</p>');
+    return;
+  }
+  const arrets = await fetchArrets();
+  renderArretPanel(arrets);
+}
+
+function renderArretPanel(arrets) {
+  const html = `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:2px solid #007B8A;flex-shrink:0;">
+      <div>
+        <h3 style="margin:0;color:#333;font-size:18px;">🛑 Site Arrets</h3>
+        <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Add and review stop-work arret reports for this project.</p>
+      </div>
+      <button class="btn" type="button" onclick="openArretForm()">+ Add Arret</button>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:16px 20px;">
+      ${arrets.length ? '<ul style="padding:0;margin:0;list-style:none;">' : '<div style="text-align:center;padding:40px 0;color:#9ca3af;"><div style="font-size:32px;margin-bottom:8px;">🛑</div><p style="margin:0;">No arrets yet. Add one now to flag a stop-work issue.</p></div>'}
+      ${arrets.map(arret => {
+          const attachmentMarkup = arret.attachments?.length ? `
+          <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;">
+            ${arret.attachments.map(att => att.file_mime?.startsWith('image/') ? `
+              <button type="button" class="attachment-preview-btn" data-file-url="${escapeHtml(att.file_url)}" data-file-name="${escapeHtml(att.file_name)}" data-file-mime="${escapeHtml(att.file_mime)}" style="border:none;background:none;padding:0;cursor:pointer;">
+                <img src="${escapeHtml(att.file_url)}" alt="${escapeHtml(att.file_name)}" style="max-width:120px;max-height:120px;border-radius:10px;object-fit:cover;border:1px solid #d1d5db;" />
+              </button>
+            ` : `
+              <button type="button" class="attachment-preview-btn" data-file-url="${escapeHtml(att.file_url)}" data-file-name="${escapeHtml(att.file_name)}" data-file-mime="${escapeHtml(att.file_mime)}" style="display:inline-flex;align-items:center;gap:6px;padding:8px 12px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:10px;color:#111;cursor:pointer;">
+                📎 ${escapeHtml(att.file_name)}
+              </button>
+            `).join('')}
+          </div>
+        ` : ''; 
+        return `
+          <li style="border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:220px;">
+                <div style="font-weight:700;font-size:14px;color:#111;">${escapeHtml(arret.title || 'Untitled arret')}</div>
+                <div style="font-size:12px;color:#6b7280;margin-top:4px;white-space:pre-wrap;">${escapeHtml(arret.description || '')}</div>
+                <div style="font-size:11px;color:#9ca3af;margin-top:8px;">${new Date(arret.issued_date).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})} · ${escapeHtml(arret.creator_role || 'Unknown')}</div>
+                ${attachmentMarkup}
+              </div>
+              <button type="button" class="btn" style="font-size:12px;padding:8px 12px;" data-arret-id="${arret.id}">View</button>
+            </div>
+          </li>
+        `;
+      }).join('')}
+      ${arrets.length ? '</ul>' : ''}
+    </div>
+    <div style="padding:16px 20px;border-top:1px solid #e5e7eb;flex-shrink:0;">
+      <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
+    </div>`;
+
+  expandGrayPart(`<div style="display:flex;flex-direction:column;height:100%;">${html}</div>`);
+
+  setTimeout(() => {
+    document.querySelectorAll('[data-arret-id]').forEach(btn => {
+      btn.addEventListener('click', async (event) => {
+        const recordId = event.currentTarget.getAttribute('data-arret-id');
+        if (recordId) await handleArretView(recordId);
+      });
+    });
+
+    document.querySelectorAll('.attachment-preview-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const url = btn.getAttribute('data-file-url');
+        const name = btn.getAttribute('data-file-name');
+        const mime = btn.getAttribute('data-file-mime');
+        if (url && name && mime) {
+          showAttachmentPreview(url, name, mime);
+        }
+      });
+    });
+  }, 50);
+}
+
+async function handleArretView(recordId) {
+  const arret = currentArrets.find(a => String(a.id) === String(recordId));
+  if (!arret) return;
+
+  await authFetch(`${API}/arrets/view`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ arretId: recordId })
+  });
+
+  arret.is_viewed = true;
+  updateArretBar();
+
+  const attachmentHtml = arret.attachments?.length ? `
+    <div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:12px;">
+      ${arret.attachments.map(att => att.file_mime?.startsWith('image/') ? `
+        <button type="button" class="attachment-preview-btn" data-file-url="${escapeHtml(att.file_url)}" data-file-name="${escapeHtml(att.file_name)}" data-file-mime="${escapeHtml(att.file_mime)}" style="border:none;background:none;padding:0;cursor:pointer;">
+          <img src="${escapeHtml(att.file_url)}" alt="${escapeHtml(att.file_name)}" style="max-width:260px;max-height:260px;border-radius:12px;object-fit:cover;border:1px solid #d1d5db;" />
+        </button>
+      ` : `
+        <button type="button" class="attachment-preview-btn" data-file-url="${escapeHtml(att.file_url)}" data-file-name="${escapeHtml(att.file_name)}" data-file-mime="${escapeHtml(att.file_mime)}" style="display:inline-flex;align-items:center;gap:8px;padding:10px 14px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:10px;color:#111;cursor:pointer;">
+          📎 ${escapeHtml(att.file_name)}
+        </button>
+      `).join('')}
+    </div>
+  ` : '';
+
+  const html = `
+    <div style="padding:18px 20px;border-bottom:2px solid #007B8A;flex-shrink:0;">
+      <h3 style="margin:0;color:#333;font-size:18px;">🛑 ${escapeHtml(arret.title)}</h3>
+      <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Reported by ${escapeHtml(arret.creator_role || 'Unknown')} on ${new Date(arret.issued_date).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}</p>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:16px 20px;">
+      <div style="font-size:14px;color:#111;line-height:1.6;white-space:pre-wrap;">${escapeHtml(arret.description)}</div>
+      ${attachmentHtml}
+    </div>
+    <div style="padding:16px 20px;border-top:1px solid #e5e7eb;display:flex;gap:12px;justify-content:flex-end;flex-shrink:0;">
+      <button class="btn" type="button" onclick="openArretPanel()">← Back to list</button>
+    </div>`;
+
+  expandGrayPart(`<div style="display:flex;flex-direction:column;height:100%;">${html}</div>`);
+
+  setTimeout(() => {
+    document.querySelectorAll('.attachment-preview-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const url = btn.getAttribute('data-file-url');
+        const name = btn.getAttribute('data-file-name');
+        const mime = btn.getAttribute('data-file-mime');
+        if (url && name && mime) {
+          showAttachmentPreview(url, name, mime);
+        }
+      });
+    });
+  }, 50);
+}
+
+function showAttachmentPreview(url, name, mime) {
+  const existing = document.getElementById('attachmentPreviewOverlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'attachmentPreviewOverlay';
+  overlay.style.position = 'fixed';
+  overlay.style.inset = '0';
+  overlay.style.background = 'rgba(0,0,0,0.7)';
+  overlay.style.display = 'flex';
+  overlay.style.alignItems = 'center';
+  overlay.style.justifyContent = 'center';
+  overlay.style.zIndex = '9999';
+  overlay.style.padding = '20px';
+
+  const content = document.createElement('div');
+  content.style.background = '#fff';
+  content.style.borderRadius = '16px';
+  content.style.maxWidth = '95vw';
+  content.style.maxHeight = '95vh';
+  content.style.overflow = 'auto';
+  content.style.padding = '18px';
+  content.style.position = 'relative';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.position = 'absolute';
+  closeBtn.style.top = '12px';
+  closeBtn.style.right = '12px';
+  closeBtn.style.border = 'none';
+  closeBtn.style.background = 'transparent';
+  closeBtn.style.fontSize = '20px';
+  closeBtn.style.cursor = 'pointer';
+  closeBtn.addEventListener('click', () => overlay.remove());
+
+  const title = document.createElement('div');
+  title.style.marginBottom = '12px';
+  title.style.fontWeight = '700';
+  title.style.color = '#111';
+  title.textContent = name || 'Attachment preview';
+
+  content.appendChild(closeBtn);
+  content.appendChild(title);
+
+  if (mime?.startsWith('image/')) {
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = name || 'Attachment';
+    img.style.maxWidth = '100%';
+    img.style.maxHeight = '80vh';
+    img.style.borderRadius = '12px';
+    img.style.display = 'block';
+    content.appendChild(img);
+  } else {
+    const link = document.createElement('a');
+    link.href = url;
+    link.textContent = `Open ${name || 'attachment'}`;
+    link.target = '_blank';
+    link.rel = 'noreferrer';
+    link.style.display = 'inline-flex';
+    link.style.padding = '12px 16px';
+    link.style.background = '#f3f4f6';
+    link.style.border = '1px solid #d1d5db';
+    link.style.borderRadius = '10px';
+    link.style.color = '#111';
+    link.style.textDecoration = 'none';
+    content.appendChild(link);
+  }
+
+  overlay.appendChild(content);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) overlay.remove();
+  });
+  document.body.appendChild(overlay);
+}
+
+function openArretForm() {
+  const html = `
+    <div style="padding:18px 20px;border-bottom:2px solid #007B8A;flex-shrink:0;">
+      <h3 style="margin:0;color:#333;font-size:18px;">➕ New Arret Report</h3>
+      <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Submit a stop-work arret for the active project.</p>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:16px 20px;">
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div>
+          <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px;">Title</label>
+          <input id="arretTitle" type="text" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;" placeholder="Short summary of the issue" />
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px;">Description</label>
+          <textarea id="arretDescription" rows="6" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;resize:vertical;" placeholder="Describe the reason for the arret and any immediate actions taken."></textarea>
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px;">Attach images or documents</label>
+          <input id="arretAttachment" type="file" multiple accept="image/*,.pdf,.doc,.docx,.png,.jpg,.jpeg" style="width:100%;" />
+          <div id="arretAttachmentPreview"></div>
+        </div>
+      </div>
+    </div>
+    <div style="padding:16px 20px;border-top:1px solid #e5e7eb;display:flex;gap:12px;justify-content:flex-end;flex-shrink:0;">
+      <button class="btn" type="button" onclick="collapseGrayPart()">Cancel</button>
+      <button class="btn primary" type="button" id="saveArretBtn">Save Arret</button>
+    </div>`;
+
+  expandGrayPart(`<div style="display:flex;flex-direction:column;height:100%;">${html}</div>`);
+  setTimeout(() => {
+    document.getElementById('saveArretBtn')?.addEventListener('click', submitArretForm);
+    document.getElementById('arretAttachment')?.addEventListener('change', (event) => {
+      setArretAttachmentPreview(event.target.files);
+    });
+  }, 50);
+}
+
+function setArretAttachmentPreview(files) {
+  const preview = document.getElementById('arretAttachmentPreview');
+  if (!preview) return;
+  preview.innerHTML = '';
+  if (!files || !files.length) return;
+
+  Array.from(files).forEach(file => {
+    const container = document.createElement('div');
+    container.className = 'file-preview';
+
+    if (file.type.startsWith('image/')) {
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(file);
+      img.onload = () => URL.revokeObjectURL(img.src);
+      container.appendChild(img);
+    }
+
+    const meta = document.createElement('div');
+    meta.className = 'file-meta';
+    meta.innerHTML = `<strong>${escapeHtml(file.name)}</strong><span>${Math.round(file.size / 1024)} KB</span><span>${escapeHtml(file.type || 'Unknown')}</span>`;
+    container.appendChild(meta);
+    preview.appendChild(container);
+  });
+}
+
+async function submitArretForm() {
+  const title = document.getElementById('arretTitle')?.value?.trim();
+  const description = document.getElementById('arretDescription')?.value?.trim();
+  if (!title || !description) {
+    alert('Please provide both title and description for the arret.');
+    return;
+  }
+
+  try {
+    const formData = new FormData();
+    const attachments = document.getElementById('arretAttachment')?.files || [];
+    formData.append('title', title);
+    formData.append('description', description);
+    formData.append('projectId', localStorage.getItem('activeProjectId'));
+    Array.from(attachments).forEach(file => formData.append('attachments', file));
+
+    const saveBtn = document.getElementById('saveArretBtn');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+
+    const res = await authFetch(`${API}/arrets`, { method: 'POST', body: formData });
+    if (!res) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const result = await res.json();
+    if (!result.success) throw new Error(result.message || 'Failed to save arret.');
+
+    alert('Arret saved successfully.');
+    updateArretBar();
+    openArretPanel();
+  } catch (err) {
+    console.error('Save arret error:', err);
+    alert('Error saving arret: ' + (err.message || 'Please try again.'));
+    const saveBtn = document.getElementById('saveArretBtn');
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Arret'; }
+  }
+}
+
 // =======================================================================
 //  BOOTSTRAP
 // =======================================================================
@@ -4520,8 +4861,13 @@ async function bootstrapUser() {
     }
 
     loadHomeTabs();
+    initializeSummaryPanel();
+    loadSummaryPanelData();
     updateNotificationBadge();
+    updateArretBar();
+    if (arretBar) arretBar.addEventListener('click', openArretPanel);
     setInterval(updateNotificationBadge, 30000);
+    setInterval(updateArretBar, 30000);
   } catch (err) {
     console.error('Bootstrap failed:', err);
     window.location.href = '/login.html';
