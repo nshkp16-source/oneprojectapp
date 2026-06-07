@@ -456,10 +456,46 @@
 }
 .left-top {
   flex: 0 0 auto;
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content:space-between;
   padding: 6px 10px; background: rgba(255,255,255,0.7);
+  gap: 10px;
 }
-.search-box { width: 75%; padding: 6px; border-radius: 6px; border: 1px solid #aaa; }
+.search-box { width: 62%; padding: 6px; border-radius: 6px; border: 1px solid #aaa; }
+
+.arret-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: #fff;
+  color: #1f2937;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  white-space: nowrap;
+}
+.arret-bar:hover {
+  background: #f8fafc;
+}
+.arret-bar.alert {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #991b1b;
+  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.18);
+}
+.arret-bar .arret-count {
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #991b1b;
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  padding: 0 6px;
+}
 
 /* Notification icon + badge */
 .notification-wrapper {
@@ -919,6 +955,10 @@
           <!-- Top Section -->
           <div class="left-top">
             <input type="text" class="search-box" id="searchBox" placeholder="Search..." />
+          <span class="arret-bar" id="arretBar" title="Click to add or view arrets">
+            🛑 <span class="arret-text">ARRET</span>
+            <span class="arret-count" id="arretCount"></span>
+          </span>
             <span class="notification-icon" id="notificationIcon">
     🔔
                <span class="notification-badge" id="notificationBadge">3</span>
@@ -1251,6 +1291,11 @@ const profileRole       = document.getElementById('profileRole');
 const projectSelector   = document.getElementById("projectSelector");
 const projectDialog     = document.getElementById("projectDialog");
 const activeProject     = document.getElementById("activeProject");
+const arretBar          = document.getElementById("arretBar");
+const arretCount        = document.getElementById("arretCount");
+
+const ARRET_RECORD_TYPE = 'safety_records';
+const ARRET_RECORD_KIND = 'arret';
 
 // =========================
 // BOOT — single DOMContentLoaded
@@ -1333,7 +1378,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   loadSummaryPanelData();
   setTimeout(() => { loadTabRecords('contractual'); }, 50);
   updateNotificationBadge();
+  updateArretBar();
+  if (arretBar) arretBar.addEventListener('click', openArretPanel);
 });
+
+setInterval(updateNotificationBadge, 30000);
+setInterval(updateArretBar, 30000);
 
 async function fetchProjectDetails(projectId) {
   try {
@@ -5894,6 +5944,170 @@ async function handleNotificationClick(entityType, entityId) {
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const detail = document.getElementById(`detail-${entityId}`);
     if (detail && detail.style.display === 'none') toggleRecordDetail(entityId, tabKey);
+  }
+}
+
+async function fetchArrets() {
+  const projectId = localStorage.getItem('activeProjectId');
+  if (!projectId) return [];
+  try {
+    const res = await authFetch(`${API}/fetch-tab-records`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, recordType: ARRET_RECORD_TYPE })
+    });
+    if (!res || !res.ok) return [];
+    const data = await res.json();
+    return (data.records || []).filter(r => r.record_kind === ARRET_RECORD_KIND);
+  } catch (err) {
+    console.error('Fetch arrets error:', err);
+    return [];
+  }
+}
+
+async function updateArretBar() {
+  if (!arretBar || !arretCount) return;
+  const arrets = await fetchArrets();
+  const unviewedCount = arrets.filter(r => !r.is_viewed).length;
+  if (unviewedCount > 0) {
+    arretBar.classList.add('alert');
+    arretCount.textContent = unviewedCount;
+    arretCount.style.display = 'inline-flex';
+  } else {
+    arretBar.classList.remove('alert');
+    arretCount.textContent = arrets.length > 0 ? arrets.length : '';
+    arretCount.style.display = arrets.length > 0 ? 'inline-flex' : 'none';
+  }
+}
+
+async function openArretPanel() {
+  const projectId = localStorage.getItem('activeProjectId');
+  if (!projectId) {
+    expandGrayPart('<p>Please select a project first.</p>');
+    return;
+  }
+  const arrets = await fetchArrets();
+  renderArretPanel(arrets);
+}
+
+function renderArretPanel(arrets) {
+  const html = `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:2px solid #007B8A;flex-shrink:0;">
+      <div>
+        <h3 style="margin:0;color:#333;font-size:18px;">🛑 Site Arrets</h3>
+        <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Add and review stop-work arret reports for this project.</p>
+      </div>
+      <button class="btn" type="button" onclick="openArretForm()">+ Add Arret</button>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:16px 20px;">
+      ${arrets.length ? '<ul style="padding:0;margin:0;list-style:none;">' : '<div style="text-align:center;padding:40px 0;color:#9ca3af;"><div style="font-size:32px;margin-bottom:8px;">🛑</div><p style="margin:0;">No arrets yet. Add one now to flag a stop-work issue.</p></div>'}
+      ${arrets.map(arret => `
+        <li style="border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+            <div>
+              <div style="font-weight:700;font-size:14px;color:#111;">${escapeHtml(arret.title || 'Untitled arret')}</div>
+              <div style="font-size:12px;color:#6b7280;margin-top:4px;">${escapeHtml(arret.description || '')}</div>
+              <div style="font-size:11px;color:#9ca3af;margin-top:8px;">${new Date(arret.issued_date).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})} · ${escapeHtml(arret.uploader_role || 'Unknown')}</div>
+            </div>
+            <button type="button" class="btn" style="font-size:12px;padding:8px 12px;" data-arret-id="${arret.id}">${arret.is_viewed ? 'Viewed' : 'View'}</button>
+          </div>
+        </li>
+      `).join('')}
+      ${arrets.length ? '</ul>' : ''}
+    </div>
+    <div style="padding:16px 20px;border-top:1px solid #e5e7eb;flex-shrink:0;">
+      <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
+    </div>`;
+
+  expandGrayPart(`<div style="display:flex;flex-direction:column;height:100%;">${html}</div>`);
+
+  setTimeout(() => {
+    document.querySelectorAll('[data-arret-id]').forEach(btn => {
+      btn.addEventListener('click', async (event) => {
+        const recordId = event.currentTarget.getAttribute('data-arret-id');
+        if (recordId) await handleArretView(recordId);
+      });
+    });
+  }, 50);
+}
+
+async function handleArretView(recordId) {
+  markRecordViewed(recordId, 'safety');
+  collapseGrayPart();
+  const tabKey = 'safety';
+  delete recordsCache[tabKey];
+  await loadTabRecords(tabKey);
+  const item = document.querySelector(`.doc-item[data-id="${recordId}"]`);
+  if (item) {
+    item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const detail = document.getElementById(`detail-${recordId}`);
+    if (detail && detail.style.display === 'none') toggleRecordDetail(recordId, tabKey);
+  }
+  updateArretBar();
+}
+
+function openArretForm() {
+  const html = `
+    <div style="padding:18px 20px;border-bottom:2px solid #007B8A;flex-shrink:0;">
+      <h3 style="margin:0;color:#333;font-size:18px;">➕ New Arret Report</h3>
+      <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Submit a stop-work arret for the active project.</p>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:16px 20px;">
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div>
+          <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px;">Title</label>
+          <input id="arretTitle" type="text" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;" placeholder="Short summary of the issue" />
+        </div>
+        <div>
+          <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px;">Description</label>
+          <textarea id="arretDescription" rows="6" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;resize:vertical;" placeholder="Describe the reason for the arret and any immediate actions taken."></textarea>
+        </div>
+      </div>
+    </div>
+    <div style="padding:16px 20px;border-top:1px solid #e5e7eb;display:flex;gap:12px;justify-content:flex-end;flex-shrink:0;">
+      <button class="btn" type="button" onclick="collapseGrayPart()">Cancel</button>
+      <button class="btn primary" type="button" id="saveArretBtn">Save Arret</button>
+    </div>`;
+
+  expandGrayPart(`<div style="display:flex;flex-direction:column;height:100%;">${html}</div>`);
+  setTimeout(() => {
+    document.getElementById('saveArretBtn')?.addEventListener('click', submitArretForm);
+  }, 50);
+}
+
+async function submitArretForm() {
+  const title = document.getElementById('arretTitle')?.value?.trim();
+  const description = document.getElementById('arretDescription')?.value?.trim();
+  if (!title || !description) {
+    alert('Please provide both title and description for the arret.');
+    return;
+  }
+
+  try {
+    const formData = new FormData();
+    formData.append('recordType', ARRET_RECORD_TYPE);
+    formData.append('title', title);
+    formData.append('description', description);
+    formData.append('projectId', localStorage.getItem('activeProjectId'));
+    formData.append('recordKind', ARRET_RECORD_KIND);
+
+    const saveBtn = document.getElementById('saveArretBtn');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+
+    const res = await authFetch(`${API}/add-record`, { method: 'POST', body: formData });
+    if (!res) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const result = await res.json();
+    if (!result.success) throw new Error(result.message || 'Failed to save arret.');
+
+    alert('Arret saved successfully.');
+    updateArretBar();
+    openArretPanel();
+  } catch (err) {
+    console.error('Save arret error:', err);
+    alert('Error saving arret: ' + (err.message || 'Please try again.'));
+    const saveBtn = document.getElementById('saveArretBtn');
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Arret'; }
   }
 }
 
