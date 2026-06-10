@@ -846,14 +846,21 @@ async function apiRequest(path, options = {}) {
    NORMALISE MEMBER FROM API
 ═══════════════════════════════════════════ */
 function normalizeMember(member) {
-    const role    = normalizeRole(member.role);
-    const repName = member.name || member.display_name || member.representative || (member.email ? member.email.split('@')[0] : '') || '';
-    const pos     = member.position || member.title || '';
-    const side    = member.assigned_part || '';
+    const role         = normalizeRole(member.role);
+    const repName      = member.name || member.display_name || member.representative || (member.email ? member.email.split('@')[0] : '') || '';
+    const pos          = member.position || member.title || '';
+    const assignedBy   = member.assigned_by_name || member.assigned_by || '';
 
     let displayName;
     if (role === 'TeamMember') {
-        displayName = [repName, side, pos, role].filter(Boolean).join(' · ');
+        displayName = [repName, pos, assignedBy ? 'via ' + assignedBy : '', 'Team Member'].filter(Boolean).join(' · ');
+    } else if (['ContractorPM','ConsultantPM','ClientPM'].includes(role)) {
+        const humanRole = role === 'ContractorPM'
+                        ? 'Contractor PM'
+                        : role === 'ConsultantPM'
+                        ? 'Consultant PM'
+                        : 'Client PM';
+        displayName = [repName, humanRole].filter(Boolean).join(' · ');
     } else {
         displayName = [repName, pos, role].filter(Boolean).join(' · ');
     }
@@ -867,9 +874,7 @@ function normalizeMember(member) {
         title:         member.company_name || member.title || role,
         position:      pos,
         pictureUrl:    member.profile_picture || null,
-        initial:       (member.display_name || member.name)
-                   ? getInitial(member.display_name || member.name)
-                   : getInitial(member.email),
+        initial:       repName ? getInitial(repName) : getInitial(member.email),
         online:        true,
         isGroup:       false,
         recipientRole: role,
@@ -1075,12 +1080,16 @@ function renderMessages() {
             const lbl = document.createElement('div');
             lbl.className = 'sender-label ' + roleColorClass(m.senderRole);
             const sRole = normalizeRole(m.senderRole);
-            const humanRole = sRole === 'TeamMember' ? 'Team Member' : sRole;
             let parts;
             if (sRole === 'TeamMember') {
-                parts = [m.senderName, m.senderAssignedPart || '', m.senderPosition, humanRole];
+                parts = [m.senderName, m.senderPosition, m.senderAssignedPart ? 'via ' + m.senderAssignedPart : '', 'Team Member'];
+            } else if (['ContractorPM','ConsultantPM','ClientPM'].includes(sRole)) {
+                const humanRole = sRole === 'ContractorPM' ? 'Contractor PM'
+                                : sRole === 'ConsultantPM' ? 'Consultant PM'
+                                : 'Client PM';
+                parts = [m.senderName, humanRole];
             } else {
-                parts = [m.senderName, m.senderPosition, humanRole];
+                parts = [m.senderName, m.senderPosition, sRole];
             }
             lbl.textContent = parts.filter(Boolean).join(' · ');
             bubble.appendChild(lbl);
