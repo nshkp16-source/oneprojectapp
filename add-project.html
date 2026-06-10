@@ -59,7 +59,28 @@
     .back-link {
       color: #007BFF; text-decoration: none; font-size: 15px;
     }
-    #formMessage { margin-top: 10px; color: #cc0000; font-size: 14px; min-height: 18px; }
+    #formMessage {
+      margin-top: 10px;
+      font-size: 14px;
+      min-height: 22px;
+      display: none;
+      padding: 12px;
+      border-radius: 6px;
+    }
+    #formMessage.error {
+      display: block;
+      background-color: #ffe6e6;
+      border: 1px solid #ff6b6b;
+      color: #cc0000;
+      font-weight: 600;
+    }
+    #formMessage.success {
+      display: block;
+      background-color: #e6ffed;
+      border: 1px solid #4caf50;
+      color: #1f7a20;
+      font-weight: 600;
+    }
   </style>
 </head>
 <body>
@@ -122,6 +143,8 @@
 
 <script>
   // Show client info from localStorage
+  const BACKEND_URL = "https://oneprojectapp-backend.onrender.com";
+
   document.addEventListener("DOMContentLoaded", async () => {
     const loggedInEmail = localStorage.getItem("clientEmail") || localStorage.getItem("userEmail");
 
@@ -148,41 +171,53 @@
     }
   });
 
+  function showFormMessage(message, type = "error") {
+    const messageEl = document.getElementById("formMessage");
+    messageEl.textContent = message;
+    messageEl.classList.remove("error", "success");
+    messageEl.classList.add(type);
+  }
+
   async function handleVerifyProject(e) {
     e.preventDefault();
     const email = localStorage.getItem("clientEmail");
+    const projectName = document.getElementById("projectName").value.trim();
+    const projectLocation = document.getElementById("projectLocation").value.trim();
+    const contractReference = document.getElementById("contractReference").value.trim();
+    const contractorCompany = document.getElementById("contractorCompany").value.trim();
+    const contractorEmail = document.getElementById("contractorEmail").value.trim().toLowerCase();
+    const contractorTel = document.getElementById("contractorTel").value.trim();
+    const contractorRepName = document.getElementById("contractorRepName").value.trim();
+    const contractorTitlePosition = document.getElementById("contractorTitlePosition").value.trim();
 
-    /*
-      Payload structure aligned to new schema:
+    if (!email) {
+      showFormMessage("Client email is missing. Please return to the previous step and sign in or create an account.");
+      return;
+    }
 
-      projects table:
-        name, location, contract_reference
+    if (!projectName || !projectLocation || !contractReference) {
+      showFormMessage("Please complete all project information fields, including project name, location, and contract reference.");
+      return;
+    }
 
-      contractor_assignments table:
-        company_name, telephone, representative, title_position, task
-        + contractor email (for backend to resolve/create contractors.id)
+    if (!contractorCompany || !contractorEmail || !contractorTel || !contractorRepName || !contractorTitlePosition) {
+      showFormMessage("Please complete all contractor details, including contractor company name, email, telephone, representative name, and position/title.");
+      return;
+    }
 
-      consultant_assignments table:
-        company_name, telephone, representative, title_position, task
-        + consultant email (for backend to resolve/create consultants.id)
-
-      REMOVED from old payload:
-        - contractor.position (was duplicate of title; schema has single title_position)
-        - consultant.position (same reason)
-    */
     const projectDetails = {
       project: {
-        name:               document.getElementById("projectName").value.trim(),
-        location:           document.getElementById("projectLocation").value.trim(),
-        contract_reference: document.getElementById("contractReference").value.trim(),
+        name:               projectName,
+        location:           projectLocation,
+        contract_reference: contractReference,
         created_at:         new Date().toISOString()
       },
       contractor: {
-        email:          document.getElementById("contractorEmail").value.trim().toLowerCase(),
-        company_name:   document.getElementById("contractorCompany").value.trim(),
-        telephone:      document.getElementById("contractorTel").value.trim(),
-        representative: document.getElementById("contractorRepName").value.trim(),
-        title_position: document.getElementById("contractorTitlePosition").value.trim(),
+        email:          contractorEmail,
+        company_name:   contractorCompany,
+        telephone:      contractorTel,
+        representative: contractorRepName,
+        title_position: contractorTitlePosition,
         task:           document.getElementById("contractorTask")?.value.trim() || null,
         created_at:     new Date().toISOString()
       },
@@ -197,6 +232,27 @@
       }
     };
 
+    // Check with backend whether project name or contract reference already exists for this client
+    try {
+      const checkRes = await fetch(`${BACKEND_URL}/project-check-existence`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientEmail: email, projectName: projectName, contractReference: contractReference })
+      });
+      const checkData = await checkRes.json();
+
+      if (checkRes.ok && checkData.exists) {
+        // Backend reports name/reference already used for this client
+        showFormMessage(checkData.message || "A project with this name or contract reference already exists for your account. Please change them and try again.");
+        return;
+      }
+    } catch (err) {
+      // If backend check fails, inform user and abort
+      showFormMessage("Could not verify project uniqueness at this time. Please try again later.");
+      return;
+    }
+
+    // Persist and continue with existing flow
     localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
     localStorage.setItem("clientEmail", email);
 
