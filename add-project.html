@@ -46,6 +46,7 @@
       display: block; width: 100%; margin: 10px 0;
       padding: 12px; font-size: 15px;
       border-radius: 5px; border: 1px solid #ccc;
+      box-sizing: border-box;
     }
     button {
       background-color: #007BFF; color: white;
@@ -54,7 +55,10 @@
       font-size: 16px; margin-top: 20px;
     }
     button:hover { background-color: #0056b3; }
-    .button-row { display:flex; justify-content:space-between; }
+    .button-row { display:flex; justify-content:space-between; align-items:center; }
+    .back-link {
+      color: #007BFF; text-decoration: none; font-size: 15px;
+    }
     #formMessage { margin-top: 10px; color: #cc0000; font-size: 14px; min-height: 18px; }
   </style>
 </head>
@@ -72,46 +76,57 @@
 
     <!-- Project Form -->
     <form id="verifyProjectForm" onsubmit="handleVerifyProject(event)">
+
+      <!-- PROJECT INFO -->
+      <!-- Maps to: projects(name, location, contract_reference) -->
       <h3>Project Information</h3>
-      <input type="text" id="projectName" placeholder="Project Name" required />
-      <input type="text" id="projectLocation" placeholder="Project Location" required />
-      <input type="text" id="contractReference" placeholder="Contract Reference" required />
+      <input type="text"  id="projectName"        placeholder="Project Name"         required />
+      <input type="text"  id="projectLocation"    placeholder="Project Location"     required />
+      <input type="text"  id="contractReference"  placeholder="Contract Reference"   required />
 
+      <!-- CONTRACTOR INFO -->
+      <!--
+        contractors table:   email only (looked up or created by backend)
+        contractor_assignments: company_name, telephone, representative, title_position, task
+        NOTE: "position" field removed — schema uses single "title_position" column
+      -->
       <h3>Contractor Information</h3>
-      <input type="text" id="contractorCompany" placeholder="Contractor Company Name" required />
-      <input type="email" id="contractorEmail" placeholder="Contractor Email" required />
-      <input type="tel" id="contractorTel" placeholder="Contractor Telephone Number" required />
-      <input type="text" id="contractorRepName" placeholder="Contractor Representative Name" required />
-      <input type="text" id="contractorRepTitlePosition" placeholder="Contractor Position / Title" required />
-      <input type="text" id="contractorTask" placeholder="Contractor Task (optional)" />
+      <input type="text"  id="contractorCompany"          placeholder="Contractor Company Name"           required />
+      <input type="email" id="contractorEmail"            placeholder="Contractor Email"                  required />
+      <input type="tel"   id="contractorTel"              placeholder="Contractor Telephone Number"       required />
+      <input type="text"  id="contractorRepName"          placeholder="Contractor Representative Name"    required />
+      <input type="text"  id="contractorTitlePosition"    placeholder="Contractor Position / Title"       required />
+      <input type="text"  id="contractorTask"             placeholder="Contractor Task (optional)" />
 
+      <!-- CONSULTANT INFO -->
+      <!--
+        consultants table:   email only (looked up or created by backend)
+        consultant_assignments: company_name, telephone, representative, title_position, task
+        NOTE: "position" field removed — schema uses single "title_position" column
+      -->
       <h3>Consultant Information</h3>
-      <input type="text" id="consultantCompany" placeholder="Consultant Company Name" required />
-      <input type="email" id="consultantEmail" placeholder="Consultant Email" required />
-      <input type="tel" id="consultantTel" placeholder="Consultant Telephone Number" required />
-      <input type="text" id="consultantRepName" placeholder="Consultant Representative Name" required />
-      <input type="text" id="consultantRepTitlePosition" placeholder="Consultant Position / Title" required />
-      <input type="text" id="consultantTask" placeholder="Consultant Task (optional)" />
+      <input type="text"  id="consultantCompany"          placeholder="Consultant Company Name"           required />
+      <input type="email" id="consultantEmail"            placeholder="Consultant Email"                  required />
+      <input type="tel"   id="consultantTel"              placeholder="Consultant Telephone Number"       required />
+      <input type="text"  id="consultantRepName"          placeholder="Consultant Representative Name"    required />
+      <input type="text"  id="consultantTitlePosition"    placeholder="Consultant Position / Title"       required />
+      <input type="text"  id="consultantTask"             placeholder="Consultant Task (optional)" />
 
       <div class="button-row">
         <a href="create-project-account.html" class="back-link" onclick="handleBack()">&#8592; Back</a>
-
         <button type="submit">Save Project</button>
       </div>
       <p id="formMessage"></p>
     </form>
   </div>
 
-</body>
-</html>
 <script>
-  // Show client info from local email
+  // Show client info from localStorage
   document.addEventListener("DOMContentLoaded", async () => {
     const loggedInEmail = localStorage.getItem("clientEmail") || localStorage.getItem("userEmail");
 
     if (loggedInEmail) {
       try {
-        // ✅ Use full backend URL for profile picture fetch
         const res = await fetch("https://oneprojectapp-backend.onrender.com/client/profile-picture", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -120,18 +135,13 @@
         const data = await res.json();
 
         if (data.success && data.profile_picture) {
-          // Display profile picture in the circle
           document.getElementById("profileIcon").style.backgroundImage = `url("${data.profile_picture}")`;
           document.getElementById("profileIcon").textContent = "";
         } else {
-          // Fallback: show first letter of email
           document.getElementById("profileIcon").textContent = loggedInEmail.charAt(0).toUpperCase();
         }
-
-        // Always show local email
         document.getElementById("clientEmail").textContent = loggedInEmail.trim();
       } catch (err) {
-        // Fallback if backend call fails
         document.getElementById("profileIcon").textContent = loggedInEmail.charAt(0).toUpperCase();
         document.getElementById("clientEmail").textContent = loggedInEmail.trim();
       }
@@ -142,40 +152,54 @@
     e.preventDefault();
     const email = localStorage.getItem("clientEmail");
 
+    /*
+      Payload structure aligned to new schema:
+
+      projects table:
+        name, location, contract_reference
+
+      contractor_assignments table:
+        company_name, telephone, representative, title_position, task
+        + contractor email (for backend to resolve/create contractors.id)
+
+      consultant_assignments table:
+        company_name, telephone, representative, title_position, task
+        + consultant email (for backend to resolve/create consultants.id)
+
+      REMOVED from old payload:
+        - contractor.position (was duplicate of title; schema has single title_position)
+        - consultant.position (same reason)
+    */
     const projectDetails = {
       project: {
-        name: document.getElementById("projectName").value.trim(),
-        location: document.getElementById("projectLocation").value.trim(),
+        name:               document.getElementById("projectName").value.trim(),
+        location:           document.getElementById("projectLocation").value.trim(),
         contract_reference: document.getElementById("contractReference").value.trim(),
-        created_at: new Date().toISOString()
+        created_at:         new Date().toISOString()
       },
       contractor: {
-        company_name: document.getElementById("contractorCompany").value.trim(),
-        email: document.getElementById("contractorEmail").value.trim().toLowerCase(),
-        telephone: document.getElementById("contractorTel").value.trim(),
+        email:          document.getElementById("contractorEmail").value.trim().toLowerCase(),
+        company_name:   document.getElementById("contractorCompany").value.trim(),
+        telephone:      document.getElementById("contractorTel").value.trim(),
         representative: document.getElementById("contractorRepName").value.trim(),
-        title: document.getElementById("contractorRepTitlePosition").value.trim(),
-        position: document.getElementById("contractorRepTitlePosition").value.trim(),
-        task: document.getElementById("contractorTask")?.value.trim() || null,
-        created_at: new Date().toISOString()
+        title_position: document.getElementById("contractorTitlePosition").value.trim(),
+        task:           document.getElementById("contractorTask")?.value.trim() || null,
+        created_at:     new Date().toISOString()
       },
       consultant: {
-        company_name: document.getElementById("consultantCompany").value.trim(),
-        email: document.getElementById("consultantEmail").value.trim().toLowerCase(),
-        telephone: document.getElementById("consultantTel").value.trim(),
+        email:          document.getElementById("consultantEmail").value.trim().toLowerCase(),
+        company_name:   document.getElementById("consultantCompany").value.trim(),
+        telephone:      document.getElementById("consultantTel").value.trim(),
         representative: document.getElementById("consultantRepName").value.trim(),
-        title: document.getElementById("consultantRepTitlePosition").value.trim(),
-        position: document.getElementById("consultantRepTitlePosition").value.trim(),
-        task: document.getElementById("consultantTask")?.value.trim() || null,
-        created_at: new Date().toISOString()
+        title_position: document.getElementById("consultantTitlePosition").value.trim(),
+        task:           document.getElementById("consultantTask")?.value.trim() || null,
+        created_at:     new Date().toISOString()
       }
     };
 
-    // ✅ Save project details locally
     localStorage.setItem("projectDetails", JSON.stringify(projectDetails));
     localStorage.setItem("clientEmail", email);
 
-    // Redirect to verification page
     window.location.href = "existclient-project-verification.html";
   }
 

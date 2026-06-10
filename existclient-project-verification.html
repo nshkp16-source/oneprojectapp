@@ -93,7 +93,7 @@
     </div>
 
     <p style="color:#007BFF; font-size:14px; margin-bottom:10px;">
-      We’ve sent a 6-digit verification code to your email.<br>
+      We've sent a 6-digit verification code to your email.<br>
       Enter the code below. It will expire in 3 minutes.
     </p>
 
@@ -114,27 +114,25 @@
   </div>
 
 <script>
-  const BACKEND_URL = "https://oneprojectapp-backend.onrender.com"; 
+  const BACKEND_URL = "https://oneprojectapp-backend.onrender.com";
 
   let countdown;
-  let timeLeft = 180; // 3 minutes
+  let timeLeft = 180;
   let resendAttempts = 0;
 
   const progressFill = document.getElementById("progressFill");
-  const timerEl = document.getElementById("timer");
+  const timerEl      = document.getElementById("timer");
   const verifyMessage = document.getElementById("verifyMessage");
-  const resendBtn = document.getElementById("resendBtn");
-  const backLink = document.getElementById("backLink");
-  const loadingBar = document.getElementById("loadingBar");
+  const resendBtn    = document.getElementById("resendBtn");
+  const backLink     = document.getElementById("backLink");
+  const loadingBar   = document.getElementById("loadingBar");
 
   document.addEventListener("DOMContentLoaded", async () => {
     const email = localStorage.getItem("clientEmail");
     if (email) {
-      // Always show local email
       document.getElementById("clientEmail").textContent = email.trim();
 
       try {
-        // ✅ Fetch Cloudinary profile picture from backend
         const res = await fetch(`${BACKEND_URL}/client/profile-picture`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -147,13 +145,11 @@
           iconEl.style.backgroundImage = `url("${data.profile_picture}")`;
           iconEl.textContent = "";
         } else {
-          // Fallback: show first letter of email
           document.getElementById("profileIcon").style.backgroundImage = "";
           document.getElementById("profileIcon").textContent = email.charAt(0).toUpperCase();
         }
       } catch (err) {
         console.error("Profile picture fetch error:", err);
-        // Fallback if backend call fails
         document.getElementById("profileIcon").style.backgroundImage = "";
         document.getElementById("profileIcon").textContent = email.charAt(0).toUpperCase();
       }
@@ -165,16 +161,12 @@
 
   function getCode() {
     let code = "";
-    for (let i = 1; i <= 6; i++) {
-      code += document.getElementById("digit" + i).value.trim();
-    }
+    for (let i = 1; i <= 6; i++) code += document.getElementById("digit" + i).value.trim();
     return code;
   }
 
   function clearInputs() {
-    for (let i = 1; i <= 6; i++) {
-      document.getElementById("digit" + i).value = "";
-    }
+    for (let i = 1; i <= 6; i++) document.getElementById("digit" + i).value = "";
     document.getElementById("digit1").focus();
   }
 
@@ -218,8 +210,10 @@
   async function verifyCode() {
     const code = getCode();
     if (code.length !== 6) return;
-    const email = localStorage.getItem("clientEmail");
+
+    const email          = localStorage.getItem("clientEmail");
     const projectDetails = JSON.parse(localStorage.getItem("projectDetails"));
+
     showLoading();
     try {
       const res = await fetch(`${BACKEND_URL}/project-verify`, {
@@ -228,17 +222,43 @@
         body: JSON.stringify({ email, token: code })
       });
       const data = await res.json();
+
       if (data.success) {
         clearInterval(countdown);
 
+        /*
+          Payload aligned to new schema.
+
+          /project-save expects:
+            clientEmail  — to resolve clients.id
+
+          project:
+            name, location, contract_reference
+
+          contractor:
+            email          → resolve/create contractors row, get contractors.id
+            company_name   → contractor_assignments.company_name
+            telephone      → contractor_assignments.telephone
+            representative → contractor_assignments.representative
+            title_position → contractor_assignments.title_position  (was split into title + position before)
+            task           → contractor_assignments.task
+
+          consultant:
+            email          → resolve/create consultants row, get consultants.id
+            company_name   → consultant_assignments.company_name
+            telephone      → consultant_assignments.telephone
+            representative → consultant_assignments.representative
+            title_position → consultant_assignments.title_position
+            task           → consultant_assignments.task
+        */
         const payload = {
-          project: projectDetails?.project,
-          contractor: projectDetails?.contractor,
-          consultant: projectDetails?.consultant,
-          clientEmail: email
+          clientEmail: email,
+          project:     projectDetails?.project,
+          contractor:  projectDetails?.contractor,
+          consultant:  projectDetails?.consultant
         };
 
-        const saveRes = await fetch(`${BACKEND_URL}/project-save`, {
+        const saveRes  = await fetch(`${BACKEND_URL}/project-save`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
@@ -248,18 +268,19 @@
         if (saveData.success) {
           localStorage.clear();
 
-          // ✅ Save only tokens
           if (saveData.accessToken && saveData.refreshToken) {
-            localStorage.setItem("authToken", saveData.accessToken);
-            localStorage.setItem("refreshToken", saveData.refreshToken);
+            localStorage.setItem("authToken",      saveData.accessToken);
+            localStorage.setItem("refreshToken",   saveData.refreshToken);
           }
 
+          verifyMessage.style.color = "#007BFF";
           verifyMessage.textContent = "Project verified and saved successfully! Redirecting…";
           setTimeout(() => window.location.href = "client-dashboard.html", 1500);
         } else {
           verifyMessage.textContent = saveData.error || "Failed to save project.";
           clearInputs();
         }
+
       } else {
         verifyMessage.textContent = data.error || "Invalid or expired code.";
         clearInputs();
@@ -267,7 +288,7 @@
           resendBtn.style.display = "block";
         } else {
           resendBtn.style.display = "none";
-          backLink.style.display = "block";
+          backLink.style.display  = "block";
         }
       }
     } catch {
@@ -281,7 +302,7 @@
   async function resendCode() {
     if (resendAttempts >= 2) {
       resendBtn.style.display = "none";
-      backLink.style.display = "block";
+      backLink.style.display  = "block";
       return;
     }
     resendAttempts++;
@@ -296,7 +317,7 @@
       const data = await res.json();
       if (data.success) {
         verifyMessage.textContent = "New code sent! Check your email.";
-        resendBtn.style.display = "none";
+        resendBtn.style.display   = "none";
         timeLeft = 180;
         startCountdown();
         clearInputs();
@@ -324,23 +345,22 @@
           resendBtn.style.display = "block";
         } else {
           resendBtn.style.display = "none";
-          backLink.style.display = "block";
+          backLink.style.display  = "block";
         }
       } else {
-        let minutes = Math.floor(timeLeft / 60);
-        let seconds = timeLeft % 60;
-        timerEl.textContent = `Expires in ${minutes}:${seconds.toString().padStart(2, "0")}`;
-        progressFill.style.width = `${(timeLeft / 180) * 100}%`;
+        const minutes = Math.floor(timeLeft / 60);
+        const seconds = timeLeft % 60;
+        timerEl.textContent          = `Expires in ${minutes}:${seconds.toString().padStart(2, "0")}`;
+        progressFill.style.width     = `${(timeLeft / 180) * 100}%`;
         timeLeft--;
       }
     }, 1000);
   }
 
-  // ✅ Helper to decode JWT if needed
   function parseJwt(token) {
     try {
       const base64Url = token.split('.')[1];
-      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const base64    = base64Url.replace(/-/g, '+').replace(/_/g, '/');
       return JSON.parse(atob(base64));
     } catch (e) {
       return null;
