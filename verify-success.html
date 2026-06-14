@@ -2,117 +2,122 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Email Verified Successfully</title>
   <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
     body {
-      margin: 0; padding: 0;
+      margin: 0; padding: 16px;
       font-family: Arial, sans-serif;
       background: url('account-background.jpg') no-repeat center center fixed;
       background-size: cover;
-      height: 100vh; display: flex;
-      justify-content: center; align-items: center;
+      min-height: 100vh;
+      display: flex; justify-content: center; align-items: center;
     }
+
     .container {
-      background: #fff; padding: 40px;
-      border-radius: 12px; width: 380px;
+      background: #fff; padding: 36px 28px;
+      border-radius: 12px; width: 100%; max-width: 400px;
       text-align: center;
       box-shadow: 0 0 12px rgba(0,0,0,0.2);
-      position: relative;
+      position: relative; overflow: hidden;
       transition: opacity 1s ease-out;
     }
-    h2 { color: #28a745; font-size: 22px; margin-bottom: 20px; }
-    p { font-size: 15px; color: #333; margin-bottom: 20px; }
+
+    .success-icon {
+      width: 60px; height: 60px;
+      background: #28a745;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 16px;
+      font-size: 28px; color: #fff;
+    }
+
+    h2 { color: #28a745; font-size: clamp(18px, 5vw, 22px); margin: 0 0 14px; }
+    p  { font-size: 15px; color: #333; margin-bottom: 10px; line-height: 1.6; }
+
     #loadingBar {
       position: absolute; bottom: 0; left: 0;
       height: 5px; width: 0;
       background-color: #28a745;
       transition: width 3s linear;
     }
+
     #countdown {
-      margin-top: 15px;
-      font-size: 14px;
-      color: #555;
+      margin-top: 16px; font-size: 14px; color: #555;
+    }
+
+    @media (max-width: 400px) {
+      body { align-items: flex-start; padding-top: 32px; }
+      .container { padding: 24px 16px; border-radius: 10px; }
     }
   </style>
 </head>
 <body>
   <div class="container" id="successBox">
+    <div class="success-icon">&#10003;</div>
     <h2>Email Verified!</h2>
     <p>Your account has been successfully verified and saved.</p>
     <p>You will be redirected to your dashboard shortly.</p>
-
-    <div id="loadingBar"></div>
     <p id="countdown">Redirecting in 3 seconds...</p>
+    <div id="loadingBar"></div>
   </div>
 
-  <script>
-    async function commitData() {
-      const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
-      const sessionId = localStorage.getItem("sessionId");
-      const code = localStorage.getItem("verificationCode"); // must be set when user enters code
+<script>
+  async function commitData() {
+    const projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
+    const sessionId      = localStorage.getItem("sessionId");
+    const code           = localStorage.getItem("verificationCode");
 
-      if (!projectDetails.client?.company_email || !sessionId || !code) {
-        console.error("Missing verification data.");
-        return;
-      }
-
-      try {
-        const res = await fetch("https://oneprojectapp-backend.onrender.com/verify-code", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: projectDetails.client.company_email,
-            sessionId,
-            code,
-            client: projectDetails.client,
-            project: projectDetails.project,
-            contractor: projectDetails.contractor,
-            consultant: projectDetails.consultant
-            // ✅ team_members removed
-          })
-        });
-
-        const data = await res.json();
-        if (!data.success) {
-          console.error("Verification commit failed:", data.error);
-        }
-      } catch (err) {
-        console.error("Commit error:", err);
-      }
+    if (!projectDetails.client?.company_email || !sessionId || !code) {
+      console.error("Missing verification data.");
+      return;
     }
+    try {
+      const res = await fetch("https://oneprojectapp-backend.onrender.com/verify-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email:      projectDetails.client.company_email,
+          sessionId, code,
+          client:     projectDetails.client,
+          project:    projectDetails.project,
+          contractor: projectDetails.contractor,
+          consultant: projectDetails.consultant
+        })
+      });
+      const data = await res.json();
+      if (!data.success) console.error("Verification commit failed:", data.error);
+    } catch (err) {
+      console.error("Commit error:", err);
+    }
+  }
 
-    window.onload = () => {
-      // ✅ Commit data to backend
-      commitData();
+  window.onload = () => {
+    commitData();
 
-      // ✅ Clean LocalStorage after commit
-      localStorage.removeItem("projectDetails");
-      localStorage.removeItem("projectAccount");
-      localStorage.removeItem("resendAttempts");
-      localStorage.removeItem("verificationCode");
+    localStorage.removeItem("projectDetails");
+    localStorage.removeItem("projectAccount");
+    localStorage.removeItem("resendAttempts");
+    localStorage.removeItem("verificationCode");
 
-      // Start loading bar animation
-      const bar = document.getElementById("loadingBar");
-      setTimeout(() => { bar.style.width = "100%"; }, 100);
+    // Start progress bar
+    setTimeout(() => { document.getElementById("loadingBar").style.width = "100%"; }, 100);
 
-      // Countdown text
-      let seconds = 3;
-      const countdownEl = document.getElementById("countdown");
-      const interval = setInterval(() => {
-        seconds--;
-        countdownEl.textContent = `Redirecting in ${seconds} seconds...`;
-        if (seconds <= 0) clearInterval(interval);
-      }, 1000);
+    // Countdown
+    let seconds = 3;
+    const countdownEl = document.getElementById("countdown");
+    const interval = setInterval(() => {
+      seconds--;
+      countdownEl.textContent = `Redirecting in ${seconds} second${seconds !== 1 ? "s" : ""}...`;
+      if (seconds <= 0) clearInterval(interval);
+    }, 1000);
 
-      // Fade out container just before redirect
-      const box = document.getElementById("successBox");
-      setTimeout(() => { box.style.opacity = "0"; }, 2500);
-
-      // Auto-redirect after 3 seconds
-      setTimeout(() => {
-        window.location.href = "client-dashboard.html";
-      }, 3000);
-    };
-  </script>
+    // Fade out then redirect
+    setTimeout(() => { document.getElementById("successBox").style.opacity = "0"; }, 2500);
+    setTimeout(() => { window.location.href = "client-dashboard.html"; }, 3000);
+  };
+</script>
 </body>
 </html>

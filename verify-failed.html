@@ -2,45 +2,67 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Email Verification Failed</title>
   <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
     body {
-      margin: 0; padding: 0;
+      margin: 0; padding: 16px;
       font-family: Arial, sans-serif;
       background: url('account-background.jpg') no-repeat center center fixed;
       background-size: cover;
-      height: 100vh; display: flex;
-      justify-content: center; align-items: center;
+      min-height: 100vh;
+      display: flex; justify-content: center; align-items: center;
     }
+
     #loadingBar {
       position: fixed; top: 0; left: 0;
       height: 4px; width: 0;
       background-color: #007BFF;
       transition: width 1.5s ease-in-out;
+      z-index: 10;
     }
+
     .container {
-      background: #fff; padding: 40px;
-      border-radius: 12px; width: 380px;
+      background: #fff; padding: 36px 28px;
+      border-radius: 12px; width: 100%; max-width: 400px;
       text-align: center;
       box-shadow: 0 0 12px rgba(0,0,0,0.2);
     }
-    h2 { color: #cc0000; font-size: 22px; margin-bottom: 20px; }
-    p { font-size: 15px; color: #333; margin-bottom: 20px; }
+
+    h2 { color: #cc0000; font-size: clamp(18px, 5vw, 22px); margin: 0 0 16px; }
+    p  { font-size: 15px; color: #333; margin-bottom: 14px; line-height: 1.5; }
+
     button {
       background-color: #007BFF; color: white;
-      border: none; padding: 12px; width: 100%;
-      cursor: pointer; border-radius: 5px;
-      font-size: 15px; margin-top: 10px;
+      border: none; padding: 13px; width: 100%;
+      cursor: pointer; border-radius: 6px;
+      font-size: 15px; margin-top: 8px;
+      min-height: 48px;
     }
     button:hover { background-color: #0056b3; }
     button:disabled { background-color: #999; cursor: not-allowed; }
-    #expired-msg { margin-top: 15px; font-size: 14px; color: #cc0000; }
+
+    #expired-msg {
+      margin-top: 12px; font-size: 14px;
+      color: #cc0000; line-height: 1.5;
+    }
+
     .back-link {
-      display: block; margin-top: 15px;
+      display: none;
+      margin-top: 14px;
       font-size: 14px; color: #007BFF;
-      text-decoration: none; display: none;
+      text-decoration: none;
+      padding: 8px; min-height: 44px;
+      line-height: 28px;
     }
     .back-link:hover { text-decoration: underline; }
+
+    @media (max-width: 400px) {
+      body { align-items: flex-start; padding-top: 32px; }
+      .container { padding: 24px 16px; border-radius: 10px; }
+    }
   </style>
 </head>
 <body>
@@ -53,16 +75,17 @@
 
     <button id="resendBtn" onclick="resendCode()">Resend Verification Code</button>
     <p id="expired-msg"></p>
-    <a id="backLink" href="create-project-account.html" class="back-link" onclick="cleanupStorage()">← Back to Account Creation</a>
+    <a id="backLink" href="create-project-account.html" class="back-link" onclick="cleanupStorage()">&#8592; Back to Account Creation</a>
   </div>
 
-  <script>
-  let projectDetails = JSON.parse(localStorage.getItem("projectDetails") || "{}");
-  let clientEmail = projectDetails.client?.company_email;
-  let resendAttempts = parseInt(localStorage.getItem("resendAttempts") || "0");
-  const resendBtn = document.getElementById("resendBtn");
+<script>
+  let projectDetails  = JSON.parse(localStorage.getItem("projectDetails") || "{}");
+  let clientEmail     = projectDetails.client?.company_email;
+  let resendAttempts  = parseInt(localStorage.getItem("resendAttempts") || "0");
+
+  const resendBtn  = document.getElementById("resendBtn");
   const expiredMsg = document.getElementById("expired-msg");
-  const backLink = document.getElementById("backLink");
+  const backLink   = document.getElementById("backLink");
   const loadingBar = document.getElementById("loadingBar");
 
   function cleanupStorage() {
@@ -76,7 +99,6 @@
     loadingBar.style.transition = "width 1.5s ease-in-out";
     loadingBar.style.width = "100%";
   }
-
   function resetLoading() {
     loadingBar.style.transition = "width 0.8s ease-in-out";
     loadingBar.style.width = "0";
@@ -89,18 +111,16 @@
       window.location.href = "create-project-account.html";
       return;
     }
-
     if (resendAttempts >= 2) {
       resendBtn.disabled = true;
       expiredMsg.textContent = "Resend attempts have expired. Please start fresh.";
-      backLink.style.display = "block"; // show back link
+      backLink.style.display = "block";
       return;
     }
 
     showLoading();
-
     try {
-      const res = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
+      const res  = await fetch("https://oneprojectapp-backend.onrender.com/resend-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: clientEmail })
@@ -111,16 +131,13 @@
         resendAttempts++;
         localStorage.setItem("resendAttempts", resendAttempts.toString());
         if (data.sessionId) localStorage.setItem("sessionId", data.sessionId);
-
-        alert("Verification code resent! Redirecting to pending page...");
         resetLoading();
         window.location.href = "pending-verification.html";
       } else {
         alert(data.error || "Failed to resend code. Try again.");
         resetLoading();
       }
-    } catch (err) {
-      console.error(err);
+    } catch {
       alert("Server error. Please try again.");
       resetLoading();
     }
