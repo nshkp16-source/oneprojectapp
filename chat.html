@@ -1257,12 +1257,17 @@ async function fetchMessages(contact) {
         let readBy = [];
         if (Array.isArray(msg.read_by)) readBy = msg.read_by;
         else if (msg.read_by) { try{readBy=JSON.parse(msg.read_by);}catch(e){readBy=[];} }
+        let deliveredTo = [];
+        if (Array.isArray(msg.delivered_to)) deliveredTo = msg.delivered_to;
+        else if (msg.delivered_to) { try{deliveredTo = JSON.parse(msg.delivered_to);}catch(e){deliveredTo = []; } }
+        const deliveredFromRecipients = Array.isArray(deliveredTo) ? deliveredTo.map(Number).filter(Boolean) : [];
         return {
             id:                 msg.id,
             text:               msg.content||'',
             attachmentUrl:      msg.attachment_url||null,
             attachmentName:     msg.attachment_name||null,
             attachmentMime:     msg.attachment_mime||msg.attachmentMime||null,
+                delivered:          (deliveredFromRecipients.length > 0 && deliveredFromRecipients.some(id=>Number(id)!==Number(currentUserId))) || !!msg.delivered,
             sent:               String(msg.sender_id)===String(currentUserId) && normRole(String(msg.sender_role))===currentUserRole,
             senderName:         msg.sender_display_name||msg.sender_email||'Unknown',
             senderRole:         msg.sender_role||'',
@@ -1459,9 +1464,10 @@ function renderMessages() {
                If any ID other than currentUserId is in the list → blue double tick */
             const others = (m.readBy||[]).filter(id=>Number(id)!==currentUserId);
             const isRead = others.length > 0;
+            const isDelivered = !isRead && !!m.delivered;
             tk.className = 'msg-ticks' + (isRead ? ' read' : '');
-            tk.textContent = isRead ? '✓✓' : (m.readBy?.length ? '✓✓' : '✓');
-            tk.title = isRead ? 'Read' : (m.readBy?.length ? 'Delivered' : 'Sent');
+            tk.textContent = isRead ? '✓✓' : (isDelivered ? '✓✓' : '✓');
+            tk.title = isRead ? 'Read' : (isDelivered ? 'Delivered' : 'Sent');
             footer.appendChild(tk);
         }
         bubble.appendChild(footer);
