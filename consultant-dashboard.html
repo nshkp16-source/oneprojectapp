@@ -1543,142 +1543,281 @@ function openAssignTeam(source) {
   window.location.href = "assign-team.html";
 }
 
-// =========================
-// Settings dialog
-// =========================
-const settingsToggle   = document.getElementById('settingsToggle');
-const settingsDialog   = document.getElementById('settingsDialog');
-const resetPasswordBtn = document.getElementById('resetPasswordBtn');
-const changeLanguageBtn= document.getElementById('changeLanguageBtn');
-const exitProjectBtn   = document.getElementById('exitProjectBtn');
+// ============================================================
+//  SETTINGS FIXES — drop-in replacements
+//  1. Reset Password  → fetch /api/me, store email+role, redirect
+//  2. Exit Project    → redirect straight to exit-project.html
+//  3. Change Language → fix dropdown default + full-screen translate
+// ============================================================
 
-settingsToggle.addEventListener('click', (e) => { e.stopPropagation(); settingsDialog.classList.add('active'); });
-resetPasswordBtn.addEventListener('click',  () => { settingsDialog.classList.remove('active'); window.location.href = 'reset-password.html'; });
-changeLanguageBtn.addEventListener('click', () => { settingsDialog.classList.remove('active'); document.getElementById('languageDialog').classList.add('active'); });
-exitProjectBtn.addEventListener('click',    () => { settingsDialog.classList.remove('active'); document.getElementById('exitProjectDialog').classList.add('active'); });
+// ─────────────────────────────────────────────────────────────
+//  1. RESET PASSWORD
+//  Old code just did: window.location.href = 'reset-password.html'
+//  New code: fetch /api/me → store email + role in localStorage → redirect
+// ─────────────────────────────────────────────────────────────
+document.getElementById('resetPasswordBtn')
+  .addEventListener('click', async () => {
+    settingsDialog.classList.remove('active');
 
-// =========================
-// Translation
-// =========================
-const defaultLanguage = 'English';
-const supportedLanguages = ['English', 'French'];
-const savedLanguageKey = 'selectedDashboardLanguage';
-const rawDashboardLabel = document.querySelector('.tm-dashboard-label')?.textContent?.trim() || 'Dashboard';
-const labelToken = rawDashboardLabel.toLowerCase();
-const pageDashboardLabelEnglish = labelToken.includes('client pm') ? 'Client PM Dashboard'
-  : labelToken.includes('consultant pm') ? 'Consultant PM Dashboard'
-  : labelToken.includes('contractor pm') ? 'Contractor PM Dashboard'
-  : labelToken.includes('client') ? 'Client Dashboard'
-  : labelToken.includes('consultant') ? 'Consultant Dashboard'
-  : labelToken.includes('contractor') ? 'Contractor Dashboard'
-  : labelToken.includes('team-member') || labelToken.includes('team member') ? 'Team Member Dashboard'
-  : rawDashboardLabel;
-const pageDashboardLabelFrench = labelToken.includes('client pm') ? 'Tableau de bord chef de projet client'
-  : labelToken.includes('consultant pm') ? 'Tableau de bord chef de projet consultant'
-  : labelToken.includes('contractor pm') ? 'Tableau de bord chef de projet entrepreneur'
-  : labelToken.includes('client') ? 'Tableau de bord client'
-  : labelToken.includes('consultant') ? 'Tableau de bord consultant'
-  : labelToken.includes('contractor') ? 'Tableau de bord entrepreneur'
-  : labelToken.includes('team-member') || labelToken.includes('team member') ? 'Tableau de bord membre d\'équipe'
-  : 'Tableau de bord';
-const translationDictionary = {
-  'English': {
-    'home':'Home','reports':'Reports','assign-team-members':'Assign Team Members','edit-information':'Edit Information','chat':'Chat','settings':'Settings','support':'Support / Help','logout':'Logout','dashboard-label':pageDashboardLabelEnglish,'edit-profile':'Edit Profile','change-picture':'Change Picture','delete-picture':'Delete Picture','switch-project':'Switch Project','Project-Records':'Project Records','workspace':'Workspace','search':'Search...','reset-password':'Reset Password','change-language':'Change Language','exit-project':'Exit Project','confirm-close':'Close','settings-title':'Settings','change-language-title':'Change Language','choose-language':'Select your preferred language:','cancel':'Cancel','apply':'Apply','reset-password-title':'Reset Password','reset-password-prompt':'Do you want to change your password?','exit-project-title':'Exit Project','exit-project-prompt':'Are you sure you want to exit this project?','email-verification-required':'Email Verification Required','verification-message':'Verification email has been sent to your email address.','verification-instruction':'Tap the verification link in your email to confirm exiting the project.','verification-tips':'Tip: Click the button below to simulate clicking the email verification link for testing purposes.','welcome-message':'Welcome to the Team Member Dashboard. Select an option above to view details here.','schedule':'Schedule'
+    try {
+      const token = localStorage.getItem('authToken');
+      const res   = await fetch('https://oneprojectapp-backend.onrender.com/api/me', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (res.ok) {
+        const user = await res.json();
+        // store so reset-password.html can read them
+        localStorage.setItem('resetEmail', user.email  || '');
+        localStorage.setItem('resetRole',  user.role   || '');
+      }
+    } catch (err) {
+      console.error('Reset-password user fetch error:', err);
+      // still redirect even if fetch fails — reset page can fall back gracefully
+    }
+
+    window.location.href = 'reset-password.html';
+  });
+
+
+// ─────────────────────────────────────────────────────────────
+//  2. EXIT PROJECT
+//  Old code opened a verification dialog with countdown timers.
+//  New code: redirect straight to exit-project.html — nothing else.
+// ─────────────────────────────────────────────────────────────
+document.getElementById('exitProjectBtn')
+  .addEventListener('click', () => {
+    settingsDialog.classList.remove('active');
+    window.location.href = 'exit-project.html';
+  });
+
+
+// ─────────────────────────────────────────────────────────────
+//  3. CHANGE LANGUAGE
+//  Problems fixed:
+//    a) <select> now shows the currently saved language on open
+//    b) Applying a language re-runs applyTranslations() which
+//       walks every [data-translate] element on the WHOLE page,
+//       so the full screen updates instantly.
+//    c) The nav tabs and the search-box placeholder are also updated.
+//    d) The bottom-content description paragraph is re-translated
+//       for whichever tab is currently active.
+// ─────────────────────────────────────────────────────────────
+
+// ── Complete translation dictionary (English + French) ───────
+const TRANSLATIONS = {
+  English: {
+    /* sidebar */
+    'dashboard-label':       'Consultant Dashboard',
+    'Project-Records':       'Project Records',
+    'workspace':             'Workspace',
+    'assign-team-members':   'Assign Team Members',
+    'edit-information':      'Edit Information',
+    'chat':                  'Chat',
+    'settings':              'Settings',
+    'support':               'Support / Help',
+    'logout':                'Logout',
+    /* profile */
+    'edit-profile':          'Edit Profile',
+    'change-picture':        'Change Picture',
+    'delete-picture':        'Delete Picture',
+    /* project */
+    'switch-project':        'Switch Project',
+    /* search */
+    'search':                'Search...',
+    /* top bar */
+    'schedule':              'Schedule',
+    /* settings dialog */
+    'settings-title':        'Settings',
+    'reset-password':        '🔑 Reset Password',
+    'change-language':       '🌐 Change Language',
+    'exit-project':          '❌ Exit Project',
+    'confirm-close':         'Close',
+    /* language dialog */
+    'change-language-title': 'Change Language',
+    'choose-language':       'Select your preferred language:',
+    'cancel':                'Cancel',
+    'apply':                 'Apply',
+    /* reset password dialog */
+    'reset-password-title':  'Reset Password',
+    'reset-password-prompt': 'Do you want to change your password?',
+    /* exit project dialog */
+    'exit-project-title':    'Exit Project',
+    'exit-project-prompt':   'Are you sure you want to exit this project?',
+    /* verification dialog */
+    'email-verification-required': 'Email Verification Required',
+    'verification-message':        'Verification email has been sent to your email address.',
+    'verification-instruction':    'Tap the verification link in your email to confirm exiting the project.',
+    'verification-tips':           '💡 Tip: Click the button below to simulate clicking the email verification link for testing purposes.',
+    /* bottom description */
+    'welcome-message':       'Welcome to the Consultant Dashboard. Select an option above to view details here.',
+    /* nav tabs */
+    'tab-contractual':       'Contractual & Legal',
+    'tab-administrative':    'Administrative & Instructional',
+    'tab-safety':            'Safety & Compliance',
+    'tab-operational':       'Operational & Performance',
+    'tab-financial':         'Financial',
+    'tab-meeting':           'Meeting',
+    'tab-work-center':       'Work Center',
+    'tab-planning-execution':'Planning & Execution',
+    'tab-document-approval': 'Document & Approval',
+    'tab-control-reports':   'Control & Report',
+    'tab-communication':     'Communication & Meetings',
   },
-  'French': {
-    'home':'Accueil','reports':'Rapports','assign-team-members':'Assigner les Membres','edit-information':'Modifier les Informations','chat':'Chat','settings':'Paramètres','support':'Support / Aide','logout':'Déconnexion','dashboard-label':pageDashboardLabelFrench,'edit-profile':'Modifier le Profil','change-picture':'Changer la Photo','delete-picture':'Supprimer la Photo','switch-project':'Changer de Projet','Project-Records':'Dossiers de projet','workspace':'Espace de travail','search':'Chercher...','reset-password':'Réinitialiser le Mot de Passe','change-language':'Changer la Langue','exit-project':'Quitter le Projet','confirm-close':'Fermer','settings-title':'Paramètres','change-language-title':'Changer la Langue','choose-language':'Sélectionnez votre langue préférée :','cancel':'Annuler','apply':'Appliquer','reset-password-title':'Réinitialiser le Mot de Passe','reset-password-prompt':'Voulez-vous changer votre mot de passe ?','exit-project-title':'Quitter le Projet','exit-project-prompt':'Êtes-vous sûr de vouloir quitter ce projet ?','email-verification-required':'Vérification de l’Email requise','verification-message':'Un email de vérification a été envoyé à votre adresse e-mail.','verification-instruction':'Appuyez sur le lien de vérification dans votre e-mail pour confirmer la sortie du projet.','verification-tips':'Astuce : Cliquez sur le bouton ci-dessous pour simuler le clic sur le lien de vérification envoyé par e-mail pour les tests.','welcome-message':'Bienvenue sur le tableau de bord du membre de l’équipe. Sélectionnez une option ci-dessus pour afficher les détails ici.','schedule':'Planning'
+
+  French: {
+    /* sidebar */
+    'dashboard-label':       'Tableau de bord consultant',
+    'Project-Records':       'Dossiers de projet',
+    'workspace':             'Espace de travail',
+    'assign-team-members':   'Assigner les Membres',
+    'edit-information':      'Modifier les Informations',
+    'chat':                  'Chat',
+    'settings':              'Paramètres',
+    'support':               'Support / Aide',
+    'logout':                'Déconnexion',
+    /* profile */
+    'edit-profile':          'Modifier le Profil',
+    'change-picture':        'Changer la Photo',
+    'delete-picture':        'Supprimer la Photo',
+    /* project */
+    'switch-project':        'Changer de Projet',
+    /* search */
+    'search':                'Chercher...',
+    /* top bar */
+    'schedule':              'Planning',
+    /* settings dialog */
+    'settings-title':        'Paramètres',
+    'reset-password':        '🔑 Réinitialiser le Mot de Passe',
+    'change-language':       '🌐 Changer la Langue',
+    'exit-project':          '❌ Quitter le Projet',
+    'confirm-close':         'Fermer',
+    /* language dialog */
+    'change-language-title': 'Changer la Langue',
+    'choose-language':       'Sélectionnez votre langue préférée :',
+    'cancel':                'Annuler',
+    'apply':                 'Appliquer',
+    /* reset password dialog */
+    'reset-password-title':  'Réinitialiser le Mot de Passe',
+    'reset-password-prompt': 'Voulez-vous changer votre mot de passe ?',
+    /* exit project dialog */
+    'exit-project-title':    'Quitter le Projet',
+    'exit-project-prompt':   'Êtes-vous sûr de vouloir quitter ce projet ?',
+    /* verification dialog */
+    'email-verification-required': 'Vérification de l\'Email requise',
+    'verification-message':        'Un email de vérification a été envoyé à votre adresse e-mail.',
+    'verification-instruction':    'Appuyez sur le lien de vérification dans votre e-mail pour confirmer la sortie du projet.',
+    'verification-tips':           '💡 Astuce : Cliquez sur le bouton ci-dessous pour simuler le clic sur le lien de vérification.',
+    /* bottom description */
+    'welcome-message':       'Bienvenue sur le tableau de bord consultant. Sélectionnez une option ci-dessus pour afficher les détails ici.',
+    /* nav tabs */
+    'tab-contractual':       'Contractuel & Juridique',
+    'tab-administrative':    'Administratif & Instructionnel',
+    'tab-safety':            'Sécurité & Conformité',
+    'tab-operational':       'Opérationnel & Performance',
+    'tab-financial':         'Financier',
+    'tab-meeting':           'Réunion',
+    'tab-work-center':       'Centre de travail',
+    'tab-planning-execution':'Planification & Exécution',
+    'tab-document-approval': 'Document & Approbation',
+    'tab-control-reports':   'Contrôle & Rapport',
+    'tab-communication':     'Communication & Réunions',
   }
 };
-const applyLanguageBtn = document.getElementById('applyLanguageBtn');
-const languageSelect = document.getElementById('languageSelect');
-const languageDialog = document.getElementById('languageDialog');
 
-function applyTranslations(selected) {
-  const translations = translationDictionary[selected] || translationDictionary[defaultLanguage];
+// ── Nav-tab data-tab → translation key mapping ───────────────
+const TAB_KEY_MAP = {
+  'contractual':              'tab-contractual',
+  'administrative':           'tab-administrative',
+  'safety':                   'tab-safety',
+  'operational':              'tab-operational',
+  'financial':                'tab-financial',
+  'meeting':                  'tab-meeting',
+  'work-center':              'tab-work-center',
+  'planning-execution':       'tab-planning-execution',
+  'document-approval':        'tab-document-approval',
+  'control-reports':          'tab-control-reports',
+  'communication-meetings':   'tab-communication',
+};
+
+// ── Core translate function ───────────────────────────────────
+function applyFullTranslation(lang) {
+  const t = TRANSLATIONS[lang] || TRANSLATIONS['English'];
+
+  // 1. All [data-translate] elements anywhere on the page
   document.querySelectorAll('[data-translate]').forEach(el => {
     const key = el.getAttribute('data-translate');
-    if (translations[key]) el.textContent = translations[key];
+    if (t[key] !== undefined) el.textContent = t[key];
   });
+
+  // 2. Search-box placeholder
   const sb = document.getElementById('searchBox');
-  if (sb) sb.placeholder = translations['search'] || 'Search...';
-  localStorage.setItem(savedLanguageKey, selected);
-}
+  if (sb) sb.placeholder = t['search'] || 'Search...';
 
-function loadSavedLanguage() {
-  const selected = localStorage.getItem(savedLanguageKey) || defaultLanguage;
-  if (languageSelect) languageSelect.value = selected;
-  applyTranslations(selected);
-}
+  // 3. Nav tabs (they are plain <li> elements with data-tab, no data-translate)
+  document.querySelectorAll('#navTabs li[data-tab]').forEach(li => {
+    const tabKey    = li.getAttribute('data-tab');
+    const translateKey = TAB_KEY_MAP[tabKey];
+    if (translateKey && t[translateKey]) li.textContent = t[translateKey];
+  });
 
-applyLanguageBtn.addEventListener('click', () => {
-  const selected = languageSelect?.value || defaultLanguage;
-  if (!supportedLanguages.includes(selected)) return;
-  if (languageDialog) languageDialog.classList.remove('active');
-  applyTranslations(selected);
-  alert(`Language successfully changed to ${selected}`);
-});
-
-loadSavedLanguage();
-
-// =========================
-// Reset password dialog
-// =========================
-document.getElementById('confirmResetBtn').addEventListener('click', () => {
-  document.getElementById('resetPasswordDialog').classList.remove('active');
-  window.location.href = 'reset-password.html';
-});
-
-// =========================
-// Exit project dialog
-// =========================
-let verificationInterval;
-let verificationCountdown = 60;
-const exitProjectDialog  = document.getElementById('exitProjectDialog');
-const verificationDialog = document.getElementById('verificationDialog');
-const confirmExitBtn     = document.getElementById('confirmExitBtn');
-const cancelVerificationBtn = document.getElementById('cancelVerificationBtn');
-const resendVerificationBtn = document.getElementById('resendVerificationBtn');
-const verifyEmailBtn        = document.getElementById('verifyEmailBtn');
-
-confirmExitBtn.addEventListener('click', () => {
-  exitProjectDialog.classList.remove('active');
-  startEmailVerification();
-});
-function startEmailVerification() {
-  verificationCountdown = 60;
-  verificationDialog.classList.add('active');
-  verifyEmailBtn.disabled = false;
-  verifyEmailBtn.style.opacity = '1';
-  verifyEmailBtn.style.cursor  = 'pointer';
-  document.getElementById('verificationStatus').textContent = 'Waiting for email verification...';
-  document.getElementById('verificationStatus').style.color = '#666';
-  if (verificationInterval) clearInterval(verificationInterval);
-  verificationInterval = setInterval(() => {
-    verificationCountdown--;
-    document.getElementById('countdownTimer').textContent = verificationCountdown;
-    if (verificationCountdown <= 0) {
-      clearInterval(verificationInterval);
-      document.getElementById('verificationStatus').textContent = '❌ Verification link expired. Please try again.';
-      document.getElementById('verificationStatus').style.color = 'red';
-      verifyEmailBtn.disabled = true;
-      verifyEmailBtn.style.opacity = '0.5';
-      verifyEmailBtn.style.cursor  = 'not-allowed';
+  // 4. Bottom-content welcome paragraph (only if it still shows the default)
+  const descP = document.querySelector('.bottom-description p');
+  if (descP && t['welcome-message']) {
+    // Only overwrite if it looks like one of our two known welcome strings
+    const current = descP.textContent.trim();
+    const knownEN = 'Welcome to the';
+    const knownFR = 'Bienvenue sur le';
+    if (current.startsWith(knownEN) || current.startsWith(knownFR)) {
+      descP.textContent = t['welcome-message'];
     }
-  }, 1000);
-}
-verifyEmailBtn.addEventListener('click', () => {
-  if (verificationCountdown > 0) {
-    clearInterval(verificationInterval);
-    document.getElementById('verificationStatus').textContent = '✅ Email verified successfully! Exiting project...';
-    document.getElementById('verificationStatus').style.color = 'green';
-    verifyEmailBtn.disabled         = true;
-    resendVerificationBtn.disabled  = true;
-    cancelVerificationBtn.disabled  = true;
-    setTimeout(() => { verificationDialog.classList.remove('active'); alert('You have successfully exited the project.'); window.location.href = 'home.html'; }, 1500);
   }
-});
-resendVerificationBtn.addEventListener('click', () => { alert('Verification email has been resent.'); startEmailVerification(); });
-cancelVerificationBtn.addEventListener('click', () => { verificationDialog.classList.remove('active'); if (verificationInterval) clearInterval(verificationInterval); alert('Project exit cancelled.'); });
+
+  // 5. Persist selection
+  localStorage.setItem('selectedDashboardLanguage', lang);
+}
+
+// ── On page load: set <select> to saved language & translate ─
+(function initLanguageOnLoad() {
+  const saved = localStorage.getItem('selectedDashboardLanguage') || 'English';
+  const sel   = document.getElementById('languageSelect');
+  if (sel) sel.value = saved;
+  applyFullTranslation(saved);
+})();
+
+// ── Open language dialog: always sync <select> to current lang
+document.getElementById('changeLanguageBtn')
+  .addEventListener('click', () => {
+    settingsDialog.classList.remove('active');
+
+    // Sync the <select> to whatever is currently saved
+    const saved = localStorage.getItem('selectedDashboardLanguage') || 'English';
+    const sel   = document.getElementById('languageSelect');
+    if (sel) sel.value = saved;
+
+    document.getElementById('languageDialog').classList.add('active');
+  });
+
+// ── Apply button: translate the whole screen immediately ──────
+document.getElementById('applyLanguageBtn')
+  .addEventListener('click', () => {
+    const sel      = document.getElementById('languageSelect');
+    const chosen   = sel ? sel.value : 'English';
+    const supported = Object.keys(TRANSLATIONS);
+
+    if (!supported.includes(chosen)) {
+      alert('Language not supported. Please choose English or French.');
+      return;
+    }
+
+    document.getElementById('languageDialog').classList.remove('active');
+    applyFullTranslation(chosen);
+
+    const confirmMsg = chosen === 'French'
+      ? 'Langue changée en Français ✓'
+      : 'Language changed to English ✓';
+    alert(confirmMsg);
+  });
 
 // =========================
 // Logout dialog
