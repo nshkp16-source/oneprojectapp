@@ -911,618 +911,487 @@
   </style>
 </head>
 <!-- ═══════════════════════════════════════════════════════════════════
-     MOBILE RESPONSIVE PATCH
-     Inject this entire block just before </body> in your dashboard HTML.
-     Desktop layout (≥769px) is completely unchanged.
-     On mobile (≤768px):
-       • "Home" view  → left sidebar + gray summary panel side by side
-         (sidebar left, summary right, scrollable)
-       • "Main" view  → white center area (tabs + records) full screen
-       • "Schedule" view → gray panel full screen (schedule expanded)
-       • Bottom nav bar (4 icons) controls which view is visible
+  MOBILE PATCH v2 — paste just before </body>
+  Strategy: PURE CSS + minimal JS state toggling.
+  No DOM nodes moved. Desktop untouched (≥769px).
+  
+  Mobile layout: 3 panels controlled by bottom nav.
+    Panel A = left sidebar (full screen, scrollable)
+    Panel B = white center / records (full screen, scrollable)  
+    Panel C = gray summary/schedule (full screen, scrollable)
+  
+  Only one panel visible at a time. Bottom nav switches between them.
+  Active panel slides in, others hidden via CSS.
+  Sidebar shows ALL items: profile, project, nav, settings, logout.
 ═══════════════════════════════════════════════════════════════════ -->
 
-<style id="mobile-patch-css">
-/* ── Only activate below 769px ───────────────────────────────────── */
+<style id="mpv2">
 @media (max-width: 768px) {
 
-  /* ── Reset desktop flex that breaks on mobile ──────────────────── */
-  html, body {
-    overflow: hidden;
-    height: 100%;
-    width: 100%;
-  }
+/* ── 1. KILL the desktop flex layout ─────────────────────────── */
+html, body { overflow: hidden !important; height: 100% !important; }
 
-  /* ── Top-level layout: stack views vertically, clip to screen ──── */
-  .layout {
-    display: block;
-    position: fixed;
-    inset: 0;
-    overflow: hidden;
-    padding-bottom: 56px; /* room for bottom nav */
-  }
-
-  /* ── VIEWS: each fills the full screen, hidden by default ─────── */
-  .mob-view {
-    position: absolute;
-    inset: 0 0 0 0;
-    overflow: hidden;
-    display: none;
-    flex-direction: column;
-  }
-  .mob-view.mob-active {
-    display: flex;
-  }
-
-  /* ─────────────────────────────────────────────────────────────────
-     HOME VIEW: sidebar (left) + summary panel (right)
-     Both are full height and independently scrollable.
-  ───────────────────────────────────────────────────────────────── */
-  #mob-home-view {
-    flex-direction: row;
-  }
-
-  /* Sidebar inside home view */
-  #mob-home-view .left-main-part {
-    width: 56%;
-    min-width: 0;
-    flex-shrink: 0;
-    height: 100%;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 10px 8px;
-    display: flex;
-    flex-direction: column;
-    background: var(--c-teal);
-  }
-
-  /* Summary panel inside home view */
-  #mob-home-view .mob-summary-wrapper {
-    width: 44%;
-    flex-shrink: 0;
-    height: 100%;
-    overflow-y: auto;
-    overflow-x: hidden;
-    background: var(--c-gray);
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* Make sidebar items touch-friendly */
-  #mob-home-view .nav-item {
-    padding: 10px 6px;
-    font-size: 13px;
-    margin-bottom: 6px;
-  }
-
-  /* Shrink dashboard label */
-  #mob-home-view .tm-dashboard-label {
-    font-size: 13px;
-    padding: 4px 8px;
-  }
-
-  /* Shrink project selector */
-  #mob-home-view .project-selector {
-    font-size: 12px;
-    padding: 10px 8px;
-    margin-bottom: 12px;
-  }
-
-  /* Profile icon size */
-  #mob-home-view .profile-icon {
-    width: 48px;
-    height: 48px;
-    font-size: 14px;
-  }
-
-  /* Logout block: push to bottom */
-  #mob-home-view .logout-block {
-    margin-top: auto;
-  }
-
-  /* Summary panel content */
-  #mob-home-view .gray-scroll-content {
-    padding: 8px;
-    width: 100%;
-  }
-  #mob-home-view #summaryPanel {
-    gap: 10px;
-    padding: 0 0 16px;
-  }
-  #mob-home-view #summaryPanel > div {
-    padding: 10px;
-    font-size: 12px;
-    border-radius: 10px;
-  }
-  #mob-home-view .summary-date-text {
-    font-size: 15px !important;
-  }
-  #mob-home-view .summary-time-text {
-    font-size: 11px !important;
-  }
-  /* Schedule button in home/summary */
-  #mob-home-view #scheduleOption {
-    position: static;
-    margin: 8px auto 8px;
-    width: 90%;
-    font-size: 12px;
-    padding: 8px;
-    z-index: auto;
-  }
-
-  /* ─────────────────────────────────────────────────────────────────
-     MAIN VIEW: white center area full screen
-  ───────────────────────────────────────────────────────────────── */
-  #mob-main-view {
-    background: var(--c-white);
-  }
-
-  #mob-main-view .white-left-part {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  /* Top bar */
-  #mob-main-view .left-top {
-    flex-shrink: 0;
-    padding: 6px 8px;
-    gap: 6px;
-  }
-  #mob-main-view .search-box {
-    width: 50%;
-    font-size: 12px;
-  }
-  #mob-main-view .arret-bar {
-    font-size: 11px;
-    padding: 5px 7px;
-  }
-  #mob-main-view .arret-text {
-    display: none; /* hide text "ARRET", keep icon + count */
-  }
-
-  /* Tab nav */
-  #mob-main-view .left-middle {
-    flex-shrink: 0;
-  }
-  #mob-main-view .nav-tabs li {
-    font-size: 11px;
-    padding: 6px 7px;
-    white-space: nowrap;
-  }
-
-  /* Records area fills remaining height */
-  #mob-main-view .left-bottom {
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    max-height: none;
-    padding: 8px;
-  }
-  #mob-main-view .bottom-scroll-area {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-  }
-  #mob-main-view .bottom-fixed-header {
-    flex-shrink: 0;
-  }
-
-  /* Modal sizing on mobile */
-  .modal-content {
-    min-width: unset !important;
-    width: 90vw;
-    max-width: 90vw;
-    max-height: 85vh;
-    overflow-y: auto;
-    padding: 16px;
-  }
-
-  /* ─────────────────────────────────────────────────────────────────
-     SCHEDULE VIEW: gray panel full screen
-  ───────────────────────────────────────────────────────────────── */
-  #mob-schedule-view {
-    background: var(--c-gray);
-    overflow: hidden;
-    flex-direction: column;
-  }
-
-  #mob-schedule-view .mob-schedule-inner {
-    flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* Gray-part-content inside schedule fills its container */
-  #mob-schedule-view .gray-part-content,
-  #mob-schedule-view #grayContent {
-    height: auto;
-    min-height: 100%;
-    overflow: visible;
-    border-radius: 0;
-  }
-
-  /* ── Bottom navigation bar ─────────────────────────────────────── */
-  #mob-bottom-nav {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 56px;
-    background: var(--c-darkblue);
-    display: flex;
-    align-items: stretch;
-    z-index: 9990;
-    border-top: 2px solid var(--c-teal);
-    box-shadow: 0 -2px 12px rgba(0,0,0,0.25);
-  }
-
-  .mob-nav-btn {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 2px;
-    background: none;
-    border: none;
-    color: rgba(255,255,255,0.6);
-    font-size: 9px;
-    font-weight: 600;
-    letter-spacing: 0.3px;
-    cursor: pointer;
-    padding: 4px 2px;
-    transition: background 0.15s, color 0.15s;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .mob-nav-btn:active {
-    background: rgba(255,255,255,0.08);
-  }
-  .mob-nav-btn.mob-nav-active {
-    color: #fff;
-    background: rgba(0,123,138,0.35);
-    border-top: 2px solid var(--c-teal);
-  }
-  .mob-nav-btn .mob-nav-icon {
-    font-size: 20px;
-    line-height: 1;
-  }
-
-  /* ── Profile dialog repositioned for mobile ────────────────────── */
-  .profile-dialog {
-    left: 8px !important;
-    top: auto !important;
-    bottom: 70px;
-    max-width: calc(100vw - 16px) !important;
-    width: calc(100vw - 16px) !important;
-    z-index: 10010;
-  }
-
-  /* ── Project dialog on mobile ──────────────────────────────────── */
-  .project-dialog {
-    left: 4px !important;
-    right: 4px !important;
-    min-width: unset !important;
-  }
-
-  /* ── Logout dialog centered ────────────────────────────────────── */
-  .logout-dialog {
-    min-width: unset !important;
-    width: 88vw !important;
-  }
-
-  /* ── Gray right part: hidden on mobile (content moves to views) ─ */
-  .right-main-part,
-  .gray-right-part,
-  .white-left-part,
-  .left-main-part {
-    /* These are repositioned into mob-view wrappers; hide originals */
-    display: none !important;
-  }
-
-  /* ── Back button shown in main/schedule header ─────────────────── */
-  .mob-back-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    background: var(--c-teal);
-    color: #fff;
-    flex-shrink: 0;
-    min-height: 40px;
-  }
-  .mob-back-header button {
-    background: rgba(255,255,255,0.2);
-    border: none;
-    color: #fff;
-    border-radius: 20px;
-    padding: 5px 12px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .mob-back-header button:active {
-    background: rgba(255,255,255,0.35);
-  }
-  .mob-back-header .mob-view-title {
-    font-size: 13px;
-    font-weight: 700;
-    flex: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  /* Left-sub-part background: keep on mobile */
-  .left-sub-part {
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    background: url("dashboard-background.jpg") no-repeat center center;
-    background-size: cover;
-  }
+.layout {
+  display: block !important;
+  position: fixed !important;
+  inset: 0 !important;
+  overflow: hidden !important;
 }
 
-/* ── Desktop: hide mobile elements ─────────────────────────────────── */
+/* ── 2. PANELS: each fills the screen, layered ──────────────── */
+.left-main-part,
+.right-main-part {
+  position: fixed !important;
+  inset: 0 0 56px 0 !important;   /* leave 56px for bottom nav */
+  width: 100% !important;
+  height: calc(100% - 56px) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  transition: transform 0.28s cubic-bezier(.4,0,.2,1),
+              opacity   0.22s ease !important;
+  z-index: 100 !important;
+  border-radius: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+/* Sidebar default = visible (Panel A = default active) */
+.left-main-part {
+  transform: translateX(0) !important;
+  opacity: 1 !important;
+  padding: 12px 12px 20px !important;
+  background: var(--c-teal) !important;
+}
+
+/* White center = hidden right by default */
+.right-main-part {
+  transform: translateX(100%) !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  background: var(--c-white) !important;
+  flex-direction: column !important;
+}
+
+/* ── 3. PANEL STATES driven by body data-mob-panel ──────────── */
+/* Panel A (sidebar) active */
+body[data-mob-panel="A"] .left-main-part  { transform: translateX(0)    !important; opacity: 1 !important; pointer-events: auto !important; }
+body[data-mob-panel="A"] .right-main-part { transform: translateX(100%) !important; opacity: 0 !important; pointer-events: none !important; }
+
+/* Panel B (records) active */
+body[data-mob-panel="B"] .left-main-part  { transform: translateX(-100%) !important; opacity: 0 !important; pointer-events: none !important; }
+body[data-mob-panel="B"] .right-main-part { transform: translateX(0)     !important; opacity: 1 !important; pointer-events: auto !important; }
+
+/* Panel C (schedule/summary) — we reuse right-main-part but show gray half */
+body[data-mob-panel="C"] .left-main-part  { transform: translateX(-100%) !important; opacity: 0 !important; pointer-events: none !important; }
+body[data-mob-panel="C"] .right-main-part { transform: translateX(0)     !important; opacity: 1 !important; pointer-events: auto !important; }
+
+/* ── 4. INSIDE right-main-part: white & gray sub-panels ─────── */
+.white-left-part {
+  display: none !important;
+  flex: 1 !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  min-height: 0 !important;
+}
+.gray-right-part {
+  display: none !important;
+  flex: 1 !important;
+  flex-direction: column !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  border-radius: 0 !important;
+  width: 100% !important;
+}
+
+body[data-mob-panel="B"] .white-left-part { display: flex !important; }
+body[data-mob-panel="C"] .gray-right-part { display: flex !important; }
+
+/* ── 5. SIDEBAR — make ALL items comfortably visible ─────────── */
+.left-main-part .tm-dashboard-block   { margin-bottom: 12px; }
+.left-main-part .tm-dashboard-label   { font-size: 14px; padding: 5px 10px; }
+.left-main-part .profile-block        { margin-bottom: 10px; }
+.left-main-part .profile-icon         { width: 52px; height: 52px; font-size: 14px; }
+.left-main-part .project-selector     { font-size: 13px; padding: 10px 10px; margin-bottom: 12px; }
+.left-main-part .nav-item             { font-size: 13px; padding: 10px 8px; margin-bottom: 4px; min-height: 44px; }
+.left-main-part .nav-item .icon       { font-size: 18px; }
+.left-main-part .nav-item .label      { font-size: 13px; }
+.left-main-part .logout-block         { margin-top: 20px; }
+.left-main-part .styled-logout        { width: 100%; justify-content: center; font-size: 14px; padding: 12px; }
+
+/* ── 6. RECORDS PANEL (Panel B) ─────────────────────────────── */
+.white-left-part .left-sub-part {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.left-top {
+  padding: 6px 8px !important;
+  gap: 6px !important;
+  flex-shrink: 0 !important;
+}
+.search-box {
+  width: 45% !important;
+  font-size: 12px !important;
+  padding: 5px !important;
+}
+.arret-bar   { font-size: 11px !important; padding: 5px 8px !important; }
+.arret-text  { display: none !important; } /* keep icon+count, drop word */
+.notification-icon { font-size: 16px !important; }
+
+.left-middle { flex-shrink: 0 !important; }
+.nav-tabs    { flex-wrap: nowrap !important; overflow-x: auto !important; padding: 4px !important; gap: 2px !important; }
+.nav-tabs li { font-size: 11px !important; padding: 6px 8px !important; white-space: nowrap !important; }
+
+.left-bottom {
+  flex: 1 !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  padding: 6px 8px !important;
+}
+.bottom-scroll-area {
+  flex: 1 !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+}
+.bottom-fixed-header {
+  flex-shrink: 0 !important;
+  padding-bottom: 8px !important;
+}
+.add-doc-btn  { min-width: 72px !important; padding: 6px 10px !important; font-size: 12px !important; }
+
+.doc-item     { padding: 10px 10px !important; }
+.doc-title    { font-size: 13px !important; }
+.doc-meta     { font-size: 11px !important; }
+
+/* ── 7. SUMMARY / SCHEDULE PANEL (Panel C) ───────────────────── */
+.gray-right-part .drag-handle    { display: none !important; }
+.gray-right-part .gray-toggle-btn{ display: none !important; }
+.gray-right-part #scheduleOption {
+  position: static !important;
+  margin: 10px auto !important;
+  width: 90% !important;
+  top: auto !important;
+}
+.gray-right-part .gray-scroll-content {
+  width: 100% !important;
+  padding: 8px !important;
+}
+#summaryPanel > div {
+  padding: 10px 12px !important;
+  border-radius: 10px !important;
+  font-size: 12px !important;
+}
+.summary-date-text { font-size: 16px !important; }
+.summary-time-text { font-size: 11px !important; }
+
+/* Schedule expanded content */
+.gray-part-content, #grayContent {
+  border-radius: 0 !important;
+  height: auto !important;
+  min-height: 100% !important;
+  overflow: visible !important;
+}
+
+/* ── 8. MODALS on mobile ─────────────────────────────────────── */
+.modal-overlay.active { align-items: flex-end !important; }
+.modal-content {
+  min-width: unset !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  border-radius: 16px 16px 0 0 !important;
+  max-height: 85vh !important;
+  overflow-y: auto !important;
+  padding: 20px 16px !important;
+}
+
+/* logout dialog */
+.logout-dialog {
+  min-width: unset !important;
+  width: 88vw !important;
+}
+
+/* profile dialog: anchor near top-left of screen */
+.profile-dialog {
+  left: 8px !important;
+  top: 80px !important;
+  max-width: calc(100vw - 16px) !important;
+  width: calc(100vw - 16px) !important;
+  z-index: 10010 !important;
+}
+
+/* project dialog */
+.project-dialog {
+  left: 4px !important;
+  right: 4px !important;
+  min-width: unset !important;
+  z-index: 10010 !important;
+}
+
+/* ── 9. BOTTOM NAV BAR ───────────────────────────────────────── */
+#mob-nav-bar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: 56px;
+  background: var(--c-darkblue);
+  display: flex;
+  align-items: stretch;
+  z-index: 9999;
+  border-top: 2px solid var(--c-teal);
+  box-shadow: 0 -2px 14px rgba(0,0,0,0.3);
+}
+.mnb {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.55);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  padding: 0 2px;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s, background 0.15s;
+}
+.mnb:active { background: rgba(255,255,255,0.07); }
+.mnb.mnb-on {
+  color: #fff;
+  background: rgba(0,123,138,0.38);
+  border-top: 2px solid var(--c-teal);
+}
+.mnb-icon { font-size: 21px; line-height: 1; position: relative; }
+.mnb-badge {
+  position: absolute;
+  top: -3px; right: -5px;
+  background: red;
+  color: #fff;
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 50%;
+  min-width: 14px;
+  text-align: center;
+  display: none;
+  box-shadow: 0 0 5px red;
+}
+
+/* ── 10. Back-to-nav strip shown at top of B and C panels ───── */
+.mob-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--c-darkblue);
+  flex-shrink: 0;
+  min-height: 40px;
+}
+.mob-panel-header .mph-back {
+  background: rgba(255,255,255,0.15);
+  border: none;
+  color: #fff;
+  border-radius: 20px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.mob-panel-header .mph-back:active { background: rgba(255,255,255,0.3); }
+.mob-panel-header .mph-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mob-panel-header .mph-notif {
+  position: relative;
+  font-size: 20px;
+  cursor: pointer;
+  color: #fff;
+  padding: 4px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* hide the top panel strip on panel A (sidebar handles its own header) */
+#mob-header-B, #mob-header-C { display: none; }
+body[data-mob-panel="B"] #mob-header-B { display: flex; }
+body[data-mob-panel="C"] #mob-header-C { display: flex; }
+
+} /* end @media */
+
+/* Desktop: hide mobile-only elements */
 @media (min-width: 769px) {
-  #mob-bottom-nav,
-  #mob-home-view,
-  #mob-main-view,
-  #mob-schedule-view {
-    display: none !important;
-  }
+  #mob-nav-bar,
+  #mob-header-B,
+  #mob-header-C { display: none !important; }
 }
 </style>
 
-<script id="mobile-patch-js">
-(function() {
-  // Only run on mobile
+<script id="mpv2-js">
+(function () {
   if (window.innerWidth > 768) return;
 
-  // ── Helpers ──────────────────────────────────────────────────────
-  const $ = id => document.getElementById(id);
+  /* ── Inject bottom nav bar ───────────────────────────────────── */
+  const nav = document.createElement('div');
+  nav.id = 'mob-nav-bar';
+  nav.innerHTML = `
+    <button class="mnb mnb-on" id="mnb-A">
+      <span class="mnb-icon">☰</span>Menu
+    </button>
+    <button class="mnb" id="mnb-B">
+      <span class="mnb-icon">📄</span>Records
+    </button>
+    <button class="mnb" id="mnb-C">
+      <span class="mnb-icon">📅</span>Schedule
+    </button>
+    <button class="mnb" id="mnb-N">
+      <span class="mnb-icon" style="position:relative;">🔔
+        <span class="mnb-badge" id="mnb-badge"></span>
+      </span>Alerts
+    </button>`;
+  document.body.appendChild(nav);
 
-  // ── Build the three mobile views + bottom nav ────────────────────
-  function buildMobileLayout() {
-    const layout = document.querySelector('.layout');
-    if (!layout) return;
-
-    // Grab the original DOM nodes
-    const sidebar       = document.querySelector('.left-main-part');
-    const rightMain     = document.querySelector('.right-main-part');
-    const whiteLeft     = document.querySelector('.white-left-part');
-    const grayRight     = document.querySelector('.gray-right-part');
-    if (!sidebar || !rightMain || !whiteLeft || !grayRight) return;
-
-    // ── HOME VIEW ────────────────────────────────────────────────────
-    const homeView = document.createElement('div');
-    homeView.id    = 'mob-home-view';
-    homeView.className = 'mob-view mob-active';
-
-    // Sidebar clone placed inside home view (we MOVE the real node)
-    sidebar.classList.add('mob-sidebar-moved');
-    homeView.appendChild(sidebar);
-
-    // Summary panel wrapper (everything inside gray-right except grayContent)
-    const summaryWrapper = document.createElement('div');
-    summaryWrapper.className = 'mob-summary-wrapper';
-
-    // Move schedule option + placeholder into summary wrapper
-    const schedOpt    = $('scheduleOption');
-    const grayHolder  = $('grayPlaceholder');
-    if (schedOpt)   summaryWrapper.appendChild(schedOpt);
-    if (grayHolder) summaryWrapper.appendChild(grayHolder);
-
-    homeView.appendChild(summaryWrapper);
-    layout.appendChild(homeView);
-
-    // ── MAIN VIEW ────────────────────────────────────────────────────
-    const mainView = document.createElement('div');
-    mainView.id    = 'mob-main-view';
-    mainView.className = 'mob-view';
-
-    // Back header
-    const mainHeader = document.createElement('div');
-    mainHeader.className = 'mob-back-header';
-    mainHeader.innerHTML = `
-      <button id="mob-main-back">🏠 Home</button>
-      <span class="mob-view-title">Dashboard</span>
-      <span id="mob-main-notification" style="position:relative;cursor:pointer;font-size:20px;color:#fff;margin-left:auto;">
-        🔔<span class="notification-badge" id="mob-notif-badge" style="position:absolute;top:-4px;right:-4px;background:red;color:#fff;font-size:10px;padding:1px 4px;border-radius:50%;min-width:14px;text-align:center;display:none;"></span>
-      </span>`;
-    mainView.appendChild(mainHeader);
-
-    // Move the white left part (tabs + content)
-    whiteLeft.classList.add('mob-whitecenter-moved');
-    mainView.appendChild(whiteLeft);
-
-    layout.appendChild(mainView);
-
-    // ── SCHEDULE VIEW ────────────────────────────────────────────────
-    const schedView = document.createElement('div');
-    schedView.id    = 'mob-schedule-view';
-    schedView.className = 'mob-view';
-
-    const schedHeader = document.createElement('div');
-    schedHeader.className = 'mob-back-header';
-    schedHeader.innerHTML = `
-      <button id="mob-sched-back">🏠 Home</button>
-      <span class="mob-view-title">📅 Schedule</span>`;
-    schedView.appendChild(schedHeader);
-
-    const schedInner = document.createElement('div');
-    schedInner.className = 'mob-schedule-inner';
-    schedInner.id        = 'mob-sched-inner';
-    schedView.appendChild(schedInner);
-
-    layout.appendChild(schedView);
-
-    // ── BOTTOM NAV ───────────────────────────────────────────────────
-    const nav = document.createElement('div');
-    nav.id    = 'mob-bottom-nav';
-    nav.innerHTML = `
-      <button class="mob-nav-btn mob-nav-active" data-view="home" id="mob-btn-home">
-        <span class="mob-nav-icon">🏠</span>Home
-      </button>
-      <button class="mob-nav-btn" data-view="main" id="mob-btn-main">
-        <span class="mob-nav-icon">📄</span>Records
-      </button>
-      <button class="mob-nav-btn" data-view="schedule" id="mob-btn-schedule">
-        <span class="mob-nav-icon">📅</span>Schedule
-      </button>
-      <button class="mob-nav-btn" data-view="notifications" id="mob-btn-notif">
-        <span class="mob-nav-icon" style="position:relative;">🔔<span id="mob-nav-notif-badge" style="position:absolute;top:-2px;right:-4px;background:red;color:#fff;font-size:9px;padding:1px 3px;border-radius:50%;min-width:12px;text-align:center;display:none;box-shadow:0 0 4px red;"></span></span>Alerts
-      </button>`;
-    document.body.appendChild(nav);
-
-    // ── EVENT WIRING ─────────────────────────────────────────────────
-    function showView(viewId) {
-      document.querySelectorAll('.mob-view').forEach(v => v.classList.remove('mob-active'));
-      document.querySelectorAll('.mob-nav-btn').forEach(b => b.classList.remove('mob-nav-active'));
-      const view = $(viewId);
-      if (view) view.classList.add('mob-active');
-      const btn = document.querySelector(`.mob-nav-btn[data-view="${viewId.replace('mob-','').replace('-view','')}"]`);
-      if (btn) btn.classList.add('mob-nav-active');
-    }
-
-    // Nav buttons
-    $('mob-btn-home')?.addEventListener('click', () => showView('mob-home-view'));
-    $('mob-btn-main')?.addEventListener('click', () => showView('mob-main-view'));
-    $('mob-btn-schedule')?.addEventListener('click', () => {
-      showView('mob-schedule-view');
-      // Trigger the schedule panel into the inner container
-      openMobileSchedule();
-    });
-    $('mob-btn-notif')?.addEventListener('click', () => {
-      // Trigger notification panel (reuse existing notificationIcon click)
-      document.getElementById('notificationIcon')?.click();
-      showView('mob-main-view'); // notifications expand into gray panel; redirect to main
-    });
-
-    // Back buttons
-    $('mob-main-back')?.addEventListener('click',  () => showView('mob-home-view'));
-    $('mob-sched-back')?.addEventListener('click', () => showView('mob-home-view'));
-
-    // Notification icon in main header mirrors real one
-    $('mob-main-notification')?.addEventListener('click', () => {
-      document.getElementById('notificationIcon')?.click();
-    });
-
-    // When a sidebar nav-item is clicked → go to main view
-    sidebar.querySelectorAll('.nav-item[data-nav]').forEach(item => {
-      item.addEventListener('click', () => {
-        const key = item.getAttribute('data-nav');
-        if (['Project-Records', 'workspace'].includes(key)) {
-          setTimeout(() => showView('mob-main-view'), 80);
-        }
-        // edit-information, chat, assign-team-members navigate away, so no switch needed
-      });
-    });
-
-    // Schedule option in summary panel → open schedule view
-    if (schedOpt) {
-      schedOpt.addEventListener('click', () => {
-        showView('mob-schedule-view');
-        openMobileSchedule();
-      }, true); // capture phase so it fires before existing handler
-    }
-
-    // Intercept expandGrayPart on mobile: redirect content to schedule view
-    const _origExpand   = window.expandGrayPart;
-    const _origCollapse = window.collapseGrayPart;
-
-    window.expandGrayPart = function(html) {
-      if (window.innerWidth <= 768) {
-        const inner = $('mob-sched-inner');
-        if (inner) inner.innerHTML = html;
-        showView('mob-schedule-view');
-        // Re-run any scripts embedded in the injected HTML by re-evaluating them
-        if (inner) {
-          inner.querySelectorAll('script').forEach(s => {
-            try { eval(s.textContent); } catch(e) {}
-          });
-        }
-      } else {
-        _origExpand(html);
-      }
-    };
-
-    window.collapseGrayPart = function() {
-      if (window.innerWidth <= 768) {
-        const inner = $('mob-sched-inner');
-        if (inner) inner.innerHTML = '';
-        showView('mob-home-view');
-        loadSummaryPanelData?.();
-      } else {
-        _origCollapse();
-      }
-    };
-
-    // ── Keep notification badges in sync ────────────────────────────
-    function syncNotifBadge() {
-      const realBadge = document.getElementById('notificationBadge');
-      const mobBadge  = $('mob-nav-notif-badge');
-      const mobBadge2 = $('mob-notif-badge');
-      if (!realBadge) return;
-      const count = realBadge.textContent || '';
-      const show  = count && count !== '0';
-      [mobBadge, mobBadge2].forEach(b => {
-        if (!b) return;
-        b.textContent   = count;
-        b.style.display = show ? 'inline-block' : 'none';
-      });
-    }
-    // Watch for changes on the real badge
-    const observer = new MutationObserver(syncNotifBadge);
-    const realBadge = document.getElementById('notificationBadge');
-    if (realBadge) observer.observe(realBadge, { childList: true, characterData: true, subtree: true });
-    syncNotifBadge();
-    setInterval(syncNotifBadge, 5000);
+  /* ── Inject back-header strips into white and gray panels ───── */
+  function injectHeader(id, title, panel, showNotif) {
+    const el = document.createElement('div');
+    el.id = id;
+    el.className = 'mob-panel-header';
+    el.innerHTML = `
+      <button class="mph-back" data-goto="A">← Menu</button>
+      <span class="mph-title">${title}</span>
+      ${showNotif ? `<span class="mph-notif" id="${id}-notif">🔔
+        <span class="mnb-badge" id="${id}-badge"></span>
+      </span>` : ''}`;
+    return el;
   }
 
-  function openMobileSchedule() {
-    const inner = $('mob-sched-inner');
-    if (inner && !inner.innerHTML.trim()) {
-      inner.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;
-        height:200px;color:#007B8A;font-size:14px;">⏳ Loading schedule…</div>`;
-      setTimeout(() => {
-        try { openSchedulePanel?.(); } catch(e) {
-          inner.innerHTML = `<div style="padding:20px;color:#ef4444;text-align:center;">
-            ⚠️ Could not open schedule. Please try again.</div>`;
-        }
-      }, 50);
+  const whiteLeft = document.querySelector('.white-left-part');
+  const grayRight = document.querySelector('.gray-right-part');
+
+  if (whiteLeft) {
+    const hB = injectHeader('mob-header-B', 'Project Records', 'B', true);
+    whiteLeft.insertBefore(hB, whiteLeft.firstChild);
+  }
+  if (grayRight) {
+    const hC = injectHeader('mob-header-C', 'Summary & Schedule', 'C', false);
+    grayRight.insertBefore(hC, grayRight.firstChild);
+  }
+
+  /* ── Panel switcher ──────────────────────────────────────────── */
+  function goPanel(p) {
+    document.body.setAttribute('data-mob-panel', p);
+    document.querySelectorAll('.mnb').forEach(b => b.classList.remove('mnb-on'));
+    const map = { A:'mnb-A', B:'mnb-B', C:'mnb-C', N:'mnb-N' };
+    document.getElementById(map[p] || map.A)?.classList.add('mnb-on');
+    // When switching to C, make sure gray panel has visible content
+    if (p === 'C') ensureGrayContent();
+    window.scrollTo(0, 0);
+  }
+  window._mobGoPanel = goPanel; // expose for nav items
+
+  /* ── Ensure gray panel shows summary or schedule ─────────────── */
+  function ensureGrayContent() {
+    const placeholder = document.getElementById('grayPlaceholder');
+    const grayContent  = document.getElementById('grayContent');
+    // If no schedule content expanded, show summary
+    if (placeholder) placeholder.style.display = 'flex';
+    if (!grayContent || !grayContent.innerHTML.trim()) {
+      try { loadSummaryPanelData?.(); } catch(e){}
     }
   }
 
-  // ── Run after DOM is fully ready ─────────────────────────────────
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', buildMobileLayout);
-  } else {
-    buildMobileLayout();
-  }
+  /* ── Intercept expandGrayPart / collapseGrayPart ─────────────── */
+  const _origExpand   = window.expandGrayPart;
+  const _origCollapse = window.collapseGrayPart;
 
-  // ── Handle orientation change ────────────────────────────────────
-  window.addEventListener('resize', () => {
-    const isMobile = window.innerWidth <= 768;
-    const hasNav   = !!$('mob-bottom-nav');
-    if (isMobile && !hasNav) {
-      // Refresh if transitioning into mobile (edge case)
-      location.reload();
+  window.expandGrayPart = function(html) {
+    if (window.innerWidth <= 768) {
+      // Call the original so it renders into #grayContent
+      _origExpand(html);
+      // Then switch to panel C
+      goPanel('C');
+    } else {
+      _origExpand(html);
     }
-    // Desktop → no change needed (patch elements are CSS-hidden)
+  };
+  window.collapseGrayPart = function() {
+    if (window.innerWidth <= 768) {
+      _origCollapse();
+      goPanel('C'); // stay on panel C, now showing summary
+    } else {
+      _origCollapse();
+    }
+  };
+
+  /* ── Bottom nav click handlers ───────────────────────────────── */
+  document.getElementById('mnb-A')?.addEventListener('click', () => goPanel('A'));
+  document.getElementById('mnb-B')?.addEventListener('click', () => goPanel('B'));
+  document.getElementById('mnb-C')?.addEventListener('click', () => goPanel('C'));
+  document.getElementById('mnb-N')?.addEventListener('click', () => {
+    document.getElementById('notificationIcon')?.click();
+    goPanel('B'); // notifications expand into gray panel from existing logic
   });
 
+  /* ── Back buttons (delegated) ────────────────────────────────── */
+  document.addEventListener('click', e => {
+    const back = e.target.closest('[data-goto]');
+    if (!back) return;
+    goPanel(back.getAttribute('data-goto'));
+  });
+  document.getElementById('mob-header-B-notif')?.addEventListener('click', () => {
+    document.getElementById('notificationIcon')?.click();
+  });
+
+  /* ── Sidebar nav items → switch to records panel ─────────────── */
+  document.querySelectorAll('.left-main-part .nav-item[data-nav]').forEach(item => {
+    item.addEventListener('click', () => {
+      const key = item.getAttribute('data-nav');
+      // Only auto-switch for views that render in the center panel
+      if (['Project-Records', 'workspace'].includes(key)) {
+        setTimeout(() => goPanel('B'), 100);
+      }
+      // chat, edit-information, assign-team-members navigate away — no switch needed
+    });
+  });
+
+  /* ── Schedule option click → switch to C panel ───────────────── */
+  document.getElementById('scheduleOption')?.addEventListener('click', () => {
+    setTimeout(() => goPanel('C'), 60);
+  }, true);
+
+  /* ── Sync notification badge to bottom nav ───────────────────── */
+  function syncBadge() {
+    const real  = document.getElementById('notificationBadge');
+    const count = real ? real.textContent.trim() : '';
+    const show  = count && count !== '0';
+    ['mnb-badge','mob-header-B-badge'].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent   = count;
+      el.style.display = show ? 'inline-block' : 'none';
+    });
+  }
+  const realBadge = document.getElementById('notificationBadge');
+  if (realBadge) new MutationObserver(syncBadge).observe(realBadge, { childList:true, characterData:true, subtree:true });
+  setInterval(syncBadge, 5000);
+
+  /* ── Initial state ───────────────────────────────────────────── */
+  goPanel('A');
 })();
 </script>
 <body>
