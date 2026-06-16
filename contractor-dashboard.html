@@ -5939,35 +5939,47 @@ async function updateNotificationBadge() {
     notificationBadge.textContent   = count;
     notificationBadge.style.display = count > 0 ? 'inline-block' : 'none';
   } catch (err) {
-    notificationBadge.textContent   = '0';
-    notificationBadge.style.display = 'none';
+    console.error('Unread count error:', err);
+    // Keep the existing UI state when the request fails so a transient
+    // backend error does not incorrectly hide the unread badge.
   }
 }
 
 notificationIcon.addEventListener('click', async () => {
   const projectId = localStorage.getItem('activeProjectId');
   if (!projectId) { expandGrayPart('<p>Please select a project first.</p>'); return; }
-  notificationBadge.textContent   = '0';
-  notificationBadge.style.display = 'none';
   try {
     const res = await authFetch(`${API}/notifications?projectId=${projectId}`);
-    if (!res) return;
-    const data          = await res.json();
+    if (!res || !res.ok) {
+      console.error('Notifications fetch failed:', res && res.status);
+      expandGrayPart(`<p style="color:#ef4444;">⚠️ Error loading notifications.</p>
+        <button class="btn" onclick="collapseGrayPart()">← Back</button>`);
+      return;
+    }
+    const data = await res.json();
     let notifications = data.notifications || [];
 
-    // Mark notifications read first so the panel shows them as read
     if (notifications.length > 0) {
-      await authFetch(`${API}/notifications/mark-all-read`, {
+      const markRes = await authFetch(`${API}/notifications/mark-all-read`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notificationIds: notifications.map(n => n.id) })
       });
-      // reflect change immediately in UI
-      notifications = notifications.map(n => ({ ...n, is_read: true }));
+      if (!markRes || !markRes.ok) {
+        console.error('Mark all notifications read failed:', markRes && markRes.status);
+      } else {
+        notificationBadge.textContent   = '0';
+        notificationBadge.style.display = 'none';
+        notifications = notifications.map(n => ({ ...n, is_read: true }));
+      }
+    } else {
+      notificationBadge.textContent   = '0';
+      notificationBadge.style.display = 'none';
     }
 
     renderNotificationPanel(notifications);
   } catch (err) {
+    console.error('Notification click error:', err);
     expandGrayPart(`<p style="color:#ef4444;">⚠️ Error loading notifications.</p>
       <button class="btn" onclick="collapseGrayPart()">← Back</button>`);
   }
