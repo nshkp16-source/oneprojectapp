@@ -909,24 +909,7 @@
 .no-data-placeholder.show {
   display: block;
 }
-
-/* ── Language Button Styles ──────────────────────────── */
-.language-options { display: flex; flex-direction: column; gap: 12px; }
-.language-btn {
-  padding: 14px 16px; border: 2px solid #ccc; background: #fff; border-radius: 8px;
-  cursor: pointer; font-size: 15px; font-weight: 600; color: #333;
-  transition: all 0.3s ease; text-align: left; display: flex; align-items: center; gap: 10px;
-}
-.language-btn:hover { border-color: #007B8A; background: #f0f8ff; }
-.language-btn.active {
-  background: #007B8A; color: #fff; border-color: #007B8A;
-  box-shadow: 0 4px 12px rgba(0, 123, 138, 0.3);
-}
-.language-btn.active::after {
-  content: '\2713'; margin-left: auto; font-size: 18px; font-weight: bold;
-}
   </style>
-  <script src="language-switcher.js"></script>
 </head>
 <body>
   <div class="layout">
@@ -1192,18 +1175,22 @@
   <!-- Language Selection Dialog -->
   <div class="modal-overlay" id="languageDialog">
     <div class="modal-content">
-      <h3 data-translate="change-language-title">Change Language</h3>
-      <p data-translate="choose-language" style="color: #666; font-size: 13px; margin-bottom: 16px;">Select your preferred language:</p>
-      <div class="language-options">
-        <button class="language-btn" id="langEnglishBtn" data-lang="English">
-          <span>🇬🇧 English</span>
-        </button>
-        <button class="language-btn" id="langFrenchBtn" data-lang="French">
-          <span>🇫🇷 Français</span>
-        </button>
+      <h3>Change Language</h3>
+      <p style="color: #666; font-size: 13px; margin-bottom: 12px;">Select your preferred language:</p>
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 8px; border-radius: 6px; background: #f5f5f5;">
+          <input type="radio" name="language" value="English" checked>
+          <span style="font-weight: bold;">🇬🇧 English</span>
+          <span style="color: #999; font-size: 12px; margin-left: auto;">(Default)</span>
+        </label>
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 8px; border-radius: 6px; background: #f5f5f5;">
+          <input type="radio" name="language" value="French">
+          <span style="font-weight: bold;">🇫🇷 French</span>
+        </label>
       </div>
       <div class="modal-actions">
-        <button data-translate="cancel" id="languageCancelBtn">Cancel</button>
+        <button onclick="document.getElementById('languageDialog').classList.remove('active')">Cancel</button>
+        <button class="primary" id="applyLanguageBtn">Apply</button>
       </div>
     </div>
   </div>
@@ -1479,9 +1466,6 @@ document.addEventListener("DOMContentLoaded", async () => {
           activeProject.textContent = project.name;
           projectDialog.style.display = "none";
           fetchProjectDetails(project.id);
-          // Update notification and arret badges for the selected project
-          updateNotificationBadge();
-          updateArretBar();
         });
       });
     } else {
@@ -1498,11 +1482,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   loadSummaryWeather();
   loadSummaryPanelData();
   setTimeout(() => { loadTabRecords('contractual'); }, 50);
-  const projectId = localStorage.getItem('activeProjectId');
-  if (projectId) {
-    updateNotificationBadge();
-    updateArretBar();
-  }
+  updateNotificationBadge();
+  updateArretBar();
   if (arretBar) arretBar.addEventListener('click', openArretPanel);
   setInterval(updateNotificationBadge, 30000);
   setInterval(updateArretBar, 30000);
@@ -1702,34 +1683,14 @@ function loadSavedLanguage() {
   applyTranslations(selected);
 }
 
-// Language button handlers
-function updateLanguageButtonHighlight(lang) {
-  document.getElementById('langEnglishBtn').classList.toggle('active', lang === 'English');
-  document.getElementById('langFrenchBtn').classList.toggle('active', lang === 'French');
-}
-
-document.getElementById('langEnglishBtn').addEventListener('click', () => {
-  applyTranslations('English');
-  updateLanguageButtonHighlight('English');
-  setTimeout(() => languageDialog.classList.remove('active'), 300);
-});
-
-document.getElementById('langFrenchBtn').addEventListener('click', () => {
-  applyTranslations('French');
-  updateLanguageButtonHighlight('French');
-  setTimeout(() => languageDialog.classList.remove('active'), 300);
-});
-
-document.getElementById('languageCancelBtn').addEventListener('click', () => {
-  languageDialog.classList.remove('active');
-});
-
-// Load saved language on page load
-function loadSavedLanguage() {
-  const selected = localStorage.getItem(savedLanguageKey) || defaultLanguage;
-  updateLanguageButtonHighlight(selected);
+applyLanguageBtn.addEventListener('click', () => {
+  const selectedEl = document.querySelector('input[name="language"]:checked');
+  const selected = selectedEl?.value || defaultLanguage;
+  if (!supportedLanguages.includes(selected)) return;
+  if (languageDialog) languageDialog.classList.remove('active');
   applyTranslations(selected);
-}
+  alert(`Language successfully changed to ${selected}`);
+});
 
 loadSavedLanguage();
 
@@ -6014,53 +5975,41 @@ async function updateNotificationBadge() {
     const token     = localStorage.getItem('authToken');
     if (!projectId || !token) return;
     const res = await authFetch(`${API}/notifications/unread-count?projectId=${projectId}`);
-    if (!res || !res.ok) {
-      console.error('Unread count request failed:', res && res.status);
-      return;
-    }
+    if (!res) return;
     const data  = await res.json();
     const count = data.count ?? 0;
     notificationBadge.textContent   = count;
     notificationBadge.style.display = count > 0 ? 'inline-block' : 'none';
   } catch (err) {
-    console.error('Unread count error:', err);
-    // Keep the existing UI state when the request fails so a transient
-    // backend error does not incorrectly hide the unread badge.
+    notificationBadge.textContent   = '0';
+    notificationBadge.style.display = 'none';
   }
 }
 
 notificationIcon.addEventListener('click', async () => {
   const projectId = localStorage.getItem('activeProjectId');
   if (!projectId) { expandGrayPart('<p>Please select a project first.</p>'); return; }
+  notificationBadge.textContent   = '0';
+  notificationBadge.style.display = 'none';
   try {
     const res = await authFetch(`${API}/notifications?projectId=${projectId}`);
-    if (!res || !res.ok) {
-      console.error('Notifications fetch failed:', res && res.status);
-      expandGrayPart(`<p style="color:#ef4444;">⚠️ Error loading notifications.</p>
-        <button class="btn" onclick="collapseGrayPart()">← Back</button>`);
-      return;
-    }
-    const data = await res.json();
+    if (!res) return;
+    const data          = await res.json();
     let notifications = data.notifications || [];
 
+    // Mark notifications read first so the panel shows them as read
     if (notifications.length > 0) {
-      const markRes = await authFetch(`${API}/notifications/mark-all-read`, {
+      await authFetch(`${API}/notifications/mark-all-read`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notificationIds: notifications.map(n => n.id) })
       });
-      if (!markRes || !markRes.ok) {
-        console.error('Mark all notifications read failed:', markRes && markRes.status);
-      } else {
-        notificationBadge.textContent   = '0';
-        notificationBadge.style.display = 'none';
-        notifications = notifications.map(n => ({ ...n, is_read: true }));
-      }
+      // reflect change immediately in UI
+      notifications = notifications.map(n => ({ ...n, is_read: true }));
     }
 
     renderNotificationPanel(notifications);
   } catch (err) {
-    console.error('Notification click error:', err);
     expandGrayPart(`<p style="color:#ef4444;">⚠️ Error loading notifications.</p>
       <button class="btn" onclick="collapseGrayPart()">← Back</button>`);
   }
