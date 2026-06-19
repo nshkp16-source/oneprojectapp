@@ -1108,6 +1108,12 @@ function buildAudioWidget(url, durationHint) {
         waveWrap.querySelectorAll('span').forEach(b => b.style.opacity = '0.35');
     });
 
+    audio.addEventListener('error', () => {
+        console.warn('[buildAudioWidget] audio playback error', url, audio.error);
+        playBtn.innerHTML = '⚠';
+        timeEl.textContent = 'Error';
+    });
+
     playBtn.addEventListener('click', () => {
         if (playing) { audio.pause(); playBtn.innerHTML = '▶'; playing = false; }
         else { audio.play(); playBtn.innerHTML = '⏸'; playing = true; }
@@ -1551,12 +1557,17 @@ async function sendMessage() {
         const nowIso = ret.created_at||new Date().toISOString();
         const msgTime= new Date(nowIso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
 
+        // Validate attachment metadata from server response
+        if (pendingFile && !ret.attachment_mime) {
+            console.warn('[sendMessage] server missing attachment_mime in response. sent:', pendingFile.mime, 'url:', ret.attachment_url);
+        }
+
         currentChat.messages.push({
             id: ret.id||Date.now()+'-'+Math.random(),
             text, sent:true, time:msgTime, createdAt:nowIso,
-            attachmentUrl:  pendingFile?.url||null,
-            attachmentName: pendingFile?.name||null,
-            attachmentMime: pendingFile?.mime||null,
+            attachmentUrl:  ret.attachment_url||pendingFile?.url||null,
+            attachmentName: ret.attachment_name||pendingFile?.name||null,
+            attachmentMime: ret.attachment_mime||pendingFile?.mime||null,
             senderName: currentUserName, senderRole: currentUserRole,
             senderPosition: currentUserPos,
             readBy: [currentUserId],
