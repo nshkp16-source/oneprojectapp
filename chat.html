@@ -865,15 +865,20 @@ emojiPicker.addEventListener('click', e => e.stopPropagation());
    SEND-BTN DUAL MODE: text → send, empty → mic
 ══════════════════════════════════════ */
 function updateSendBtn() {
-    if (isRecording) return;
+    if (isRecording) {
+        console.log('[updateSendBtn] Skipping update - currently recording');
+        return;
+    }
     if (msgInput.value.trim() || pendingFile) {
         sendBtn.innerHTML = '➤';
         sendBtn.title = 'Send';
         sendBtn.setAttribute('data-mode','send');
+        console.log('[updateSendBtn] Set mode to SEND (has text or file)');
     } else {
         sendBtn.innerHTML = '🎤';
         sendBtn.title = 'Hold to record voice message';
         sendBtn.setAttribute('data-mode','mic');
+        console.log('[updateSendBtn] Set mode to MIC (empty input, no file)');
     }
 }
 msgInput.addEventListener('input', updateSendBtn);
@@ -886,19 +891,49 @@ sendBtn.addEventListener('click', e => {
 
 /* Long-press mic on desktop/touch */
 function startLongPress() {
-    if (sendBtn.getAttribute('data-mode') !== 'mic') return;
-    longPressTimer = setTimeout(() => startRecording(), 200);
+    const mode = sendBtn.getAttribute('data-mode');
+    console.log('[startLongPress] Button mode:', mode, 'isRecording:', isRecording);
+    if (mode !== 'mic') {
+        console.log('[startLongPress] Not in mic mode, ignoring');
+        return;
+    }
+    console.log('[startLongPress] Starting 200ms timer before recording...');
+    longPressTimer = setTimeout(() => {
+        console.log('[startLongPress] Timer fired, calling startRecording()');
+        startRecording();
+    }, 200);
 }
 function endLongPress() {
+    console.log('[endLongPress] Button released. isRecording:', isRecording);
     clearTimeout(longPressTimer);
-    if (isRecording) stopRecording(true);
+    if (isRecording) {
+        console.log('[endLongPress] Recording active, stopping and sending...');
+        stopRecording(true);
+    }
 }
 
-sendBtn.addEventListener('mousedown', startLongPress);
-sendBtn.addEventListener('mouseup', endLongPress);
-sendBtn.addEventListener('mouseleave', () => { if (isRecording) stopRecording(true); clearTimeout(longPressTimer); });
-sendBtn.addEventListener('touchstart', e => { e.preventDefault(); startLongPress(); }, {passive:false});
-sendBtn.addEventListener('touchend',   e => { e.preventDefault(); endLongPress(); },   {passive:false});
+sendBtn.addEventListener('mousedown', e => {
+    console.log('[sendBtn.mousedown] Event triggered');\n    startLongPress();
+});
+sendBtn.addEventListener('mouseup', e => {
+    console.log('[sendBtn.mouseup] Event triggered');
+    endLongPress();
+});
+sendBtn.addEventListener('mouseleave', () => {
+    console.log('[sendBtn.mouseleave] Event triggered');
+    if (isRecording) stopRecording(true);
+    clearTimeout(longPressTimer);
+});
+sendBtn.addEventListener('touchstart', e => {
+    console.log('[sendBtn.touchstart] Event triggered');
+    e.preventDefault();
+    startLongPress();
+}, {passive:false});
+sendBtn.addEventListener('touchend', e => {
+    console.log('[sendBtn.touchend] Event triggered');
+    e.preventDefault();
+    endLongPress();
+}, {passive:false});
 
 /* ══════════════════════════════════════
    AUDIO RECORDING
@@ -935,7 +970,12 @@ async function startRecording() {
             recTimer.textContent = m+':'+(s<10?'0':'')+s;
         }, 1000);
     } catch(err) {
-        alert('Microphone access denied. Please allow microphone permission.');
+        console.error('[startRecording] FAILED to get microphone access:', {
+            name: err.name,
+            message: err.message,
+            code: err.code
+        });
+        alert('[ERROR] Microphone access failed: ' + err.message + '\n\nMake sure:\n1. You granted microphone permission\n2. Another app isn\'t using the mic\n3. Try a different browser');
     }
 }
 
