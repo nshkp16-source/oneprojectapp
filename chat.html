@@ -908,9 +908,19 @@ async function startRecording() {
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         audioChunks = [];
-        mediaRecorder = new MediaRecorder(stream, { mimeType: getSupportedMime() });
-        mediaRecorder.addEventListener('dataavailable', e => { if(e.data.size>0) audioChunks.push(e.data); });
+        const supportedMime = getSupportedMime();
+        console.log('[startRecording] Using MIME type:', supportedMime);
+        mediaRecorder = new MediaRecorder(stream, { mimeType: supportedMime });
+        let chunkCount = 0;
+        mediaRecorder.addEventListener('dataavailable', e => {
+            if(e.data.size>0) {
+                audioChunks.push(e.data);
+                chunkCount++;
+                console.log('[startRecording] dataavailable event', chunkCount, '- chunk size:', e.data.size, 'bytes. total chunks:', audioChunks.length);
+            }
+        });
         mediaRecorder.start(100);
+        console.log('[startRecording] MediaRecorder started, timeslice=100ms');
 
         isRecording = true;
         recSeconds  = 0;
@@ -941,14 +951,22 @@ function stopRecording(send) {
         const stream = mediaRecorder.stream;
         stream.getTracks().forEach(t => t.stop());
 
-        if (!send || audioChunks.length === 0) { audioChunks = []; return; }
+        console.log('[stopRecording] audioChunks.length:', audioChunks.length, 'send:', send);
+        
+        if (!send || audioChunks.length === 0) {
+            console.warn('[stopRecording] No audio data captured or send=false. Discarding.');
+            audioChunks = [];
+            return;
+        }
 
         const mime = getSupportedMime();
         const blob = new Blob(audioChunks, { type: mime });
+        console.log('[stopRecording] blob created. size:', blob.size, 'bytes. mime:', mime);
         audioChunks = [];
 
         const ext  = mime.includes('ogg') ? 'ogg' : mime.includes('webm') ? 'webm' : 'm4a';
         const file = new File([blob], 'voice-'+Date.now()+'.'+ext, { type: mime });
+        console.log('[stopRecording] File created:', file.name, 'size:', file.size, 'type:', file.type);
 
         // Upload then send
         await uploadAndSendFile(file, true);
@@ -1267,6 +1285,12 @@ async function fetchMessages(contact) {
         if (Array.isArray(msg.delivered_to)) deliveredTo = msg.delivered_to;
         else if (msg.delivered_to) { try{deliveredTo = JSON.parse(msg.delivered_to);}catch(e){deliveredTo = []; } }
         const deliveredFromRecipients = Array.isArray(deliveredTo) ? deliveredTo.map(Number).filter(Boolean) : [];
+        
+        // Log attachment data from server
+        if (msg.attachment_url) {
+            console.log('[fetchMessages] Message with attachment:', {id: msg.id, url: msg.attachment_url, mime: msg.attachment_mime, name: msg.attachment_name});
+        }
+        
         return {
             id:                 msg.id,
             text:               msg.content||'',
@@ -1551,13 +1575,18 @@ async function sendMessage() {
     }
 
     try {
+        console.log('[sendMessage] Sending payload with attachment:', {url: pendingFile?.url, name: pendingFile?.name, mime: pendingFile?.mime});
         const data = await api('/chat/messages',{method:'POST',body:payload});
-        if (!data) return;
+        if (!data) {
+            console.error('[sendMessage] No response from server');
+            return;
+        }
         const ret    = data.chatMessage||{};
         const nowIso = ret.created_at||new Date().toISOString();
         const msgTime= new Date(nowIso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
 
         // Validate attachment metadata from server response
+        console.log('[sendMessage] Server returned message with attachment:', {url: ret.attachment_url, name: ret.attachment_name, mime: ret.attachment_mime});
         if (pendingFile && !ret.attachment_mime) {
             console.warn('[sendMessage] server missing attachment_mime in response. sent:', pendingFile.mime, 'url:', ret.attachment_url);
         }
@@ -1602,6 +1631,7 @@ async function sendMessage() {
 async function uploadAndSendFile(file, sendImmediately) {
     const fd = new FormData();
     fd.append('attachment', file);
+    console.log('[uploadAndSendFile] Uploading file:', file.name, 'type:', file.type, 'size:', file.size);
     try {
         const res = await fetch(API_BASE+'/api/upload-attachment',{
             method:'POST',
@@ -1609,7 +1639,9 @@ async function uploadAndSendFile(file, sendImmediately) {
             body: fd
         });
         const d = await res.json();
+        console.log('[uploadAndSendFile] Upload response:', d);
         if (d?.url) {
+            console.log('[uploadAndSendFile] Stored pendingFile with url:', d.url, 'mime:', d.mime, 'name:', d.name);
             pendingFile = {url:d.url, name:file.name, mime:file.type};
             if (sendImmediately) {
                 await sendMessage();
@@ -1618,8 +1650,14 @@ async function uploadAndSendFile(file, sendImmediately) {
                 attachPill.classList.add('visible');
                 updateSendBtn();
             }
-        } else { alert('Upload failed: '+(d?.error||'Unknown')); }
-    } catch(err) { alert('Upload failed: '+err.message); }
+        } else {
+            console.error('[uploadAndSendFile] Upload failed:', d);
+            alert('Upload failed: '+(d?.error||'Unknown'));
+        }
+    } catch(err) {
+        console.error('[uploadAndSendFile] Exception:', err);
+        alert('Upload failed: '+err.message);
+    }
 }
 
 /* ══════════════════════════════════════
