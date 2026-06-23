@@ -137,7 +137,10 @@
       left: calc(var(--left-w) + 10px);
       min-width: 230px;
       max-width: var(--profile-max-w);
-      max-height: calc(var(--profile-max-w) * 1.2);
+      /* was a fixed calc() with no relation to actual viewport height,
+         which clipped the photo preview on short screens; cap relative
+         to the visible space below where the dialog opens instead */
+      max-height: min(calc(var(--profile-max-w) * 1.2), calc(100vh - 130px));
       width: auto;
       background: var(--surface);
       border-radius: var(--r-lg);
@@ -150,6 +153,8 @@
       transition: opacity 0.22s, transform 0.22s;
       overflow-wrap: break-word;
       white-space: normal;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
       transform: translateY(-6px);
     }
     .profile-dialog.active  { opacity: 1; pointer-events: auto; transform: translateY(0); }
@@ -167,6 +172,11 @@
       position: absolute; top: 8px; right: 10px;
       cursor: pointer; color: #333; font-weight: bold;
       padding: 4px; background: rgba(255,255,255,0.85); border-radius: 50%; line-height: 1;
+    }
+
+    @media (max-height: 560px) {
+      .profile-dialog { top: 70px; max-height: calc(100vh - 90px); }
+      #profilePreview .preview-box { min-height: 130px; }
     }
 
     .profile-icon-large {
@@ -592,7 +602,7 @@
     ══════════════════════════════════════════════ */
     .gray-part-content {
       width: 100%; height: 100%; padding: 16px;
-      background: var(--surface); overflow: hidden;
+      background: var(--surface); overflow-y: auto; overflow-x: hidden;
       display: flex; flex-direction: column;
     }
     .gray-part-header {
@@ -2840,7 +2850,11 @@ const _css = `
             border-top-color:transparent;border-radius:50%;
             animation:sc-spin 0.8s linear infinite;}
 
-/* ── Gantt ── */
+/* ── Gantt ──
+   Fixed 360px on desktop where there's room to spare. On short
+   viewports this is overridden below so the expanded Gantt becomes
+   its own scrollable section instead of just adding 360px on top of
+   an already-cramped milestones list. */
 .gtt-body{display:none;height:360px;}
 .gtt-body.open{display:flex;}
 .gtt-labels{width:200px;flex-shrink:0;border-right:1px solid var(--c-border);overflow-y:auto;overflow-x:hidden;}
@@ -4148,6 +4162,30 @@ function openActualProgressPage(savedSchedule) {
   .p3sk-v.ahead{color:#3dd6b5;}.p3sk-v.behind{color:#f28c5e;}.p3sk-v.overdue{color:#f28c5e;}.p3sk-v.today{color:#f5c400;}
   .p3scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;}
   .p3content{display:flex;align-items:flex-start;min-height:100%;}
+
+  /* ── Short viewport: the green stats bar no longer eats fixed,
+     non-negotiable space. It scrolls away with the page instead of
+     permanently blocking room the milestones/Gantt need below it. ── */
+  @media (max-height:560px){
+    .p3root{height:auto;min-height:100%;overflow-y:auto;overflow-x:hidden;}
+    .p3-topbar,.p3sum{flex-shrink:0;position:static;}
+    .p3sum{padding:7px 10px;}
+    .p3sk{padding:4px 12px;}
+    .p3sk-v{font-size:13px;}
+    .p3sk-l{font-size:8px;}
+    .p3scroll{flex:none;overflow-y:visible;min-height:0;}
+    .p3content{min-height:0;}
+    /* milestones get a bounded, independently-scrolling height instead
+       of expanding indefinitely and pushing the Gantt off-screen */
+    .p3list{max-height:38vh;}
+    .p3detail{max-height:38vh;overflow-y:auto;}
+    /* Gantt becomes its own section: a hard top border to visually
+       separate it from milestones, and its own capped, scrollable
+       body sized to the viewport rather than a flat 360px */
+    .p3-gantt{border-top:4px solid var(--c-border);margin-top:4px;}
+    .gtt-body{height:auto;max-height:50vh;}
+    .gtt-body.open{display:flex;}
+  }
   .p3list{width:260px;flex-shrink:0;background:var(--c-surface);border-right:1px solid var(--c-border);
           position:sticky;left:0;top:0;align-self:flex-start;max-height:calc(100vh - 130px);overflow-y:auto;}
   .p3list-hdr{padding:12px 16px;border-bottom:1px solid var(--c-border);font-size:10px;font-weight:600;
@@ -4892,13 +4930,19 @@ function openActualProgressPage(savedSchedule) {
   });
 
   _el('p3GanttToggle')?.addEventListener('click', () => {
-    const body  = _el('p3GanttBody');
-    const chv   = _el('p3GanttChv');
-    const leg   = _el('p3GttLegend');
+    const body   = _el('p3GanttBody');
+    const chv    = _el('p3GanttChv');
+    const leg    = _el('p3GttLegend');
+    const toggle = _el('p3GanttToggle');
     const isOpen = body.classList.toggle('open');
     chv.style.transform = isOpen ? 'rotate(180deg)' : '';
     if (leg) leg.classList.toggle('open', isOpen);
-    if (isOpen) buildGantt();
+    if (isOpen) {
+      buildGantt();
+      // bring the newly-opened section into view rather than leaving
+      // it to render off-screen below a short viewport
+      requestAnimationFrame(() => toggle?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+    }
   });
 
   // ── Initial render ──
