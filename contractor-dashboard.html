@@ -600,6 +600,52 @@
       text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px;
     }
     .gray-part-value { color: var(--text); font-size: 13px; line-height: 1.6; word-wrap: break-word; }
+    /* ══════════════════════════════════════════════
+       ACCORDION (gray panel sections)
+    ══════════════════════════════════════════════ */
+    .acc-section {
+      width: 100%;
+      background: rgba(255,255,255,0.95);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: var(--sh-sm);
+    }
+    .acc-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      cursor: pointer;
+      user-select: none;
+      background: rgba(255,255,255,0.95);
+      border-bottom: 1px solid transparent;
+      transition: background 0.15s;
+    }
+    .acc-header:hover { background: #f0f8fa; }
+    .acc-header.open  { border-bottom-color: var(--border); }
+    .acc-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .acc-chevron {
+      font-size: 10px;
+      color: var(--muted);
+      transition: transform 0.2s;
+      flex-shrink: 0;
+    }
+    .acc-header.open .acc-chevron { transform: rotate(180deg); }
+    .acc-body {
+      display: none;
+      padding: 12px 14px 14px;
+    }
+    .acc-body.open { display: block; }
+
     .gray-part-placeholder {
       display: flex; align-items: center; justify-content: center;
       height: auto; color: var(--muted); font-size: 13px; text-align: center; padding: 16px;
@@ -3758,16 +3804,25 @@ function openActualProgressPage(savedSchedule) {
   <style>
   .p3root{font-family:var(--font);display:flex;flex-direction:column;height:100%;background:var(--c-bg);overflow:hidden;}
   .p3-topbar{flex-shrink:0;}
-  .p3sum{background:var(--c-dark);padding:10px 24px;display:flex;gap:0;flex-shrink:0;flex-wrap:wrap;}
-  .p3sk{flex:1;min-width:90px;padding:6px 16px;border-right:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:2px;}
+  .p3sum{background:var(--c-dark);padding:6px 0;display:flex;gap:0;flex-shrink:0;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;}
+  .p3sum::-webkit-scrollbar{display:none;}
+  .p3sk{flex:0 0 auto;min-width:88px;padding:6px 14px;border-right:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:2px;}
   .p3sk:last-child{border-right:none;}
   .p3sk-l{font-size:9px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#4a7a74;font-family:var(--font-mono);}
   .p3sk-v{font-size:16px;font-weight:600;color:#e8f4f2;font-family:var(--font-mono);}
   .p3sk-v.ahead{color:#3dd6b5;}.p3sk-v.behind{color:#f28c5e;}.p3sk-v.overdue{color:#f28c5e;}.p3sk-v.today{color:#f5c400;}
   .p3scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;}
   .p3content{display:flex;align-items:flex-start;min-height:100%;}
-  .p3list{width:260px;flex-shrink:0;background:var(--c-surface);border-right:1px solid var(--c-border);
+  .p3list{width:220px;flex-shrink:0;background:var(--c-surface);border-right:1px solid var(--c-border);
           position:sticky;left:0;top:0;align-self:flex-start;max-height:calc(100vh - 130px);overflow-y:auto;}
+  /* On very short screens, switch to tabs: list slides up when milestone selected */
+  @media (max-height:520px){
+    .p3content{flex-direction:column;}
+    .p3list{width:100%;max-height:140px;position:relative;border-right:none;border-bottom:2px solid var(--c-border);}
+    .p3detail{padding:10px 14px;}
+    .p3sum .p3sk{min-width:76px;padding:4px 10px;}
+    .p3sk-v{font-size:13px!important;}
+  }
   .p3list-hdr{padding:12px 16px;border-bottom:1px solid var(--c-border);font-size:10px;font-weight:600;
               letter-spacing:0.08em;text-transform:uppercase;color:var(--c-brand);font-family:var(--font-mono);
               position:sticky;top:0;background:var(--c-surface);z-index:2;}
@@ -3792,6 +3847,10 @@ function openActualProgressPage(savedSchedule) {
     </div>
     ${!AppState.canWrite ? `<div class="p3-viewonly-bar">🔒 View-only — your role (${AppState.user.role}) can view but cannot edit.</div>` : ''}
 
+    <div id="p3SumToggleBar" style="background:var(--c-dark);padding:2px 14px 0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;border-bottom:1px solid rgba(255,255,255,0.06);">
+      <span style="font-size:9px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#4a7a74;">← scroll stats →</span>
+      <button id="p3SumToggleBtn" title="Toggle stats bar" style="background:none;border:none;cursor:pointer;color:#4a7a74;font-size:11px;padding:3px 6px;line-height:1;">▲ hide</button>
+    </div>
     <div class="p3sum" id="p3Sum">
       <div class="p3sk"><span class="p3sk-l">Overall</span><span class="p3sk-v" id="p3OverallPct">—</span></div>
       <div class="p3sk"><span class="p3sk-l">Plan Today</span><span class="p3sk-v" id="p3PlanPct">—</span></div>
@@ -3874,6 +3933,19 @@ function openActualProgressPage(savedSchedule) {
   const _el = id => document.getElementById(id);
 
   _el('p3Back')?.addEventListener('click', () => collapseGrayPart());
+
+  // Stats bar toggle
+  (function() {
+    const sumEl = _el('p3Sum');
+    const btn   = _el('p3SumToggleBtn');
+    if (!btn || !sumEl) return;
+    let visible = true;
+    btn.addEventListener('click', () => {
+      visible = !visible;
+      sumEl.style.display = visible ? '' : 'none';
+      btn.textContent = visible ? '▲ hide' : '▼ stats';
+    });
+  })();
   // FIX 1: Edit Plan passes full savedSchedule (with both milestone arrays)
   _el('p3EditPlan')?.addEventListener('click', () => openProjectScheduleForm(savedSchedule));
   _el('p3Extension')?.addEventListener('click', () => openExtensionPanel(savedSchedule));
