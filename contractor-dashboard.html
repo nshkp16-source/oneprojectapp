@@ -2920,6 +2920,54 @@ function openCreateScheduleIntro(existingSchedule) {
       </div>
     </div>
   </div>`);
+
+// ====== make the summary bar show left/right chevrons and handle scrolling ======
+(function(){
+  const sum = document.getElementById('p3Sum');
+  if (!sum) return;
+  sum.style.position = sum.style.position || 'relative';
+
+  // create fades
+  const fadeL = document.createElement('div'); fadeL.className = 'p3-fade p3-fade-left';
+  const fadeR = document.createElement('div'); fadeR.className = 'p3-fade p3-fade-right';
+  sum.appendChild(fadeL); sum.appendChild(fadeR);
+
+  // create thin scroll indicator
+  const indicator = document.createElement('div'); indicator.className = 'p3-scroll-indicator';
+  const bar = document.createElement('div'); bar.className = 'bar'; indicator.appendChild(bar);
+  sum.appendChild(indicator);
+
+  function update(){
+    const max = Math.max(0, sum.scrollWidth - sum.clientWidth);
+    // show/hide fades
+    if (sum.scrollLeft > 6) fadeL.style.opacity = '1'; else fadeL.style.opacity = '0';
+    if (sum.scrollLeft < max - 6) fadeR.style.opacity = '1'; else fadeR.style.opacity = '0';
+    // update indicator width & position
+    const visibleRatio = sum.clientWidth / sum.scrollWidth || 1;
+    const barWidth = Math.max(0.08, visibleRatio) * 100;
+    const leftPct = (sum.scrollLeft / (sum.scrollWidth - sum.clientWidth || 1)) * (100 - barWidth);
+    bar.style.width = barWidth + '%';
+    bar.style.left = leftPct + '%';
+  }
+  sum.addEventListener('scroll', update, { passive:true });
+  window.addEventListener('resize', update);
+  setTimeout(update, 300);
+
+  // layout tester: run in the browser console like `p3LayoutTester([[360,800],[412,915],[1024,768]])`
+  window.p3LayoutTester = async function(sizes){
+    const results = [];
+    const origBodyW = document.body.style.width; const origBodyH = document.body.style.height;
+    for (const s of sizes){
+      const w = s[0], h = s[1] || window.innerHeight;
+      document.body.style.width = w + 'px'; document.body.style.height = h + 'px';
+      await new Promise(r=>setTimeout(r,80));
+      results.push({ size:[w,h], p3sum:{clientWidth: sum.clientWidth, scrollWidth: sum.scrollWidth, isOverflowing: sum.scrollWidth>sum.clientWidth}, tiles: Array.from(sum.querySelectorAll('.p3sk')).map(el=>({text: el.querySelector('.p3sk-l')?.textContent?.trim(), minWidth: parseFloat(getComputedStyle(el).minWidth), clientWidth: el.clientWidth})) });
+    }
+    document.body.style.width = origBodyW; document.body.style.height = origBodyH;
+    console.table(results.map(r=>({size: r.size.join('x'), isOverflowing: r.p3sum.isOverflowing, clientWidth: r.p3sum.clientWidth, scrollWidth: r.p3sum.scrollWidth}))); 
+    return results;
+  };
+})();
   document.getElementById('s1Back')?.addEventListener('click', collapseGrayPart);
   document.getElementById('s1CreateBtn')?.addEventListener('click', () => openProjectScheduleForm(existingSchedule || null));
 }
@@ -3992,8 +4040,12 @@ function openActualProgressPage(savedSchedule) {
   <style>
   .p3root{font-family:var(--font);display:flex;flex-direction:column;height:100%;background:var(--c-bg);overflow:hidden;}
   .p3-topbar{flex-shrink:0;}
-  .p3sum{background:var(--c-dark);padding:10px 24px;display:flex;gap:0;flex-shrink:0;flex-wrap:wrap;}
-  .p3sk{flex:1;min-width:90px;padding:6px 16px;border-right:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:2px;}
+  .p3sum{background:var(--c-dark);padding:10px 12px;display:flex;gap:8px;flex-shrink:0;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;}
+  /* each summary tile: allow grow but prevent over-shrinking on small screens */
+  .p3sk{flex:1;min-width:110px;padding:6px 16px;border-right:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:2px;}
+  /* make some important tiles wider to preserve desktop ratios */
+  .p3sum .p3sk:nth-child(7){ min-width:160px; }
+  .p3sum .p3sk:nth-child(8), .p3sum .p3sk:nth-child(9){ min-width:140px; }
   .p3sk:last-child{border-right:none;}
   .p3sk-l{font-size:9px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#4a7a74;font-family:var(--font-mono);}
   .p3sk-v{font-size:16px;font-weight:600;color:#e8f4f2;font-family:var(--font-mono);}
@@ -4007,6 +4059,31 @@ function openActualProgressPage(savedSchedule) {
               position:sticky;top:0;background:var(--c-surface);z-index:2;}
   .p3detail{flex:1;padding:16px;display:flex;flex-direction:column;gap:14px;min-width:0;overflow-x:hidden;}
   .p3-gantt{border-top:2px solid var(--c-border);background:var(--c-surface);}
+  /* allow horizontal scrolling of Gantt timeline when it exceeds container */
+  .gtt-scroll{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;}
+
+  /* subtle scrollbar styling */
+  .p3sum::-webkit-scrollbar, .gtt-scroll::-webkit-scrollbar{height:8px;background:transparent}
+  .p3sum::-webkit-scrollbar-track, .gtt-scroll::-webkit-scrollbar-track{background:transparent}
+  .p3sum::-webkit-scrollbar-thumb, .gtt-scroll::-webkit-scrollbar-thumb{background:linear-gradient(90deg, rgba(0,0,0,0.12), rgba(0,0,0,0.18));border-radius:6px}
+  .p3sum::-webkit-scrollbar-thumb:hover, .gtt-scroll::-webkit-scrollbar-thumb:hover{background:linear-gradient(90deg, rgba(0,0,0,0.16), rgba(0,0,0,0.26));}
+  .p3sum{position:relative;}
+
+  /* small animated scroll indicator (thin bar) */
+  .p3-scroll-indicator{position:absolute;left:0;right:0;bottom:4px;height:4px;pointer-events:none;opacity:0.9}
+  .p3-scroll-indicator .bar{height:100%;width:20%;background:linear-gradient(90deg,var(--c-brand), rgba(125,211,196,0.6));border-radius:99px;transform-origin:left;transition:left 0.18s linear,width 0.18s linear}
+
+  /* edge fade gradients as discoverability hint */
+  .p3-fade{position:absolute;top:0;bottom:0;width:36px;pointer-events:none;z-index:9}
+  .p3-fade.p3-fade-left{left:0;background:linear-gradient(90deg, rgba(22,24,26,0.9), rgba(22,24,26,0));}
+  .p3-fade.p3-fade-right{right:0;background:linear-gradient(270deg, rgba(22,24,26,0.9), rgba(22,24,26,0));}
+
+  /* orientation-aware tweaks: on tall/narrow screens allow slightly smaller tiles */
+  @media (orientation: portrait), (max-width:480px){
+    .p3sk{min-width:96px}
+    .p3sum .p3sk:nth-child(7){ min-width:140px; }
+    .p3sum .p3sk:nth-child(8), .p3sum .p3sk:nth-child(9){ min-width:120px; }
+  }
   .gtt-toggle{padding:12px 20px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;}
   .gtt-toggle:hover{background:#f8faf9;}
   .p3-viewonly-bar{background:var(--c-warn-light);border-bottom:1px solid #f5d48a;
