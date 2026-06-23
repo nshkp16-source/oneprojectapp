@@ -4174,11 +4174,22 @@ function openActualProgressPage(savedSchedule) {
     .p3sk-v{font-size:13px;}
     .p3sk-l{font-size:8px;}
     .p3scroll{flex:none;overflow-y:visible;min-height:0;}
-    .p3content{min-height:0;}
-    /* milestones get a bounded, independently-scrolling height instead
-       of expanding indefinitely and pushing the Gantt off-screen */
-    .p3list{max-height:38vh;}
-    .p3detail{max-height:38vh;overflow-y:auto;}
+    .p3content{min-height:0;flex-direction:column;align-items:stretch;}
+    /* Accordion mode: the side-by-side list+detail columns (which only
+       had 38vh each to share — barely enough for either) become one
+       full-width stacked list. Each milestone row carries its own
+       detail (Progress Log, Site Photos, daily entry) inline, shown
+       only while that row is expanded. Collapsed = title only. */
+    .p3list{width:100%;max-height:none;position:static;border-right:none;border-bottom:2px solid var(--c-border);}
+    .p3detail{display:none;}
+    .p3ms{position:relative;}
+    .p3ms-inline-detail{display:none;max-height:48vh;overflow-y:auto;-webkit-overflow-scrolling:touch;
+      margin:8px -14px -10px;padding:0 14px 14px;border-top:1px solid #e3eeec;background:#fafdfc;}
+    .p3ms.expanded .p3ms-inline-detail{display:block;}
+    .p3ms-expand-hint{font-size:10px;color:var(--c-muted);font-family:var(--font-mono);
+      display:flex;align-items:center;gap:4px;margin-top:2px;}
+    .p3ms-expand-hint .chv{transition:transform 0.2s;display:inline-block;}
+    .p3ms.expanded .p3ms-expand-hint .chv{transform:rotate(180deg);}
     /* Gantt becomes its own section: a hard top border to visually
        separate it from milestones, and its own capped, scrollable
        body sized to the viewport rather than a flat 360px */
@@ -4329,6 +4340,7 @@ function openActualProgressPage(savedSchedule) {
 
   let msList   = pms.map(ms => ({ ...ms }));
   let activeId = msList.length ? String(msList[0].id) : null;
+  let expandedMsId = null; // accordion state on short viewports — null = all collapsed
   let _renderToken = 0;
 
   const _el = id => document.getElementById(id);
@@ -4394,6 +4406,8 @@ function openActualProgressPage(savedSchedule) {
     }
   }
 
+  function isShortViewport() { return window.innerHeight <= 560; }
+
   function renderList() {
     const el = _el('p3MsList'); if (!el) return;
     el.innerHTML = msList.map(ms => {
@@ -4406,8 +4420,9 @@ function openActualProgressPage(savedSchedule) {
         : ms.activity_status === 'in_progress' ? 'sc-tag-ok' : 'sc-tag-ns';
       const stLbl = ms.activity_status === 'completed' ? 'Done'
         : ms.activity_status === 'in_progress' ? 'Active' : 'Pending';
+      const isExpanded = isShortViewport() && String(ms.id) === expandedMsId;
       return `
-      <div class="p3ms ${String(ms.id) === activeId ? 'active' : ''}"
+      <div class="p3ms ${String(ms.id) === activeId ? 'active' : ''} ${isExpanded ? 'expanded' : ''}"
            data-id="${ms.id}"
            style="${isPostExt ? 'border-left:3px solid var(--c-ext);' : ''}">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
@@ -4423,10 +4438,15 @@ function openActualProgressPage(savedSchedule) {
         </div>
         <div class="sc-pbar" style="height:4px;"><div class="sc-pfill" style="width:${pct}%;background:${fillColor};"></div></div>
         <div style="font-size:10px;font-family:var(--font-mono);font-weight:600;color:${fillColor};margin-top:2px;">${pct.toFixed(1)}%</div>
+        <div class="p3ms-expand-hint"><span class="chv">▼</span>${isExpanded ? 'Tap to collapse' : 'Tap to see progress log & photos'}</div>
+        <div class="p3ms-inline-detail" id="p3msSlot-${ms.id}"></div>
       </div>`;
     }).join('');
     el.querySelectorAll('.p3ms').forEach(item => {
-      item.addEventListener('click', () => selectMs(item.dataset.id));
+      item.addEventListener('click', () => {
+        if (isShortViewport()) toggleMsAccordion(item.dataset.id);
+        else selectMs(item.dataset.id);
+      });
     });
   }
 
@@ -4438,8 +4458,33 @@ function openActualProgressPage(savedSchedule) {
     renderList(); renderDetail(ms); updateSummary(ms);
   }
 
-  function renderDetail(ms) {
-    const el = _el('p3Detail'); if (!el) return;
+  // ── Accordion (short viewport): expand/collapse a milestone row
+  // in place instead of showing list+detail side by side. Only one
+  // #p3Detail node exists, so only one row can be expanded at a time —
+  // expanding a new one collapses whatever was open before it. ──
+  function toggleMsAccordion(id) {
+    const idStr = String(id);
+    const ms = msList.find(m => String(m.id) === idStr);
+    if (!ms) return;
+    activeId = idStr;
+    if (expandedMsId === idStr) {
+      expandedMsId = null;     // tap again on the open row → collapse
+      renderList();
+      updateSummary(ms);
+      return;
+    }
+    expandedMsId = idStr;
+    renderList();              // rebuilds rows with the empty slot in place
+    renderDetail(ms, _el(`p3msSlot-${idStr}`));
+    updateSummary(ms);
+    requestAnimationFrame(() => {
+      document.querySelector(`.p3ms[data-id="${idStr}"]`)
+        ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+  }
+
+  function renderDetail(ms, targetEl) {
+    const el = targetEl || _el('p3Detail'); if (!el) return;
     _renderToken++;
     const token       = _renderToken;
     const pct         = Number(ms.progress_pct || 0);
@@ -4948,7 +4993,11 @@ function openActualProgressPage(savedSchedule) {
   // ── Initial render ──
   updateSummary(null);
   renderList();
-  if (activeId) selectMs(activeId);
+  // On short viewports the accordion starts fully collapsed — only
+  // title rows are shown until the user taps one. On normal-height
+  // screens, keep the original behavior: auto-select the first
+  // milestone into the desktop detail column.
+  if (activeId && !isShortViewport()) selectMs(activeId);
 }
 
 // ── Helper: effective finish date as YYYY-MM-DD string ──
