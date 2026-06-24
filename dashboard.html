@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>contractor dashboard</title>
+  <title>OneProjectApp Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     /* ══════════════════════════════════════════════
@@ -203,6 +203,13 @@
       word-wrap: break-word; overflow-wrap: break-word; white-space: normal;
       max-width: 100%; display: block; line-height: 1.5;
       color: var(--muted); margin-bottom: 10px; font-size: 12px;
+    }
+    /* Team-Member-only profile field (position). Hidden by default via
+       inline style on the element; JS shows it only for TeamMember role. */
+    .team-member-role {
+      word-wrap: break-word; overflow-wrap: break-word; white-space: normal;
+      max-width: 100%; display: block; line-height: 1.5;
+      color: var(--text); margin-bottom: 10px; font-size: 12px; font-weight: 600;
     }
 
     /* Buttons */
@@ -1074,7 +1081,7 @@
 
       <!-- Dashboard Block -->
       <div class="tm-dashboard-block">
-        <span class="tm-dashboard-label" data-translate="dashboard-label">contractor Dashboard</span>
+        <span class="tm-dashboard-label" data-translate="dashboard-label" id="dashboardLabel">Dashboard</span>
       </div>
 
       <!-- Profile block -->
@@ -1087,6 +1094,8 @@
           <div id="profileDefault">
             <div class="profile-email" id="profileEmail">email@example.com</div>
             <div class="profile-role" id="profileRole">Role: stakeholder</div>
+            <!-- Team-Member-only field; shown/hidden by JS based on logged-in role -->
+            <div class="team-member-role" id="position" style="display:none;">position: Site Engineer</div>
             <button class="btn" id="editProfileBtn" data-translate="edit-profile">Edit Profile</button>
             <div id="editProfileOptions" style="display:none; margin-top:8px;">
               <button class="btn" id="changePictureBtn" data-translate="change-picture">Change Picture</button>
@@ -1118,7 +1127,7 @@
       <div class="nav-item" data-nav="workspace">
         <span class="icon">📑</span><span class="label" data-translate="workspace">Workspace</span>
       </div>
-      <div class="nav-item" data-nav="assign-team-members" onclick="openAssignTeam('contractor-dashboard')">
+      <div class="nav-item" data-nav="assign-team-members" id="assignTeamNavItem" onclick="openAssignTeam(assignTeamSourceForRole())">
         <span class="icon">👥</span>
         <span class="label" data-translate="assign-team-members">Assign Team Members</span>
       </div>
@@ -1568,7 +1577,6 @@
   })();
   </script>
 
-  <!-- ══ YOUR EXISTING <script> BLOCK GOES HERE ══ -->
 <script>
 
 // =========================
@@ -1629,12 +1637,95 @@ async function refreshAccessToken() {
 }
 
 // =========================
+// Role configuration
+// Maps each normalized JWT role to its backend route prefix.
+// Source of truth: server.js buildProfileRoutes() calls (routePrefix args).
+// =========================
+const ROLE_CONFIG = {
+  Client:        { routePrefix: '/client' },
+  Contractor:    { routePrefix: '/contractor' },
+  Consultant:    { routePrefix: '/consultant' },
+  ClientPM:      { routePrefix: '/client-project-manager' },
+  ContractorPM:  { routePrefix: '/contractor-project-manager' },
+  ConsultantPM:  { routePrefix: '/consultant-project-manager' },
+  TeamMember:    { routePrefix: '/team-member' },
+};
+
+// Normalizes whatever role string comes out of the JWT (handles the
+// "Team Member" vs "TeamMember" / spacing variants the backend already
+// tolerates in normalizeRole()) down to one of the ROLE_CONFIG keys above.
+function normalizeRoleKey(role) {
+  const flat = String(role || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  const map = {
+    client: 'Client',
+    contractor: 'Contractor',
+    consultant: 'Consultant',
+    clientpm: 'ClientPM',
+    clientprojectmanager: 'ClientPM',
+    contractorpm: 'ContractorPM',
+    contractorprojectmanager: 'ContractorPM',
+    consultantpm: 'ConsultantPM',
+    consultantprojectmanager: 'ConsultantPM',
+    teammember: 'TeamMember',
+  };
+  return map[flat] || null;
+}
+
+function isTeamMemberRole(role) {
+  return normalizeRoleKey(role) === 'TeamMember';
+}
+
+// Apply frontend restrictions for TeamMember role (hide buttons; this
+// mirrors the helper that existed-but-was-never-called in the PM dashboards,
+// now actually invoked from the boot sequence below).
+function applyRoleRestrictions() {
+  const role = window.currentUserRole || userRoleRaw;
+  const isTM = isTeamMemberRole(role);
+
+  // Hide static/dynamically-rendered add buttons
+  ['#addRecordBtn', '#addRecordBtnRendered'].forEach(sel => {
+    document.querySelectorAll(sel).forEach(el => el.style.display = isTM ? 'none' : '');
+  });
+  document.querySelectorAll('.add-doc-btn').forEach(el => el.style.display = isTM ? 'none' : '');
+
+  // Hide meeting plan and minute creation controls
+  document.querySelectorAll('.meeting-btn[data-view="plan"]').forEach(el => el.style.display = isTM ? 'none' : '');
+  document.querySelectorAll('.add-minute-btn').forEach(el => el.style.display = isTM ? 'none' : '');
+
+  // Hide the Assign Team Members nav item for Team Members (no other
+  // role's UI is affected by this)
+  document.getElementById('assignTeamNavItem')?.style.setProperty('display', isTM ? 'none' : '');
+}
+
+// Global click interceptor to block restricted actions client-side for TeamMember users
+document.addEventListener('click', function (e) {
+  const role = window.currentUserRole || userRoleRaw;
+  if (!isTeamMemberRole(role)) return;
+
+  const tg = e.target;
+  if (tg.closest('.add-doc-btn') || tg.closest('#addRecordBtnRendered') || tg.closest('.meeting-btn[data-view="plan"]') || tg.closest('.add-minute-btn') || tg.closest('#savePlanMeetingBtn') || (tg.id && tg.id.startsWith('saveMinuteBtn_'))) {
+    e.preventDefault();
+    e.stopPropagation();
+    alert('Action not permitted: Team Members cannot perform this operation.');
+    return false;
+  }
+}, true);
+
+// =========================
 // Identity from JWT
 // =========================
 const token = localStorage.getItem("authToken");
 const decoded = parseJwt(token);
-const contractorEmail = decoded?.email;
-const contractorRole  = decoded?.role;
+const userEmail   = decoded?.email;
+const userRoleRaw = decoded?.role;
+const userRoleKey = normalizeRoleKey(userRoleRaw) || 'Contractor'; // safe fallback, should never hit in practice
+const roleConfig  = ROLE_CONFIG[userRoleKey];
+const API_PREFIX  = roleConfig.routePrefix;
+
+// Legacy aliases kept so any code further down the file that still
+// references the old per-role variable names keeps working untouched.
+const contractorEmail = userEmail;
+const contractorRole  = userRoleRaw;
 
 // DOM elements
 const profileIcon       = document.getElementById('profileIcon');
@@ -1684,26 +1775,44 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // 3. Fetch contractor profile picture
+  // 2b. Apply role-specific UI: hide Team-Member-restricted controls,
+  // hide the Assign Team Members nav item for Team Members.
+  applyRoleRestrictions();
+
+  // 3. Fetch profile picture (and extra fields, e.g. Team Member "position")
   try {
-    const contractor = await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/profile", { method: "GET" });
-    if (contractor.profile_picture && contractor.profile_picture.trim() !== "") {
-      profileIcon.style.backgroundImage      = `url("${contractor.profile_picture}")`;
-      profileIconLarge.style.backgroundImage = `url("${contractor.profile_picture}")`;
+    const profile = await apiRequest(`https://oneprojectapp-backend.onrender.com${API_PREFIX}/profile`, { method: "GET" });
+    if (profile.profile_picture && profile.profile_picture.trim() !== "") {
+      profileIcon.style.backgroundImage      = `url("${profile.profile_picture}")`;
+      profileIconLarge.style.backgroundImage = `url("${profile.profile_picture}")`;
       profileIcon.textContent      = "";
       profileIconLarge.textContent = "";
     } else {
-      const ch = (contractorEmail || "?").charAt(0).toUpperCase();
+      const ch = (userEmail || "?").charAt(0).toUpperCase();
       profileIcon.textContent      = ch;
       profileIconLarge.textContent = ch;
     }
+    // Team-Member-only profile field (markup lives in the profile dialog;
+    // hidden by default for every other role)
+    const positionEl = document.getElementById('position');
+    if (positionEl) {
+      if (userRoleKey === 'TeamMember' && profile.position) {
+        positionEl.textContent = `Position: ${profile.position}`;
+        positionEl.style.display = '';
+      } else {
+        positionEl.style.display = 'none';
+      }
+    }
   } catch (err) {
-    console.error("Contractor profile fetch error:", err);
+    console.error("Profile fetch error:", err);
   }
 
   // 4. Fetch projects
   try {
-    const data     = await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/projects", { method: "POST", headers: { "Content-Type": "application/json" } });
+    // Note: the server derives identity entirely from the JWT
+    // (req.user.user_id) for every role, including Client — it never reads
+    // a clientId/etc. from the body, so no payload is needed here.
+    const data     = await apiRequest(`https://oneprojectapp-backend.onrender.com${API_PREFIX}/projects`, { method: "POST", headers: { "Content-Type": "application/json" } });
     const projects = data.projects || [];
     if (projects.length > 0) {
       projectDialog.innerHTML = "";
@@ -1751,7 +1860,7 @@ setInterval(updateArretBar, 30000);
 
 async function fetchProjectDetails(projectId) {
   try {
-    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/project-details", {
+    const data = await apiRequest(`https://oneprojectapp-backend.onrender.com${API_PREFIX}/project-details`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ projectId })
@@ -1826,7 +1935,7 @@ profileUpload.addEventListener('change', async (e) => {
   const formData = new FormData();
   formData.append("profile_picture", file);
   try {
-    const data = await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/upload-picture", { method: "POST", body: formData });
+    const data = await apiRequest(`https://oneprojectapp-backend.onrender.com${API_PREFIX}/upload-picture`, { method: "POST", body: formData });
     profileIcon.style.backgroundImage      = `url("${data.url}")`;
     profileIconLarge.style.backgroundImage = `url("${data.url}")`;
     profileIcon.textContent      = "";
@@ -1835,7 +1944,7 @@ profileUpload.addEventListener('change', async (e) => {
 });
 deletePictureBtn.addEventListener('click', async () => {
   try {
-    await apiRequest("https://oneprojectapp-backend.onrender.com/contractor/delete-picture", { method: "POST" });
+    await apiRequest(`https://oneprojectapp-backend.onrender.com${API_PREFIX}/delete-picture`, { method: "POST" });
     const ch = contractorEmail.charAt(0).toUpperCase();
     profileIcon.style.backgroundImage      = "";
     profileIcon.textContent                = ch;
@@ -1866,6 +1975,22 @@ profileIconLarge.addEventListener("click", () => {
 // =========================
 // Assign Team redirect
 // =========================
+// Maps the logged-in role to the same source-slug each original
+// per-role dashboard used to hardcode, so assign-team.html's existing
+// "where do I send the user back to" logic keeps working unchanged.
+const ASSIGN_TEAM_SOURCE_BY_ROLE = {
+  Client:       'client-dashboard',
+  Contractor:   'contractor-dashboard',
+  Consultant:   'consultant-dashboard',
+  ClientPM:     'client-project-manager',
+  ContractorPM: 'contractor-project-manager',
+  ConsultantPM: 'consultant-project-manager',
+  // TeamMember intentionally omitted — TM never sees this nav item.
+};
+function assignTeamSourceForRole() {
+  return ASSIGN_TEAM_SOURCE_BY_ROLE[userRoleKey] || null;
+}
+
 function openAssignTeam(source) {
   if (!localStorage.getItem("authToken")) { alert("No token found. Please log in again."); window.location.href = "home.html"; return; }
   if (!source) { console.error("openAssignTeam called without a valid source"); window.location.href = "home.html"; return; }
@@ -1893,24 +2018,31 @@ exitProjectBtn.addEventListener('click',    (e) => { e.stopPropagation(); settin
 const defaultLanguage = 'English';
 const supportedLanguages = ['English', 'French'];
 const savedLanguageKey = 'selectedDashboardLanguage';
-const rawDashboardLabel = document.querySelector('.tm-dashboard-label')?.textContent?.trim() || 'Dashboard';
-const labelToken = rawDashboardLabel.toLowerCase();
-const pageDashboardLabelEnglish = labelToken.includes('client pm') ? 'Client PM Dashboard'
-  : labelToken.includes('consultant pm') ? 'Consultant PM Dashboard'
-  : labelToken.includes('contractor pm') ? 'Contractor PM Dashboard'
-  : labelToken.includes('client') ? 'Client Dashboard'
-  : labelToken.includes('consultant') ? 'Consultant Dashboard'
-  : labelToken.includes('contractor') ? 'Contractor Dashboard'
-  : labelToken.includes('team-member') || labelToken.includes('team member') ? 'Team Member Dashboard'
-  : rawDashboardLabel;
-const pageDashboardLabelFrench = labelToken.includes('client pm') ? 'Tableau de bord chef de projet client'
-  : labelToken.includes('consultant pm') ? 'Tableau de bord chef de projet consultant'
-  : labelToken.includes('contractor pm') ? 'Tableau de bord chef de projet entrepreneur'
-  : labelToken.includes('client') ? 'Tableau de bord client'
-  : labelToken.includes('consultant') ? 'Tableau de bord consultant'
-  : labelToken.includes('contractor') ? 'Tableau de bord entrepreneur'
-  : labelToken.includes('team-member') || labelToken.includes('team member') ? 'Tableau de bord membre d\'équipe'
-  : 'Tableau de bord';
+
+// Dashboard label is now driven directly by the logged-in role (see
+// ROLE_CONFIG above) instead of being sniffed out of static placeholder
+// text, since that text is now generic and shared across all roles.
+const ROLE_LABELS_EN = {
+  Client:       'Client Dashboard',
+  Contractor:   'Contractor Dashboard',
+  Consultant:   'Consultant Dashboard',
+  ClientPM:     'Client PM Dashboard',
+  ContractorPM: 'Contractor PM Dashboard',
+  ConsultantPM: 'Consultant PM Dashboard',
+  TeamMember:   'Team Member Dashboard',
+};
+const ROLE_LABELS_FR = {
+  Client:       'Tableau de bord client',
+  Contractor:   'Tableau de bord entrepreneur',
+  Consultant:   'Tableau de bord consultant',
+  ClientPM:     'Tableau de bord chef de projet client',
+  ContractorPM: 'Tableau de bord chef de projet entrepreneur',
+  ConsultantPM: 'Tableau de bord chef de projet consultant',
+  TeamMember:   'Tableau de bord membre d\'équipe',
+};
+const pageDashboardLabelEnglish = ROLE_LABELS_EN[userRoleKey] || 'Dashboard';
+const pageDashboardLabelFrench  = ROLE_LABELS_FR[userRoleKey]  || 'Tableau de bord';
+document.getElementById('dashboardLabel') && (document.getElementById('dashboardLabel').textContent = pageDashboardLabelEnglish);
 const translationDictionary = {
   'English': {
     /* sidebar */
@@ -2694,11 +2826,17 @@ grayToggleBtn.addEventListener('click', (e) => {
 const BACKEND       = 'https://oneprojectapp-backend.onrender.com';
 const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search';
 
+// NOTE: these must match the *normalized* role keys produced by
+// normalizeRoleKey() (PascalCase, no spaces — see top of file), not raw
+// lowercased JWT text. The previous version used space-separated strings
+// like 'contractor project manager' here, which never matched the actual
+// JWT role value (e.g. 'ContractorPM' -> lowercased 'contractorpm'), so
+// ContractorPM/ConsultantPM users were silently denied write access.
 const WRITE_ROLES = new Set([
-  'contractor',
-  'consultant',
-  'consultant project manager',
-  'contractor project manager',
+  'Contractor',
+  'Consultant',
+  'ConsultantPM',
+  'ContractorPM',
 ]);
 
 // ============================================================
@@ -2725,8 +2863,9 @@ function _initAppState() {
   const token     = localStorage.getItem('authToken');
   const projectId = localStorage.getItem('activeProjectId');
   if (!token || !projectId) return false;
-  const payload = _decodeJwt(token);
-  const role = (payload.role || payload.userRole || payload.user_role || '').toLowerCase().trim();
+  const payload  = _decodeJwt(token);
+  const rawRole  = payload.role || payload.userRole || payload.user_role || '';
+  const role     = normalizeRoleKey(rawRole) || rawRole; // fall back to raw value if unrecognized, rather than silently empty
   AppState = {
     user:     { id: payload.sub || payload.id || null, name: payload.name || payload.username || 'User', role, email: payload.email || '' },
     projectId,
@@ -5239,6 +5378,7 @@ async function bootstrapUser() {
 
     loadHomeTabs();
     updateNotificationBadge();
+    setInterval(updateNotificationBadge, 30000);
   } catch (err) {
     console.error('Bootstrap failed:', err);
     window.location.href = '/login.html';
@@ -6704,13 +6844,12 @@ notificationIcon.addEventListener('click', async () => {
     const data          = await res.json();
     let notifications = data.notifications || [];
 
-    // Mark only unread notifications as read
-    const unread = notifications.filter(n => !n.is_read);
-    if (unread.length > 0) {
+    // Mark notifications read first so the panel shows them as read
+    if (notifications.length > 0) {
       await authFetch(`${API}/notifications/mark-all-read`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notificationIds: unread.map(n => n.id) })
+        body: JSON.stringify({ notificationIds: notifications.map(n => n.id) })
       });
       // reflect change immediately in UI
       notifications = notifications.map(n => ({ ...n, is_read: true }));
@@ -6785,54 +6924,25 @@ async function handleNotificationClick(entityType, entityId) {
     operational_records:    'operational',
     financial_records:      'financial',
   };
-
-  collapseGrayPart();
-
-  // — Records (Project-Records tab) —
   const tabKey = TABLE_TAB_MAP[entityType];
-  if (tabKey) {
-    const tabEl = document.querySelector(`#navTabs li[data-tab="${tabKey}"]`);
-    if (tabEl) tabEl.click();
-    const waitForRecord = () => new Promise(resolve => {
-      const check = () => {
-        const cached = recordsCache[tabKey];
-        if (cached && cached.some(r => String(r.id) === String(entityId))) resolve();
-        else setTimeout(check, 100);
-      };
-      check();
-    });
-    await Promise.race([waitForRecord(), new Promise(r => setTimeout(r, 5000))]);
-    const el = document.querySelector(`.doc-item[data-id='${entityId}']`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      const detail = document.getElementById(`detail-${entityId}`);
-      if (detail && detail.style.display === 'none') toggleRecordDetail(entityId, tabKey);
-    }
-    return;
-  }
-
-  // — Meetings / Meeting Minutes —
-  if (entityType === 'meetings' || entityType === 'meeting_minutes') {
-    const navEl = document.querySelector('#navTabs li[data-nav="workspace"]') ||
-                  document.querySelector('.nav-item[data-nav="workspace"]');
-    if (navEl) navEl.click();
-    return;
-  }
-
-  // — Milestones / Extension Milestones (Schedule) —
-  if (entityType === 'milestones' || entityType === 'extension_milestones' ||
-      entityType === 'project_schedule') {
-    const schedBtn = document.getElementById('scheduleOption');
-    if (schedBtn) schedBtn.click();
-    return;
-  }
-
-  // — Work Center progress —
-  if (entityType === 'workspace_work_center' || entityType === 'work_center_progress') {
-    const navEl = document.querySelector('#navTabs li[data-nav="workspace"]') ||
-                  document.querySelector('.nav-item[data-nav="workspace"]');
-    if (navEl) navEl.click();
-    return;
+  if (!tabKey) return;
+  collapseGrayPart();
+  const tabEl = document.querySelector(`#navTabs li[data-tab="${tabKey}"]`);
+  if (tabEl) tabEl.click();
+  const waitForRecord = () => new Promise(resolve => {
+    const check = () => {
+      const cached = recordsCache[tabKey];
+      if (cached && cached.some(r => String(r.id) === String(entityId))) resolve();
+      else setTimeout(check, 100);
+    };
+    check();
+  });
+  await Promise.race([waitForRecord(), new Promise(r => setTimeout(r, 5000))]);
+  const el = document.querySelector(`.doc-item[data-id='${entityId}']`);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const detail = document.getElementById(`detail-${entityId}`);
+    if (detail && detail.style.display === 'none') toggleRecordDetail(entityId, tabKey);
   }
 }
 
