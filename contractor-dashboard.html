@@ -5239,7 +5239,6 @@ async function bootstrapUser() {
 
     loadHomeTabs();
     updateNotificationBadge();
-    setInterval(updateNotificationBadge, 30000);
   } catch (err) {
     console.error('Bootstrap failed:', err);
     window.location.href = '/login.html';
@@ -6705,12 +6704,13 @@ notificationIcon.addEventListener('click', async () => {
     const data          = await res.json();
     let notifications = data.notifications || [];
 
-    // Mark notifications read first so the panel shows them as read
-    if (notifications.length > 0) {
+    // Mark only unread notifications as read
+    const unread = notifications.filter(n => !n.is_read);
+    if (unread.length > 0) {
       await authFetch(`${API}/notifications/mark-all-read`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notificationIds: notifications.map(n => n.id) })
+        body: JSON.stringify({ notificationIds: unread.map(n => n.id) })
       });
       // reflect change immediately in UI
       notifications = notifications.map(n => ({ ...n, is_read: true }));
@@ -6785,25 +6785,54 @@ async function handleNotificationClick(entityType, entityId) {
     operational_records:    'operational',
     financial_records:      'financial',
   };
-  const tabKey = TABLE_TAB_MAP[entityType];
-  if (!tabKey) return;
+
   collapseGrayPart();
-  const tabEl = document.querySelector(`#navTabs li[data-tab="${tabKey}"]`);
-  if (tabEl) tabEl.click();
-  const waitForRecord = () => new Promise(resolve => {
-    const check = () => {
-      const cached = recordsCache[tabKey];
-      if (cached && cached.some(r => String(r.id) === String(entityId))) resolve();
-      else setTimeout(check, 100);
-    };
-    check();
-  });
-  await Promise.race([waitForRecord(), new Promise(r => setTimeout(r, 5000))]);
-  const el = document.querySelector(`.doc-item[data-id='${entityId}']`);
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    const detail = document.getElementById(`detail-${entityId}`);
-    if (detail && detail.style.display === 'none') toggleRecordDetail(entityId, tabKey);
+
+  // — Records (Project-Records tab) —
+  const tabKey = TABLE_TAB_MAP[entityType];
+  if (tabKey) {
+    const tabEl = document.querySelector(`#navTabs li[data-tab="${tabKey}"]`);
+    if (tabEl) tabEl.click();
+    const waitForRecord = () => new Promise(resolve => {
+      const check = () => {
+        const cached = recordsCache[tabKey];
+        if (cached && cached.some(r => String(r.id) === String(entityId))) resolve();
+        else setTimeout(check, 100);
+      };
+      check();
+    });
+    await Promise.race([waitForRecord(), new Promise(r => setTimeout(r, 5000))]);
+    const el = document.querySelector(`.doc-item[data-id='${entityId}']`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const detail = document.getElementById(`detail-${entityId}`);
+      if (detail && detail.style.display === 'none') toggleRecordDetail(entityId, tabKey);
+    }
+    return;
+  }
+
+  // — Meetings / Meeting Minutes —
+  if (entityType === 'meetings' || entityType === 'meeting_minutes') {
+    const navEl = document.querySelector('#navTabs li[data-nav="workspace"]') ||
+                  document.querySelector('.nav-item[data-nav="workspace"]');
+    if (navEl) navEl.click();
+    return;
+  }
+
+  // — Milestones / Extension Milestones (Schedule) —
+  if (entityType === 'milestones' || entityType === 'extension_milestones' ||
+      entityType === 'project_schedule') {
+    const schedBtn = document.getElementById('scheduleOption');
+    if (schedBtn) schedBtn.click();
+    return;
+  }
+
+  // — Work Center progress —
+  if (entityType === 'workspace_work_center' || entityType === 'work_center_progress') {
+    const navEl = document.querySelector('#navTabs li[data-nav="workspace"]') ||
+                  document.querySelector('.nav-item[data-nav="workspace"]');
+    if (navEl) navEl.click();
+    return;
   }
 }
 
