@@ -1131,10 +1131,10 @@
         <span class="icon">👥</span>
         <span class="label" data-translate="assign-team-members">Assign Team Members</span>
       </div>
-      <div class="nav-item" data-nav="edit-information" onclick="sessionStorage.setItem('redirectSource','dashboard'); window.location.href='edit-information.html'">
+      <div class="nav-item" data-nav="edit-information" onclick="window.location.href='edit-information.html'">
         <span class="icon">✏️</span><span class="label" data-translate="edit-information">Edit Information</span>
       </div>
-      <div class="nav-item" data-nav="chat" onclick="sessionStorage.setItem('redirectSource','dashboard'); window.location.href='chat.html'">
+      <div class="nav-item" data-nav="chat" onclick="window.location.href='chat.html'">
         <span class="icon">💬</span><span class="label" data-translate="chat">Chat</span>
       </div>
 
@@ -1144,7 +1144,7 @@
       </div>
 
       <!-- Support -->
-      <div class="nav-item" id="supportLink" data-nav="support" onclick="sessionStorage.setItem('redirectSource','dashboard'); window.location.href='support&amp;help.html'">
+      <div class="nav-item" id="supportLink" data-nav="support" onclick="window.location.href='support&amp;help.html'">
         <span class="icon">❓</span><span class="label" data-translate="support">Support / Help</span>
       </div>
 
@@ -1697,6 +1697,31 @@ function applyRoleRestrictions() {
   document.getElementById('assignTeamNavItem')?.style.setProperty('display', isTM ? 'none' : '');
 }
 
+// Team-Member-only profile rows: "role: {side}-team member" and
+// "position: {position}". These come from the team_member_assignments
+// row for the active project (assigned_part / position), NOT from
+// /profile — that endpoint only returns profile_picture for TeamMember.
+// Called once the active project is known (project fetch + project switch).
+function updateTeamMemberProfileFields(project) {
+  if (!isTeamMemberRole(window.currentUserRole || userRoleRaw)) return;
+  if (!project) return;
+
+  const side = (project.assigned_part || '').toLowerCase();
+  if (profileRole && side) {
+    profileRole.textContent = `role: ${side}-team member`;
+  }
+
+  const positionEl = document.getElementById('position');
+  if (positionEl) {
+    if (project.position) {
+      positionEl.textContent  = `position: ${project.position}`;
+      positionEl.style.display = '';
+    } else {
+      positionEl.style.display = 'none';
+    }
+  }
+}
+
 // Global click interceptor to block restricted actions client-side for TeamMember users
 document.addEventListener('click', function (e) {
   const role = window.currentUserRole || userRoleRaw;
@@ -1792,17 +1817,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       profileIcon.textContent      = ch;
       profileIconLarge.textContent = ch;
     }
-    // Team-Member-only profile field (markup lives in the profile dialog;
-    // hidden by default for every other role)
-    const positionEl = document.getElementById('position');
-    if (positionEl) {
-      if (userRoleKey === 'TeamMember' && profile.position) {
-        positionEl.textContent = `Position: ${profile.position}`;
-        positionEl.style.display = '';
-      } else {
-        positionEl.style.display = 'none';
-      }
-    }
   } catch (err) {
     console.error("Profile fetch error:", err);
   }
@@ -1820,6 +1834,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       let activeProjectObj = projects.find(p => String(p.id) === String(savedProjectId)) || projects[0];
       ProjectContext.set(activeProjectObj);
       activeProject.textContent = activeProjectObj.name;
+      updateTeamMemberProfileFields(activeProjectObj);
       projects.forEach(project => {
         const item = document.createElement("div");
         item.className   = "project-item";
@@ -1832,6 +1847,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             window.location.reload();
           } else {
             activeProject.textContent = project.name;
+            updateTeamMemberProfileFields(project);
             projectDialog.style.display = "none";
             fetchProjectDetails(project.id);
           }
@@ -2008,15 +2024,7 @@ const changeLanguageBtn= document.getElementById('changeLanguageBtn');
 const exitProjectBtn   = document.getElementById('exitProjectBtn');
 
 settingsToggle.addEventListener('click', (e) => { e.stopPropagation(); settingsDialog.classList.add('active'); });
-resetPasswordBtn.addEventListener('click',  () => { 
-  settingsDialog.classList.remove('active'); 
-  const token = localStorage.getItem("authToken");
-  const decoded = parseJwt(token);
-  localStorage.setItem("resetEmail", decoded?.email || "");
-  localStorage.setItem("resetRole", decoded?.role || "");
-  sessionStorage.setItem("redirectSource", "dashboard");
-  window.location.href = 'reset-password.html'; 
-});
+resetPasswordBtn.addEventListener('click',  () => { settingsDialog.classList.remove('active'); window.location.href = 'reset-password.html'; });
 changeLanguageBtn.addEventListener('click', (e) => { e.stopPropagation(); settingsDialog.classList.remove('active'); document.getElementById('languageDialog').classList.add('active'); });
 exitProjectBtn.addEventListener('click',    (e) => { e.stopPropagation(); settingsDialog.classList.remove('active'); document.getElementById('exitProjectDialog').classList.add('active'); });
 
@@ -2254,11 +2262,6 @@ loadSavedLanguage();
 // =========================
 document.getElementById('confirmResetBtn').addEventListener('click', () => {
   document.getElementById('resetPasswordDialog').classList.remove('active');
-  const token = localStorage.getItem("authToken");
-  const decoded = parseJwt(token);
-  localStorage.setItem("resetEmail", decoded?.email || "");
-  localStorage.setItem("resetRole", decoded?.role || "");
-  sessionStorage.setItem("redirectSource", "dashboard");
   window.location.href = 'reset-password.html';
 });
 
