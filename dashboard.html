@@ -83,6 +83,10 @@
       transition: transform 0.28s cubic-bezier(0.4,0,0.2,1);
       z-index: 50;
     }
+    /* Global toast / notification area */
+    .global-toast { position: fixed; top: 12px; right: 12px; z-index: 1200; display:flex;flex-direction:column;gap:8px; }
+    .toast-item { background: #062b2a; color: #e6fff9; padding:10px 14px; border-radius:8px; box-shadow:var(--sh-md); font-weight:600; font-size:13px; }
+    .toast-item.error { background:#6b1f1f; color:#fff1f1; }
     .left-main-part::-webkit-scrollbar { width: 4px; }
     .left-main-part::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 4px; }
 
@@ -1080,6 +1084,23 @@
 <body>
   <!-- mobile sidebar backdrop -->
   <div id="sidebarBackdrop"></div>
+  <!-- Global toast notifications -->
+  <div id="globalToast" class="global-toast" aria-live="polite"></div>
+  <!-- Error / Issue Report Modal -->
+  <div id="errorFormModal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="errFormTitle">
+      <h3 id="errFormTitle">Report an issue</h3>
+      <p>Please describe the problem. Include steps to reproduce and any relevant details.</p>
+      <div class="form-group">
+        <label for="errDetails">Details</label>
+        <textarea id="errDetails" placeholder="Describe the issue..."></textarea>
+      </div>
+      <div class="modal-actions">
+        <button id="errCancelBtn">Cancel</button>
+        <button id="errSubmitBtn" class="primary">Send Report</button>
+      </div>
+    </div>
+  </div>
 
   <div class="layout">
     <aside class="left-main-part" id="sidebar">
@@ -1136,10 +1157,10 @@
         <span class="icon">👥</span>
         <span class="label" data-translate="assign-team-members">Assign Team Members</span>
       </div>
-      <div class="nav-item" data-nav="edit-information" onclick="window.location.href='edit-information.html'">
+      <div class="nav-item" data-nav="edit-information" onclick="sessionStorage.setItem('redirectSource','dashboard'); window.location.href='edit-information.html'">
         <span class="icon">✏️</span><span class="label" data-translate="edit-information">Edit Information</span>
       </div>
-      <div class="nav-item" data-nav="chat" onclick="window.location.href='chat.html'">
+      <div class="nav-item" data-nav="chat" onclick="sessionStorage.setItem('redirectSource','dashboard'); window.location.href='chat.html'">
         <span class="icon">💬</span><span class="label" data-translate="chat">Chat</span>
       </div>
 
@@ -1149,7 +1170,7 @@
       </div>
 
       <!-- Support -->
-      <div class="nav-item" id="supportLink" data-nav="support" onclick="window.location.href='support&amp;help.html'">
+      <div class="nav-item" id="supportLink" data-nav="support" onclick="sessionStorage.setItem('redirectSource','dashboard'); window.location.href='support&amp;help.html'">
         <span class="icon">❓</span><span class="label" data-translate="support">Support / Help</span>
       </div>
 
@@ -2029,7 +2050,15 @@ const changeLanguageBtn= document.getElementById('changeLanguageBtn');
 const exitProjectBtn   = document.getElementById('exitProjectBtn');
 
 settingsToggle.addEventListener('click', (e) => { e.stopPropagation(); settingsDialog.classList.add('active'); });
-resetPasswordBtn.addEventListener('click',  () => { settingsDialog.classList.remove('active'); window.location.href = 'reset-password.html'; });
+resetPasswordBtn.addEventListener('click',  () => { 
+  settingsDialog.classList.remove('active');
+  const token = localStorage.getItem("authToken");
+  const decoded = parseJwt(token);
+  localStorage.setItem("resetEmail", decoded?.email || "");
+  localStorage.setItem("resetRole", decoded?.role || "");
+  sessionStorage.setItem("redirectSource", "dashboard");
+  window.location.href = 'reset-password.html';
+});
 changeLanguageBtn.addEventListener('click', (e) => { e.stopPropagation(); settingsDialog.classList.remove('active'); document.getElementById('languageDialog').classList.add('active'); });
 exitProjectBtn.addEventListener('click',    (e) => { e.stopPropagation(); settingsDialog.classList.remove('active'); document.getElementById('exitProjectDialog').classList.add('active'); });
 
@@ -2267,7 +2296,13 @@ loadSavedLanguage();
 // =========================
 document.getElementById('confirmResetBtn').addEventListener('click', () => {
   document.getElementById('resetPasswordDialog').classList.remove('active');
+  const token = localStorage.getItem("authToken");
+  const decoded = parseJwt(token);
+  localStorage.setItem("resetEmail", decoded?.email || "");
+  localStorage.setItem("resetRole", decoded?.role || "");
+  sessionStorage.setItem("redirectSource", "dashboard");
   window.location.href = 'reset-password.html';
+});
 });
 
 // =========================
@@ -2745,16 +2780,59 @@ function expandGrayPart(htmlContent) {
   }
   /* Desktop layout */
   clearGrayPart();
-  grayRightPart.style.flex      = 5;
-  whiteLeftPart.style.flex      = 0;
-  expandLabel.textContent       = 'Click to hide';
-  grayPlaceholder.style.display = 'none';
-  scheduleOption.style.display  = 'none';
-  grayToggleBtn.style.display   = 'none';
-  grayPlaceholder.insertAdjacentHTML('afterend', `<div class='gray-part-content' id='grayContent'>${htmlContent}</div>`);
-  document.getElementById('grayContent').style.display = 'block';
+  // If the viewport height is short (less than half the physical screen),
+  // cap the gray panel content height and let it scroll internally so the
+  // main area (gantt) remains visible and the left column retains its
+  // own scrollbar.
+  const shortHeight = window.innerHeight < (window.screen.height || 800) / 2 || window.innerHeight < 640;
+  if (shortHeight) {
+    // keep left part visible and scrollable
+    grayRightPart.style.flex = '0 0 auto';
+    // insert the content but cap its max-height to preserve gantt visibility
+    grayPlaceholder.style.display = 'none';
+    scheduleOption.style.display  = 'none';
+    grayToggleBtn.style.display   = 'none';
+    grayPlaceholder.insertAdjacentHTML('afterend', `<div class='gray-part-content' id='grayContent'>${htmlContent}</div>`);
+    const g = document.getElementById('grayContent');
+    if (g) {
+      g.style.display = 'block';
+      g.style.maxHeight = Math.max(220, Math.round(window.innerHeight * 0.45)) + 'px';
+      g.style.overflowY = 'auto';
+    }
+  } else {
+    grayRightPart.style.flex      = 5;
+    whiteLeftPart.style.flex      = 0;
+    expandLabel.textContent       = 'Click to hide';
+    grayPlaceholder.style.display = 'none';
+    scheduleOption.style.display  = 'none';
+    grayToggleBtn.style.display   = 'none';
+    grayPlaceholder.insertAdjacentHTML('afterend', `<div class='gray-part-content' id='grayContent'>${htmlContent}</div>`);
+    document.getElementById('grayContent').style.display = 'block';
+  }
   expandedGrayPart = true;
 }
+  // ── Notifications / Error form helpers
+  function showToast(msg, type = 'info', timeout = 4000) {
+    const container = document.getElementById('globalToast'); if (!container) return;
+    const it = document.createElement('div'); it.className = 'toast-item' + (type === 'error' ? ' error' : '');
+    it.textContent = msg;
+    container.appendChild(it);
+    setTimeout(() => { it.style.opacity = '0'; setTimeout(() => it.remove(), 300); }, timeout);
+  }
+
+  function showErrorInGray(message) {
+    // insert an inline error block at top of grayContent
+    const g = document.getElementById('grayContent');
+    const errId = 'grayInlineError';
+    if (!g) { showToast(message, 'error'); return; }
+    let e = document.getElementById(errId);
+    if (!e) {
+      e = document.createElement('div'); e.id = errId;
+      e.style.cssText = 'background:#ffecec;color:#8b1f1f;padding:10px;border-radius:6px;margin-bottom:10px;font-weight:600;';
+      g.prepend(e);
+    }
+    e.textContent = message;
+  }
 function collapseGrayPart() {
   /* On mobile, close the schedule drawer */
   if (window.innerWidth <= 640) {
@@ -2775,6 +2853,29 @@ function collapseGrayPart() {
   expandedGrayPart = false;
   setGrayToggleArrow('>');
 }
+
+// Error report modal control
+function openErrorReportModal(prefill) {
+  const modal = document.getElementById('errorFormModal');
+  if (!modal) return;
+  modal.classList.add('active'); modal.setAttribute('aria-hidden', 'false');
+  const ta = document.getElementById('errDetails'); if (ta && prefill) ta.value = prefill;
+}
+function closeErrorReportModal() {
+  const modal = document.getElementById('errorFormModal'); if (!modal) return;
+  modal.classList.remove('active'); modal.setAttribute('aria-hidden', 'true');
+}
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'errCancelBtn') closeErrorReportModal();
+  if (e.target && e.target.id === 'errSubmitBtn') {
+    const details = document.getElementById('errDetails')?.value || '';
+    if (!details.trim()) { showToast('Please enter details before sending.', 'error'); return; }
+    // For now, just log and show a toast; backend hook can be added later.
+    console.error('[UserIssue]', details);
+    showToast('Issue reported — thank you.', 'info', 3500);
+    closeErrorReportModal();
+  }
+});
 function hideGrayPanel() {
   clearGrayPart();
   grayRightPart.style.flex      = 0.4;
@@ -2956,7 +3057,8 @@ function _mergeAllMilestones(schedule) {
     _sourceTable: 'milestones',      // routes to /api/report-progress
     added_via_extension: ms.isExtension || ms.added_via_extension || false,
   }));
-  const ext  = (schedule.extension_milestones || []).map(ms => ({
+  const extSources = [schedule.extension_milestones, schedule.additional_milestones];
+  const ext = (extSources.flat().filter(Boolean) || []).map(ms => ({
     ...ms,
     _sourceTable: 'additional_milestones', // routes to /api/report-additional-progress
     added_via_extension: true,
@@ -3244,7 +3346,8 @@ async function openSchedulePanel() {
     // Has either baseline milestones OR extension milestones
     const hasMilestones =
       (sched?.milestones?.length > 0) ||
-      (sched?.extension_milestones?.length > 0);
+      (sched?.extension_milestones?.length > 0) ||
+      (sched?.additional_milestones?.length > 0);
 
     if (hasMilestones) {
       openActualProgressPage(sched);
@@ -3550,7 +3653,7 @@ function _wireLocationPicker(initialLocation) {
 //          The "duration" field in tl only stores the BASELINE days;
 //          extension days are shown separately as "+Nd ext".
 // ============================================================
-function openProjectScheduleForm(existingSchedule) {
+function openProjectScheduleForm(existingSchedule, focusMilestoneId = null) {
   if (!AppState.canWrite) {
     alert('Your role does not have permission to create or edit schedules.');
     return;
@@ -3569,7 +3672,12 @@ function openProjectScheduleForm(existingSchedule) {
   );
 
   // ── FIX 1: merge all milestones into one flat list for the editor ──
-  const _allExistingMs = isEdit ? _mergeAllMilestones(existingSchedule) : [];
+  // Normalize ids to strings so edit/delete event handlers work consistently.
+  const initialEditId = focusMilestoneId ? String(focusMilestoneId) : null;
+  const _allExistingMs = isEdit ? _mergeAllMilestones(existingSchedule).map(ms => ({
+    ...ms,
+    id: String(ms.id),
+  })) : [];
   const originalIds    = new Set(_allExistingMs.map(m => m.id));
   const touchedIds     = new Set();
   const deletedIds     = new Set();
@@ -3799,7 +3907,7 @@ function openProjectScheduleForm(existingSchedule) {
   function _sfRefDep() {
     const sel = _el('sfMsDep'); if (!sel) return;
     sel.innerHTML = '<option value="None">None</option>' +
-      milestones.filter(m => m.id !== editingId)
+      milestones.filter(m => String(m.id) !== String(editingId))
         .map(m => `<option value="${m.id}">${m.title} (${m.start}→${m.end})</option>`).join('');
   }
 
@@ -3859,7 +3967,7 @@ function openProjectScheduleForm(existingSchedule) {
               ${ms._isNew ? `<span class="sc-tag sc-tag-ext">+ NEW</span>`
                 : isTouched ? `<span class="sc-tag" style="background:#e8f4ff;color:#1a6fba;font-weight:600;">✎ EDITED</span>`
                 : `<span class="sc-tag sc-tag-ok">✓ DB</span>`}
-              ${isPostExt ? `<span class="sc-tag sc-tag-ext">EXT</span>` : ''}
+              ${isPostExt || ms._sourceTable === 'additional_milestones' ? `<span class="sc-tag sc-tag-ext">EXTENSION</span>` : ''}
               ${ms._sourceTable === 'additional_milestones' ? `<span class="sc-tag" style="background:#f3e8ff;color:#7c3aed;font-size:9px;">ADD'L TABLE</span>` : ''}
               ${isBeingEdited ? `<span class="sc-tag sc-tag-warn">⏳ EDITING</span>` : ''}
             </div>
@@ -3915,8 +4023,9 @@ function openProjectScheduleForm(existingSchedule) {
   }
 
   _ns.edit = function(id) {
+    id = String(id);
     if (editingId !== null && editingId !== id) { alert('Please finish editing the current milestone first.'); return; }
-    const ms = milestones.find(m => m.id === id); if (!ms) return;
+    const ms = milestones.find(m => String(m.id) === id); if (!ms) return;
     editingId = id;
     if (_el('sfMsT')) _el('sfMsT').value = ms.title;
     if (_el('sfMsD')) _el('sfMsD').value = ms.desc;
@@ -3938,8 +4047,9 @@ function openProjectScheduleForm(existingSchedule) {
   };
 
   _ns.del = function(id) {
+    id = String(id);
     if (editingId !== null) { alert('Please finish the current edit before deleting.'); return; }
-    const ms = milestones.find(m => m.id === id); if (!ms) return;
+    const ms = milestones.find(m => String(m.id) === id); if (!ms) return;
     if ((ms.executed > 0 || ms.progress_pct > 0) &&
         !confirm('This milestone has recorded progress. The backend may refuse deletion. Continue?')) return;
     if (originalIds.has(ms.id)) deletedIds.add(ms.id);
@@ -3962,6 +4072,12 @@ function openProjectScheduleForm(existingSchedule) {
   }
 
   if (isEdit && tl.start) { _sfRefDep(); _sfRender(); }
+
+  if (initialEditId) {
+    setTimeout(() => {
+      if (_ns && typeof _ns.edit === 'function') _ns.edit(initialEditId);
+    }, 0);
+  }
 
   _el('sfUnlockDates')?.addEventListener('click', () => {
     if (!confirm('Unlock dates? This lets you change the project timeline.')) return;
@@ -4714,14 +4830,27 @@ function openActualProgressPage(savedSchedule) {
     }
 
     if (selectedMs) {
-      const msEnd  = selectedMs.end || selectedMs.planned_end;
-      const dLeft  = msEnd ? _daysUntil(msEnd) : null;
       const mEl    = _el('p3DaysLeftMsVal');
       const mName  = _el('p3DaysLeftMsName');
-      if (mEl) {
-        mEl.textContent = dLeft !== null ? _fmtDaysLeft(dLeft) : '—';
-        mEl.className   = 'p3sk-v ' + (dLeft !== null && dLeft < 0 ? 'overdue' : dLeft === 0 ? 'today' : '');
+      
+      // Only show days left if milestone is NOT finished (progress < 100%)
+      const msPct = Number(selectedMs.progress_pct || 0);
+      if (msPct >= 100) {
+        // Milestone finished - show "Completed" status
+        if (mEl) {
+          mEl.textContent = '✓ Completed';
+          mEl.className   = 'p3sk-v completed';
+        }
+      } else {
+        // Milestone not finished - show days left
+        const msEnd  = selectedMs.end || selectedMs.planned_end;
+        const dLeft  = msEnd ? _daysUntil(msEnd) : null;
+        if (mEl) {
+          mEl.textContent = dLeft !== null ? _fmtDaysLeft(dLeft) : '—';
+          mEl.className   = 'p3sk-v ' + (dLeft !== null && dLeft < 0 ? 'overdue' : dLeft === 0 ? 'today' : '');
+        }
       }
+      
       if (mName) {
         mName.textContent = selectedMs.title
           ? selectedMs.title.slice(0, 22) + (selectedMs.title.length > 22 ? '…' : '') : '—';
@@ -4957,6 +5086,21 @@ function openActualProgressPage(savedSchedule) {
       _el('p3MarkEndBtn')?.addEventListener('click', () => {
         if (_renderToken !== token) return;
         markEnded(ms, isExtMs);
+      });
+    }
+    if (isExtMs) {
+      _el('p3EditMsBtn')?.addEventListener('click', () => {
+        if (_renderToken !== token) return;
+        openProjectScheduleForm(savedSchedule, ms.id);
+      });
+      _el('p3EditExtTimeBtn')?.addEventListener('click', () => {
+        if (_renderToken !== token) return;
+        openExtensionPanel(savedSchedule);
+      });
+      _el('p3DelMsBtn')?.addEventListener('click', () => {
+        if (_renderToken !== token) return;
+        if (!confirm('Open Edit Plan to remove this extension milestone?')) return;
+        openProjectScheduleForm(savedSchedule, ms.id);
       });
     }
 
