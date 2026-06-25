@@ -7180,20 +7180,20 @@ async function fetchArrets() {
 async function updateArretBar() {
   if (!arretBar || !arretCount) return;
   const arrets = await fetchArrets();
-  const unviewedCount = arrets.filter(a => !a.is_viewed).length;
+  const unviewedCount = arrets.filter(a => !a.is_viewed && !isArretCreator(a)).length;
   if (unviewedCount > 0) {
     arretBar.classList.add('alert');
     arretCount.textContent = unviewedCount;
     arretCount.style.display = 'inline-flex';
-  } else if (arrets.length > 0) {
-    arretBar.classList.remove('alert');
-    arretCount.textContent = '';
-    arretCount.style.display = 'none';
   } else {
     arretBar.classList.remove('alert');
     arretCount.textContent = '';
     arretCount.style.display = 'none';
   }
+}
+
+function isArretCreator(arret) {
+  return arret && String(arret.creator_id) === String(window.currentUserId) && String(arret.creator_role) === String(window.currentUserRole);
 }
 
 async function openArretPanel() {
@@ -7240,7 +7240,11 @@ function renderArretPanel(arrets) {
                 <div style="font-size:11px;color:#9ca3af;margin-top:8px;">${new Date(arret.issued_date).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})} · ${escapeHtml(arret.creator_role || 'Unknown')}</div>
                 ${attachmentMarkup}
               </div>
-              <button type="button" class="btn" style="font-size:12px;padding:8px 12px;" data-arret-id="${arret.id}">View</button>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+                <button type="button" class="btn" style="font-size:12px;padding:8px 12px;" data-arret-id="${arret.id}">View</button>
+                ${isArretCreator(arret) ? `<button type="button" class="btn secondary" style="font-size:12px;padding:8px 12px;" data-edit-arret-id="${arret.id}">Edit</button>` : ''}
+                ${isArretCreator(arret) ? `<button type="button" class="btn danger" style="font-size:12px;padding:8px 12px;" data-delete-arret-id="${arret.id}">Delete</button>` : ''}
+              </div>
             </div>
           </li>
         `;
@@ -7260,6 +7264,19 @@ function renderArretPanel(arrets) {
         if (recordId) await handleArretView(recordId);
       });
     });
+    document.querySelectorAll('[data-edit-arret-id]').forEach(btn => {
+      btn.addEventListener('click', async (event) => {
+        const recordId = event.currentTarget.getAttribute('data-edit-arret-id');
+        const arret = currentArrets.find(a => String(a.id) === String(recordId));
+        if (arret) openArretForm(arret);
+      });
+    });
+    document.querySelectorAll('[data-delete-arret-id]').forEach(btn => {
+      btn.addEventListener('click', async (event) => {
+        const recordId = event.currentTarget.getAttribute('data-delete-arret-id');
+        if (recordId) await deleteArret(recordId);
+      });
+    });
 
     document.querySelectorAll('.attachment-preview-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -7276,16 +7293,20 @@ function renderArretPanel(arrets) {
 
 async function handleArretView(recordId) {
   const arret = currentArrets.find(a => String(a.id) === String(recordId));
-  if (!arret) return;
+  const projectId = localStorage.getItem('activeProjectId');
+  if (!arret || !projectId) return;
 
   await authFetch(`${API}/arrets/view`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ arretId: recordId })
+    body: JSON.stringify({ projectId, arretId: recordId })
   });
 
   arret.is_viewed = true;
   updateArretBar();
+
+  const canEdit = isArretCreator(arret);
+  const canDelete = canEdit;
 
   const attachmentHtml = arret.attachments?.length ? `
     <div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:12px;">
@@ -7305,12 +7326,15 @@ async function handleArretView(recordId) {
     <div style="padding:18px 20px;border-bottom:2px solid #007B8A;flex-shrink:0;">
       <h3 style="margin:0;color:#333;font-size:18px;">🛑 ${escapeHtml(arret.title)}</h3>
       <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Reported by ${escapeHtml(arret.creator_role || 'Unknown')} on ${new Date(arret.issued_date).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}</p>
+      ${!canEdit ? '<div style="margin-top:8px;font-size:12px;color:#71717a;">You can only view this arret. Only the creator can edit or delete it.</div>' : ''}
     </div>
     <div style="flex:1;overflow-y:auto;padding:16px 20px;">
       <div style="font-size:14px;color:#111;line-height:1.6;white-space:pre-wrap;">${escapeHtml(arret.description)}</div>
       ${attachmentHtml}
     </div>
     <div style="padding:16px 20px;border-top:1px solid #e5e7eb;display:flex;gap:12px;justify-content:flex-end;flex-shrink:0;">
+      ${canEdit ? `<button class="btn secondary" type="button" onclick="openArretForm(${arret.id})">Edit</button>` : ''}
+      ${canDelete ? `<button class="btn danger" type="button" onclick="deleteArret(${arret.id})">Delete</button>` : ''}
       <button class="btn" type="button" onclick="openArretPanel()">← Back to list</button>
     </div>`;
 
@@ -7406,32 +7430,41 @@ function showAttachmentPreview(url, name, mime) {
   document.body.appendChild(overlay);
 }
 
-function openArretForm() {
+function openArretForm(arret = null) {
+  if (arret && typeof arret !== 'object') {
+    arret = currentArrets.find(a => String(a.id) === String(arret)) || null;
+  }
+  const isEditing = Boolean(arret);
+  const titleValue = isEditing ? arret.title : '';
+  const descriptionValue = isEditing ? arret.description : '';
   const html = `
     <div style="padding:18px 20px;border-bottom:2px solid #007B8A;flex-shrink:0;">
-      <h3 style="margin:0;color:#333;font-size:18px;">➕ New Arret Report</h3>
+      <h3 style="margin:0;color:#333;font-size:18px;">${isEditing ? '✏️ Edit Arret Report' : '➕ New Arret Report'}</h3>
       <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Submit a stop-work arret for the active project.</p>
     </div>
     <div style="flex:1;overflow-y:auto;padding:16px 20px;">
       <div style="display:flex;flex-direction:column;gap:14px;">
+        <input id="arretId" type="hidden" value="${isEditing ? escapeHtml(String(arret.id)) : ''}" />
         <div>
           <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px;">Title</label>
-          <input id="arretTitle" type="text" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;" placeholder="Short summary of the issue" />
+          <input id="arretTitle" type="text" value="${escapeHtml(titleValue)}" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;" placeholder="Short summary of the issue" />
         </div>
         <div>
           <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px;">Description</label>
-          <textarea id="arretDescription" rows="6" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;resize:vertical;" placeholder="Describe the reason for the arret and any immediate actions taken."></textarea>
+          <textarea id="arretDescription" rows="6" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;resize:vertical;" placeholder="Describe the reason for the arret and any immediate actions taken.">${escapeHtml(descriptionValue)}</textarea>
         </div>
+        ${!isEditing ? `
         <div>
           <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px;">Attach images or documents</label>
           <input id="arretAttachment" type="file" multiple accept="image/*,.pdf,.doc,.docx,.png,.jpg,.jpeg" style="width:100%;" />
           <div id="arretAttachmentPreview"></div>
         </div>
+        ` : '<div style="padding:14px 12px;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb;color:#374151;font-size:13px;">Attachments cannot be changed while editing. Please delete and recreate the arret if you need new files.</div>'}
       </div>
     </div>
     <div style="padding:16px 20px;border-top:1px solid #e5e7eb;display:flex;gap:12px;justify-content:flex-end;flex-shrink:0;">
       <button class="btn" type="button" onclick="collapseGrayPart()">Cancel</button>
-      <button class="btn primary" type="button" id="saveArretBtn">Save Arret</button>
+      <button class="btn primary" type="button" id="saveArretBtn">${isEditing ? 'Save Changes' : 'Save Arret'}</button>
     </div>`;
 
   expandGrayPart(`<div style="display:flex;flex-direction:column;height:100%;">${html}</div>`);
@@ -7477,30 +7510,62 @@ async function submitArretForm() {
   }
 
   try {
-    const formData = new FormData();
-    const attachments = document.getElementById('arretAttachment')?.files || [];
-    formData.append('title', title);
-    formData.append('description', description);
-    formData.append('projectId', localStorage.getItem('activeProjectId'));
-    Array.from(attachments).forEach(file => formData.append('attachments', file));
-
+    const arretId = document.getElementById('arretId')?.value;
+    const projectId = localStorage.getItem('activeProjectId');
     const saveBtn = document.getElementById('saveArretBtn');
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
 
-    const res = await authFetch(`${API}/arrets`, { method: 'POST', body: formData });
+    let res;
+    if (arretId) {
+      res = await authFetch(`${API}/arrets/${arretId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, title, description })
+      });
+    } else {
+      const formData = new FormData();
+      const attachments = document.getElementById('arretAttachment')?.files || [];
+      formData.append('title', title);
+      formData.append('description', description);
+      formData.append('projectId', projectId);
+      Array.from(attachments).forEach(file => formData.append('attachments', file));
+      res = await authFetch(`${API}/arrets`, { method: 'POST', body: formData });
+    }
+
     if (!res) return;
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const result = await res.json();
     if (!result.success) throw new Error(result.message || 'Failed to save arret.');
 
-    alert('Arret saved successfully.');
+    alert(arretId ? 'Arret updated successfully.' : 'Arret saved successfully.');
     updateArretBar();
     openArretPanel();
   } catch (err) {
     console.error('Save arret error:', err);
     alert('Error saving arret: ' + (err.message || 'Please try again.'));
     const saveBtn = document.getElementById('saveArretBtn');
-    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Arret'; }
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = document.getElementById('arretId')?.value ? 'Save Changes' : document.getElementById('arretId')?.value ? 'Save Changes' : 'Save Arret'; }
+  }
+}
+
+async function deleteArret(arretId) {
+  if (!confirm('Delete this arret? This cannot be undone.')) return;
+  try {
+    const projectId = localStorage.getItem('activeProjectId');
+    const res = await authFetch(`${API}/arrets/${arretId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId })
+    });
+    if (!res) throw new Error(`HTTP ${res?.status || 'unknown'}`);
+    const result = await res.json();
+    if (!result.success) throw new Error(result.message || 'Failed to delete arret.');
+    alert('Arret deleted.');
+    updateArretBar();
+    openArretPanel();
+  } catch (err) {
+    console.error('Delete arret error:', err);
+    alert('Error deleting arret: ' + (err.message || 'Please try again.'));
   }
 }
 
