@@ -1219,7 +1219,7 @@
               🔔
               <span class="notification-badge" id="notificationBadge">3</span>
             </span>
-            <button class="btn" id="notifDiagBtn" title="Notification diagnostic" style="margin-left:8px;padding:6px 8px;font-size:12px;">ℹ️</button>
+            
             <!-- mobile-only icon button -->
             <button class="mob-icon-btn" id="mobSummaryBtn"  aria-label="Open Summary"  title="Summary">📊</button>
           </div>
@@ -6995,7 +6995,6 @@ window.openAddRecordPanel = openAddRecordPanel;
 // =======================================================================
 const notificationIcon  = document.getElementById('notificationIcon');
 const notificationBadge = document.getElementById('notificationBadge');
-const notifDiagBtn = document.getElementById('notifDiagBtn');
 
 async function updateNotificationBadge() {
   try {
@@ -7047,34 +7046,7 @@ notificationIcon.addEventListener('click', async () => {
   }
 });
 
-// Diagnostic button: check DB tables and counts for notifications
-if (notifDiagBtn) {
-  notifDiagBtn.addEventListener('click', async () => {
-    const projectId = localStorage.getItem('activeProjectId');
-    if (!projectId) { expandGrayPart('<p>Please select a project first.</p>'); return; }
-    try {
-      const res = await authFetch(`${API}/notifications/diagnose?projectId=${projectId}`);
-      if (!res) throw new Error('No response');
-      const data = await res.json();
-      const tableStatus = data.tables || {};
-      const counts = data.counts || {};
-      const funcs = data.functions || {};
-      let html = `<div style="padding:18px 20px;">
-        <h3 style="margin:0 0 8px;">Notification diagnostics</h3>
-        <div style="font-size:13px;color:#374151;margin-bottom:8px;">Tables present: notifications: <strong>${tableStatus.notifications}</strong>, notification_recipients: <strong>${tableStatus.notification_recipients}</strong></div>
-        <div style="font-size:13px;color:#374151;margin-bottom:8px;">Notifications for this project: <strong>${counts.notifications ?? 'n/a'}</strong></div>
-        <div style="font-size:13px;color:#374151;margin-bottom:8px;">Recipients for this project's notifications: <strong>${counts.notification_recipients ?? 'n/a'}</strong></div>
-        <div style="font-size:13px;color:#374151;margin-bottom:8px;">Orphaned notifications (no recipients): <strong>${counts.orphaned_notifications ?? 'n/a'}</strong></div>
-        <div style="font-size:13px;color:#374151;margin-bottom:12px;">DB functions: create_notification_for_project: <strong>${funcs.create_notification_for_project}</strong></div>
-        <button class="btn" onclick="collapseGrayPart()">Close</button>
-      </div>`;
-      expandGrayPart(html);
-    } catch (err) {
-      console.error('Diagnostic error:', err);
-      expandGrayPart(`<p style="color:#ef4444;">⚠️ Diagnostic failed: ${err.message || String(err)}</p><button class="btn" onclick="collapseGrayPart()">Close</button>`);
-    }
-  });
-}
+
 
 function renderNotificationPanel(notifications) {
   let html = `
@@ -7084,9 +7056,39 @@ function renderNotificationPanel(notifications) {
     <div style="flex:1;overflow-y:auto;padding:16px 20px;">`;
 
   if (!notifications.length) {
-    html += `<div style="text-align:center;padding:40px 0;color:#9ca3af;">
-      <div style="font-size:32px;margin-bottom:8px;">🔔</div>
-      <p style="margin:0;">No notifications yet.</p></div>`;
+    // show a helpful message and fetch diagnostic info to explain why empty
+    html += `<div id="notif-empty" style="text-align:center;padding:24px 12px;color:#9ca3af;">
+      <div style="font-size:28px;margin-bottom:8px;">🔔</div>
+      <p style="margin:0 0 8px;">No notifications yet.</p>
+      <p style="margin:0 0 12px;font-size:12px;color:#94a3b8;">If you created recent items you may be excluded — notifications are sent to other project participants.</p>
+      <div id="notif-empty-extra" style="font-size:12px;color:#64748b;margin-top:8px;"></div>
+    </div>`;
+    setTimeout(async () => {
+      try {
+        const projectId = localStorage.getItem('activeProjectId');
+        if (!projectId) return;
+        const res = await authFetch(`${API}/notifications/diagnose?projectId=${projectId}`);
+        if (!res || !res.ok) return;
+        const data = await res.json();
+        const counts = data.counts || {};
+        const tableStatus = data.tables || {};
+        const extraEl = document.getElementById('notif-empty-extra');
+        if (!extraEl) return;
+        if (!tableStatus.notifications || !tableStatus.notification_recipients) {
+          extraEl.textContent = 'Notification tables are not present in the database. Run the migration to enable notifications.';
+        } else if ((counts.notification_recipients ?? 0) === 0) {
+          extraEl.textContent = 'No other project participants found — creators are excluded from receiving notifications.';
+        } else if ((counts.notifications ?? 0) === 0) {
+          extraEl.textContent = 'No notifications have been created for this project yet.';
+        } else if ((counts.orphaned_notifications ?? 0) > 0) {
+          extraEl.textContent = `${counts.orphaned_notifications} notification(s) found with no recipients (orphaned).`;
+        } else {
+          extraEl.textContent = '';
+        }
+      } catch (err) {
+        console.warn('Notif diag fetch failed:', err);
+      }
+    }, 20);
   } else {
     html += `<ul style="padding:0;margin:0;list-style:none;">`;
     notifications.forEach(n => {
