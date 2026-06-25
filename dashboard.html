@@ -293,6 +293,21 @@
       border-radius: 0 2px 2px 0;
     }
     .icon  { font-size: 15px; flex-shrink: 0; }
+    .nav-item-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 18px;
+      height: 18px;
+      margin-left: auto;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: #ef4444;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+    }
     .label { font-size: 13px; }
 
     /* Logout */
@@ -1181,6 +1196,7 @@
       </div>
       <div class="nav-item" data-nav="chat" onclick="sessionStorage.setItem('redirectSource','dashboard'); window.location.href='chat.html'">
         <span class="icon">💬</span><span class="label" data-translate="chat">Chat</span>
+        <span class="nav-item-badge" id="chatUnreadBadge" style="display:none;">0</span>
       </div>
 
       <!-- Settings -->
@@ -1913,11 +1929,20 @@ document.addEventListener("DOMContentLoaded", async () => {
   loadSummaryPanelData();
   setTimeout(() => { loadTabRecords('contractual'); }, 50);
   updateNotificationBadge();
+  updateChatUnreadBadge();
   updateArretBar();
   if (arretBar) arretBar.addEventListener('click', openArretPanel);
 });
 
-setInterval(updateNotificationBadge, 30000);
+window.addEventListener('pageshow', () => {
+  if (document.visibilityState === 'visible') updateChatUnreadBadge();
+});
+window.addEventListener('focus', updateChatUnreadBadge);
+
+setInterval(() => {
+  updateNotificationBadge();
+  updateChatUnreadBadge();
+}, 30000);
 setInterval(updateArretBar, 30000);
 
 async function fetchProjectDetails(projectId) {
@@ -5555,7 +5580,11 @@ async function bootstrapUser() {
 
     loadHomeTabs();
     updateNotificationBadge();
-    setInterval(updateNotificationBadge, 30000);
+    updateChatUnreadBadge();
+    setInterval(() => {
+      updateNotificationBadge();
+      updateChatUnreadBadge();
+    }, 30000);
   } catch (err) {
     console.error('Bootstrap failed:', err);
     window.location.href = '/login.html';
@@ -6995,6 +7024,32 @@ window.openAddRecordPanel = openAddRecordPanel;
 // =======================================================================
 const notificationIcon  = document.getElementById('notificationIcon');
 const notificationBadge = document.getElementById('notificationBadge');
+const chatUnreadBadge  = document.getElementById('chatUnreadBadge');
+
+async function updateChatUnreadBadge() {
+  if (!chatUnreadBadge) return;
+  try {
+    const projectId = localStorage.getItem('activeProjectId');
+    if (!projectId) return;
+    const res = await authFetch(`${API}/chat/conversations?projectId=${encodeURIComponent(projectId)}`);
+    if (!res || !res.ok) {
+      console.warn('[updateChatUnreadBadge] Response not OK:', res?.status);
+      return;
+    }
+    const data = await res.json();
+    if (!data || !data.success) return;
+    const groupCount = Number(data.group?.unreadCount || 0);
+    const memberCount = Array.isArray(data.members)
+      ? data.members.reduce((sum, member) => sum + Number(member.unreadCount || 0), 0)
+      : 0;
+    const count = groupCount + memberCount;
+    chatUnreadBadge.textContent = count;
+    chatUnreadBadge.style.display = count > 0 ? 'inline-flex' : 'none';
+  } catch (err) {
+    console.error('[updateChatUnreadBadge] Error:', err);
+    chatUnreadBadge.style.display = 'none';
+  }
+}
 
 async function updateNotificationBadge() {
   try {
