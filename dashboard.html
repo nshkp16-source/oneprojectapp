@@ -1219,6 +1219,7 @@
               🔔
               <span class="notification-badge" id="notificationBadge">3</span>
             </span>
+            <button class="btn" id="notifDiagBtn" title="Notification diagnostic" style="margin-left:8px;padding:6px 8px;font-size:12px;">ℹ️</button>
             <!-- mobile-only icon button -->
             <button class="mob-icon-btn" id="mobSummaryBtn"  aria-label="Open Summary"  title="Summary">📊</button>
           </div>
@@ -6994,6 +6995,7 @@ window.openAddRecordPanel = openAddRecordPanel;
 // =======================================================================
 const notificationIcon  = document.getElementById('notificationIcon');
 const notificationBadge = document.getElementById('notificationBadge');
+const notifDiagBtn = document.getElementById('notifDiagBtn');
 
 async function updateNotificationBadge() {
   try {
@@ -7044,6 +7046,35 @@ notificationIcon.addEventListener('click', async () => {
       <button class="btn" onclick="collapseGrayPart()">← Back</button>`);
   }
 });
+
+// Diagnostic button: check DB tables and counts for notifications
+if (notifDiagBtn) {
+  notifDiagBtn.addEventListener('click', async () => {
+    const projectId = localStorage.getItem('activeProjectId');
+    if (!projectId) { expandGrayPart('<p>Please select a project first.</p>'); return; }
+    try {
+      const res = await authFetch(`${API}/notifications/diagnose?projectId=${projectId}`);
+      if (!res) throw new Error('No response');
+      const data = await res.json();
+      const tableStatus = data.tables || {};
+      const counts = data.counts || {};
+      const funcs = data.functions || {};
+      let html = `<div style="padding:18px 20px;">
+        <h3 style="margin:0 0 8px;">Notification diagnostics</h3>
+        <div style="font-size:13px;color:#374151;margin-bottom:8px;">Tables present: notifications: <strong>${tableStatus.notifications}</strong>, notification_recipients: <strong>${tableStatus.notification_recipients}</strong></div>
+        <div style="font-size:13px;color:#374151;margin-bottom:8px;">Notifications for this project: <strong>${counts.notifications ?? 'n/a'}</strong></div>
+        <div style="font-size:13px;color:#374151;margin-bottom:8px;">Recipients for this project's notifications: <strong>${counts.notification_recipients ?? 'n/a'}</strong></div>
+        <div style="font-size:13px;color:#374151;margin-bottom:8px;">Orphaned notifications (no recipients): <strong>${counts.orphaned_notifications ?? 'n/a'}</strong></div>
+        <div style="font-size:13px;color:#374151;margin-bottom:12px;">DB functions: create_notification_for_project: <strong>${funcs.create_notification_for_project}</strong></div>
+        <button class="btn" onclick="collapseGrayPart()">Close</button>
+      </div>`;
+      expandGrayPart(html);
+    } catch (err) {
+      console.error('Diagnostic error:', err);
+      expandGrayPart(`<p style="color:#ef4444;">⚠️ Diagnostic failed: ${err.message || String(err)}</p><button class="btn" onclick="collapseGrayPart()">Close</button>`);
+    }
+  });
+}
 
 function renderNotificationPanel(notifications) {
   let html = `
