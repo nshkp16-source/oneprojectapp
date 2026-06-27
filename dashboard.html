@@ -7041,6 +7041,13 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       if (fileInput.files[0] && fileInput.files[0].size > 10*1024*1024)
         throw new Error('File size must not exceed 10MB.');
 
+      // Check if user wants to stamp the document
+      const stampYes = document.getElementById('stampYes');
+      const stampType = (stampYes && stampYes.checked) 
+        ? (document.getElementById('stampTypeSelect')?.value || 'SUBMITTED')
+        : '';
+      console.log('[save-record] stampType:', stampType || 'not selected');
+
       const formData = new FormData();
       formData.append('recordType',  rType);
       formData.append('title',       title);
@@ -7048,10 +7055,11 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       formData.append('projectId',   localStorage.getItem('activeProjectId'));
       formData.append('recordKind',  rKind);
       if (tiedId) formData.append('noticeTiedId', tiedId);
+      if (stampType) formData.append('stampType', stampType);  // ← NEW: include stamp request
       if (fileInput.files.length > 0) formData.append('attachment', fileInput.files[0]);
 
       const saveBtn = document.getElementById('saveRecordBtn');
-      if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+      if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = stampType ? 'Applying stamp…' : 'Saving…'; }
 
       const res = await authFetch(`${API}/add-record`, { method: 'POST', body: formData });
       if (!res) return;
@@ -7059,13 +7067,13 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       const data = await res.json();
 
       if (data.success) {
-        // Apply stamp if user opted in (non-fatal if it fails)
-        const pId = localStorage.getItem('activeProjectId');
-        await applyStampIfRequested(data.recordId, rType, pId);
-
-        alert(rKind === 'rejection_notice' ? `✓ Rejection Notice "${title}" issued.`
+        alert(
+          stampType && data.stamped ? `✓ Record "${title}" saved with your stamp!`
+          : stampType ? `✓ Record "${title}" saved (stamp could not be applied).`
+          : rKind === 'rejection_notice' ? `✓ Rejection Notice "${title}" issued.`
           : rKind === 'notice' ? `✓ Notice of Determination "${title}" issued.`
-          : `✓ Record "${title}" saved.`);
+          : `✓ Record "${title}" saved.`
+        );
         delete recordsCache[rTabKey];
         loadTabRecords(rTabKey);
         collapseGrayPart();
@@ -11457,10 +11465,13 @@ async function showStampStep(fileInput, stampStepContainer) {
 
   if (!stampable) {
     stampStepContainer.innerHTML = `
-      <div style="padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;
-        border-radius:8px;font-size:12px;color:#6b7280;">
-        ℹ️ Stamp/signature is available for PDF, JPG, PNG files only.
-        Convert to PDF to enable stamping.
+      <div style="padding:12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;">
+        <div style="font-weight:700;color:#b45309;margin-bottom:4px;">⚠️ Stamping not available</div>
+        <div style="font-size:12px;color:#92400e;">
+          Stamps can only be applied to <strong>PDF, JPG, or PNG</strong> files.
+          <br/>Your file is <strong>.${ext.toUpperCase()}</strong> — 
+          convert to PDF first if you want to add your stamp.
+        </div>
       </div>`;
     stampStepContainer.style.display = 'block';
     return;
@@ -11525,21 +11536,60 @@ async function showStampStep(fileInput, stampStepContainer) {
 // Called from saveRecordBtn handler after successful save to apply stamp
 async function applyStampIfRequested(recordId, recordType, projectId) {
   const stampYes = document.getElementById('stampYes');
-  if (!stampYes || !stampYes.checked) return; // user said no or element not present
+  console.log('[STAMP] applyStampIfRequested called', { stampYes: !!stampYes, checked: stampYes?.checked, recordId, recordType, projectId });
+  
+  if (!stampYes || !stampYes.checked) {
+    console.log('[STAMP] ℹ️ User opted out or element missing - skipping stamp');
+    return;
+  }
+  
   const stampType = document.getElementById('stampTypeSelect')?.value || 'SUBMITTED';
+  console.log('[STAMP] User opted in for stamp:', { stampType });
+  
   try {
+    const payload = { recordId, recordType, projectId, stampType };
+    console.log('[STAMP] Sending request to /sign-record:', payload);
+    
     const res = await authFetch(`${API}/sign-record`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recordId, recordType, projectId, stampType }),
+      body: JSON.stringify(payload),
     });
-    if (res && res.ok) {
-      const d = await res.json();
-      if (d.success) console.log('[stamp] applied:', d.stamped_doc_url || 'metadata only');
+    
+    console.log('[STAMP] Response status:', res?.status, res?.ok);
+    
+    if (!res) {
+      console.error('[STAMP] ❌ No response from server');
+      return;
+    }
+    
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({ error: res.statusText }));
+      console.error('[STAMP] ❌ Server error:', res.status, errData);
+      
+      // Show user-friendly error message
+      if (errData.error) {
+        alert('⚠️ Stamp failed: ' + errData.error);
+      } else {
+        alert('❌ Stamp failed with status ' + res.status);
+      }
+      return;
+    }
+    
+    const d = await res.json();
+    console.log('[STAMP] ✅ Response:', d);
+    
+    if (d.success || d.signed_at) {
+      console.log('[STAMP] ✅ Applied successfully!', { 
+        signed_at: d.signed_at,
+        stamped_doc_url: d.stamped_doc_url || 'N/A',
+        signature_hash: d.signature_hash?.substring(0, 8) + '...' || 'N/A'
+      });
+    } else {
+      console.warn('[STAMP] ⚠️ Response ok but no success flag:', d);
     }
   } catch (err) {
-    console.warn('[stamp] non-fatal error:', err.message);
-    // stamp failure is non-fatal — record is already saved
+    console.error('[STAMP] ❌ Caught error:', err.message, err.stack);
   }
 }
 
