@@ -1114,6 +1114,7 @@
       .right-main-part { width: 100%; }
     }
   </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/signature_pad/4.1.7/signature_pad.umd.min.js"></script>
 </head>
 <body>
   <!-- mobile sidebar backdrop -->
@@ -1202,6 +1203,11 @@
       <!-- Settings -->
       <div class="nav-item" id="settingsToggle" data-nav="settings">
         <span class="icon">⚙️</span><span class="label" data-translate="settings">Settings</span>
+      </div>
+
+      <!-- My Stamp (decision makers only) -->
+      <div class="nav-item" id="stampSetupNav" data-nav="stamp-setup" style="display:none;" onclick="openStampSetup()">
+        <span class="icon">🖋️</span><span class="label">My Stamp</span>
       </div>
 
       <!-- Support -->
@@ -6169,7 +6175,14 @@ function renderRecordsList(records, tabKey) {
   const placeholderDiv = document.querySelector('.no-data-placeholder');
   if (!recordsList || !placeholderDiv) return;
 
-  if (!records.length) {
+  // Filter out standalone notice cards — they are rendered embedded inside their parent
+  const displayRecords = records.filter(r =>
+    r.record_kind !== 'notice' &&
+    r.record_kind !== 'rejection_notice' &&
+    r.record_kind !== 'acceptance_notice'
+  );
+
+  if (!displayRecords.length) {
     recordsList.innerHTML = '';
     placeholderDiv.style.display = 'block';
     placeholderDiv.innerHTML = '<p>ℹ️ No records found in this category.</p>';
@@ -6177,7 +6190,7 @@ function renderRecordsList(records, tabKey) {
   }
   placeholderDiv.style.display = 'none';
 
-  recordsList.innerHTML = records.map(doc => {
+  recordsList.innerHTML = displayRecords.map(doc => {
     const isUploader = doc.is_uploader === true;
     const isUnread   = !doc.is_viewed && !isUploader;
     const fileName   = doc.file_path ? doc.file_path.split('/').pop() : null;
@@ -6209,21 +6222,31 @@ function renderRecordsList(records, tabKey) {
     const teamMemberViewersHtml = teamMemberReviews.length ? `
       <div style="margin-top:10px;">
         <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
-          letter-spacing:.5px;margin-bottom:6px;">👥 Viewers (Team Members)</div>
+          letter-spacing:.5px;margin-bottom:6px;">👥 Team Member Reviews</div>
         <ul style="margin:0;padding:0;list-style:none;">
           ${teamMemberReviews.map(r => {
             const ac = r.action === 'approved' ? '#10b981' : r.action === 'rejected' ? '#ef4444' : '#9ca3af';
             const al = r.action === 'no_action' ? 'Viewed' : (r.action.charAt(0).toUpperCase() + r.action.slice(1));
+            const sideLabel = r.reviewer_assigned_part || '';
+            const sideColor = sideLabel === 'Contractor' ? '#1d4ed8'
+                            : sideLabel === 'Consultant'  ? '#7c3aed'
+                            : sideLabel === 'Client'      ? '#065f46' : '#6b7280';
             return `
               <li style="padding:8px 0;border-bottom:1px solid #f7f7f7;font-size:12px;color:#555;">
-                <span style="font-weight:600;color:#374151;">${r.reviewer_role || 'Team Member'}</span>
-                ${r.reviewer_email ? `<span style="font-size:11px;color:#9ca3af;">(${r.reviewer_email})</span>` : ''}
-                ${r.reviewer_position ? `<span style="font-size:11px;background:#f3f4f6;color:#6b7280;
-                  border-radius:4px;padding:1px 6px;">${r.reviewer_position}</span>` : ''}
-                <span style="color:${ac};font-weight:600;text-transform:capitalize;">${al}</span>
-                <span style="color:#9ca3af;font-size:11px;">
-                  ${new Date(r.action_date).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
-                </span>
+                <div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-bottom:3px;">
+                  <span style="font-weight:600;color:#374151;">${r.reviewer_email || 'Team Member'}</span>
+                  ${sideLabel ? `<span style="font-size:10px;font-weight:700;background:${sideColor}1a;
+                    color:${sideColor};border:1px solid ${sideColor}40;
+                    border-radius:4px;padding:1px 6px;">${sideLabel} Side</span>` : ''}
+                  ${r.reviewer_position ? `<span style="font-size:10px;background:#f3f4f6;color:#6b7280;
+                    border-radius:4px;padding:1px 6px;">${r.reviewer_position}</span>` : ''}
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="color:${ac};font-weight:600;text-transform:capitalize;">${al}</span>
+                  <span style="color:#9ca3af;font-size:11px;">
+                    ${new Date(r.action_date).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
+                  </span>
+                </div>
                 ${r.comment ? `<div style="margin-top:5px;color:#6b7280;font-style:italic;padding:5px 8px;
                   background:#f9fafb;border-radius:4px;border-left:2px solid #d1d5db;font-size:12px;">
                   💬 ${r.comment}</div>` : ''}
@@ -6329,20 +6352,46 @@ function renderRecordsList(records, tabKey) {
     const workflowHtml = doc.is_decision_maker === true && !isLocked
       ? renderWorkflowSteps(doc) : '';
 
-    const tiedRecordHtml = (doc.record_kind === 'notice' || doc.record_kind === 'rejection_notice') && doc.notice_tied_id
-      ? `<div style="margin-bottom:12px;padding:10px 12px;
-          background:${doc.record_kind === 'rejection_notice' ? '#fff1f2' : '#fffbeb'};
-          border:1px solid ${doc.record_kind === 'rejection_notice' ? '#fca5a5' : '#fcd34d'};
-          border-radius:8px;">
-          <div style="font-size:11px;font-weight:700;
-            color:${doc.record_kind === 'rejection_notice' ? '#991b1b' : '#92400e'};
-            text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">
-            📎 ${doc.record_kind === 'rejection_notice' ? 'Rejection Notice' : 'Notice of Determination'} — Tied to Record
+    // Build embedded notice panels (sorted newest first — already sorted by server)
+    const embeddedNoticesHtml = (doc.embedded_notices || []).map(n => {
+      const noticeKind  = n.record_kind || 'notice';
+      const isRejection = noticeKind === 'rejection_notice';
+      const isAcceptance = noticeKind === 'acceptance_notice';
+      const bgColor     = isRejection ? '#fff1f2' : isAcceptance ? '#f0fdf4' : '#fffbeb';
+      const borderColor = isRejection ? '#fca5a5' : isAcceptance ? '#6ee7b7' : '#fcd34d';
+      const labelColor  = isRejection ? '#991b1b' : isAcceptance ? '#065f46' : '#92400e';
+      const labelText   = isRejection ? '❌ Rejection Notice'
+                        : isAcceptance ? '✅ Notice of Acceptance'
+                        : '📋 Notice of Determination';
+      const noticeDate  = n.issued_date
+        ? new Date(n.issued_date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+        : '';
+      const noticeFileName = n.file_path ? n.file_path.split('/').pop() : null;
+      const signedBadge = n.signed_at
+        ? `<span style="font-size:10px;background:#f0fdf4;color:#065f46;border:1px solid #6ee7b7;
+            border-radius:4px;padding:1px 6px;margin-left:6px;">✍️ Signed</span>` : '';
+      return `
+        <div style="margin-bottom:10px;padding:10px 12px;
+          background:${bgColor};border:1px solid ${borderColor};border-radius:8px;">
+          <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
+            <span style="font-size:11px;font-weight:700;color:${labelColor};
+              text-transform:uppercase;letter-spacing:.5px;">${labelText}</span>
+            ${signedBadge}
+            <span style="font-size:11px;color:#9ca3af;margin-left:auto;">
+              by <strong>${n.uploader_role || ''}</strong> · ${noticeDate}
+            </span>
           </div>
-          <div style="font-size:13px;font-weight:600;color:#374151;">
-            #${doc.notice_tied_id}${doc.tied_record_title ? ': "' + doc.tied_record_title + '"' : ''}
-          </div>
-         </div>` : '';
+          ${n.description ? `<div style="font-size:12px;color:#374151;line-height:1.6;margin-bottom:6px;">
+            ${n.description}</div>` : ''}
+          ${noticeFileName ? `<a href="${n.file_path}" target="_blank"
+            style="display:inline-flex;align-items:center;gap:5px;background:#fff;color:#2563eb;
+            border:1px solid #bfdbfe;border-radius:5px;padding:4px 10px;
+            font-size:11px;font-weight:500;text-decoration:none;">
+            ⬇️ ${noticeFileName}
+          </a>` : ''}
+        </div>`;
+    }).join('');
+    const tiedRecordHtml = embeddedNoticesHtml; // kept same variable name used below
 
     const hasDecisionActions = decisionMakerReviews.filter(r => r.action !== 'no_action').length > 0;
     const hasAnyReview = (doc.reviews || []).length > 0;
@@ -6896,6 +6945,10 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
             </div>
             <div id="attachmentName" style="margin-top:8px;font-size:12px;color:#28a745;font-weight:bold;display:none;"></div>
           </div>
+
+          <!-- Stamp Step — shown after file selected, for decision makers only -->
+          <div id="stampStepContainer" style="display:none;margin-bottom:16px;"></div>
+
         </form>
       </div>
 
@@ -6959,7 +7012,11 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       attachInput.files = dt.files; updateAttachDisplay();
     }
   });
-  attachInput.addEventListener('change', updateAttachDisplay);
+  attachInput.addEventListener('change', () => {
+    updateAttachDisplay();
+    const stampContainer = document.getElementById('stampStepContainer');
+    if (stampContainer) showStampStep(attachInput, stampContainer);
+  });
 
   document.getElementById('saveRecordBtn').addEventListener('click', async () => {
     try {
@@ -6998,6 +7055,10 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       const data = await res.json();
 
       if (data.success) {
+        // Apply stamp if user opted in (non-fatal if it fails)
+        const pId = localStorage.getItem('activeProjectId');
+        await applyStampIfRequested(data.recordId, rType, pId);
+
         alert(rKind === 'rejection_notice' ? `✓ Rejection Notice "${title}" issued.`
           : rKind === 'notice' ? `✓ Notice of Determination "${title}" issued.`
           : `✓ Record "${title}" saved.`);
@@ -11201,6 +11262,281 @@ async function _crDownload(docId, fileName) {
 //  Expose for external use
 // ═══════════════════════════════════════════════════════════════════════
 window.openDocumentApprovalForm = _daOpenCreateForm;
+
+// ═══════════════════════════════════════════════════════════════════════
+//  STAMP & SIGNATURE SYSTEM
+// ═══════════════════════════════════════════════════════════════════════
+
+// Show "My Stamp" nav item for decision makers only
+(function initStampNav() {
+  const role = localStorage.getItem('userRole') || '';
+  const sides = ['Contractor','ContractorPM','Consultant','ConsultantPM','Client','ClientPM'];
+  const isDM = sides.some(s => role.toLowerCase().replace(/[\s_-]/g,'') === s.toLowerCase().replace(/[\s_-]/g,''));
+  const stampNav = document.getElementById('stampSetupNav');
+  if (stampNav && isDM) stampNav.style.display = '';
+})();
+
+// ── Stamp setup panel ─────────────────────────────────────────────────
+let _signaturePad = null;
+
+async function openStampSetup() {
+  // Fetch existing stamp
+  let existing = null;
+  try {
+    const r = await authFetch(`${API}/my-stamp`);
+    if (r && r.ok) { const d = await r.json(); existing = d.stamp; }
+  } catch(_) {}
+
+  const html = `
+    <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
+      <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
+        <h3 style="margin:0;color:#333;font-size:18px;">🖋️ My Stamp Setup</h3>
+        <p style="margin:4px 0 0;font-size:12px;color:#9ca3af;">
+          Set up your signature and company stamp. Used when uploading documents.
+        </p>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:16px 20px;">
+
+        ${existing ? `<div style="margin-bottom:16px;padding:10px 12px;background:#f0fdf4;
+          border:1px solid #6ee7b7;border-radius:8px;font-size:12px;color:#065f46;">
+          ✅ Stamp saved — last updated ${new Date(existing.updated_at).toLocaleDateString()}.
+          Saving again will overwrite.
+        </div>` : `<div style="margin-bottom:16px;padding:10px 12px;background:#fffbeb;
+          border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#92400e;">
+          ⚠️ No stamp set up yet. Add your signature and/or company stamp image below.
+        </div>`}
+
+        <!-- Signature Pad -->
+        <div style="margin-bottom:20px;">
+          <label style="display:block;font-weight:700;color:#007B8A;font-size:12px;
+            text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">
+            ✍️ Draw Your Signature
+          </label>
+          ${existing && existing.signature_image ? `
+            <div style="margin-bottom:8px;">
+              <div style="font-size:11px;color:#6b7280;margin-bottom:4px;">Current signature:</div>
+              <img src="${existing.signature_image}" style="max-width:200px;max-height:60px;
+                border:1px solid #e5e7eb;border-radius:4px;background:#fff;" />
+            </div>` : ''}
+          <canvas id="stampSignatureCanvas"
+            style="border:2px solid #d1d5db;border-radius:8px;background:#fff;
+            width:100%;height:120px;touch-action:none;cursor:crosshair;display:block;"></canvas>
+          <div style="display:flex;gap:8px;margin-top:6px;">
+            <button type="button" onclick="clearStampSignature()"
+              style="padding:5px 12px;font-size:11px;background:#f3f4f6;color:#374151;
+              border:1px solid #d1d5db;border-radius:5px;cursor:pointer;">Clear</button>
+            <span style="font-size:11px;color:#9ca3af;align-self:center;">
+              Draw inside the box above
+            </span>
+          </div>
+        </div>
+
+        <!-- Company Stamp Upload -->
+        <div style="margin-bottom:20px;">
+          <label style="display:block;font-weight:700;color:#007B8A;font-size:12px;
+            text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">
+            🏢 Company Stamp Image (Optional)
+          </label>
+          ${existing && existing.stamp_image_url ? `
+            <div style="margin-bottom:8px;">
+              <div style="font-size:11px;color:#6b7280;margin-bottom:4px;">Current stamp:</div>
+              <img src="${existing.stamp_image_url}" style="max-width:80px;max-height:80px;
+                border:1px solid #e5e7eb;border-radius:4px;" />
+            </div>` : ''}
+          <div id="stampImageDropZone"
+            style="display:flex;align-items:center;gap:12px;padding:14px;
+            border:2px dashed #d1d5db;border-radius:6px;cursor:pointer;">
+            <span style="font-size:24px;">🏢</span>
+            <div>
+              <div style="font-weight:600;color:#333;font-size:13px;">Upload stamp image</div>
+              <div style="font-size:11px;color:#9ca3af;">PNG or JPG, transparent background recommended</div>
+              <input type="file" id="stampImageInput" style="display:none;" accept=".png,.jpg,.jpeg" />
+            </div>
+          </div>
+          <div id="stampImageName" style="margin-top:6px;font-size:12px;color:#28a745;display:none;"></div>
+        </div>
+
+      </div>
+      <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
+        background:#fff;display:flex;gap:12px;">
+        <button type="button" id="saveStampBtn"
+          style="flex:1;padding:12px;font-size:14px;font-weight:700;
+          background:#007B8A;color:#fff;border:none;border-radius:6px;cursor:pointer;">
+          💾 Save Stamp
+        </button>
+        <button type="button" onclick="collapseGrayPart()"
+          style="flex:1;padding:12px;font-size:14px;font-weight:600;
+          background:#f5f5f5;color:#333;border:1px solid #ddd;border-radius:6px;cursor:pointer;">
+          ✕ Cancel
+        </button>
+      </div>
+    </div>`;
+
+  expandGrayPart(html);
+
+  // Init signature pad
+  const canvas = document.getElementById('stampSignatureCanvas');
+  if (canvas && typeof SignaturePad !== 'undefined') {
+    // Match CSS size to physical pixels
+    canvas.width  = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+    _signaturePad = new SignaturePad(canvas, { penColor: '#1e3a5f', minWidth: 1, maxWidth: 2.5 });
+  }
+
+  // Stamp image input
+  const dropZone   = document.getElementById('stampImageDropZone');
+  const stampInput = document.getElementById('stampImageInput');
+  const stampName  = document.getElementById('stampImageName');
+  dropZone.addEventListener('click', () => stampInput.click());
+  stampInput.addEventListener('change', () => {
+    if (stampInput.files[0]) {
+      stampName.textContent = `✓ ${stampInput.files[0].name}`;
+      stampName.style.display = 'block';
+      dropZone.style.borderColor = '#28a745';
+    }
+  });
+
+  // Save
+  document.getElementById('saveStampBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('saveStampBtn');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      const fd = new FormData();
+      if (_signaturePad && !_signaturePad.isEmpty()) {
+        fd.append('signatureBase64', _signaturePad.toDataURL('image/png'));
+      }
+      if (stampInput.files[0]) {
+        fd.append('stampImage', stampInput.files[0]);
+      }
+      if (fd.entries().next().done) {
+        alert('Please draw a signature or upload a stamp image first.');
+        btn.disabled = false; btn.textContent = '💾 Save Stamp';
+        return;
+      }
+      const res = await authFetch(`${API}/my-stamp`, { method: 'POST', body: fd });
+      if (!res || !res.ok) throw new Error('Save failed');
+      alert('✅ Stamp saved successfully!');
+      collapseGrayPart();
+    } catch (err) {
+      alert('Error saving stamp: ' + err.message);
+      btn.disabled = false; btn.textContent = '💾 Save Stamp';
+    }
+  });
+}
+
+function clearStampSignature() {
+  if (_signaturePad) _signaturePad.clear();
+}
+
+// ── Stamp step in upload form ─────────────────────────────────────────
+// Called after file is selected in addRecordForm — shows stamp opt-in
+async function showStampStep(fileInput, stampStepContainer) {
+  const role = localStorage.getItem('userRole') || '';
+  const sides = ['Contractor','ContractorPM','Consultant','ConsultantPM','Client','ClientPM'];
+  const isDM = sides.some(s => role.toLowerCase().replace(/[\s_-]/g,'') === s.toLowerCase().replace(/[\s_-]/g,''));
+  if (!isDM) { stampStepContainer.style.display = 'none'; return; }
+
+  const file = fileInput.files[0];
+  if (!file) { stampStepContainer.style.display = 'none'; return; }
+
+  const ext = file.name.split('.').pop().toLowerCase();
+  const stampable = ['pdf','jpg','jpeg','png'].includes(ext);
+
+  // Check if stamp exists
+  let hasStamp = false;
+  try {
+    const r = await authFetch(`${API}/my-stamp`);
+    if (r && r.ok) { const d = await r.json(); hasStamp = !!d.stamp; }
+  } catch(_) {}
+
+  if (!stampable) {
+    stampStepContainer.innerHTML = `
+      <div style="padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;
+        border-radius:8px;font-size:12px;color:#6b7280;">
+        ℹ️ Stamp/signature is available for PDF, JPG, PNG files only.
+        Convert to PDF to enable stamping.
+      </div>`;
+    stampStepContainer.style.display = 'block';
+    return;
+  }
+
+  if (!hasStamp) {
+    stampStepContainer.innerHTML = `
+      <div style="padding:10px 12px;background:#fffbeb;border:1px solid #fcd34d;
+        border-radius:8px;font-size:12px;color:#92400e;">
+        ⚠️ You have no stamp set up.
+        <button type="button" onclick="openStampSetup()"
+          style="margin-left:8px;padding:3px 10px;font-size:11px;font-weight:600;
+          background:#d97706;color:#fff;border:none;border-radius:4px;cursor:pointer;">
+          Set up stamp →
+        </button>
+      </div>`;
+    stampStepContainer.style.display = 'block';
+    return;
+  }
+
+  stampStepContainer.innerHTML = `
+    <div style="padding:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;">
+      <div style="font-size:12px;font-weight:700;color:#0369a1;margin-bottom:8px;">
+        🖋️ Add Digital Stamp to this document?
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
+          <input type="radio" name="stampChoice" value="yes" id="stampYes" />
+          <span style="font-weight:600;color:#0369a1;">Yes — stamp &amp; save as PDF</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
+          <input type="radio" name="stampChoice" value="no" id="stampNo" checked />
+          <span style="color:#6b7280;">No — upload as-is</span>
+        </label>
+      </div>
+      <div id="stampTypeRow" style="display:none;margin-top:8px;">
+        <label style="font-size:11px;font-weight:700;color:#0369a1;display:block;margin-bottom:4px;">
+          Stamp type:
+        </label>
+        <select id="stampTypeSelect"
+          style="padding:6px 10px;border:1px solid #bae6fd;border-radius:5px;font-size:12px;">
+          <option value="SUBMITTED">SUBMITTED</option>
+          <option value="APPROVED">APPROVED</option>
+          <option value="REVIEWED">REVIEWED</option>
+          <option value="NOTED">NOTED</option>
+        </select>
+        <div style="margin-top:6px;font-size:11px;color:#6b7280;">
+          ℹ️ File will be converted and saved as PDF with your stamp.
+        </div>
+      </div>
+    </div>`;
+  stampStepContainer.style.display = 'block';
+
+  document.getElementById('stampYes').addEventListener('change', () => {
+    document.getElementById('stampTypeRow').style.display = 'block';
+  });
+  document.getElementById('stampNo').addEventListener('change', () => {
+    document.getElementById('stampTypeRow').style.display = 'none';
+  });
+}
+
+// Called from saveRecordBtn handler after successful save to apply stamp
+async function applyStampIfRequested(recordId, recordType, projectId) {
+  const stampYes = document.getElementById('stampYes');
+  if (!stampYes || !stampYes.checked) return; // user said no or element not present
+  const stampType = document.getElementById('stampTypeSelect')?.value || 'SUBMITTED';
+  try {
+    const res = await authFetch(`${API}/sign-record`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recordId, recordType, projectId, stampType }),
+    });
+    if (res && res.ok) {
+      const d = await res.json();
+      if (d.success) console.log('[stamp] applied:', d.stamped_doc_url || 'metadata only');
+    }
+  } catch (err) {
+    console.warn('[stamp] non-fatal error:', err.message);
+    // stamp failure is non-fatal — record is already saved
+  }
+}
+
 </script>
 </body>
 </html>
