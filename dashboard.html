@@ -7043,14 +7043,10 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       if (fileInput.files[0] && fileInput.files[0].size > 10*1024*1024)
         throw new Error('File size must not exceed 10MB.');
 
-      // Check if user wants to stamp the document
-      const stampYes = document.getElementById('stampYes');
-      const stampType = (stampYes && stampYes.checked) 
-        ? (document.getElementById('stampTypeSelect')?.value || 'SUBMITTED')
-        : '';
+      const stampChoice = document.querySelector('input[name="stampChoice"]:checked')?.value || 'save';
       const saveAsPdfCheckbox = document.getElementById('saveAsPdfOption');
       const saveAsPdf = !!(saveAsPdfCheckbox && saveAsPdfCheckbox.checked);
-      console.log('[save-record] stampType:', stampType || 'not selected', 'saveAsPdf:', saveAsPdf);
+      console.log('[save-record] stampChoice:', stampChoice, 'saveAsPdf:', saveAsPdf);
 
       const formData = new FormData();
       formData.append('recordType',  rType);
@@ -7059,12 +7055,22 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       formData.append('projectId',   localStorage.getItem('activeProjectId'));
       formData.append('recordKind',  rKind);
       if (tiedId) formData.append('noticeTiedId', tiedId);
-      if (stampType) formData.append('stampType', stampType);
+      if (stampChoice === 'stamp') formData.append('stampAction', 'stamp');
+      else if (stampChoice === 'approve') formData.append('stampAction', 'approve');
+      if (stampChoice === 'stamp') {
+        const placement = window.__stampPlacement || { page: 1, x: 0.8, y: 0.08 };
+        formData.append('stampPage', String(placement.page || 1));
+        formData.append('stampX', String(placement.x ?? 0.8));
+        formData.append('stampY', String(placement.y ?? 0.08));
+      }
+      if (stampChoice === 'approve' && document.getElementById('createNoticeAfterApproval')?.checked) {
+        formData.append('createNotice', 'true');
+      }
       if (saveAsPdf) formData.append('saveAsPdf', 'true');
       if (fileInput.files.length > 0) formData.append('attachment', fileInput.files[0]);
 
       const saveBtn = document.getElementById('saveRecordBtn');
-      if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = stampType ? 'Applying stamp…' : 'Saving…'; }
+      if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = stampChoice === 'stamp' ? 'Preparing stamp…' : stampChoice === 'approve' ? 'Submitting approval…' : 'Saving…'; }
 
       const res = await authFetch(`${API}/add-record`, { method: 'POST', body: formData });
       if (!res) return;
@@ -7073,8 +7079,9 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
 
       if (data.success) {
         alert(
-          stampType && data.stamped ? `✓ Record "${title}" saved with your stamp!`
-          : stampType ? `✓ Record "${title}" saved (stamp could not be applied).`
+          stampChoice === 'stamp' && data.stamped ? `✓ Record "${title}" saved with your stamp!`
+          : stampChoice === 'stamp' ? `✓ Record "${title}" saved (stamp could not be applied).`
+          : stampChoice === 'approve' ? `✓ Record "${title}" saved for approval.`
           : rKind === 'rejection_notice' ? `✓ Rejection Notice "${title}" issued.`
           : rKind === 'notice' ? `✓ Notice of Determination "${title}" issued.`
           : `✓ Record "${title}" saved.`
@@ -11448,121 +11455,195 @@ function clearStampSignature() {
 }
 
 // ── Stamp step in upload form ─────────────────────────────────────────
-// Called after file is selected in addRecordForm — shows stamp opt-in
+function isDecisionMakerRole(role) {
+  const r = (role || '').toLowerCase().replace(/[\s_-]+/g, '');
+  return ['contractor','contractorpm','consultant','consultantpm','client','clientpm'].includes(r);
+}
+
+function openStampPlacementModal(file, onApply) {
+  const modal = document.createElement('div');
+  modal.style.position = 'fixed';
+  modal.style.inset = '0';
+  modal.style.background = 'rgba(15, 23, 42, 0.7)';
+  modal.style.display = 'flex';
+  modal.style.alignItems = 'center';
+  modal.style.justifyContent = 'center';
+  modal.style.zIndex = '99999';
+  modal.style.padding = '20px';
+  modal.innerHTML = `
+    <div style="width:min(1100px, 100%);max-height:90vh;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.25);">
+      <div style="padding:16px 18px;border-bottom:1px solid #e5e7eb;background:#f8fafc;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:15px;font-weight:700;color:#0f172a;">Choose stamp placement</div>
+          <div style="font-size:12px;color:#64748b;">Pick the page and position for the stamp on the uploaded document.</div>
+        </div>
+        <button type="button" id="stampPlacementClose" style="border:none;background:#ef4444;color:#fff;border-radius:6px;padding:7px 12px;cursor:pointer;">✕ Close</button>
+      </div>
+      <div style="display:grid;grid-template-columns:280px 1fr;gap:16px;padding:16px;max-height:calc(90vh - 120px);overflow:hidden;">
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <label style="font-size:12px;font-weight:700;color:#334155;">Page number</label>
+          <input id="stampPlacementPage" type="number" min="1" max="20" value="1" style="padding:8px;border:1px solid #cbd5e1;border-radius:6px;" />
+          <label style="font-size:12px;font-weight:700;color:#334155;">Horizontal position</label>
+          <input id="stampPlacementX" type="range" min="0" max="100" value="80" />
+          <label style="font-size:12px;font-weight:700;color:#334155;">Vertical position</label>
+          <input id="stampPlacementY" type="range" min="0" max="100" value="8" />
+          <div id="stampPlacementSummary" style="padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#475569;line-height:1.5;">Page 1 • x 80% • y 8%</div>
+          <button type="button" id="stampPlacementApply" style="padding:10px 12px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Apply placement</button>
+        </div>
+        <div id="stampPlacementPreview" style="border:1px solid #e2e8f0;border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:auto;padding:10px;min-height:480px;"></div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  const state = { page: 1, x: 0.8, y: 0.08 };
+  const previewContainer = modal.querySelector('#stampPlacementPreview');
+  const summary = modal.querySelector('#stampPlacementSummary');
+  const pageInput = modal.querySelector('#stampPlacementPage');
+  const xInput = modal.querySelector('#stampPlacementX');
+  const yInput = modal.querySelector('#stampPlacementY');
+
+  const previewUrl = URL.createObjectURL(file);
+  const ext = (file.name || '').split('.').pop().toLowerCase();
+  if (file.type.includes('pdf') || ext === 'pdf') {
+    const iframe = document.createElement('iframe');
+    iframe.src = `${previewUrl}#page=1`;
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    iframe.style.minHeight = '480px';
+    iframe.style.border = 'none';
+    previewContainer.appendChild(iframe);
+  } else if (file.type.startsWith('image/') || ['jpg','jpeg','png'].includes(ext)) {
+    const img = document.createElement('img');
+    img.src = previewUrl;
+    img.style.maxWidth = '100%';
+    img.style.maxHeight = '100%';
+    img.style.objectFit = 'contain';
+    previewContainer.appendChild(img);
+  } else {
+    previewContainer.innerHTML = '<div style="color:#64748b;font-size:13px;text-align:center;">Preview is not available for this file type. You can still choose the stamp placement manually.</div>';
+  }
+
+  const updatePreview = () => {
+    state.page = Math.max(1, parseInt(pageInput.value || '1', 10));
+    state.x = Math.max(0, Math.min(1, Number(xInput.value || '80') / 100));
+    state.y = Math.max(0, Math.min(1, Number(yInput.value || '8') / 100));
+    summary.textContent = `Page ${state.page} • x ${Math.round(state.x * 100)}% • y ${Math.round(state.y * 100)}%`;
+    if (file.type.includes('pdf') || ext === 'pdf') {
+      const iframe = previewContainer.querySelector('iframe');
+      if (iframe) iframe.src = `${previewUrl}#page=${state.page}`;
+    }
+  };
+
+  [pageInput, xInput, yInput].forEach(el => el.addEventListener('input', updatePreview));
+  updatePreview();
+
+  const closeModal = () => {
+    URL.revokeObjectURL(previewUrl);
+    modal.remove();
+  };
+
+  modal.querySelector('#stampPlacementClose').addEventListener('click', closeModal);
+  modal.querySelector('#stampPlacementApply').addEventListener('click', () => {
+    onApply(state);
+    closeModal();
+  });
+}
+
 async function showStampStep(fileInput, stampStepContainer) {
   const role = window.currentUserRole || '';
   const r = role.toLowerCase().replace(/[\s_-]+/g, '');
-  const isDM = ['contractor','contractorpm','consultant','consultantpm','client','clientpm'].includes(r);
+  const isDM = isDecisionMakerRole(role);
   if (!isDM) { stampStepContainer.style.display = 'none'; return; }
 
   const file = fileInput.files[0];
   if (!file) { stampStepContainer.style.display = 'none'; return; }
 
   const ext = file.name.split('.').pop().toLowerCase();
-  const stampable = ['pdf','jpg','jpeg','png'].includes(ext);
   const canConvertToPdf = ['pdf','jpg','jpeg','png'].includes(ext);
+  const canStamp = ['pdf','jpg','jpeg','png'].includes(ext);
   const pdfOptionContainer = document.getElementById('pdfSaveOption');
 
   if (pdfOptionContainer) {
-    if (!canConvertToPdf) {
-      pdfOptionContainer.innerHTML = `
-        <div style="padding:12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;">
-          <div style="font-weight:700;color:#b45309;margin-bottom:4px;">⚠️ PDF conversion is not available for this file type</div>
-          <div style="font-size:12px;color:#92400e;">
-            Upload a PDF, JPG, or PNG to save the file as PDF before storing it.
-          </div>
-        </div>`;
-      pdfOptionContainer.style.display = 'block';
-    } else {
-      pdfOptionContainer.innerHTML = `
-        <div style="padding:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:#0369a1;">
-            <input type="checkbox" id="saveAsPdfOption" />
-            <span><strong>Save this file as PDF</strong> before storing it</span>
-          </label>
-          <div style="margin-top:6px;font-size:11px;color:#6b7280;">
-            ${ext === 'pdf' ? 'The file is already PDF.' : 'This will convert the uploaded file to a PDF document.'}
-          </div>
-        </div>`;
-      pdfOptionContainer.style.display = 'block';
-    }
+    pdfOptionContainer.innerHTML = `
+      <div style="padding:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:#0369a1;">
+          <input type="checkbox" id="saveAsPdfOption" ${ext === 'pdf' ? 'checked' : ''} />
+          <span><strong>Convert this attachment to PDF before saving</strong></span>
+        </label>
+        <div style="margin-top:6px;font-size:11px;color:#6b7280;">
+          ${ext === 'pdf' ? 'The file is already PDF.' : canConvertToPdf ? 'This will convert the uploaded file to a PDF document before storing it.' : 'This option is available for PDF, JPG, and PNG files. Other formats will be stored as uploaded.'}
+        </div>
+      </div>`;
+    pdfOptionContainer.style.display = 'block';
   }
 
-  // Check if stamp exists
   let hasStamp = false;
   try {
     const r = await authFetch(`${API}/my-stamp`);
     if (r && r.ok) { const d = await r.json(); hasStamp = !!d.stamp; }
   } catch(_) {}
 
-  if (!stampable) {
-    stampStepContainer.innerHTML = `
-      <div style="padding:12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;">
-        <div style="font-weight:700;color:#b45309;margin-bottom:4px;">⚠️ Stamping not available</div>
-        <div style="font-size:12px;color:#92400e;">
-          Stamps can only be applied to <strong>PDF, JPG, or PNG</strong> files.
-          <br/>Your file is <strong>.${ext.toUpperCase()}</strong> — 
-          convert to PDF first if you want to add your stamp.
-        </div>
-      </div>`;
-    stampStepContainer.style.display = 'block';
-    return;
-  }
-
-  if (!hasStamp) {
-    stampStepContainer.innerHTML = `
-      <div style="padding:10px 12px;background:#fffbeb;border:1px solid #fcd34d;
-        border-radius:8px;font-size:12px;color:#92400e;">
-        ⚠️ You have no stamp set up.
-        <button type="button" onclick="openStampSetup()"
-          style="margin-left:8px;padding:3px 10px;font-size:11px;font-weight:600;
-          background:#d97706;color:#fff;border:none;border-radius:4px;cursor:pointer;">
-          Set up stamp →
-        </button>
-      </div>`;
-    stampStepContainer.style.display = 'block';
-    return;
-  }
-
   stampStepContainer.innerHTML = `
     <div style="padding:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;">
       <div style="font-size:12px;font-weight:700;color:#0369a1;margin-bottom:8px;">
-        🖋️ Add Digital Stamp to this document?
+        🖋️ Decision-maker document action
       </div>
-      <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
-        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
-          <input type="radio" name="stampChoice" value="yes" id="stampYes" />
-          <span style="font-weight:600;color:#0369a1;">Yes — stamp &amp; save as PDF</span>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;">
+          <input type="radio" name="stampChoice" value="save" id="stampChoiceSave" checked />
+          <span style="color:#374151;">Save document only</span>
         </label>
-        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
-          <input type="radio" name="stampChoice" value="no" id="stampNo" checked />
-          <span style="color:#6b7280;">No — upload as-is</span>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;">
+          <input type="radio" name="stampChoice" value="stamp" id="stampChoiceStamp" ${!canStamp || !hasStamp ? 'disabled' : ''} />
+          <span style="${!canStamp || !hasStamp ? 'color:#9ca3af;' : 'color:#0369a1;font-weight:600;'}">Add stamp to document</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;">
+          <input type="radio" name="stampChoice" value="approve" id="stampChoiceApprove" />
+          <span style="color:#065f46;font-weight:600;">Approve / accept without stamp</span>
         </label>
       </div>
-      <div id="stampTypeRow" style="display:none;margin-top:8px;">
-        <label style="font-size:11px;font-weight:700;color:#0369a1;display:block;margin-bottom:4px;">
-          Stamp type:
-        </label>
-        <select id="stampTypeSelect"
-          style="padding:6px 10px;border:1px solid #bae6fd;border-radius:5px;font-size:12px;">
-          <option value="SUBMITTED">SUBMITTED</option>
-          <option value="APPROVED">APPROVED</option>
-          <option value="REVIEWED">REVIEWED</option>
-          <option value="NOTED">NOTED</option>
-        </select>
-        <div style="margin-top:6px;font-size:11px;color:#6b7280;">
-          ℹ️ File will be converted and saved as PDF with your stamp.
-        </div>
+      <div id="stampPlacementBlock" style="display:none;margin-top:8px;">
+        <button type="button" id="stampPlacementBtn" style="padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;">Choose page & position</button>
+        <div id="stampPlacementSummary" style="margin-top:6px;font-size:11px;color:#6b7280;">No placement chosen yet.</div>
       </div>
+      <div id="approveNoticeBlock" style="display:none;margin-top:8px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#065f46;">
+          <input type="checkbox" id="createNoticeAfterApproval" />
+          <span>Create notice of determination after approval</span>
+        </label>
+      </div>
+      ${!hasStamp ? `<div style="margin-top:8px;padding:8px 10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;font-size:11px;color:#92400e;">⚠️ Add your stamp in “My Stamp” first to enable stamping.</div>` : ''}
+      ${!canStamp ? `<div style="margin-top:8px;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;font-size:11px;color:#b91c1c;">⚠️ Stamping is available after PDF conversion for PDF, JPG, or PNG files.</div>` : ''}
     </div>`;
   stampStepContainer.style.display = 'block';
 
-  document.getElementById('stampYes').addEventListener('change', () => {
-    document.getElementById('stampTypeRow').style.display = 'block';
-  });
-  document.getElementById('stampNo').addEventListener('change', () => {
-    document.getElementById('stampTypeRow').style.display = 'none';
-  });
+  const stampChoiceSave = document.getElementById('stampChoiceSave');
+  const stampChoiceStamp = document.getElementById('stampChoiceStamp');
+  const stampChoiceApprove = document.getElementById('stampChoiceApprove');
+  const stampPlacementBlock = document.getElementById('stampPlacementBlock');
+  const approveNoticeBlock = document.getElementById('approveNoticeBlock');
+  const stampPlacementSummary = document.getElementById('stampPlacementSummary');
+
+  const updateActionBlocks = () => {
+    const choice = document.querySelector('input[name="stampChoice"]:checked')?.value || 'save';
+    stampPlacementBlock.style.display = choice === 'stamp' ? 'block' : 'none';
+    approveNoticeBlock.style.display = choice === 'approve' ? 'block' : 'none';
+  };
+
+  [stampChoiceSave, stampChoiceStamp, stampChoiceApprove].forEach(el => el && el.addEventListener('change', updateActionBlocks));
+  updateActionBlocks();
+
+  const placementBtn = document.getElementById('stampPlacementBtn');
+  if (placementBtn) {
+    placementBtn.addEventListener('click', () => {
+      openStampPlacementModal(file, (placement) => {
+        if (stampPlacementSummary) {
+          stampPlacementSummary.textContent = `Placement saved: page ${placement.page} • x ${Math.round(placement.x * 100)}% • y ${Math.round(placement.y * 100)}%`;
+        }
+        window.__stampPlacement = placement;
+      });
+    });
+  }
 }
 
 // Called from saveRecordBtn handler after successful save to apply stamp
