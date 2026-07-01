@@ -6947,6 +6947,8 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
             <div id="attachmentName" style="margin-top:8px;font-size:12px;color:#28a745;font-weight:bold;display:none;"></div>
           </div>
 
+          <div id="pdfSaveOption" style="display:none;margin-bottom:16px;"></div>
+
           <!-- Stamp Step — shown after file selected, for decision makers only -->
           <div id="stampStepContainer" style="display:none;margin-bottom:16px;"></div>
 
@@ -7046,7 +7048,9 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       const stampType = (stampYes && stampYes.checked) 
         ? (document.getElementById('stampTypeSelect')?.value || 'SUBMITTED')
         : '';
-      console.log('[save-record] stampType:', stampType || 'not selected');
+      const saveAsPdfCheckbox = document.getElementById('saveAsPdfOption');
+      const saveAsPdf = !!(saveAsPdfCheckbox && saveAsPdfCheckbox.checked);
+      console.log('[save-record] stampType:', stampType || 'not selected', 'saveAsPdf:', saveAsPdf);
 
       const formData = new FormData();
       formData.append('recordType',  rType);
@@ -7055,7 +7059,8 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       formData.append('projectId',   localStorage.getItem('activeProjectId'));
       formData.append('recordKind',  rKind);
       if (tiedId) formData.append('noticeTiedId', tiedId);
-      if (stampType) formData.append('stampType', stampType);  // ← NEW: include stamp request
+      if (stampType) formData.append('stampType', stampType);
+      if (saveAsPdf) formData.append('saveAsPdf', 'true');
       if (fileInput.files.length > 0) formData.append('attachment', fileInput.files[0]);
 
       const saveBtn = document.getElementById('saveRecordBtn');
@@ -11455,6 +11460,33 @@ async function showStampStep(fileInput, stampStepContainer) {
 
   const ext = file.name.split('.').pop().toLowerCase();
   const stampable = ['pdf','jpg','jpeg','png'].includes(ext);
+  const canConvertToPdf = ['pdf','jpg','jpeg','png'].includes(ext);
+  const pdfOptionContainer = document.getElementById('pdfSaveOption');
+
+  if (pdfOptionContainer) {
+    if (!canConvertToPdf) {
+      pdfOptionContainer.innerHTML = `
+        <div style="padding:12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;">
+          <div style="font-weight:700;color:#b45309;margin-bottom:4px;">⚠️ PDF conversion is not available for this file type</div>
+          <div style="font-size:12px;color:#92400e;">
+            Upload a PDF, JPG, or PNG to save the file as PDF before storing it.
+          </div>
+        </div>`;
+      pdfOptionContainer.style.display = 'block';
+    } else {
+      pdfOptionContainer.innerHTML = `
+        <div style="padding:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:#0369a1;">
+            <input type="checkbox" id="saveAsPdfOption" />
+            <span><strong>Save this file as PDF</strong> before storing it</span>
+          </label>
+          <div style="margin-top:6px;font-size:11px;color:#6b7280;">
+            ${ext === 'pdf' ? 'The file is already PDF.' : 'This will convert the uploaded file to a PDF document.'}
+          </div>
+        </div>`;
+      pdfOptionContainer.style.display = 'block';
+    }
+  }
 
   // Check if stamp exists
   let hasStamp = false;
