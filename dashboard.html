@@ -11487,24 +11487,32 @@ function openStampPlacementModal(file, onApply) {
           <input id="stampPlacementX" type="range" min="0" max="100" value="80" />
           <label style="font-size:12px;font-weight:700;color:#334155;">Vertical position</label>
           <input id="stampPlacementY" type="range" min="0" max="100" value="8" />
-          <div id="stampPlacementSummary" style="padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#475569;line-height:1.5;">Page 1 • x 80% • y 8%</div>
+          <div id="stampPlacementModalSummary" style="padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#475569;line-height:1.5;">Page 1 • x 80% • y 8%</div>
           <button type="button" id="stampPlacementApply" style="padding:10px 12px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Apply placement</button>
         </div>
-        <div id="stampPlacementPreview" style="border:1px solid #e2e8f0;border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:auto;padding:10px;min-height:480px;"></div>
+        <div id="stampPlacementPreview" style="position:relative;border:1px solid #e2e8f0;border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:auto;padding:10px;min-height:480px;">
+          <div id="stampPlacementHint" style="position:absolute;top:10px;left:10px;right:10px;font-size:12px;color:#475569;">Click anywhere on the preview to set the stamp position.</div>
+          <div id="stampPlacementNote" style="position:absolute;top:35px;left:10px;right:10px;padding:8px 10px;background:rgba(255,255,255,0.94);border:1px solid rgba(148,163,184,0.4);border-radius:8px;font-size:12px;color:#0f172a;text-align:center;box-shadow:0 4px 10px rgba(15,23,42,0.08);">Use the preview click, sliders, or page selector to position the stamp.</div>
+          <div id="stampPlacementOverlayLabel" style="position:absolute;bottom:10px;left:10px;right:10px;padding:8px 10px;background:rgba(255,255,255,0.92);border:1px solid rgba(148,163,184,0.5);border-radius:8px;font-size:12px;color:#0f172a;text-align:center;box-shadow:0 4px 10px rgba(15,23,42,0.08);">Page 1 • x 80% • y 8%</div>
+        </div>
       </div>
     </div>`;
   document.body.appendChild(modal);
 
   const state = { page: 1, x: 0.8, y: 0.08 };
   const previewContainer = modal.querySelector('#stampPlacementPreview');
-  const summary = modal.querySelector('#stampPlacementSummary');
+  const summary = modal.querySelector('#stampPlacementModalSummary');
+  const overlayLabel = modal.querySelector('#stampPlacementOverlayLabel');
   const pageInput = modal.querySelector('#stampPlacementPage');
   const xInput = modal.querySelector('#stampPlacementX');
   const yInput = modal.querySelector('#stampPlacementY');
 
   const previewUrl = URL.createObjectURL(file);
   const ext = (file.name || '').split('.').pop().toLowerCase();
-  if (file.type.includes('pdf') || ext === 'pdf') {
+  const isPdf = file.type.includes('pdf') || ext === 'pdf';
+
+  let previewElement = null;
+  if (isPdf) {
     const iframe = document.createElement('iframe');
     iframe.src = `${previewUrl}#page=1`;
     iframe.style.width = '100%';
@@ -11512,28 +11520,62 @@ function openStampPlacementModal(file, onApply) {
     iframe.style.minHeight = '480px';
     iframe.style.border = 'none';
     previewContainer.appendChild(iframe);
+    previewElement = iframe;
   } else if (file.type.startsWith('image/') || ['jpg','jpeg','png'].includes(ext)) {
     const img = document.createElement('img');
     img.src = previewUrl;
     img.style.maxWidth = '100%';
     img.style.maxHeight = '100%';
     img.style.objectFit = 'contain';
+    img.style.pointerEvents = 'none';
     previewContainer.appendChild(img);
+    previewElement = img;
   } else {
     previewContainer.innerHTML = '<div style="color:#64748b;font-size:13px;text-align:center;">Preview is not available for this file type. You can still choose the stamp placement manually.</div>';
   }
+
+  const marker = document.createElement('div');
+  marker.style.cssText = 'position:absolute;width:14px;height:14px;border:3px solid #2563eb;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;display:none;z-index:4;box-shadow:0 0 0 2px rgba(37,99,235,0.22);background:rgba(59,130,246,0.15);';
+  previewContainer.appendChild(marker);
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:absolute;inset:0;cursor:crosshair;z-index:3;';
+  previewContainer.appendChild(overlay);
+
+  const updateMarker = () => {
+    marker.style.left = `${Math.round(state.x * 100)}%`;
+    marker.style.top = `${Math.round((1 - state.y) * 100)}%`;
+    marker.style.display = 'block';
+  };
 
   const updatePreview = () => {
     state.page = Math.max(1, parseInt(pageInput.value || '1', 10));
     state.x = Math.max(0, Math.min(1, Number(xInput.value || '80') / 100));
     state.y = Math.max(0, Math.min(1, Number(yInput.value || '8') / 100));
-    summary.textContent = `Page ${state.page} • x ${Math.round(state.x * 100)}% • y ${Math.round(state.y * 100)}%`;
-    if (file.type.includes('pdf') || ext === 'pdf') {
+    const label = `Page ${state.page} • x ${Math.round(state.x * 100)}% • y ${Math.round(state.y * 100)}%`;
+    summary.textContent = label;
+    if (overlayLabel) overlayLabel.textContent = label;
+    if (isPdf) {
       const iframe = previewContainer.querySelector('iframe');
       if (iframe) iframe.src = `${previewUrl}#page=${state.page}`;
     }
+    updateMarker();
   };
 
+  const handlePreviewClick = (event) => {
+    const rect = previewContainer.getBoundingClientRect();
+    const clickX = event.clientX - rect.left;
+    const clickY = event.clientY - rect.top;
+    const xRatio = Math.max(0, Math.min(1, clickX / rect.width));
+    const yRatio = Math.max(0, Math.min(1, 1 - (clickY / rect.height)));
+    state.x = xRatio;
+    state.y = yRatio;
+    xInput.value = String(Math.round(state.x * 100));
+    yInput.value = String(Math.round(state.y * 100));
+    updatePreview();
+  };
+
+  overlay.addEventListener('pointerdown', handlePreviewClick);
   [pageInput, xInput, yInput].forEach(el => el.addEventListener('input', updatePreview));
   updatePreview();
 
