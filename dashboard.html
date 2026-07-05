@@ -7055,13 +7055,16 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       formData.append('projectId',   localStorage.getItem('activeProjectId'));
       formData.append('recordKind',  rKind);
       if (tiedId) formData.append('noticeTiedId', tiedId);
-      if (stampChoice === 'stamp') formData.append('stampAction', 'stamp');
-      else if (stampChoice === 'approve') formData.append('stampAction', 'approve');
       if (stampChoice === 'stamp') {
+        formData.append('stampAction', 'stamp');
+        const stampLabel = document.getElementById('stampTypeSelect')?.value || 'STAMPED';
+        formData.append('stampType', stampLabel);
         const placement = window.__stampPlacement || { page: 1, x: 0.8, y: 0.08 };
         formData.append('stampPage', String(placement.page || 1));
         formData.append('stampX', String(placement.x ?? 0.8));
         formData.append('stampY', String(placement.y ?? 0.08));
+      } else if (stampChoice === 'approve') {
+        formData.append('stampAction', 'approve');
       }
       if (stampChoice === 'approve' && document.getElementById('createNoticeAfterApproval')?.checked) {
         formData.append('createNotice', 'true');
@@ -11645,8 +11648,18 @@ async function showStampStep(fileInput, stampStepContainer) {
         </label>
       </div>
       <div id="stampPlacementBlock" style="display:none;margin-top:8px;">
-        <button type="button" id="stampPlacementBtn" style="padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;">Choose page & position</button>
-        <div id="stampPlacementSummary" style="margin-top:6px;font-size:11px;color:#6b7280;">No placement chosen yet.</div>
+        <div style="margin-bottom:8px;">
+          <label style="font-size:11px;font-weight:700;color:#0369a1;display:block;margin-bottom:4px;">Stamp label:</label>
+          <select id="stampTypeSelect" style="width:100%;padding:7px 10px;border:1px solid #bae6fd;border-radius:5px;font-size:12px;color:#0f172a;background:#fff;">
+            <option value="STAMPED">STAMPED</option>
+            <option value="APPROVED">APPROVED</option>
+            <option value="REVIEWED">REVIEWED</option>
+            <option value="NOTED">NOTED</option>
+            <option value="REJECTED">REJECTED</option>
+          </select>
+        </div>
+        <button type="button" id="stampPlacementBtn" style="padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;">📍 Choose page &amp; position</button>
+        <div id="stampPlacementSummary" style="margin-top:6px;font-size:11px;color:#6b7280;">Default: last page, bottom-right. Click above to customise.</div>
       </div>
       <div id="approveNoticeBlock" style="display:none;margin-top:8px;">
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#065f46;">
@@ -11688,65 +11701,7 @@ async function showStampStep(fileInput, stampStepContainer) {
   }
 }
 
-// Called from saveRecordBtn handler after successful save to apply stamp
-async function applyStampIfRequested(recordId, recordType, projectId) {
-  const stampYes = document.getElementById('stampYes');
-  console.log('[STAMP] applyStampIfRequested called', { stampYes: !!stampYes, checked: stampYes?.checked, recordId, recordType, projectId });
-  
-  if (!stampYes || !stampYes.checked) {
-    console.log('[STAMP] ℹ️ User opted out or element missing - skipping stamp');
-    return;
-  }
-  
-  const stampType = document.getElementById('stampTypeSelect')?.value || 'SUBMITTED';
-  console.log('[STAMP] User opted in for stamp:', { stampType });
-  
-  try {
-    const payload = { recordId, recordType, projectId, stampType };
-    console.log('[STAMP] Sending request to /sign-record:', payload);
-    
-    const res = await authFetch(`${API}/sign-record`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    
-    console.log('[STAMP] Response status:', res?.status, res?.ok);
-    
-    if (!res) {
-      console.error('[STAMP] ❌ No response from server');
-      return;
-    }
-    
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({ error: res.statusText }));
-      console.error('[STAMP] ❌ Server error:', res.status, errData);
-      
-      // Show user-friendly error message
-      if (errData.error) {
-        alert('⚠️ Stamp failed: ' + errData.error);
-      } else {
-        alert('❌ Stamp failed with status ' + res.status);
-      }
-      return;
-    }
-    
-    const d = await res.json();
-    console.log('[STAMP] ✅ Response:', d);
-    
-    if (d.success || d.signed_at) {
-      console.log('[STAMP] ✅ Applied successfully!', { 
-        signed_at: d.signed_at,
-        stamped_doc_url: d.stamped_doc_url || 'N/A',
-        signature_hash: d.signature_hash?.substring(0, 8) + '...' || 'N/A'
-      });
-    } else {
-      console.warn('[STAMP] ⚠️ Response ok but no success flag:', d);
-    }
-  } catch (err) {
-    console.error('[STAMP] ❌ Caught error:', err.message, err.stack);
-  }
-}
+// stamp is applied inline via stampAction in add-record formData
 
 </script>
 </body>
