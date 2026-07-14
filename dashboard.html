@@ -1114,6 +1114,7 @@
       .right-main-part { width: 100%; }
     }
   </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/signature_pad/4.1.7/signature_pad.umd.min.js"></script>
 </head>
 <body>
@@ -7082,6 +7083,23 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       const saveAsPdf = !!(saveAsPdfCheckbox && saveAsPdfCheckbox.checked);
       console.log('[save-record] stampChoice:', stampChoice, 'saveAsPdf:', saveAsPdf);
 
+      let attachmentFile = fileInput.files[0];
+      let clientStamped = false;
+      if (stampChoice === 'stamp') {
+        const placement = window.__stampPlacement || { page: 1, x: 0.8, y: 0.08 };
+        const stampType = 'STAMPED';
+        const stampProfile = await loadStampProfile();
+        if (!stampProfile) throw new Error('No stamp profile is available for stamping.');
+        const ext = (attachmentFile?.name || '').split('.').pop().toLowerCase();
+        if (!['pdf','jpg','jpeg','png'].includes(ext)) {
+          throw new Error('Stamping is only supported for PDF, JPG, and PNG files.');
+        }
+        const stampedBlob = await createStampedFileBlob(attachmentFile, placement, stampType, stampProfile);
+        const stampedName = `${(attachmentFile.name || 'document').replace(/\.[^/.]+$/, '')}-stamped.pdf`;
+        attachmentFile = new File([stampedBlob], stampedName, { type: 'application/pdf' });
+        clientStamped = true;
+      }
+
       const formData = new FormData();
       formData.append('recordType',  rType);
       formData.append('title',       title);
@@ -7089,8 +7107,12 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       formData.append('projectId',   localStorage.getItem('activeProjectId'));
       formData.append('recordKind',  rKind);
       if (tiedId) formData.append('noticeTiedId', tiedId);
-      if (stampChoice === 'stamp') formData.append('stampAction', 'stamp');
-      else if (stampChoice === 'approve') formData.append('stampAction', 'approve');
+      if (stampChoice === 'stamp') {
+        formData.append('clientStamped', 'true');
+        formData.append('stampType', 'STAMPED');
+      } else if (stampChoice === 'approve') {
+        formData.append('stampAction', 'approve');
+      }
       if (stampChoice === 'stamp') {
         const placement = window.__stampPlacement || { page: 1, x: 0.8, y: 0.08 };
         formData.append('stampPage', String(placement.page || 1));
@@ -7101,7 +7123,7 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
         formData.append('createNotice', 'true');
       }
       if (saveAsPdf) formData.append('saveAsPdf', 'true');
-      if (fileInput.files.length > 0) formData.append('attachment', fileInput.files[0]);
+      if (attachmentFile) formData.append('attachment', attachmentFile);
 
       const saveBtn = document.getElementById('saveRecordBtn');
       if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = stampChoice === 'stamp' ? 'Preparing stamp…' : stampChoice === 'approve' ? 'Submitting approval…' : 'Saving…'; }
@@ -11569,7 +11591,11 @@ function openStampPlacementModal(file, onApply) {
   }
 
   const marker = document.createElement('div');
-  marker.style.cssText = 'position:absolute;width:14px;height:14px;border:3px solid #2563eb;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;display:none;z-index:4;box-shadow:0 0 0 2px rgba(37,99,235,0.22);background:rgba(59,130,246,0.15);';
+  marker.style.cssText = 'position:absolute;width:180px;height:90px;border:2px dashed rgba(37,99,235,0.85);border-radius:12px;transform:translate(-50%,-50%);pointer-events:none;display:none;z-index:4;background:rgba(37,99,235,0.14);';
+  const markerLabel = document.createElement('div');
+  markerLabel.style.cssText = 'position:absolute;top:8px;left:10px;font-size:11px;font-weight:700;color:#0f172a;text-shadow:0 1px 2px rgba(255,255,255,0.9);pointer-events:none;';
+  markerLabel.textContent = 'Stamp position';
+  marker.appendChild(markerLabel);
   previewContainer.appendChild(marker);
 
   const overlay = document.createElement('div');
@@ -11720,6 +11746,95 @@ async function showStampStep(fileInput, stampStepContainer) {
       });
     });
   }
+}
+
+async function loadStampProfile() {
+  try {
+    const res = await authFetch(`${API}/my-stamp`);
+    if (!res || !res.ok) return null;
+    const data = await res.json();
+    return data.stamp || null;
+  } catch (err) {
+    console.error('[STAMP] loadStampProfile error:', err);
+    return null;
+  }
+}
+
+async function createStampedFileBlob(file, placement, stampType, stampProfile) {
+  const arrayBuffer = await file.arrayBuffer();
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  let pdfDoc;
+
+  if (file.type.includes('pdf') || ext === 'pdf') {
+    pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
+  } else if (['jpg', 'jpeg', 'png'].includes(ext) || file.type.startsWith('image/')) {
+    pdfDoc = await PDFLib.PDFDocument.create();
+    const img = ['png'].includes(ext) || file.type.includes('png')
+      ? await pdfDoc.embedPng(arrayBuffer)
+      : await pdfDoc.embedJpg(arrayBuffer);
+    const page = pdfDoc.addPage([img.width, img.height]);
+    page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+  } else {
+    throw new Error('Unsupported file type for client stamping.');
+  }
+
+  const pages = pdfDoc.getPages();
+  const pageIndex = Math.max(0, Math.min((placement.page || 1) - 1, pages.length - 1));
+  const page = pages[pageIndex];
+  const { width, height } = page.getSize();
+
+  const rectWidth = Math.min(220, width * 0.45);
+  const rectHeight = Math.min(100, height * 0.22);
+  const x = Math.min(Math.max((placement.x ?? 0.8) * width, 10), width - rectWidth - 10);
+  const y = Math.min(Math.max(height - ((placement.y ?? 0.08) * height) - rectHeight, 10), height - rectHeight - 10);
+
+  page.drawRectangle({
+    x, y, width: rectWidth, height: rectHeight,
+    color: PDFLib.rgb(0.98, 0.98, 0.98),
+    borderColor: PDFLib.rgb(0.15, 0.45, 0.82),
+    borderWidth: 1.4,
+    opacity: 0.96,
+  });
+
+  const titleFont = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  const bodyFont = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+  const label = (stampType || 'STAMPED').toUpperCase();
+
+  page.drawText(label, { x: x + 10, y: y + rectHeight - 20, size: 13, font: titleFont, color: PDFLib.rgb(0.07, 0.44, 0.52) });
+  page.drawText(stampProfile.role || 'Decision Maker', { x: x + 10, y: y + rectHeight - 35, size: 9, font: bodyFont, color: PDFLib.rgb(0.18, 0.18, 0.18) });
+  page.drawText(new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }), { x: x + 10, y: y + rectHeight - 50, size: 9, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
+
+  if (stampProfile.stamp_image_url) {
+    try {
+      const stampResp = await fetch(stampProfile.stamp_image_url);
+      const stampData = await stampResp.arrayBuffer();
+      const stampImg = stampProfile.stamp_image_url.toLowerCase().endsWith('.png')
+        ? await pdfDoc.embedPng(stampData)
+        : await pdfDoc.embedJpg(stampData);
+      page.drawImage(stampImg, { x: x + 10, y: y + 8, width: Math.min(60, rectWidth - 20), height: Math.min(60, rectHeight - 20) });
+    } catch (err) {
+      console.warn('[STAMP] Could not embed stamp image:', err);
+    }
+  }
+
+  if (stampProfile.signature_image) {
+    try {
+      const sigMatch = String(stampProfile.signature_image).match(/^data:image\/(png|jpeg|jpg);base64,(.+)$/i);
+      if (sigMatch) {
+        const sigType = sigMatch[1].toLowerCase();
+        const sigBuffer = Uint8Array.from(atob(sigMatch[2]), c => c.charCodeAt(0));
+        const signatureImg = sigType === 'png'
+          ? await pdfDoc.embedPng(sigBuffer)
+          : await pdfDoc.embedJpg(sigBuffer);
+        page.drawImage(signatureImg, { x: x + rectWidth - 90, y: y + 10, width: 80, height: 40 });
+      }
+    } catch (err) {
+      console.warn('[STAMP] Could not embed signature image:', err);
+    }
+  }
+
+  const pdfBytes = await pdfDoc.save();
+  return new Blob([pdfBytes], { type: 'application/pdf' });
 }
 
 // Called from saveRecordBtn handler after successful save to apply stamp
