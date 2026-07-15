@@ -7046,20 +7046,28 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
   dropZone.addEventListener('click',     () => attachInput.click());
   dropZone.addEventListener('dragover',  (e) => { e.preventDefault(); dropZone.style.borderColor = '#007B8A'; });
   dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = '#ddd'; });
+  const onAttachmentSelected = (file) => {
+    // Reset any prior prepared/stamped state whenever a new file is picked
+    window.__preparedFile = null;
+    window.__stampPlacement = null;
+    const convertContainer = document.getElementById('pdfSaveOption');
+    const stampContainer = document.getElementById('stampStepContainer');
+    if (stampContainer) { stampContainer.style.display = 'none'; stampContainer.innerHTML = ''; }
+    if (file && convertContainer) renderConvertStep(file, convertContainer, stampContainer);
+  };
+
   dropZone.addEventListener('drop', (e) => {
     e.preventDefault(); dropZone.style.borderColor = '#ddd';
     if (e.dataTransfer.files.length > 0) {
       const dt = new DataTransfer(); dt.items.add(e.dataTransfer.files[0]);
       attachInput.files = dt.files;
       updateAttachDisplay();
-      const stampContainerDrop = document.getElementById('stampStepContainer');
-      if (stampContainerDrop) showStampStep(attachInput, stampContainerDrop);
+      onAttachmentSelected(attachInput.files[0]);
     }
   });
   attachInput.addEventListener('change', () => {
     updateAttachDisplay();
-    const stampContainer = document.getElementById('stampStepContainer');
-    if (stampContainer) showStampStep(attachInput, stampContainer);
+    onAttachmentSelected(attachInput.files[0]);
   });
 
   document.getElementById('saveRecordBtn').addEventListener('click', async () => {
@@ -7082,23 +7090,27 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
         throw new Error('File size must not exceed 10MB.');
 
       const stampChoice = document.querySelector('input[name="stampChoice"]:checked')?.value || 'save';
-      const saveAsPdfCheckbox = document.getElementById('saveAsPdfOption');
-      const saveAsPdf = !!(saveAsPdfCheckbox && saveAsPdfCheckbox.checked);
-      console.log('[save-record] stampChoice:', stampChoice, 'saveAsPdf:', saveAsPdf);
+      console.log('[save-record] stampChoice:', stampChoice);
 
-      let attachmentFile = fileInput.files[0];
+      // Base attachment is whatever the convert-to-PDF step prepared (already
+      // converted to PDF when needed, or the original file for unsupported types).
+      // If nothing was prepared (e.g. no file attached at all), fall back to the raw input.
+      let attachmentFile = window.__preparedFile || fileInput.files[0] || null;
       let clientStamped = false;
+
       if (stampChoice === 'stamp') {
+        if (!attachmentFile) throw new Error('Attach a document before adding a stamp.');
         const placement = window.__stampPlacement || { page: 1, x: 0.8, y: 0.08 };
         const stampType = 'STAMPED';
         const stampProfile = await loadStampProfile();
         if (!stampProfile) throw new Error('No stamp profile is available for stamping.');
-        const ext = (attachmentFile?.name || '').split('.').pop().toLowerCase();
-        if (!['pdf','jpg','jpeg','png'].includes(ext)) {
-          throw new Error('Stamping is only supported for PDF, JPG, and PNG files.');
+        const ext = (attachmentFile.name || '').split('.').pop().toLowerCase();
+        if (ext !== 'pdf') {
+          throw new Error('The document must be converted to PDF before it can be stamped.');
         }
         const stampedBlob = await createStampedFileBlob(attachmentFile, placement, stampType, stampProfile);
         const stampedName = `${(attachmentFile.name || 'document').replace(/\.[^/.]+$/, '')}-stamped.pdf`;
+        // The stamped file REPLACES the prepared file — only this one gets saved.
         attachmentFile = new File([stampedBlob], stampedName, { type: 'application/pdf' });
         clientStamped = true;
       }
@@ -7113,23 +7125,17 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       if (stampChoice === 'stamp') {
         formData.append('clientStamped', 'true');
         formData.append('stampType', 'STAMPED');
-      } else if (stampChoice === 'approve') {
-        formData.append('stampAction', 'approve');
-      }
-      if (stampChoice === 'stamp') {
         const placement = window.__stampPlacement || { page: 1, x: 0.8, y: 0.08 };
         formData.append('stampPage', String(placement.page || 1));
         formData.append('stampX', String(placement.x ?? 0.8));
         formData.append('stampY', String(placement.y ?? 0.08));
       }
-      if (stampChoice === 'approve' && document.getElementById('createNoticeAfterApproval')?.checked) {
-        formData.append('createNotice', 'true');
-      }
-      if (saveAsPdf) formData.append('saveAsPdf', 'true');
+      // Only ONE file is ever sent — the prepared/converted file, or the stamped
+      // version replacing it when the user chose to stamp.
       if (attachmentFile) formData.append('attachment', attachmentFile);
 
       const saveBtn = document.getElementById('saveRecordBtn');
-      if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = stampChoice === 'stamp' ? 'Preparing stamp…' : stampChoice === 'approve' ? 'Submitting approval…' : 'Saving…'; }
+      if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = stampChoice === 'stamp' ? 'Preparing stamp…' : 'Saving…'; }
 
       const res = await authFetch(`${API}/add-record`, { method: 'POST', body: formData });
       if (!res) return;
@@ -11654,33 +11660,88 @@ function openStampPlacementModal(file, onApply) {
   });
 }
 
-async function showStampStep(fileInput, stampStepContainer) {
-  const role = window.currentUserRole || '';
-  const r = role.toLowerCase().replace(/[\s_-]+/g, '');
-  const isDM = isDecisionMakerRole(role);
-  if (!isDM) { stampStepContainer.style.display = 'none'; return; }
+// STEP 1 — runs for every user (not just decision makers): make sure the
+// attachment is a PDF before anything else can happen to it.
+async function renderConvertStep(file, convertContainer, stampContainer) {
+  if (!convertContainer) return;
+  const ext = (file.name || '').split('.').pop().toLowerCase();
+  const isPdf = ext === 'pdf';
+  const isImage = ['jpg','jpeg','png'].includes(ext);
+  const isConvertible = isPdf || isImage;
 
-  const file = fileInput.files[0];
-  if (!file) { stampStepContainer.style.display = 'none'; return; }
-
-  const ext = file.name.split('.').pop().toLowerCase();
-  const canConvertToPdf = ['pdf','jpg','jpeg','png'].includes(ext);
-  const canStamp = ['pdf','jpg','jpeg','png'].includes(ext);
-  const pdfOptionContainer = document.getElementById('pdfSaveOption');
-
-  if (pdfOptionContainer) {
-    pdfOptionContainer.innerHTML = `
-      <div style="padding:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:#0369a1;">
-          <input type="checkbox" id="saveAsPdfOption" ${ext === 'pdf' ? 'checked' : ''} />
-          <span><strong>Convert this attachment to PDF before saving</strong></span>
-        </label>
-        <div style="margin-top:6px;font-size:11px;color:#6b7280;">
-          ${ext === 'pdf' ? 'The file is already PDF.' : canConvertToPdf ? 'This will convert the uploaded file to a PDF document before storing it.' : 'This option is available for PDF, JPG, and PNG files. Other formats will be stored as uploaded.'}
-        </div>
+  if (!isConvertible) {
+    // No conversion capability exists for this file type (e.g. DOC/DOCX/XLS/XLSX).
+    // It gets stored as-uploaded, and stamping stays unavailable for it.
+    window.__preparedFile = file;
+    convertContainer.innerHTML = `
+      <div style="padding:12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;">
+        <div style="font-size:12px;font-weight:700;color:#b91c1c;">⚠️ Cannot convert this file type to PDF</div>
+        <div style="margin-top:4px;font-size:11px;color:#6b7280;">.${ext.toUpperCase()} files are saved as uploaded. Stamping is only available for PDF, JPG, and PNG documents.</div>
       </div>`;
-    pdfOptionContainer.style.display = 'block';
+    convertContainer.style.display = 'block';
+    if (stampContainer) renderStampStep(window.__preparedFile, stampContainer);
+    return;
   }
+
+  if (isPdf) {
+    // Already a PDF — nothing to convert, move straight on.
+    window.__preparedFile = file;
+    convertContainer.innerHTML = `
+      <div style="padding:10px 12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;font-size:12px;color:#166534;">
+        ✓ Document is already a PDF.
+      </div>`;
+    convertContainer.style.display = 'block';
+    if (stampContainer) renderStampStep(window.__preparedFile, stampContainer);
+    return;
+  }
+
+  // Image file — conversion is required before the user can proceed.
+  window.__preparedFile = null;
+  if (stampContainer) { stampContainer.style.display = 'none'; stampContainer.innerHTML = ''; }
+  convertContainer.innerHTML = `
+    <div style="padding:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;">
+      <div style="font-size:12px;font-weight:700;color:#0369a1;margin-bottom:6px;">📄 Convert to PDF</div>
+      <div style="font-size:11px;color:#6b7280;margin-bottom:10px;">This document must be converted to PDF before it can be saved or stamped.</div>
+      <button type="button" id="convertToPdfBtn" style="padding:8px 12px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;">Convert document to PDF</button>
+      <div id="convertToPdfStatus" style="margin-top:8px;font-size:11px;color:#6b7280;"></div>
+    </div>`;
+  convertContainer.style.display = 'block';
+
+  const btn = document.getElementById('convertToPdfBtn');
+  const status = document.getElementById('convertToPdfStatus');
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Converting…';
+    try {
+      const pdfDoc = await PDFLib.PDFDocument.create();
+      const arrayBuffer = await file.arrayBuffer();
+      const img = ext === 'png' ? await pdfDoc.embedPng(arrayBuffer) : await pdfDoc.embedJpg(arrayBuffer);
+      const page = pdfDoc.addPage([img.width, img.height]);
+      page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+      const pdfBytes = await pdfDoc.save();
+      const convertedName = `${file.name.replace(/\.[^/.]+$/, '')}.pdf`;
+      // The converted PDF becomes the local attachment — the original image is discarded.
+      window.__preparedFile = new File([pdfBytes], convertedName, { type: 'application/pdf' });
+      status.innerHTML = `<span style="color:#166534;">✓ Converted to PDF (${convertedName})</span>`;
+      btn.style.display = 'none';
+      if (stampContainer) renderStampStep(window.__preparedFile, stampContainer);
+    } catch (err) {
+      console.error('[convert-to-pdf] failed:', err);
+      status.innerHTML = `<span style="color:#b91c1c;">Conversion failed: ${err.message}</span>`;
+      btn.disabled = false;
+      btn.textContent = 'Convert document to PDF';
+    }
+  });
+}
+
+// STEP 2 — decision makers only, and only once a prepared PDF exists.
+async function renderStampStep(file, stampStepContainer) {
+  const role = window.currentUserRole || '';
+  const isDM = isDecisionMakerRole(role);
+  if (!isDM || !file) { stampStepContainer.style.display = 'none'; return; }
+
+  const ext = (file.name || '').split('.').pop().toLowerCase();
+  const canStamp = ext === 'pdf';
 
   let hasStamp = false;
   try {
@@ -11702,49 +11763,61 @@ async function showStampStep(fileInput, stampStepContainer) {
           <input type="radio" name="stampChoice" value="stamp" id="stampChoiceStamp" ${!canStamp || !hasStamp ? 'disabled' : ''} />
           <span style="${!canStamp || !hasStamp ? 'color:#9ca3af;' : 'color:#0369a1;font-weight:600;'}">Add stamp to document</span>
         </label>
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;">
-          <input type="radio" name="stampChoice" value="approve" id="stampChoiceApprove" />
-          <span style="color:#065f46;font-weight:600;">Approve / accept without stamp</span>
-        </label>
       </div>
       <div id="stampPlacementBlock" style="display:none;margin-top:8px;">
-        <button type="button" id="stampPlacementBtn" style="padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;">Choose page & position</button>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;">
+            <input type="radio" name="stampPlaceMode" value="choose" id="stampPlaceModeChoose" checked />
+            <span style="color:#374151;">Choose page &amp; position</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;">
+            <input type="radio" name="stampPlaceMode" value="append" id="stampPlaceModeAppend" />
+            <span style="color:#374151;">Add stamp on a new page at the end of the document</span>
+          </label>
+        </div>
+        <button type="button" id="stampPlacementBtn" style="padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;">Choose page &amp; position</button>
         <div id="stampPlacementSummary" style="margin-top:6px;font-size:11px;color:#6b7280;">No placement chosen yet.</div>
       </div>
-      <div id="approveNoticeBlock" style="display:none;margin-top:8px;">
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#065f46;">
-          <input type="checkbox" id="createNoticeAfterApproval" />
-          <span>Create notice of determination after approval</span>
-        </label>
-      </div>
       ${!hasStamp ? `<div style="margin-top:8px;padding:8px 10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;font-size:11px;color:#92400e;">⚠️ Add your stamp in “My Stamp” first to enable stamping.</div>` : ''}
-      ${!canStamp ? `<div style="margin-top:8px;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;font-size:11px;color:#b91c1c;">⚠️ Stamping is available after PDF conversion for PDF, JPG, or PNG files.</div>` : ''}
+      ${!canStamp ? `<div style="margin-top:8px;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;font-size:11px;color:#b91c1c;">⚠️ Convert the document to PDF first to enable stamping.</div>` : ''}
     </div>`;
   stampStepContainer.style.display = 'block';
 
   const stampChoiceSave = document.getElementById('stampChoiceSave');
   const stampChoiceStamp = document.getElementById('stampChoiceStamp');
-  const stampChoiceApprove = document.getElementById('stampChoiceApprove');
   const stampPlacementBlock = document.getElementById('stampPlacementBlock');
-  const approveNoticeBlock = document.getElementById('approveNoticeBlock');
   const stampPlacementSummary = document.getElementById('stampPlacementSummary');
+  const placeModeChoose = document.getElementById('stampPlaceModeChoose');
+  const placeModeAppend = document.getElementById('stampPlaceModeAppend');
+  const placementBtn = document.getElementById('stampPlacementBtn');
 
   const updateActionBlocks = () => {
     const choice = document.querySelector('input[name="stampChoice"]:checked')?.value || 'save';
     stampPlacementBlock.style.display = choice === 'stamp' ? 'block' : 'none';
-    approveNoticeBlock.style.display = choice === 'approve' ? 'block' : 'none';
+    if (choice !== 'stamp') window.__stampPlacement = null;
   };
-
-  [stampChoiceSave, stampChoiceStamp, stampChoiceApprove].forEach(el => el && el.addEventListener('change', updateActionBlocks));
+  [stampChoiceSave, stampChoiceStamp].forEach(el => el && el.addEventListener('change', updateActionBlocks));
   updateActionBlocks();
 
-  const placementBtn = document.getElementById('stampPlacementBtn');
+  const updatePlaceMode = () => {
+    const mode = document.querySelector('input[name="stampPlaceMode"]:checked')?.value || 'choose';
+    if (mode === 'append') {
+      placementBtn.style.display = 'none';
+      window.__stampPlacement = { page: 'append', x: 0.5, y: 0.5 };
+      stampPlacementSummary.textContent = 'Stamp will be added on a new final page.';
+    } else {
+      placementBtn.style.display = 'inline-block';
+      window.__stampPlacement = null;
+      stampPlacementSummary.textContent = 'No placement chosen yet.';
+    }
+  };
+  [placeModeChoose, placeModeAppend].forEach(el => el && el.addEventListener('change', updatePlaceMode));
+  updatePlaceMode();
+
   if (placementBtn) {
     placementBtn.addEventListener('click', () => {
       openStampPlacementModal(file, (placement) => {
-        if (stampPlacementSummary) {
-          stampPlacementSummary.textContent = `Placement saved: page ${placement.page} • x ${Math.round(placement.x * 100)}% • y ${Math.round(placement.y * 100)}%`;
-        }
+        stampPlacementSummary.textContent = `Placement saved: page ${placement.page} • x ${Math.round(placement.x * 100)}% • y ${Math.round(placement.y * 100)}%`;
         window.__stampPlacement = placement;
       });
     });
@@ -11781,9 +11854,16 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
     throw new Error('Unsupported file type for client stamping.');
   }
 
-  const pages = pdfDoc.getPages();
-  const pageIndex = Math.max(0, Math.min((placement.page || 1) - 1, pages.length - 1));
-  const page = pages[pageIndex];
+  let page;
+  if (placement.page === 'append') {
+    const existingPages = pdfDoc.getPages();
+    const refSize = existingPages.length ? existingPages[existingPages.length - 1].getSize() : { width: 595.28, height: 841.89 };
+    page = pdfDoc.addPage([refSize.width, refSize.height]);
+  } else {
+    const pages = pdfDoc.getPages();
+    const pageIndex = Math.max(0, Math.min((placement.page || 1) - 1, pages.length - 1));
+    page = pages[pageIndex];
+  }
   const { width, height } = page.getSize();
 
   const rectWidth = Math.min(220, width * 0.45);
