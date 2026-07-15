@@ -6495,14 +6495,11 @@ function renderRecordsList(records, tabKey) {
                     ⬇️ ${fileName}
                   </a>
                   ${doc.stamp_type && doc.signed_at
-                    ? `<a data-action="download-stamped"
-                        style="display:inline-flex;align-items:center;gap:6px;background:#f0fdf4;color:#065f46;
-                        border:1px solid #6ee7b7;border-radius:6px;padding:6px 12px;
-                        font-size:12px;font-weight:600;text-decoration:none;cursor:pointer;">
-                        🖋️ Download Stamped PDF
-                        <span style="font-size:10px;background:#065f46;color:#fff;
-                          border-radius:3px;padding:1px 5px;">${doc.stamp_type}</span>
-                      </a>`
+                    ? `<span style="display:inline-flex;align-items:center;gap:4px;background:#f0fdf4;color:#065f46;
+                        border:1px solid #6ee7b7;border-radius:6px;padding:5px 10px;
+                        font-size:11px;font-weight:700;">
+                        🖋️ ${doc.stamp_type}
+                      </span>`
                     : ''}
                 </div>
                </div>` : ''}
@@ -6595,7 +6592,6 @@ bottomContent.addEventListener('click', (e) => {
     }
     case 'delete':   deleteRecord(recordId, tabKey); break;
     case 'download': downloadFile(recordId, tabKey, actionEl.getAttribute('data-filename')); break;
-    case 'download-stamped': downloadStampedFile(recordId, tabKey); break;
   }
 });
 
@@ -6756,29 +6752,6 @@ function openTeamMemberComment(recordId, tabKey) {
 // =======================================================================
 //  DOWNLOAD FILE
 // =======================================================================
-async function downloadStampedFile(recordId, tabKey) {
-  try {
-    const url = `${API}/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}`;
-    const res = await authFetch(url);
-    if (!res || !res.ok) {
-      const err = await res?.json().catch(() => ({}));
-      alert(err.error || 'Could not download stamped PDF.');
-      return;
-    }
-    const blob = await res.blob();
-    const contentDisposition = res.headers.get('content-disposition') || '';
-    const filenameMatch = contentDisposition.match(/filename\s*=\s*"?([^";]+)"?/i);
-    const filename = filenameMatch ? filenameMatch[1] : `stamped-record-${recordId}.pdf`;
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(a.href);
-  } catch (err) {
-    console.error('[downloadStamped]', err);
-    alert('Failed to download stamped PDF.');
-  }
-}
 
 async function downloadFile(recordId, tabKey, fileName) {
   try {
@@ -7144,9 +7117,8 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
 
       if (data.success) {
         alert(
-          stampChoice === 'stamp' && data.stamped ? `✓ Record "${title}" saved. Use "Download Stamped PDF" to get the stamped version.`
+          stampChoice === 'stamp' && data.stamped ? `✓ Record "${title}" saved with stamp applied.`
           : stampChoice === 'stamp' ? `✓ Record "${title}" saved.`
-          : stampChoice === 'approve' ? `✓ Record "${title}" saved for approval.`
           : rKind === 'rejection_notice' ? `✓ Rejection Notice "${title}" issued.`
           : rKind === 'notice' ? `✓ Notice of Determination "${title}" issued.`
           : `✓ Record "${title}" saved.`
@@ -11525,7 +11497,9 @@ function isDecisionMakerRole(role) {
   return ['contractor','contractorpm','consultant','consultantpm','client','clientpm'].includes(r);
 }
 
-function openStampPlacementModal(file, onApply) {
+async function openStampPlacementModal(file, onApply) {
+  const stampProfile = await loadStampProfile();
+
   const modal = document.createElement('div');
   modal.style.position = 'fixed';
   modal.style.inset = '0';
@@ -11540,7 +11514,7 @@ function openStampPlacementModal(file, onApply) {
       <div style="padding:16px 18px;border-bottom:1px solid #e5e7eb;background:#f8fafc;display:flex;justify-content:space-between;align-items:center;">
         <div>
           <div style="font-size:15px;font-weight:700;color:#0f172a;">Choose stamp placement</div>
-          <div style="font-size:12px;color:#64748b;">Pick the page and position for the stamp on the uploaded document.</div>
+          <div style="font-size:12px;color:#64748b;">Drag your real stamp onto the page — this is exactly what will be saved.</div>
         </div>
         <button type="button" id="stampPlacementClose" style="border:none;background:#ef4444;color:#fff;border-radius:6px;padding:7px 12px;cursor:pointer;">✕ Close</button>
       </div>
@@ -11556,8 +11530,7 @@ function openStampPlacementModal(file, onApply) {
           <button type="button" id="stampPlacementApply" style="padding:10px 12px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Apply placement</button>
         </div>
         <div id="stampPlacementPreview" style="position:relative;border:1px solid #e2e8f0;border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:auto;padding:10px;min-height:480px;">
-          <div id="stampPlacementHint" style="position:absolute;top:10px;left:10px;right:10px;font-size:12px;color:#475569;">Click anywhere on the preview to set the stamp position.</div>
-          <div id="stampPlacementNote" style="position:absolute;top:35px;left:10px;right:10px;padding:8px 10px;background:rgba(255,255,255,0.94);border:1px solid rgba(148,163,184,0.4);border-radius:8px;font-size:12px;color:#0f172a;text-align:center;box-shadow:0 4px 10px rgba(15,23,42,0.08);">Use the preview click, sliders, or page selector to position the stamp.</div>
+          <div id="stampPlacementHint" style="position:absolute;top:10px;left:10px;right:10px;font-size:12px;color:#475569;">Click or drag the stamp anywhere on the preview to position it.</div>
           <div id="stampPlacementOverlayLabel" style="position:absolute;bottom:10px;left:10px;right:10px;padding:8px 10px;background:rgba(255,255,255,0.92);border:1px solid rgba(148,163,184,0.5);border-radius:8px;font-size:12px;color:#0f172a;text-align:center;box-shadow:0 4px 10px rgba(15,23,42,0.08);">Page 1 • x 80% • y 8%</div>
         </div>
       </div>
@@ -11599,12 +11572,18 @@ function openStampPlacementModal(file, onApply) {
     previewContainer.innerHTML = '<div style="color:#64748b;font-size:13px;text-align:center;">Preview is not available for this file type. You can still choose the stamp placement manually.</div>';
   }
 
+  // The marker shows the user's REAL stamp — same box, label, stamp image, and
+  // signature that createStampedFileBlob() will actually burn into the PDF.
   const marker = document.createElement('div');
-  marker.style.cssText = 'position:absolute;width:180px;height:90px;border:2px dashed rgba(37,99,235,0.85);border-radius:12px;transform:translate(-50%,-50%);pointer-events:none;display:none;z-index:4;background:rgba(37,99,235,0.14);';
-  const markerLabel = document.createElement('div');
-  markerLabel.style.cssText = 'position:absolute;top:8px;left:10px;font-size:11px;font-weight:700;color:#0f172a;text-shadow:0 1px 2px rgba(255,255,255,0.9);pointer-events:none;';
-  markerLabel.textContent = 'Stamp position';
-  marker.appendChild(markerLabel);
+  marker.style.cssText = 'position:absolute;width:200px;height:100px;border:1.5px solid rgba(37,99,235,0.9);border-radius:8px;transform:translate(-50%,-50%);cursor:grab;display:none;z-index:4;background:rgba(255,255,255,0.97);box-shadow:0 4px 10px rgba(15,23,42,0.18);padding:8px;box-sizing:border-box;font-family:inherit;';
+  marker.innerHTML = `
+    <div style="font-size:12px;font-weight:700;color:#0b7089;">STAMPED</div>
+    <div style="font-size:9px;color:#333;margin-top:2px;">${(stampProfile && stampProfile.role) || 'Decision Maker'}</div>
+    <div style="font-size:9px;color:#777;margin-top:1px;">${new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}</div>
+    <div style="position:absolute;left:8px;bottom:8px;display:flex;align-items:flex-end;gap:6px;">
+      ${stampProfile && stampProfile.stamp_image_url ? `<img src="${stampProfile.stamp_image_url}" style="width:44px;height:44px;object-fit:contain;pointer-events:none;" />` : ''}
+      ${stampProfile && stampProfile.signature_image ? `<img src="${stampProfile.signature_image}" style="width:90px;height:36px;object-fit:contain;pointer-events:none;" />` : ''}
+    </div>`;
   previewContainer.appendChild(marker);
 
   const overlay = document.createElement('div');
@@ -11631,12 +11610,12 @@ function openStampPlacementModal(file, onApply) {
     updateMarker();
   };
 
-  const handlePreviewClick = (event) => {
+  const setFromPointer = (event) => {
     const rect = previewContainer.getBoundingClientRect();
-    const clickX = event.clientX - rect.left;
-    const clickY = event.clientY - rect.top;
-    const xRatio = Math.max(0, Math.min(1, clickX / rect.width));
-    const yRatio = Math.max(0, Math.min(1, 1 - (clickY / rect.height)));
+    const px = event.clientX - rect.left;
+    const py = event.clientY - rect.top;
+    const xRatio = Math.max(0, Math.min(1, px / rect.width));
+    const yRatio = Math.max(0, Math.min(1, 1 - (py / rect.height)));
     state.x = xRatio;
     state.y = yRatio;
     xInput.value = String(Math.round(state.x * 100));
@@ -11644,7 +11623,14 @@ function openStampPlacementModal(file, onApply) {
     updatePreview();
   };
 
-  overlay.addEventListener('pointerdown', handlePreviewClick);
+  // Click anywhere to place the stamp…
+  overlay.addEventListener('pointerdown', setFromPointer);
+  // …or drag the visible stamp itself to reposition it.
+  let dragging = false;
+  marker.addEventListener('pointerdown', (e) => { dragging = true; marker.style.cursor = 'grabbing'; e.stopPropagation(); });
+  window.addEventListener('pointermove', (e) => { if (dragging) setFromPointer(e); });
+  window.addEventListener('pointerup', () => { dragging = false; marker.style.cursor = 'grab'; });
+
   [pageInput, xInput, yInput].forEach(el => el.addEventListener('input', updatePreview));
   updatePreview();
 
