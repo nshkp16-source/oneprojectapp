@@ -11421,11 +11421,24 @@ async function openStampSetup() {
             text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">
             👤 Signer Name
           </label>
-          <input id="stampSignerName" type="text" value="${existing && existing.signer_name ? existing.signer_name.replace(/"/g,'&quot;') : ''}"
+          <input id="stampSignerName" type="text" value="${existing && existing.signer_name ? existing.signer_name.replace(/\"/g,'&quot;') : ''}"
             placeholder="e.g. Jane Doe"
             style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;color:#111;" />
           <div style="font-size:11px;color:#9ca3af;margin-top:6px;">
             Optional. Shown on the stamp below your role.
+          </div>
+        </div>
+
+        <div style="margin-bottom:20px;">
+          <label style="display:block;font-weight:700;color:#007B8A;font-size:12px;
+            text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">
+            🏷️ Company / Organization
+          </label>
+          <input id="stampCompanyName" type="text" value="${existing && existing.company_name ? existing.company_name.replace(/\"/g,'&quot;') : ''}"
+            placeholder="e.g. Acme Consulting"
+            style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;color:#111;" />
+          <div style="font-size:11px;color:#9ca3af;margin-top:6px;">
+            Optional. Displayed on the stamp near the signer name.
           </div>
         </div>
 
@@ -11513,6 +11526,10 @@ async function openStampSetup() {
       }
       if (signerInput) {
         fd.append('signerName', signerInput.value.trim());
+      }
+      const companyInput = document.getElementById('stampCompanyName');
+      if (companyInput) {
+        fd.append('companyName', companyInput.value.trim());
       }
       if (!hasSignature && !hasStampImage) {
         alert('Please draw a signature or upload a stamp image first.');
@@ -11855,17 +11872,32 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
   const titleFont = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
   const bodyFont = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
   const label = (stampType || 'STAMPED').toUpperCase();
+  // Layout: draw textual elements top-down so stamp image at bottom won't overlap
+  const paddingLeft = 10;
+  const topInset = 14;
+  const titleY = y + rectHeight - topInset;
+  page.drawText(label, { x: x + paddingLeft, y: titleY, size: 13, font: titleFont, color: PDFLib.rgb(0.07, 0.44, 0.52) });
 
-  page.drawText(label, { x: x + 10, y: y + rectHeight - 20, size: 13, font: titleFont, color: PDFLib.rgb(0.07, 0.44, 0.52) });
-  page.drawText(stampProfile.role || 'Decision Maker', { x: x + 10, y: y + rectHeight - 35, size: 9, font: bodyFont, color: PDFLib.rgb(0.18, 0.18, 0.18) });
+  let textY = titleY - 16;
+  const roleText = String(stampProfile.role || 'Decision Maker');
+  page.drawText(roleText, { x: x + paddingLeft, y: textY, size: 9, font: bodyFont, color: PDFLib.rgb(0.18, 0.18, 0.18) });
 
   const signerName = String(stampProfile.signer_name || '').trim();
   if (signerName) {
-    page.drawText(signerName, { x: x + 10, y: y + rectHeight - 50, size: 9, font: bodyFont, color: PDFLib.rgb(0.18, 0.18, 0.18) });
+    textY -= 14;
+    page.drawText(signerName, { x: x + paddingLeft, y: textY, size: 9, font: bodyFont, color: PDFLib.rgb(0.15, 0.15, 0.15) });
   }
 
-  const dateY = y + rectHeight - (signerName ? 65 : 50);
-  page.drawText(new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }), { x: x + 10, y: dateY, size: 9, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
+  const companyName = String(stampProfile.company_name || '').trim();
+  if (companyName) {
+    textY -= 14;
+    page.drawText(companyName, { x: x + paddingLeft, y: textY, size: 9, font: bodyFont, color: PDFLib.rgb(0.15, 0.15, 0.15) });
+  }
+
+  // Date: keep it above the bottom stamp area to avoid overlap with the image
+  textY -= 14;
+  const dateStr = new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+  page.drawText(dateStr, { x: x + paddingLeft, y: textY, size: 9, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
 
   const maxStampPts = 140; // roughly 5cm
   const stampSize = Math.min(maxStampPts, rectWidth - 20);
