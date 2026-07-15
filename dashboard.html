@@ -1652,8 +1652,11 @@
 // Decode JWT helper
 // =========================
 function parseJwt(token) {
+  if (!token || typeof token !== 'string') return null;
   try {
-    const base64Url = token.split('.')[1];
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    const base64Url = parts[1];
     const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
     return JSON.parse(atob(base64));
   } catch (e) {
@@ -1667,6 +1670,10 @@ function parseJwt(token) {
 // =========================
 async function apiRequest(url, options = {}) {
   let token = localStorage.getItem("authToken");
+  if (!token) {
+    window.location.href = "home.html";
+    return null;
+  }
   options.headers = { ...options.headers, Authorization: `Bearer ${token}` };
   let res = await fetch(url, options);
   if (res.status === 401 || res.status === 403) {
@@ -1809,11 +1816,15 @@ document.addEventListener('click', function (e) {
 // Identity from JWT
 // =========================
 const token = localStorage.getItem("authToken");
+if (!token) {
+  window.location.replace("home.html");
+  throw new Error("No auth token available");
+}
 const decoded = parseJwt(token);
-const userEmail   = decoded?.email || decoded?.companyEmail;
-const userRoleRaw = decoded?.role;
-const userRoleKey = normalizeRoleKey(userRoleRaw) || 'Contractor'; // safe fallback, should never hit in practice
-const roleConfig  = ROLE_CONFIG[userRoleKey];
+const userEmail   = decoded?.email || decoded?.companyEmail || '';
+const userRoleRaw = decoded?.role || '';
+const userRoleKey = normalizeRoleKey(userRoleRaw) || 'Contractor';
+const roleConfig  = ROLE_CONFIG[userRoleKey] || { routePrefix: '/contractor' };
 const API_PREFIX  = roleConfig.routePrefix;
 
 // Legacy aliases kept so any code further down the file that still
@@ -1845,6 +1856,10 @@ const ARRET_RECORD_KIND = 'arret';
 // BOOT — single DOMContentLoaded
 // =========================
 document.addEventListener("DOMContentLoaded", async () => {
+  if (!localStorage.getItem('authToken')) {
+    window.location.replace('home.html');
+    return;
+  }
 
   // 1. Display email + role from JWT
   if (profileEmail) profileEmail.textContent = contractorEmail;
@@ -11533,7 +11548,7 @@ function isDecisionMakerRole(role) {
   return ['contractor','contractorpm','consultant','consultantpm','client','clientpm'].includes(r);
 }
 
-function openStampPlacementModal(file, onApply) {
+async function openStampPlacementModal(file, onApply) {
   const modal = document.createElement('div');
   modal.style.position = 'fixed';
   modal.style.inset = '0';
