@@ -11328,6 +11328,12 @@ window.openDocumentApprovalForm = _daOpenCreateForm;
 //  STAMP & SIGNATURE SYSTEM
 // ═══════════════════════════════════════════════════════════════════════
 
+// A handwritten signature is naturally landscape (wide, short) — this is the
+// single source of truth for that shape. The draw canvas, the placement
+// preview, and the final burned-in stamp all use this same ratio so nothing
+// gets stretched, squished, or drawn tiny with wasted space around it.
+const SIGNATURE_RATIO = 2.5; // width : height
+
 // Show "My Stamp" nav item for decision makers only
 function initStampNav() {
   const role = window.currentUserRole || '';
@@ -11339,6 +11345,7 @@ function initStampNav() {
 
 // ── Stamp setup panel ─────────────────────────────────────────────────
 let _signaturePad = null;
+let _updateStampPreviewFn = null;
 
 async function openStampSetup() {
   const projectId = localStorage.getItem('activeProjectId');
@@ -11400,7 +11407,10 @@ async function openStampSetup() {
           <div id="sigDrawPanel">
             <canvas id="stampSignatureCanvas"
               style="border:2px solid #d1d5db;border-radius:8px;background:#fff;
-              width:100%;height:120px;touch-action:none;cursor:crosshair;display:block;"></canvas>
+              width:100%;aspect-ratio:${SIGNATURE_RATIO}/1;max-height:160px;touch-action:none;cursor:crosshair;display:block;"></canvas>
+            <div style="margin-top:4px;font-size:10px;color:#9ca3af;">
+              This box matches the shape your signature will actually appear in on documents.
+            </div>
             <div style="display:flex;gap:8px;margin-top:6px;">
               <button type="button" onclick="clearStampSignature()"
                 style="padding:5px 12px;font-size:11px;background:#f3f4f6;color:#374151;
@@ -11456,6 +11466,34 @@ async function openStampSetup() {
           document — you don't need to enter them here.
         </div>
 
+        <!-- Live preview of the actual stamp box -->
+        <div style="margin-top:20px;">
+          <label style="display:block;font-weight:700;color:#007B8A;font-size:12px;
+            text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">
+            👁️ Live preview — how your stamp will look
+          </label>
+          <div id="stampPreviewBox" style="width:100%;aspect-ratio:3.78/1;max-width:480px;
+            display:flex;border:1.4px solid #2563eb;border-radius:6px;background:#fbfbfb;
+            overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+            <div id="previewSigCell" style="flex:0 0 19%;display:flex;align-items:center;justify-content:center;
+              border-right:1px solid #e5e7eb;padding:4px;overflow:hidden;">
+              <span style="font-size:10px;color:#9ca3af;text-align:center;">signature</span>
+            </div>
+            <div style="flex:0 0 40%;padding:6px 8px;display:flex;flex-direction:column;
+              justify-content:center;gap:2px;border-right:1px solid #e5e7eb;overflow:hidden;">
+              <div style="font-size:9px;color:#777;">Digitally signed by</div>
+              <div id="previewSignedLine" style="font-size:11px;font-weight:700;color:#0b7089;
+                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Your Company (Role)</div>
+              <div style="font-size:9px;color:#777;" id="previewDateLine"></div>
+            </div>
+            <div id="previewStampCell" style="flex:1;display:flex;align-items:center;justify-content:center;
+              padding:4px;overflow:hidden;">
+              <span style="font-size:10px;color:#9ca3af;text-align:center;">stamp image<br/>(5cm wide)</span>
+            </div>
+          </div>
+          <div id="stampPreviewDims" style="margin-top:6px;font-size:10px;color:#9ca3af;"></div>
+        </div>
+
       </div>
       <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
         background:#fff;display:flex;gap:12px;">
@@ -11474,6 +11512,59 @@ async function openStampSetup() {
 
   expandGrayPart(html);
 
+  // Live preview: mirrors createStampedFileBlob's exact 3-column layout so the
+  // user can judge image size/shape before saving anything.
+  const previewSigCell = document.getElementById('previewSigCell');
+  const previewStampCell = document.getElementById('previewStampCell');
+  const previewSignedLine = document.getElementById('previewSignedLine');
+  const previewDateLine = document.getElementById('previewDateLine');
+  const previewDims = document.getElementById('stampPreviewDims');
+  const roleForPreview = window.currentUserRole || 'Role';
+  previewSignedLine.textContent = `${(existing && existing.company_name) || 'Your Company'} (${roleForPreview})`;
+  previewDateLine.textContent = new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })
+    + ', ' + new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+
+  const updateStampPreview = () => {
+    const isDrawMode = drawPanel.style.display !== 'none';
+    let sigSrc = null;
+    if (isDrawMode && _signaturePad && !_signaturePad.isEmpty()) {
+      sigSrc = _signaturePad.toDataURL('image/png');
+    } else if (!isDrawMode && sigInput.files[0]) {
+      sigSrc = URL.createObjectURL(sigInput.files[0]);
+    } else if (existing && existing.signature_image) {
+      sigSrc = existing.signature_image;
+    }
+    previewSigCell.innerHTML = sigSrc
+      ? `<img src="${sigSrc}" style="max-width:100%;max-height:100%;object-fit:contain;" />`
+      : `<span style="font-size:10px;color:#9ca3af;text-align:center;">signature</span>`;
+
+    let stampSrc = null;
+    if (stampInput.files[0]) {
+      stampSrc = URL.createObjectURL(stampInput.files[0]);
+    } else if (existing && existing.stamp_image_url) {
+      stampSrc = existing.stamp_image_url;
+    }
+    previewStampCell.innerHTML = stampSrc
+      ? `<img src="${stampSrc}" style="max-width:100%;max-height:100%;object-fit:contain;" />`
+      : `<span style="font-size:10px;color:#9ca3af;text-align:center;">stamp image<br/>(5cm wide)</span>`;
+
+    // Show the uploaded files' real pixel dimensions to help pick a well-sized source image.
+    const dimParts = [];
+    const reportDims = () => { previewDims.textContent = dimParts.join('  •  '); };
+    if (!isDrawMode && sigInput.files[0]) {
+      const im = new Image();
+      im.onload = () => { dimParts.push(`Signature: ${im.naturalWidth}×${im.naturalHeight}px`); reportDims(); };
+      im.src = sigSrc;
+    }
+    if (stampInput.files[0]) {
+      const im2 = new Image();
+      im2.onload = () => { dimParts.push(`Stamp: ${im2.naturalWidth}×${im2.naturalHeight}px`); reportDims(); };
+      im2.src = stampSrc;
+    }
+    if (dimParts.length === 0) previewDims.textContent = '';
+  };
+  _updateStampPreviewFn = updateStampPreview;
+
   // Init signature pad — defer one frame so canvas has real dimensions
   requestAnimationFrame(() => {
     const canvas = document.getElementById('stampSignatureCanvas');
@@ -11482,7 +11573,10 @@ async function openStampSetup() {
       canvas.width  = rect.width  || canvas.offsetWidth  || 300;
       canvas.height = rect.height || canvas.offsetHeight || 120;
       _signaturePad = new SignaturePad(canvas, { penColor: '#1e3a5f', minWidth: 1, maxWidth: 2.5 });
+      canvas.addEventListener('pointerup', updateStampPreview);
+      canvas.addEventListener('pointerleave', updateStampPreview);
     }
+    updateStampPreview();
   });
 
   // Signature mode toggle: draw vs upload an image
@@ -11501,8 +11595,8 @@ async function openStampSetup() {
     uploadBtn.style.color = isDraw ? '#374151' : '#fff';
     uploadBtn.style.borderColor = isDraw ? '#d1d5db' : '#007B8A';
   };
-  drawBtn.addEventListener('click', () => setSigMode('draw'));
-  uploadBtn.addEventListener('click', () => setSigMode('upload'));
+  drawBtn.addEventListener('click', () => { setSigMode('draw'); _updateStampPreviewFn && _updateStampPreviewFn(); });
+  uploadBtn.addEventListener('click', () => { setSigMode('upload'); _updateStampPreviewFn && _updateStampPreviewFn(); });
 
   const sigDropZone = document.getElementById('sigImageDropZone');
   const sigInput = document.getElementById('sigImageInput');
@@ -11513,6 +11607,7 @@ async function openStampSetup() {
       sigName.textContent = `✓ ${sigInput.files[0].name}`;
       sigName.style.display = 'block';
       sigDropZone.style.borderColor = '#28a745';
+      _updateStampPreviewFn && _updateStampPreviewFn();
     }
   });
 
@@ -11526,6 +11621,7 @@ async function openStampSetup() {
       stampName.textContent = `✓ ${stampInput.files[0].name}`;
       stampName.style.display = 'block';
       dropZone.style.borderColor = '#28a745';
+      _updateStampPreviewFn && _updateStampPreviewFn();
     }
   });
 
@@ -11565,6 +11661,7 @@ async function openStampSetup() {
 
 function clearStampSignature() {
   if (_signaturePad) _signaturePad.clear();
+  if (_updateStampPreviewFn) _updateStampPreviewFn();
 }
 
 // ── Stamp step in upload form ─────────────────────────────────────────
@@ -11658,7 +11755,7 @@ async function openStampPlacementModal(file, onApply) {
   marker.innerHTML = `
     <div style="display:flex;height:100%;">
       <div style="width:64px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-right:1px solid #e5e7eb;padding:4px;">
-        ${stampProfile && stampProfile.signature_image ? `<img src="${stampProfile.signature_image}" style="max-width:100%;max-height:100%;object-fit:contain;pointer-events:none;" />` : '<span style="font-size:9px;color:#9ca3af;">signature</span>'}
+        ${stampProfile && stampProfile.signature_image ? `<img src="${stampProfile.signature_image}" style="max-width:100%;aspect-ratio:${SIGNATURE_RATIO}/1;object-fit:contain;pointer-events:none;" />` : '<span style="font-size:9px;color:#9ca3af;">signature</span>'}
       </div>
       <div style="flex:1;min-width:0;padding:6px 8px;display:flex;flex-direction:column;justify-content:center;gap:2px;border-right:1px solid #e5e7eb;">
         <div style="font-size:8px;color:#777;">Digitally signed by</div>
@@ -12009,8 +12106,12 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
         const signatureImg = sigType === 'png'
           ? await pdfDoc.embedPng(sigBuffer)
           : await pdfDoc.embedJpg(sigBuffer);
-        const maxW = SIG_COL_W, maxH = rectHeight - PAD * 2;
-        const ratio = Math.min(maxW / signatureImg.width, maxH / signatureImg.height, 1);
+        const maxW = SIG_COL_W, maxAvailH = rectHeight - PAD * 2;
+        // Target box respects the same landscape ratio as the draw canvas —
+        // centered in the column rather than stretched to fill it.
+        const targetBoxH = Math.min(maxAvailH, maxW / SIGNATURE_RATIO);
+        const targetBoxW = Math.min(maxW, targetBoxH * SIGNATURE_RATIO);
+        const ratio = Math.min(targetBoxW / signatureImg.width, targetBoxH / signatureImg.height, 1);
         const w = signatureImg.width * ratio, h = signatureImg.height * ratio;
         page.drawImage(signatureImg, {
           x: sigColX + (SIG_COL_W - w) / 2,
