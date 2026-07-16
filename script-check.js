@@ -549,8 +549,8 @@ function openAssignTeam(source) {
     return;
   }
 
-  // ✅ Save the dashboard source in sessionStorage
-  sessionStorage.setItem("redirectSource", source);
+  // ✅ Always return to the dashboard after using assign-team
+  sessionStorage.setItem("redirectSource", "dashboard");
 
   // ✅ Redirect to assign-team.html
   window.location.href = "assign-team.html";
