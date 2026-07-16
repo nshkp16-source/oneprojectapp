@@ -407,7 +407,6 @@
       transition: transform 0.2s;
     }
     .gray-toggle-btn:hover { transform: translateY(-50%) scale(1.12); }
-    .gray-toggle-btn.hidden {}
 
     /* ══════════════════════════════════════════════
        LEFT SUB PART — content pane
@@ -11406,8 +11405,9 @@ async function openStampSetup() {
           </div>
           <div id="sigDrawPanel">
             <canvas id="stampSignatureCanvas"
-              style="border:2px solid #d1d5db;border-radius:8px;background:#fff;
-              width:100%;aspect-ratio:${SIGNATURE_RATIO}/1;max-height:160px;touch-action:none;cursor:crosshair;display:block;"></canvas>
+              style="border:none;border-radius:0;background:transparent;
+              width:min(100%, 280px);max-width:280px;aspect-ratio:${SIGNATURE_RATIO}/1;max-height:140px;
+              touch-action:none;cursor:crosshair;display:block;margin:0 auto;"></canvas>
             <div style="margin-top:4px;font-size:10px;color:#9ca3af;">
               This box matches the shape your signature will actually appear in on documents.
             </div>
@@ -11473,7 +11473,7 @@ async function openStampSetup() {
             👁️ Live preview — how your stamp will look
           </label>
           <div id="stampPreviewBox" style="width:100%;aspect-ratio:3.78/1;max-width:480px;
-            display:flex;border:1.4px solid #2563eb;border-radius:6px;background:#fbfbfb;
+            display:flex;border:1.4px solid #2563eb;border-radius:6px;background:transparent;
             overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
             <div id="previewSigCell" style="flex:0 0 19%;display:flex;align-items:center;justify-content:center;
               border-right:1px solid #e5e7eb;padding:4px;overflow:hidden;">
@@ -11572,7 +11572,7 @@ async function openStampSetup() {
       const rect = canvas.getBoundingClientRect();
       canvas.width  = rect.width  || canvas.offsetWidth  || 300;
       canvas.height = rect.height || canvas.offsetHeight || 120;
-      _signaturePad = new SignaturePad(canvas, { penColor: '#1e3a5f', minWidth: 1, maxWidth: 2.5 });
+      _signaturePad = new SignaturePad(canvas, { penColor: '#1e3a5f', minWidth: 1, maxWidth: 2.5, backgroundColor: 'transparent' });
       canvas.addEventListener('pointerup', updateStampPreview);
       canvas.addEventListener('pointerleave', updateStampPreview);
     }
@@ -11694,7 +11694,12 @@ async function openStampPlacementModal(file, onApply) {
       <div style="display:grid;grid-template-columns:280px 1fr;gap:16px;padding:16px;max-height:calc(90vh - 120px);overflow:hidden;">
         <div style="display:flex;flex-direction:column;gap:10px;">
           <label style="font-size:12px;font-weight:700;color:#334155;">Page number</label>
-          <input id="stampPlacementPage" type="number" min="1" max="20" value="1" style="padding:8px;border:1px solid #cbd5e1;border-radius:6px;" />
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button type="button" id="stampPlacementPrevPage" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;cursor:pointer;">← Prev</button>
+            <input id="stampPlacementPage" type="number" min="1" max="20" value="1" style="padding:8px;border:1px solid #cbd5e1;border-radius:6px;flex:1;" />
+            <button type="button" id="stampPlacementNextPage" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;cursor:pointer;">Next →</button>
+          </div>
+          <div id="stampPlacementPageHint" style="font-size:11px;color:#64748b;">Page 1 of 1</div>
           <label style="font-size:12px;font-weight:700;color:#334155;">Horizontal position</label>
           <input id="stampPlacementX" type="range" min="0" max="100" value="80" />
           <label style="font-size:12px;font-weight:700;color:#334155;">Vertical position</label>
@@ -11715,12 +11720,26 @@ async function openStampPlacementModal(file, onApply) {
   const summary = modal.querySelector('#stampPlacementModalSummary');
   const overlayLabel = modal.querySelector('#stampPlacementOverlayLabel');
   const pageInput = modal.querySelector('#stampPlacementPage');
+  const pageHint = modal.querySelector('#stampPlacementPageHint');
+  const prevPageBtn = modal.querySelector('#stampPlacementPrevPage');
+  const nextPageBtn = modal.querySelector('#stampPlacementNextPage');
   const xInput = modal.querySelector('#stampPlacementX');
   const yInput = modal.querySelector('#stampPlacementY');
 
   const previewUrl = URL.createObjectURL(file);
   const ext = (file.name || '').split('.').pop().toLowerCase();
   const isPdf = file.type.includes('pdf') || ext === 'pdf';
+  let totalPages = 1;
+
+  if (isPdf) {
+    try {
+      const fileBytes = await file.arrayBuffer();
+      const pdfDoc = await PDFLib.PDFDocument.load(fileBytes);
+      totalPages = pdfDoc.getPageCount();
+    } catch (err) {
+      console.warn('[STAMP] Could not count PDF pages for placement preview:', err);
+    }
+  }
 
   let previewElement = null;
   if (isPdf) {
@@ -11751,7 +11770,7 @@ async function openStampPlacementModal(file, onApply) {
   const roleLabel = (stampProfile && stampProfile.role) || '';
   const nowLabel = new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
   const marker = document.createElement('div');
-  marker.style.cssText = 'position:absolute;width:320px;height:88px;border:1.5px solid rgba(37,99,235,0.9);border-radius:8px;transform:translate(-50%,-50%);cursor:grab;display:none;z-index:4;background:rgba(255,255,255,0.97);box-shadow:0 4px 10px rgba(15,23,42,0.18);box-sizing:border-box;font-family:inherit;';
+  marker.style.cssText = 'position:absolute;width:320px;height:88px;border:1.5px solid rgba(37,99,235,0.9);border-radius:8px;transform:translate(-50%,-50%);cursor:grab;display:none;z-index:4;background:rgba(255,255,255,0.2);box-shadow:0 4px 10px rgba(15,23,42,0.18);box-sizing:border-box;font-family:inherit;';
   marker.innerHTML = `
     <div style="display:flex;height:100%;">
       <div style="width:64px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-right:1px solid #e5e7eb;padding:4px;">
@@ -11779,12 +11798,14 @@ async function openStampPlacementModal(file, onApply) {
   };
 
   const updatePreview = () => {
-    state.page = Math.max(1, parseInt(pageInput.value || '1', 10));
+    state.page = Math.max(1, Math.min(totalPages, parseInt(pageInput.value || '1', 10)));
+    pageInput.value = String(state.page);
     state.x = Math.max(0, Math.min(1, Number(xInput.value || '80') / 100));
     state.y = Math.max(0, Math.min(1, Number(yInput.value || '8') / 100));
-    const label = `Page ${state.page} • x ${Math.round(state.x * 100)}% • y ${Math.round(state.y * 100)}%`;
+    const label = `Page ${state.page} of ${totalPages} • x ${Math.round(state.x * 100)}% • y ${Math.round(state.y * 100)}%`;
     summary.textContent = label;
     if (overlayLabel) overlayLabel.textContent = label;
+    if (pageHint) pageHint.textContent = `Page ${state.page} of ${totalPages}`;
     if (isPdf) {
       const iframe = previewContainer.querySelector('iframe');
       if (iframe) iframe.src = `${previewUrl}#page=${state.page}`;
@@ -11804,6 +11825,21 @@ async function openStampPlacementModal(file, onApply) {
     yInput.value = String(Math.round(state.y * 100));
     updatePreview();
   };
+
+  const moveToPage = (delta) => {
+    const nextPage = Math.max(1, Math.min(totalPages, state.page + delta));
+    if (nextPage !== state.page) {
+      pageInput.value = String(nextPage);
+      updatePreview();
+    }
+  };
+
+  if (prevPageBtn) prevPageBtn.addEventListener('click', () => moveToPage(-1));
+  if (nextPageBtn) nextPageBtn.addEventListener('click', () => moveToPage(1));
+  if (totalPages <= 1) {
+    if (prevPageBtn) prevPageBtn.style.display = 'none';
+    if (nextPageBtn) nextPageBtn.style.display = 'none';
+  }
 
   // Click anywhere to place the stamp…
   overlay.addEventListener('pointerdown', setFromPointer);
@@ -12040,25 +12076,35 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
   const PT_PER_CM = 28.3465;
   const PAD = 8;
   const GAP = 8;
-  const SIG_COL_W = 80;
+  const SIG_COL_W = 5 * PT_PER_CM; // fixed 5cm, per spec — height follows the image's own aspect ratio
   const STAMP_COL_W = 5 * PT_PER_CM; // fixed 5cm, per spec — height follows the image's own aspect ratio
   const MID_COL_W = 170;
   const rectWidth = Math.min(PAD * 2 + SIG_COL_W + GAP + MID_COL_W + GAP + STAMP_COL_W, width * 0.7);
-  const rectHeight = Math.min(112, height * 0.22);
+  const rectHeight = Math.min(132, height * 0.24);
 
   const x = Math.min(Math.max((placement.x ?? 0.8) * width, 10), width - rectWidth - 10);
   const y = Math.min(Math.max(height - ((placement.y ?? 0.08) * height) - rectHeight, 10), height - rectHeight - 10);
 
-  page.drawRectangle({
-    x, y, width: rectWidth, height: rectHeight,
-    color: PDFLib.rgb(0.98, 0.98, 0.98),
-    borderColor: PDFLib.rgb(0.15, 0.45, 0.82),
-    borderWidth: 1.4,
-    opacity: 0.96,
-  });
-
   const titleFont = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
   const bodyFont = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+
+  const wrapTextToWidth = (text, font, size, maxWidth) => {
+    const words = String(text || '').split(/\s+/).filter(Boolean);
+    if (!words.length) return [''];
+    const lines = [];
+    let current = '';
+    words.forEach((word) => {
+      const candidate = current ? `${current} ${word}` : word;
+      if (!current || font.widthOfTextAtSize(candidate, size) <= maxWidth) {
+        current = candidate;
+      } else {
+        lines.push(current);
+        current = word;
+      }
+    });
+    if (current) lines.push(current);
+    return lines;
+  };
 
   // Column boundaries
   const sigColX = x + PAD;
@@ -12077,24 +12123,10 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
   const signedLine1 = 'Digitally signed by';
   let signedLine2 = roleLabel ? `${companyName} (${roleLabel})` : companyName;
 
-  // Auto-shrink the company/role line so long names never overflow the column.
-  let signedFontSize = 10;
-  while (signedFontSize > 6 && bodyFont.widthOfTextAtSize(signedLine2, signedFontSize) > midColW) {
-    signedFontSize -= 0.5;
-  }
-  if (bodyFont.widthOfTextAtSize(signedLine2, signedFontSize) > midColW) {
-    while (signedLine2.length > 4 && bodyFont.widthOfTextAtSize(signedLine2 + '…', signedFontSize) > midColW) {
-      signedLine2 = signedLine2.slice(0, -1);
-    }
-    signedLine2 += '…';
-  }
-
+  let signedFontSize = 11;
+  const wrappedLines = wrapTextToWidth(signedLine2, titleFont, signedFontSize, midColW);
   const now = new Date();
   const dateTimeLabel = `${now.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}, ${now.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
-
-  page.drawText(signedLine1, { x: midColX, y: y + rectHeight - 24, size: 8, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
-  page.drawText(signedLine2, { x: midColX, y: y + rectHeight - 40, size: signedFontSize, font: titleFont, color: PDFLib.rgb(0.07, 0.44, 0.52) });
-  page.drawText(dateTimeLabel, { x: midColX, y: y + rectHeight - 58, size: 8, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
 
   // ── Left column: signature ──
   if (stampProfile.signature_image) {
@@ -12123,6 +12155,14 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
       console.warn('[STAMP] Could not embed signature image:', err);
     }
   }
+
+  // ── Middle column text (drawn after the images so it remains readable and does not get covered) ──
+  page.drawText(signedLine1, { x: midColX, y: y + rectHeight - 24, size: 9, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
+  wrappedLines.forEach((line, index) => {
+    const lineY = y + rectHeight - 40 - (index * 12);
+    page.drawText(line, { x: midColX, y: lineY, size: signedFontSize, font: titleFont, color: PDFLib.rgb(0.07, 0.44, 0.52) });
+  });
+  page.drawText(dateTimeLabel, { x: midColX, y: y + rectHeight - 58 - ((wrappedLines.length - 1) * 12), size: 8, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
 
   // ── Right column: stamp image, fixed 5cm wide ──
   if (stampProfile.stamp_image_url) {
