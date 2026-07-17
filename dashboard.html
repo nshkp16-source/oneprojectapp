@@ -1115,6 +1115,12 @@
   </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/signature_pad/4.1.7/signature_pad.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  if (window.pdfjsLib) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+</script>
 </head>
 <body>
   <!-- mobile sidebar backdrop -->
@@ -11765,7 +11771,7 @@ async function openStampPlacementModal(file, onApply) {
           <div id="stampPlacementModalSummary" style="padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#475569;line-height:1.5;">Page 1 • x 80% • y 8%</div>
           <button type="button" id="stampPlacementApply" style="padding:10px 12px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Apply placement</button>
         </div>
-        <div id="stampPlacementPreview" style="position:relative;border:1px solid #e2e8f0;border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:auto;padding:10px;min-height:480px;">
+        <div id="stampPlacementPreview" style="position:relative;border:1px solid #e2e8f0;border-radius:10px;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;overflow:auto;padding:10px;min-height:480px;max-height:calc(90vh - 220px);">
           <div id="stampPlacementHint" style="position:absolute;top:10px;left:10px;right:10px;font-size:12px;color:#475569;">Click or drag the stamp anywhere on the preview to position it.</div>
           <div id="stampPlacementOverlayLabel" style="position:absolute;bottom:10px;left:10px;right:10px;padding:8px 10px;background:rgba(255,255,255,0.92);border:1px solid rgba(148,163,184,0.5);border-radius:8px;font-size:12px;color:#0f172a;text-align:center;box-shadow:0 4px 10px rgba(15,23,42,0.08);">Page 1 • x 80% • y 8%</div>
         </div>
@@ -11788,43 +11794,83 @@ async function openStampPlacementModal(file, onApply) {
   const ext = (file.name || '').split('.').pop().toLowerCase();
   const isPdf = file.type.includes('pdf') || ext === 'pdf';
   let totalPages = 1;
-  let iframeEl = null;
+
+  // For PDFs we render every page ourselves onto a stacked, scrollable set of
+  // <canvas> elements via pdf.js — rather than an <iframe> pointed at the
+  // browser's built-in PDF viewer. That built-in viewer only reliably honours
+  // a #page=N jump on its very first load; after that, changing just the URL
+  // fragment is treated as a same-document navigation and the plugin ignores
+  // it, so Next/Prev silently stopped working. It also needed a full-cover
+  // transparent overlay on top to capture stamp-placement clicks (since you
+  // can't attach listeners inside a native plugin), and that overlay ended up
+  // swallowing scroll/wheel input too — so the preview looked stuck on page 1
+  // with no way to scroll through the rest of the document. Rendering pages
+  // ourselves avoids both problems: it's normal scrollable DOM content.
+  let previewElement = null;
+  const pageEls = [];
 
   if (isPdf) {
     try {
       const fileBytes = await file.arrayBuffer();
-      const pdfDoc = await PDFLib.PDFDocument.load(fileBytes);
-      totalPages = pdfDoc.getPageCount();
-    } catch (err) {
-      console.warn('[STAMP] Could not count PDF pages for placement preview:', err);
-    }
-  }
+      if (window.pdfjsLib) {
+        const pdfJsDoc = await pdfjsLib.getDocument({ data: fileBytes.slice(0) }).promise;
+        totalPages = pdfJsDoc.numPages;
 
-  let previewElement = null;
-  if (isPdf) {
-    const iframe = document.createElement('iframe');
-    iframe.src = `${previewUrl}#page=1`;
-    iframe.style.width = '100%';
-    iframe.style.height = '100%';
-    iframe.style.minHeight = '480px';
-    iframe.style.border = 'none';
-    previewContainer.appendChild(iframe);
-    previewElement = iframe;
+        const pagesWrap = document.createElement('div');
+        pagesWrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:16px;width:100%;';
+        previewContainer.appendChild(pagesWrap);
+
+        for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+          const pdfPage = await pdfJsDoc.getPage(pageNum);
+          const baseViewport = pdfPage.getViewport({ scale: 1 });
+          const targetWidth = Math.min(700, previewContainer.clientWidth - 20 || 700);
+          const scale = targetWidth / baseViewport.width;
+          const viewport = pdfPage.getViewport({ scale });
+
+          const pageWrap = document.createElement('div');
+          pageWrap.className = 'stampPlacementPageWrap';
+          pageWrap.dataset.page = String(pageNum);
+          pageWrap.style.cssText = `position:relative;width:${viewport.width}px;height:${viewport.height}px;box-shadow:0 1px 4px rgba(15,23,42,0.15);cursor:crosshair;flex-shrink:0;`;
+
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          canvas.style.cssText = 'display:block;width:100%;height:100%;pointer-events:none;';
+          pageWrap.appendChild(canvas);
+          pagesWrap.appendChild(pageWrap);
+          pageEls.push(pageWrap);
+
+          const ctx = canvas.getContext('2d');
+          await pdfPage.render({ canvasContext: ctx, viewport }).promise;
+        }
+      } else {
+        throw new Error('pdf.js failed to load');
+      }
+    } catch (err) {
+      console.warn('[STAMP] Could not render PDF pages for placement preview:', err);
+      previewContainer.innerHTML = '<div style="color:#64748b;font-size:13px;text-align:center;">Preview could not be rendered. You can still choose the stamp placement manually using the page number and sliders.</div>';
+    }
   } else if (file.type.startsWith('image/') || ['jpg','jpeg','png'].includes(ext)) {
+    const imgWrap = document.createElement('div');
+    imgWrap.className = 'stampPlacementPageWrap';
+    imgWrap.dataset.page = '1';
+    imgWrap.style.cssText = 'position:relative;max-width:100%;cursor:crosshair;';
     const img = document.createElement('img');
     img.src = previewUrl;
-    img.style.maxWidth = '100%';
-    img.style.maxHeight = '100%';
-    img.style.objectFit = 'contain';
-    img.style.pointerEvents = 'none';
-    previewContainer.appendChild(img);
+    img.style.cssText = 'display:block;max-width:100%;max-height:calc(90vh - 260px);object-fit:contain;pointer-events:none;';
+    imgWrap.appendChild(img);
+    previewContainer.appendChild(imgWrap);
     previewElement = img;
+    pageEls.push(imgWrap);
   } else {
     previewContainer.innerHTML = '<div style="color:#64748b;font-size:13px;text-align:center;">Preview is not available for this file type. You can still choose the stamp placement manually.</div>';
   }
 
   // The marker shows the user's REAL stamp — same 3 columns, dividers, text,
   // and images that createStampedFileBlob() will actually burn into the PDF.
+  // It's re-parented into whichever page wrapper is currently targeted, so it
+  // scrolls naturally along with that page instead of floating over the whole
+  // (now much taller) scrollable preview.
   const companyLabel = (stampProfile && (stampProfile.company_name || stampProfile.role)) || 'Decision Maker';
   const roleLabel = (stampProfile && stampProfile.role) || '';
   const nowLabel = new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
@@ -11844,57 +11890,52 @@ async function openStampPlacementModal(file, onApply) {
         ${stampProfile && stampProfile.stamp_image_url ? `<img src="${stampProfile.stamp_image_url}" style="max-width:100%;max-height:100%;object-fit:contain;pointer-events:none;" />` : '<span style="font-size:9px;color:#9ca3af;">stamp</span>'}
       </div>
     </div>`;
-  previewContainer.appendChild(marker);
 
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:absolute;inset:0;cursor:crosshair;z-index:3;';
-  previewContainer.appendChild(overlay);
+  const getPageEl = (pageNum) => pageEls.find(el => Number(el.dataset.page) === pageNum) || null;
 
-  const updateMarker = () => {
+  // Moves the marker into the given page wrapper (re-parenting it if needed)
+  // and positions it there using the current x/y ratios.
+  const placeMarkerOnPage = (pageNum) => {
+    const targetEl = getPageEl(pageNum);
+    if (!targetEl) return;
+    if (marker.parentElement !== targetEl) targetEl.appendChild(marker);
     marker.style.left = `${Math.round(state.x * 100)}%`;
     marker.style.top = `${Math.round((1 - state.y) * 100)}%`;
     marker.style.display = 'block';
   };
 
-  const updatePreview = () => {
-    state.page = Math.max(1, Math.min(totalPages, parseInt(pageInput.value || '1', 10)));
-    pageInput.value = String(state.page);
-    state.x = Math.max(0, Math.min(1, Number(xInput.value || '80') / 100));
-    state.y = Math.max(0, Math.min(1, Number(yInput.value || '8') / 100));
+  const updateLabels = () => {
     const label = `Page ${state.page} of ${totalPages} • x ${Math.round(state.x * 100)}% • y ${Math.round(state.y * 100)}%`;
     summary.textContent = label;
     if (overlayLabel) overlayLabel.textContent = label;
     if (pageHint) pageHint.textContent = `Page ${state.page} of ${totalPages}`;
-    if (isPdf) {
-      const iframe = previewContainer.querySelector('iframe');
-      if (iframe) {
-        iframe.src = `${previewUrl}#page=${state.page}`;
-        iframeEl = iframe;
-      }
-    }
-    updateMarker();
-  };
-
-  const setFromPointer = (event) => {
-    const rect = previewContainer.getBoundingClientRect();
-    const px = event.clientX - rect.left;
-    const py = event.clientY - rect.top;
-    const xRatio = Math.max(0, Math.min(1, px / rect.width));
-    const yRatio = Math.max(0, Math.min(1, 1 - (py / rect.height)));
-    state.x = xRatio;
-    state.y = yRatio;
+    pageInput.value = String(state.page);
     xInput.value = String(Math.round(state.x * 100));
     yInput.value = String(Math.round(state.y * 100));
-    updatePreview();
   };
 
-  const moveToPage = (delta) => {
-    const nextPage = Math.max(1, Math.min(totalPages, state.page + delta));
-    if (nextPage !== state.page) {
-      pageInput.value = String(nextPage);
-      updatePreview();
+  // Repositions the marker on its current page from the x/y slider values
+  // (does not navigate pages).
+  const updatePosition = () => {
+    state.x = Math.max(0, Math.min(1, Number(xInput.value || '80') / 100));
+    state.y = Math.max(0, Math.min(1, Number(yInput.value || '8') / 100));
+    updateLabels();
+    placeMarkerOnPage(state.page);
+  };
+
+  // Navigates to a page — scrolls it into view and moves the marker there,
+  // keeping the same x/y ratios so the stamp stays in a consistent spot.
+  const goToPage = (pageNum) => {
+    state.page = Math.max(1, Math.min(totalPages, pageNum));
+    updateLabels();
+    const targetEl = getPageEl(state.page);
+    if (targetEl) {
+      targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      placeMarkerOnPage(state.page);
     }
   };
+
+  const moveToPage = (delta) => goToPage(state.page + delta);
 
   if (prevPageBtn) prevPageBtn.addEventListener('click', () => moveToPage(-1));
   if (nextPageBtn) nextPageBtn.addEventListener('click', () => moveToPage(1));
@@ -11902,17 +11943,45 @@ async function openStampPlacementModal(file, onApply) {
     if (prevPageBtn) prevPageBtn.style.display = 'none';
     if (nextPageBtn) nextPageBtn.style.display = 'none';
   }
+  pageInput.max = String(totalPages);
+  pageInput.addEventListener('change', () => goToPage(parseInt(pageInput.value || '1', 10)));
 
-  // Click anywhere to place the stamp…
-  overlay.addEventListener('pointerdown', setFromPointer);
-  // …or drag the visible stamp itself to reposition it.
+  // Click anywhere on a rendered page to place the stamp there. Listening
+  // directly on previewContainer (instead of a full-cover overlay div) means
+  // scroll/wheel events reach the browser's normal scrolling for this
+  // container untouched — nothing sits on top blocking them.
+  previewContainer.addEventListener('pointerdown', (event) => {
+    if (event.target === marker || marker.contains(event.target)) return;
+    const targetEl = event.target.closest('.stampPlacementPageWrap');
+    if (!targetEl) return;
+    const pageNum = Number(targetEl.dataset.page) || 1;
+    const rect = targetEl.getBoundingClientRect();
+    state.x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    state.y = Math.max(0, Math.min(1, 1 - (event.clientY - rect.top) / rect.height));
+    state.page = pageNum;
+    updateLabels();
+    placeMarkerOnPage(state.page);
+  });
+
+  // …or drag the visible stamp itself to reposition it within its own page.
   let dragging = false;
   marker.addEventListener('pointerdown', (e) => { dragging = true; marker.style.cursor = 'grabbing'; e.stopPropagation(); });
-  window.addEventListener('pointermove', (e) => { if (dragging) setFromPointer(e); });
+  window.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const hostEl = marker.parentElement;
+    if (!hostEl) return;
+    const rect = hostEl.getBoundingClientRect();
+    state.x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    state.y = Math.max(0, Math.min(1, 1 - (e.clientY - rect.top) / rect.height));
+    updateLabels();
+    marker.style.left = `${Math.round(state.x * 100)}%`;
+    marker.style.top = `${Math.round((1 - state.y) * 100)}%`;
+  });
   window.addEventListener('pointerup', () => { dragging = false; marker.style.cursor = 'grab'; });
 
-  [pageInput, xInput, yInput].forEach(el => el.addEventListener('input', updatePreview));
-  updatePreview();
+  xInput.addEventListener('input', updatePosition);
+  yInput.addEventListener('input', updatePosition);
+  goToPage(state.page);
 
   const closeModal = () => {
     URL.revokeObjectURL(previewUrl);
@@ -12231,7 +12300,9 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
     try {
       const stampResp = await fetch(stampProfile.stamp_image_url);
       const stampData = await stampResp.arrayBuffer();
-      const stampImg = stampProfile.stamp_image_url.toLowerCase().endsWith('.png')
+      const stampContentType = stampResp.headers.get('content-type') || '';
+      const stampIsPng = stampContentType.includes('png') || stampProfile.stamp_image_url.toLowerCase().endsWith('.png');
+      const stampImg = stampIsPng
         ? await pdfDoc.embedPng(stampData)
         : await pdfDoc.embedJpg(stampData);
       const targetW = STAMP_COL_W - PAD; // leave a little breathing room inside the box
@@ -12249,66 +12320,6 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
 
   const pdfBytes = await pdfDoc.save();
   return new Blob([pdfBytes], { type: 'application/pdf' });
-}
-
-// Called from saveRecordBtn handler after successful save to apply stamp
-async function applyStampIfRequested(recordId, recordType, projectId) {
-  const stampYes = document.getElementById('stampYes');
-  console.log('[STAMP] applyStampIfRequested called', { stampYes: !!stampYes, checked: stampYes?.checked, recordId, recordType, projectId });
-  
-  if (!stampYes || !stampYes.checked) {
-    console.log('[STAMP] ℹ️ User opted out or element missing - skipping stamp');
-    return;
-  }
-  
-  const stampType = document.getElementById('stampTypeSelect')?.value || 'SUBMITTED';
-  console.log('[STAMP] User opted in for stamp:', { stampType });
-  
-  try {
-    const payload = { recordId, recordType, projectId, stampType };
-    console.log('[STAMP] Sending request to /sign-record:', payload);
-    
-    const res = await authFetch(`${API}/sign-record`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    
-    console.log('[STAMP] Response status:', res?.status, res?.ok);
-    
-    if (!res) {
-      console.error('[STAMP] ❌ No response from server');
-      return;
-    }
-    
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({ error: res.statusText }));
-      console.error('[STAMP] ❌ Server error:', res.status, errData);
-      
-      // Show user-friendly error message
-      if (errData.error) {
-        alert('⚠️ Stamp failed: ' + errData.error);
-      } else {
-        alert('❌ Stamp failed with status ' + res.status);
-      }
-      return;
-    }
-    
-    const d = await res.json();
-    console.log('[STAMP] ✅ Response:', d);
-    
-    if (d.success || d.signed_at) {
-      console.log('[STAMP] ✅ Applied successfully!', { 
-        signed_at: d.signed_at,
-        stamped_doc_url: d.stamped_doc_url || 'N/A',
-        signature_hash: d.signature_hash?.substring(0, 8) + '...' || 'N/A'
-      });
-    } else {
-      console.warn('[STAMP] ⚠️ Response ok but no success flag:', d);
-    }
-  } catch (err) {
-    console.error('[STAMP] ❌ Caught error:', err.message, err.stack);
-  }
 }
 
 </script>
