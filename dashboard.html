@@ -12260,28 +12260,39 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
   const dateTimeLabel = `${now.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}, ${now.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
 
   // ── Left column: signature ──
+  // stampProfile.signature_image is either a base64 data URI (signature was
+  // drawn on the canvas) or a plain Cloudinary URL (signature was uploaded as
+  // a file — see POST /api/my-stamp, which stores uploadRes.secure_url in
+  // that case). Both need to be handled here.
   if (stampProfile.signature_image) {
     try {
-      const sigMatch = String(stampProfile.signature_image).match(/^data:image\/(png|jpeg|jpg);base64,(.+)$/i);
+      const sigSrc = String(stampProfile.signature_image);
+      const sigMatch = sigSrc.match(/^data:image\/(png|jpeg|jpg);base64,(.+)$/i);
+      let sigBuffer, sigIsPng;
       if (sigMatch) {
-        const sigType = sigMatch[1].toLowerCase();
-        const sigBuffer = Uint8Array.from(atob(sigMatch[2]), c => c.charCodeAt(0));
-        const signatureImg = sigType === 'png'
-          ? await pdfDoc.embedPng(sigBuffer)
-          : await pdfDoc.embedJpg(sigBuffer);
-        const maxW = SIG_COL_W, maxAvailH = rectHeight - PAD * 2;
-        // Target box respects the same landscape ratio as the draw canvas —
-        // centered in the column rather than stretched to fill it.
-        const targetBoxH = Math.min(maxAvailH, maxW / SIGNATURE_RATIO);
-        const targetBoxW = Math.min(maxW, targetBoxH * SIGNATURE_RATIO);
-        const ratio = Math.min(targetBoxW / signatureImg.width, targetBoxH / signatureImg.height, 1);
-        const w = signatureImg.width * ratio, h = signatureImg.height * ratio;
-        page.drawImage(signatureImg, {
-          x: sigColX + (SIG_COL_W - w) / 2,
-          y: y + (rectHeight - h) / 2,
-          width: w, height: h,
-        });
+        sigIsPng = sigMatch[1].toLowerCase() === 'png';
+        sigBuffer = Uint8Array.from(atob(sigMatch[2]), c => c.charCodeAt(0));
+      } else {
+        const sigResp = await fetch(sigSrc);
+        sigBuffer = await sigResp.arrayBuffer();
+        const sigContentType = sigResp.headers.get('content-type') || '';
+        sigIsPng = sigContentType.includes('png') || sigSrc.toLowerCase().endsWith('.png');
       }
+      const signatureImg = sigIsPng
+        ? await pdfDoc.embedPng(sigBuffer)
+        : await pdfDoc.embedJpg(sigBuffer);
+      const maxW = SIG_COL_W, maxAvailH = rectHeight - PAD * 2;
+      // Target box respects the same landscape ratio as the draw canvas —
+      // centered in the column rather than stretched to fill it.
+      const targetBoxH = Math.min(maxAvailH, maxW / SIGNATURE_RATIO);
+      const targetBoxW = Math.min(maxW, targetBoxH * SIGNATURE_RATIO);
+      const ratio = Math.min(targetBoxW / signatureImg.width, targetBoxH / signatureImg.height, 1);
+      const w = signatureImg.width * ratio, h = signatureImg.height * ratio;
+      page.drawImage(signatureImg, {
+        x: sigColX + (SIG_COL_W - w) / 2,
+        y: y + (rectHeight - h) / 2,
+        width: w, height: h,
+      });
     } catch (err) {
       console.warn('[STAMP] Could not embed signature image:', err);
     }
