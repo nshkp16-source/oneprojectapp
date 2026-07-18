@@ -6506,6 +6506,13 @@ function renderRecordsList(records, tabKey) {
                         🖋️ ${doc.stamp_type}
                       </span>`
                     : ''}
+                  ${(() => {
+                    const stampStatus = doc.stamp_status || 'none';
+                    if (stampStatus === 'both') return `<span style="display:inline-flex;align-items:center;gap:4px;background:#ecfeff;color:#0f766e;border:1px solid #99f6e4;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;">🖋️ Stamped by approver and recorder</span>`;
+                    if (stampStatus === 'approver') return `<span style="display:inline-flex;align-items:center;gap:4px;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;">🖋️ Stamped by approver</span>`;
+                    if (stampStatus === 'recorder') return `<span style="display:inline-flex;align-items:center;gap:4px;background:#ede9fe;color:#6d28d9;border:1px solid #c4b5fd;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;">🖋️ Stamped by recorder</span>`;
+                    return '<span style="display:inline-flex;align-items:center;gap:4px;background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;">🖋️ Not stamped yet</span>';
+                  })()}
                 </div>
                </div>` : ''}
 
@@ -6631,24 +6638,66 @@ function toggleRecordDetail(recordId, tabKey) {
 // =======================================================================
 async function handleDecisionMakerAction(recordId, tabKey, action) {
   try {
-    const res = await authFetch(
-      `${API}/review-record`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId:  localStorage.getItem('activeProjectId'),
-          recordId,
-          recordType: tabToTable(tabKey),
-          action,
-          actorType:  'decision_maker'
-        })
+    const projectId = localStorage.getItem('activeProjectId');
+    const cached = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
+    const body = new FormData();
+    body.append('projectId', projectId);
+    body.append('recordId', recordId);
+    body.append('recordType', tabToTable(tabKey));
+    body.append('action', action);
+    body.append('actorType', 'decision_maker');
+
+    const fileUrl = cached?.file_path || '';
+    const isPdf = /\.pdf$/i.test((fileUrl || '').split('?')[0]) || (fileUrl || '').toLowerCase().includes('.pdf');
+    let stampedFile = null;
+    let didStamp = false;
+
+    if (isPdf) {
+      const wantsStamp = confirm('Stamp this PDF before applying the action?\n\nChoose OK to stamp and replace the stored document, or Cancel to proceed without stamping.');
+      if (wantsStamp) {
+        const stampProfile = await loadStampProfile();
+        if (!stampProfile) {
+          alert('No stamp profile is available for this project yet.');
+          return;
+        }
+        const downloadRes = await authFetch(
+          `${API}/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}&filename=${encodeURIComponent(cached?.title || 'document.pdf')}`,
+          { method: 'GET' }
+        );
+        if (!downloadRes || !downloadRes.ok) {
+          alert('Failed to download the document for stamping.');
+          return;
+        }
+        const blob = await downloadRes.blob();
+        if (!blob.size) {
+          alert('The document is empty, so it cannot be stamped.');
+          return;
+        }
+        const sourceFile = new File([blob], (cached?.file_path || 'document.pdf').split('/').pop() || 'document.pdf', { type: blob.type || 'application/pdf' });
+        const placement = await new Promise((resolve) => {
+          openStampPlacementModal(sourceFile, (placementData) => resolve(placementData), () => resolve(null));
+        });
+        if (!placement) {
+          alert('Stamp placement was canceled.');
+          return;
+        }
+        const stampedBlob = await createStampedFileBlob(sourceFile, placement, 'STAMPED', stampProfile);
+        const stampedName = `${(sourceFile.name || 'document').replace(/\.[^/.]+$/, '')}-stamped.pdf`;
+        stampedFile = new File([stampedBlob], stampedName, { type: 'application/pdf' });
+        didStamp = true;
+        body.append('stampDocument', 'true');
       }
-    );
+    }
+
+    if (didStamp && stampedFile) {
+      body.append('attachment', stampedFile, stampedFile.name);
+    }
+
+    const res = await authFetch(`${API}/review-record`, { method: 'POST', body });
     if (!res) return;
     const data = await res.json();
     if (!res.ok) { alert(data.error || `Failed to ${action} record.`); return; }
-    alert(data.message || `Record ${action} successfully.`);
+    alert(data.message || `Record ${action} successfully.${didStamp ? ' The document was stamped and replaced the original file.' : ''}`);
     delete recordsCache[tabKey];
     await loadTabRecords(tabKey);
   } catch (err) {
@@ -11734,7 +11783,7 @@ function isDecisionMakerRole(role) {
   return ['contractor','contractorpm','consultant','consultantpm','client','clientpm'].includes(r);
 }
 
-async function openStampPlacementModal(file, onApply) {
+async function openStampPlacementModal(file, onApply, onCancel) {
   const stampProfile = await loadStampProfile();
 
   const modal = document.createElement('div');
@@ -11988,7 +12037,10 @@ async function openStampPlacementModal(file, onApply) {
     modal.remove();
   };
 
-  modal.querySelector('#stampPlacementClose').addEventListener('click', closeModal);
+  modal.querySelector('#stampPlacementClose').addEventListener('click', () => {
+    if (typeof onCancel === 'function') onCancel();
+    closeModal();
+  });
   modal.querySelector('#stampPlacementApply').addEventListener('click', () => {
     onApply(state);
     closeModal();
