@@ -1859,18 +1859,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   const storedToken = localStorage.getItem('authToken');
   if (storedToken) {
     try {
-      const projectIdForMe = localStorage.getItem('activeProjectId');
-      const meUrl = projectIdForMe
-        ? `https://oneprojectapp-backend.onrender.com/api/me?projectId=${encodeURIComponent(projectIdForMe)}`
-        : 'https://oneprojectapp-backend.onrender.com/api/me';
-      const res = await fetch(meUrl, {
+      const res = await fetch('https://oneprojectapp-backend.onrender.com/api/me', {
         headers: { 'Authorization': `Bearer ${storedToken}` }
       });
       if (res.ok) {
         const user = await res.json();
         window.currentUserId   = user.id;
         window.currentUserRole = user.role;
-        window.currentUserName = user.name || user.full_name || [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email || 'User';
       } else {
         console.error('Failed to fetch user info:', res.status);
       }
@@ -5581,6 +5576,7 @@ async function bootstrapUser() {
     window.currentUserId   = meData.id;
     window.currentUserRole = meData.role;
     window.currentUserName = meData.name || meData.full_name || [meData.first_name, meData.last_name].filter(Boolean).join(' ') || meData.email || 'User';
+    window.currentUserCompany = meData.company_name || null;
 
     // Safe default — must be set before any render happens
     window.isCurrentUserLeader = false;
@@ -11620,8 +11616,7 @@ async function openStampSetup() {
               <div style="font-size:9px;color:#777;">Digitally signed by</div>
               <div id="previewSignedLine" style="font-size:11px;font-weight:700;color:#0b7089;
                 white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Your Name (Role)</div>
-              <div id="previewCompanyLine" style="font-size:9px;color:#777;
-                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Your Company</div>
+              <div id="previewCompanyLine" style="font-size:10px;color:#0b7089;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Your Company</div>
               <div style="font-size:9px;color:#777;" id="previewDateLine"></div>
             </div>
             <div id="previewStampCell" style="flex:1;display:flex;align-items:center;justify-content:center;
@@ -11655,13 +11650,14 @@ async function openStampSetup() {
   const previewSigCell = document.getElementById('previewSigCell');
   const previewStampCell = document.getElementById('previewStampCell');
   const previewSignedLine = document.getElementById('previewSignedLine');
-  const previewCompanyLine = document.getElementById('previewCompanyLine');
   const previewDateLine = document.getElementById('previewDateLine');
   const previewDims = document.getElementById('stampPreviewDims');
   const roleForPreview = window.currentUserRole || 'Role';
-  const signerNameForPreview = (window.currentUserName || 'User').trim();
-  previewSignedLine.textContent = `${signerNameForPreview}${roleForPreview ? ` (${roleForPreview})` : ''}`;
-  previewCompanyLine.textContent = (existing && existing.company_name) || 'Your Company';
+  const signerName = window.currentUserName || 'Your Name';
+  previewSignedLine.textContent = `${signerName} (${roleForPreview})`;
+  const companyForPreview = (existing && existing.company_name) || window.currentUserCompany || '';
+  const previewCompanyLine = document.getElementById('previewCompanyLine');
+  previewCompanyLine.textContent = companyForPreview;
   previewDateLine.textContent = new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })
     + ', ' + new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
 
@@ -11790,7 +11786,6 @@ async function openStampSetup() {
       const uploadingSig = uploadPanel.style.display !== 'none';
       const fd = new FormData();
       fd.append('projectId', projectId);
-      fd.append('signerName', window.currentUserName || '');
       if (uploadingSig && sigInput.files[0]) {
         fd.append('signatureImageFile', sigInput.files[0]);
       } else if (!uploadingSig && _signaturePad && !_signaturePad.isEmpty()) {
@@ -11965,9 +11960,8 @@ async function openStampPlacementModal(file, onApply, onCancel) {
   // It's re-parented into whichever page wrapper is currently targeted, so it
   // scrolls naturally along with that page instead of floating over the whole
   // (now much taller) scrollable preview.
-  const signerName = (stampProfile && stampProfile.signer_name) || window.currentUserName || 'User';
-  const companyLabel = (stampProfile && stampProfile.company_name) || 'Company';
-  const roleLabel = (stampProfile && stampProfile.role) || window.currentUserRole || '';
+  const companyLabel = (stampProfile && (stampProfile.company_name || stampProfile.role)) || 'Decision Maker';
+  const roleLabel = (stampProfile && stampProfile.role) || '';
   const nowLabel = new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
   const marker = document.createElement('div');
   marker.style.cssText = 'position:absolute;width:320px;height:88px;border:1.5px solid rgba(37,99,235,0.9);border-radius:8px;transform:translate(-50%,-50%);cursor:grab;display:none;z-index:4;background:rgba(255,255,255,0.18);box-shadow:0 4px 10px rgba(15,23,42,0.18);box-sizing:border-box;font-family:inherit;';
@@ -11978,8 +11972,7 @@ async function openStampPlacementModal(file, onApply, onCancel) {
       </div>
       <div style="flex:1;min-width:0;padding:6px 8px;display:flex;flex-direction:column;justify-content:center;gap:2px;border-right:1px solid #e5e7eb;">
         <div style="font-size:8px;color:#777;">Digitally signed by</div>
-        <div style="font-size:10px;font-weight:700;color:#0b7089;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${signerName}${roleLabel ? ` (${roleLabel})` : ''}</div>
-        <div style="font-size:8px;color:#777;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${companyLabel}</div>
+        <div style="font-size:10px;font-weight:700;color:#0b7089;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${companyLabel}${roleLabel ? ` (${roleLabel})` : ''}</div>
         <div style="font-size:8px;color:#777;">${nowLabel}</div>
       </div>
       <div style="width:72px;flex-shrink:0;display:flex;align-items:center;justify-content:center;padding:4px;">
