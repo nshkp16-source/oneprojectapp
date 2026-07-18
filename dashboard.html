@@ -5575,6 +5575,7 @@ async function bootstrapUser() {
     const meData = await res.json();
     window.currentUserId   = meData.id;
     window.currentUserRole = meData.role;
+    window.currentUserName = meData.name || meData.full_name || [meData.first_name, meData.last_name].filter(Boolean).join(' ') || meData.email || 'User';
 
     // Safe default — must be set before any render happens
     window.isCurrentUserLeader = false;
@@ -6653,8 +6654,39 @@ async function handleDecisionMakerAction(recordId, tabKey, action) {
     let didStamp = false;
 
     if (isPdf) {
-      const wantsStamp = confirm('Stamp this PDF before applying the action?\n\nChoose OK to stamp and replace the stored document, or Cancel to proceed without stamping.');
-      if (wantsStamp) {
+      const stampChoice = await new Promise((resolve) => {
+        const modal = document.createElement('div');
+        modal.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+        modal.innerHTML = `
+          <div style="background:#fff;border-radius:12px;padding:24px;width:min(460px,100%);box-shadow:0 20px 40px rgba(0,0,0,0.18);">
+            <div style="font-size:18px;font-weight:700;color:#0f172a;margin-bottom:8px;">Stamp this document before approving?</div>
+            <div style="font-size:13px;color:#64748b;margin-bottom:14px;">Choose how the stamp should be added.</div>
+            <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;font-size:13px;color:#334155;">
+              <input type="radio" name="approvalStampChoice" value="none" checked />
+              <span>Continue without stamping</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;font-size:13px;color:#334155;">
+              <input type="radio" name="approvalStampChoice" value="position" />
+              <span>Choose position on the document</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;cursor:pointer;font-size:13px;color:#334155;">
+              <input type="radio" name="approvalStampChoice" value="append" />
+              <span>Add stamp on a new page at the end of the document</span>
+            </label>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button type="button" id="approvalStampCancel" style="padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#334155;cursor:pointer;">Cancel</button>
+              <button type="button" id="approvalStampOk" style="padding:10px 12px;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-weight:700;">Continue</button>
+            </div>
+          </div>`;
+        document.body.appendChild(modal);
+        const choiceValue = () => modal.querySelector('input[name="approvalStampChoice"]:checked')?.value || 'none';
+        modal.querySelector('#approvalStampCancel').addEventListener('click', () => { modal.remove(); resolve('cancel'); });
+        modal.querySelector('#approvalStampOk').addEventListener('click', () => { modal.remove(); resolve(choiceValue()); });
+        modal.addEventListener('click', (e) => { if (e.target === modal) { modal.remove(); resolve('cancel'); } });
+      });
+
+      if (stampChoice === 'cancel') return;
+      if (stampChoice !== 'none') {
         const stampProfile = await loadStampProfile();
         if (!stampProfile) {
           alert('No stamp profile is available for this project yet.');
@@ -6674,9 +6706,11 @@ async function handleDecisionMakerAction(recordId, tabKey, action) {
           return;
         }
         const sourceFile = new File([blob], (cached?.file_path || 'document.pdf').split('/').pop() || 'document.pdf', { type: blob.type || 'application/pdf' });
-        const placement = await new Promise((resolve) => {
-          openStampPlacementModal(sourceFile, (placementData) => resolve(placementData), () => resolve(null));
-        });
+        const placement = stampChoice === 'append'
+          ? { page: 'append', x: 0.5, y: 0.5 }
+          : await new Promise((resolve) => {
+              openStampPlacementModal(sourceFile, (placementData) => resolve(placementData), () => resolve(null));
+            });
         if (!placement) {
           alert('Stamp placement was canceled.');
           return;
@@ -12301,13 +12335,16 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
   page.drawLine({ start: { x: stampColX - GAP / 2, y: y + 8 }, end: { x: stampColX - GAP / 2, y: y + rectHeight - 8 }, thickness: 0.75, color: dividerColor });
 
   // ── Middle column: "Digitally signed by {Company} (Role)" + date/time ──
-  const companyName = stampProfile.company_name || stampProfile.role || 'Decision Maker';
+  const signerName = stampProfile.signer_name || window.currentUserName || 'User';
+  const companyName = stampProfile.company_name || 'Company';
   const roleLabel = stampProfile.role || '';
   const signedLine1 = 'Digitally signed by';
-  let signedLine2 = roleLabel ? `${companyName} (${roleLabel})` : companyName;
+  const signerLine = `${signerName}${roleLabel ? ` (${roleLabel})` : ''}`;
+  const companyLine = companyName;
 
   let signedFontSize = 11;
-  const wrappedLines = wrapTextToWidth(signedLine2, titleFont, signedFontSize, midColW);
+  const wrappedSignerLines = wrapTextToWidth(signerLine, titleFont, signedFontSize, midColW);
+  const wrappedCompanyLines = wrapTextToWidth(companyLine, bodyFont, 9, midColW);
   const now = new Date();
   const dateTimeLabel = `${now.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}, ${now.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
 
@@ -12352,11 +12389,15 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
 
   // ── Middle column text (drawn after the images so it remains readable and does not get covered) ──
   page.drawText(signedLine1, { x: midColX, y: y + rectHeight - 24, size: 9, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
-  wrappedLines.forEach((line, index) => {
+  wrappedSignerLines.forEach((line, index) => {
     const lineY = y + rectHeight - 40 - (index * 12);
     page.drawText(line, { x: midColX, y: lineY, size: signedFontSize, font: titleFont, color: PDFLib.rgb(0.07, 0.44, 0.52) });
   });
-  page.drawText(dateTimeLabel, { x: midColX, y: y + rectHeight - 58 - ((wrappedLines.length - 1) * 12), size: 8, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
+  wrappedCompanyLines.forEach((line, index) => {
+    const lineY = y + rectHeight - 58 - ((wrappedSignerLines.length + index) * 10);
+    page.drawText(line, { x: midColX, y: lineY, size: 8.5, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
+  });
+  page.drawText(dateTimeLabel, { x: midColX, y: y + rectHeight - 70 - ((wrappedSignerLines.length + wrappedCompanyLines.length) * 10), size: 8, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
 
   // ── Right column: stamp image, fixed 5cm wide ──
   if (stampProfile.stamp_image_url) {
