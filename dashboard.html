@@ -5577,6 +5577,8 @@ async function bootstrapUser() {
     window.currentUserRole = meData.role;
     window.currentUserName = meData.name || meData.full_name || [meData.first_name, meData.last_name].filter(Boolean).join(' ') || meData.email || 'User';
     window.currentUserCompany = meData.company_name || null;
+    window.currentUserPosition = meData.position || null;
+    window.currentUserAssignedPart = meData.assigned_part || null;
 
     // Safe default — must be set before any render happens
     window.isCurrentUserLeader = false;
@@ -6746,20 +6748,95 @@ async function handleDecisionMakerAction(recordId, tabKey, action) {
 // =======================================================================
 async function handleTeamMemberAction(recordId, tabKey, action) {
   try {
-    const res = await authFetch(
-      `${API}/review-record`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId:  localStorage.getItem('activeProjectId'),
-          recordId,
-          recordType: tabToTable(tabKey),
-          action,
-          actorType:  'team_member'
-        })
+    const projectId = localStorage.getItem('activeProjectId');
+    const cached = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
+    const body = new FormData();
+    body.append('projectId', projectId);
+    body.append('recordId', recordId);
+    body.append('recordType', tabToTable(tabKey));
+    body.append('action', action);
+    body.append('actorType', 'team_member');
+
+    const fileUrl = cached?.file_path || '';
+    const isPdf = /\.pdf$/i.test((fileUrl || '').split('?')[0]) || (fileUrl || '').toLowerCase().includes('.pdf');
+    let stampedFile = null;
+    let didStamp = false;
+
+    if (action === 'approved' && isPdf) {
+      const stampChoice = await new Promise((resolve) => {
+        const modal = document.createElement('div');
+        modal.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+        modal.innerHTML = `
+          <div style="background:#fff;border-radius:12px;padding:24px;width:min(460px,100%);box-shadow:0 20px 40px rgba(0,0,0,0.18);">
+            <div style="font-size:18px;font-weight:700;color:#0f172a;margin-bottom:8px;">Add your signature before approving?</div>
+            <div style="font-size:13px;color:#64748b;margin-bottom:14px;">Choose whether to add your signature block to the document.</div>
+            <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;font-size:13px;color:#334155;">
+              <input type="radio" name="approvalStampChoice" value="none" checked />
+              <span>Continue without signing</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;font-size:13px;color:#334155;">
+              <input type="radio" name="approvalStampChoice" value="position" />
+              <span>Place your signature on the document</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;cursor:pointer;font-size:13px;color:#334155;">
+              <input type="radio" name="approvalStampChoice" value="append" />
+              <span>Add signature on a new page at the end</span>
+            </label>
+            <div style="display:flex;gap:10px;justify-content:flex-end;">
+              <button type="button" id="approvalStampCancel" style="padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#334155;cursor:pointer;">Cancel</button>
+              <button type="button" id="approvalStampOk" style="padding:10px 12px;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-weight:700;">Continue</button>
+            </div>
+          </div>`;
+        document.body.appendChild(modal);
+        const choiceValue = () => modal.querySelector('input[name="approvalStampChoice"]:checked')?.value || 'none';
+        modal.querySelector('#approvalStampCancel').addEventListener('click', () => { modal.remove(); resolve('cancel'); });
+        modal.querySelector('#approvalStampOk').addEventListener('click', () => { modal.remove(); resolve(choiceValue()); });
+        modal.addEventListener('click', (e) => { if (e.target === modal) { modal.remove(); resolve('cancel'); } });
+      });
+
+      if (stampChoice === 'cancel') return;
+      if (stampChoice !== 'none') {
+        const stampProfile = await loadStampProfile();
+        if (!stampProfile) {
+          alert('No signature profile is available for this project yet.');
+          return;
+        }
+        const downloadRes = await authFetch(
+          `${API}/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}&filename=${encodeURIComponent(cached?.title || 'document.pdf')}`,
+          { method: 'GET' }
+        );
+        if (!downloadRes || !downloadRes.ok) {
+          alert('Failed to download the document for signing.');
+          return;
+        }
+        const blob = await downloadRes.blob();
+        if (!blob.size) {
+          alert('The document is empty, so it cannot be signed.');
+          return;
+        }
+        const sourceFile = new File([blob], (cached?.file_path || 'document.pdf').split('/').pop() || 'document.pdf', { type: blob.type || 'application/pdf' });
+        const placement = stampChoice === 'append'
+          ? { page: 'append', x: 0.5, y: 0.5 }
+          : await new Promise((resolve) => {
+              openStampPlacementModal(sourceFile, (placementData) => resolve(placementData), () => resolve(null));
+            });
+        if (!placement) {
+          alert('Signature placement was canceled.');
+          return;
+        }
+        const stampedBlob = await createStampedFileBlob(sourceFile, placement, 'SIGNED', stampProfile);
+        const stampedName = `${(sourceFile.name || 'document').replace(/\.[^/.]+$/, '')}-signed.pdf`;
+        stampedFile = new File([stampedBlob], stampedName, { type: 'application/pdf' });
+        didStamp = true;
+        body.append('stampDocument', 'true');
       }
-    );
+    }
+
+    if (didStamp && stampedFile) {
+      body.append('attachment', stampedFile, stampedFile.name);
+    }
+
+    const res = await authFetch(`${API}/review-record`, { method: 'POST', body });
     if (!res) return;
     const data = await res.json();
     if (!res.ok) { alert(data.error || 'Failed to record your action.'); return; }
@@ -11428,8 +11505,13 @@ function initStampNav() {
   const role = window.currentUserRole || '';
   const r = role.toLowerCase().replace(/[\s_-]+/g, '');
   const isDM = ['contractor','contractorpm','consultant','consultantpm','client','clientpm'].includes(r);
+  const isTM = r === 'teammember';
   const stampNav = document.getElementById('stampSetupNav');
-  if (stampNav) stampNav.style.display = isDM ? '' : 'none';
+  if (stampNav) {
+    stampNav.style.display = isDM || isTM ? '' : 'none';
+    const labelEl = stampNav.querySelector('.label');
+    if (labelEl) labelEl.textContent = isTM ? 'My Signature' : 'My Stamp';
+  }
 }
 
 // ── Stamp setup panel ─────────────────────────────────────────────────
@@ -11497,9 +11579,9 @@ async function openStampSetup() {
   const html = `
     <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
       <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
-        <h3 style="margin:0;color:#333;font-size:18px;">🖋️ My Stamp Setup</h3>
+        <h3 style="margin:0;color:#333;font-size:18px;">🖋️ My Signature Setup</h3>
         <p style="margin:4px 0 0;font-size:12px;color:#9ca3af;">
-          Add your signature and/or company stamp. This stamp only applies to <strong>${projectName}</strong> —
+          Add your signature and/or company stamp. This signature profile only applies to <strong>${projectName}</strong> —
           each project has its own.
         </p>
       </div>
@@ -11511,7 +11593,7 @@ async function openStampSetup() {
           Saving again will overwrite it.
         </div>` : `<div style="margin-bottom:16px;padding:10px 12px;background:#fffbeb;
           border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#92400e;">
-          ⚠️ No stamp set up yet for ${projectName}. Add a signature and/or a company stamp image below —
+          ⚠️ No signature profile set up yet for ${projectName}. Add a signature and/or a company stamp image below —
           at least one is required.
         </div>`}
 
@@ -11594,7 +11676,7 @@ async function openStampSetup() {
 
         <div style="padding:8px 10px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;
           font-size:11px;color:#0369a1;">
-          ℹ️ Your company name, role, and the date/time are added automatically when you stamp a
+          ℹ️ Your name, position, side, and the date/time are added automatically when you sign a
           document — you don't need to enter them here.
         </div>
 
@@ -11652,12 +11734,10 @@ async function openStampSetup() {
   const previewSignedLine = document.getElementById('previewSignedLine');
   const previewDateLine = document.getElementById('previewDateLine');
   const previewDims = document.getElementById('stampPreviewDims');
-  const roleForPreview = window.currentUserRole || 'Role';
-  const signerName = window.currentUserName || 'Your Name';
-  previewSignedLine.textContent = `${signerName} (${roleForPreview})`;
-  const companyForPreview = (existing && existing.company_name) || window.currentUserCompany || '';
   const previewCompanyLine = document.getElementById('previewCompanyLine');
-  previewCompanyLine.textContent = companyForPreview;
+  const identityMeta = buildSignatureIdentityMeta(existing);
+  previewSignedLine.textContent = identityMeta.signerName;
+  previewCompanyLine.textContent = identityMeta.secondaryLine;
   previewDateLine.textContent = new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })
     + ', ' + new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
 
@@ -11815,6 +11895,15 @@ async function openStampSetup() {
 function clearStampSignature() {
   if (_signaturePad) _signaturePad.clear();
   if (_updateStampPreviewFn) _updateStampPreviewFn();
+}
+
+function buildSignatureIdentityMeta(stampProfile = null) {
+  const signerName = stampProfile?.signer_name || window.currentUserName || 'Your Name';
+  const position = stampProfile?.position || window.currentUserPosition || '';
+  const side = stampProfile?.side || window.currentUserAssignedPart || '';
+  const sideLabel = side ? `${side} Team Member` : 'Team Member';
+  const secondaryLine = [position, sideLabel].filter(Boolean).join(' • ');
+  return { signerName, position, side, sideLabel, secondaryLine };
 }
 
 // ── Stamp step in upload form ─────────────────────────────────────────
@@ -12340,17 +12429,17 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
   page.drawLine({ start: { x: midColX - GAP / 2, y: y + 8 }, end: { x: midColX - GAP / 2, y: y + rectHeight - 8 }, thickness: 0.75, color: dividerColor });
   page.drawLine({ start: { x: stampColX - GAP / 2, y: y + 8 }, end: { x: stampColX - GAP / 2, y: y + rectHeight - 8 }, thickness: 0.75, color: dividerColor });
 
-  // ── Middle column: "Digitally signed by {Company} (Role)" + date/time ──
-  const signerName = stampProfile.signer_name || window.currentUserName || 'User';
-  const companyName = stampProfile.company_name || 'Company';
-  const roleLabel = stampProfile.role || '';
+  // ── Middle column: signer name + position/side + date/time ──
+  const identityMeta = buildSignatureIdentityMeta(stampProfile);
+  const signerName = identityMeta.signerName;
+  const secondaryLine = identityMeta.secondaryLine || 'Team Member';
   const signedLine1 = 'Digitally signed by';
-  const signerLine = `${signerName}${roleLabel ? ` (${roleLabel})` : ''}`;
-  const companyLine = companyName;
+  const signerLine = signerName;
+  const detailLine = secondaryLine;
 
   let signedFontSize = 11;
   const wrappedSignerLines = wrapTextToWidth(signerLine, titleFont, signedFontSize, midColW);
-  const wrappedCompanyLines = wrapTextToWidth(companyLine, bodyFont, 9, midColW);
+  const wrappedDetailLines = wrapTextToWidth(detailLine, bodyFont, 8.5, midColW);
   const now = new Date();
   const dateTimeLabel = `${now.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}, ${now.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
 
@@ -12399,11 +12488,11 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
     const lineY = y + rectHeight - 40 - (index * 12);
     page.drawText(line, { x: midColX, y: lineY, size: signedFontSize, font: titleFont, color: PDFLib.rgb(0.07, 0.44, 0.52) });
   });
-  wrappedCompanyLines.forEach((line, index) => {
+  wrappedDetailLines.forEach((line, index) => {
     const lineY = y + rectHeight - 58 - ((wrappedSignerLines.length + index) * 10);
     page.drawText(line, { x: midColX, y: lineY, size: 8.5, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
   });
-  page.drawText(dateTimeLabel, { x: midColX, y: y + rectHeight - 70 - ((wrappedSignerLines.length + wrappedCompanyLines.length) * 10), size: 8, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
+  page.drawText(dateTimeLabel, { x: midColX, y: y + rectHeight - 70 - ((wrappedSignerLines.length + wrappedDetailLines.length) * 10), size: 8, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
 
   // ── Right column: stamp image, fixed 5cm wide ──
   if (stampProfile.stamp_image_url) {
