@@ -11992,18 +11992,16 @@ async function openStampPlacementModal(file, onApply, onCancel) {
   const nowLabel = new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
   const marker = document.createElement('div');
   marker.style.cssText = 'position:absolute;width:320px;height:88px;border:1.5px solid rgba(37,99,235,0.9);border-radius:8px;transform:translate(-50%,-50%);cursor:grab;display:none;z-index:4;background:rgba(255,255,255,0.18);box-shadow:0 4px 10px rgba(15,23,42,0.18);box-sizing:border-box;font-family:inherit;';
+  // two-column marker when no stamp image is present (team-member signature only)
   marker.innerHTML = `
     <div style="display:flex;height:100%;">
       <div style="width:64px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-right:1px solid #e5e7eb;padding:4px;">
         ${stampProfile && stampProfile.signature_image ? `<img src="${stampProfile.signature_image}" style="max-width:100%;aspect-ratio:${SIGNATURE_RATIO}/1;object-fit:contain;pointer-events:none;" />` : '<span style="font-size:9px;color:#9ca3af;">signature</span>'}
       </div>
-      <div style="flex:1;min-width:0;padding:6px 8px;display:flex;flex-direction:column;justify-content:center;gap:2px;border-right:1px solid #e5e7eb;">
+      <div style="flex:1;min-width:0;padding:6px 8px;display:flex;flex-direction:column;justify-content:center;gap:2px;">
         <div style="font-size:8px;color:#777;">Digitally signed by</div>
         <div style="font-size:10px;font-weight:700;color:#0b7089;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${companyLabel}${roleLabel ? ` (${roleLabel})` : ''}</div>
         <div style="font-size:8px;color:#777;">${nowLabel}</div>
-      </div>
-      <div style="width:72px;flex-shrink:0;display:flex;align-items:center;justify-content:center;padding:4px;">
-        ${stampProfile && stampProfile.stamp_image_url ? `<img src="${stampProfile.stamp_image_url}" style="max-width:100%;max-height:100%;object-fit:contain;pointer-events:none;" />` : '<span style="font-size:9px;color:#9ca3af;">stamp</span>'}
       </div>
     </div>`;
 
@@ -12326,10 +12324,13 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
   const PT_PER_CM = 28.3465;
   const PAD = 8;
   const GAP = 8;
-  const SIG_COL_W = 5 * PT_PER_CM; // fixed 5cm, per spec — height follows the image's own aspect ratio
-  const STAMP_COL_W = 5 * PT_PER_CM; // fixed 5cm, per spec — height follows the image's own aspect ratio
+  const SIG_COL_W = 5 * PT_PER_CM; // fixed 5cm for signature column
   const MID_COL_W = 170;
-  const rectWidth = Math.min(PAD * 2 + SIG_COL_W + GAP + MID_COL_W + GAP + STAMP_COL_W, width * 0.7);
+  // If a stamp image is present we reserve space for it; otherwise produce a
+  // compact two-column layout (signature + details) for team members.
+  const hasStamp = !!(stampProfile && stampProfile.stamp_image_url);
+  const STAMP_COL_W = hasStamp ? 5 * PT_PER_CM : 0;
+  const rectWidth = Math.min(PAD * 2 + SIG_COL_W + GAP + MID_COL_W + (hasStamp ? GAP + STAMP_COL_W : 0), width * 0.7);
   const rectHeight = Math.min(132, height * 0.24);
 
   const x = Math.min(Math.max((placement.x ?? 0.8) * width, 10), width - rectWidth - 10);
@@ -12359,13 +12360,16 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
   // Column boundaries
   const sigColX = x + PAD;
   const midColX = sigColX + SIG_COL_W + GAP;
-  const midColW = Math.max(60, rectWidth - PAD * 2 - SIG_COL_W - GAP - STAMP_COL_W - GAP);
+  const midColW = Math.max(60, rectWidth - PAD * 2 - SIG_COL_W - GAP - (hasStamp ? STAMP_COL_W + GAP : 0));
   const stampColX = x + rectWidth - PAD - STAMP_COL_W;
 
-  // Divider lines between columns
+  // Divider line between signature and details column
   const dividerColor = PDFLib.rgb(0.82, 0.85, 0.88);
   page.drawLine({ start: { x: midColX - GAP / 2, y: y + 8 }, end: { x: midColX - GAP / 2, y: y + rectHeight - 8 }, thickness: 0.75, color: dividerColor });
-  page.drawLine({ start: { x: stampColX - GAP / 2, y: y + 8 }, end: { x: stampColX - GAP / 2, y: y + rectHeight - 8 }, thickness: 0.75, color: dividerColor });
+  // If we have a stamp column, draw its divider as well
+  if (hasStamp) {
+    page.drawLine({ start: { x: stampColX - GAP / 2, y: y + 8 }, end: { x: stampColX - GAP / 2, y: y + rectHeight - 8 }, thickness: 0.75, color: dividerColor });
+  }
 
   // ── Middle column: signer name + position/side + date/time ──
   const identityMeta = buildSignatureIdentityMeta(stampProfile);
@@ -12432,8 +12436,8 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
   });
   page.drawText(dateTimeLabel, { x: midColX, y: y + rectHeight - 70 - ((wrappedSignerLines.length + wrappedDetailLines.length) * 10), size: 8, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
 
-  // ── Right column: stamp image, fixed 5cm wide ──
-  if (stampProfile.stamp_image_url) {
+  // ── Right column: stamp image, fixed 5cm wide (only if present) ──
+  if (hasStamp) {
     try {
       const stampResp = await fetch(stampProfile.stamp_image_url);
       const stampData = await stampResp.arrayBuffer();
