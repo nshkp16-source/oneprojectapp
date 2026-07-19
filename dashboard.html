@@ -11650,30 +11650,6 @@ async function openStampSetup() {
         </div>
 
         <!-- Company Stamp Upload -->
-        <div style="margin-bottom:20px;">
-          <label style="display:block;font-weight:700;color:#007B8A;font-size:12px;
-            text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">
-            🏢 Company Stamp Image (Optional)
-          </label>
-          ${existing && existing.stamp_image_url ? `
-            <div style="margin-bottom:8px;">
-              <div style="font-size:11px;color:#6b7280;margin-bottom:4px;">Current stamp:</div>
-              <img src="${existing.stamp_image_url}" style="max-width:80px;max-height:80px;
-                border:1px solid #e5e7eb;border-radius:4px;" />
-            </div>` : ''}
-          <div id="stampImageDropZone"
-            style="display:flex;align-items:center;gap:12px;padding:14px;
-            border:2px dashed #d1d5db;border-radius:6px;cursor:pointer;">
-            <span style="font-size:24px;">🏢</span>
-            <div>
-              <div style="font-weight:600;color:#333;font-size:13px;">Upload stamp image</div>
-              <div style="font-size:11px;color:#9ca3af;">PNG or JPG, transparent background recommended</div>
-              <input type="file" id="stampImageInput" style="display:none;" accept=".png,.jpg,.jpeg" />
-            </div>
-          </div>
-          <div id="stampImageName" style="margin-top:6px;font-size:12px;color:#28a745;display:none;"></div>
-        </div>
-
         <div style="padding:8px 10px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;
           font-size:11px;color:#0369a1;">
           ℹ️ Your name, position, side, and the date/time are added automatically when you sign a
@@ -11703,7 +11679,7 @@ async function openStampSetup() {
             </div>
             <div id="previewStampCell" style="flex:1;display:flex;align-items:center;justify-content:center;
               padding:4px;overflow:hidden;">
-              <span style="font-size:10px;color:#9ca3af;text-align:center;">stamp image<br/>(5cm wide)</span>
+              <span style="font-size:10px;color:#9ca3af;text-align:center;">signature only</span>
             </div>
           </div>
           <div id="stampPreviewDims" style="margin-top:6px;font-size:10px;color:#9ca3af;"></div>
@@ -11759,17 +11735,7 @@ async function openStampSetup() {
       : `<span style="font-size:10px;color:#9ca3af;text-align:center;">signature</span>`;
 
     let stampSrc = null;
-    if (stampInput.files[0]) {
-      const selected = stampInput.files[0];
-      revokePreviewUrl(_activeStampPreviewUrl);
-      _activeStampPreviewUrl = URL.createObjectURL(selected);
-      stampSrc = _activeStampPreviewUrl;
-    } else if (existing && existing.stamp_image_url) {
-      stampSrc = existing.stamp_image_url;
-    }
-    previewStampCell.innerHTML = stampSrc
-      ? `<img src="${stampSrc}" style="max-width:100%;max-height:100%;object-fit:contain;background:transparent;" />`
-      : `<span style="font-size:10px;color:#9ca3af;text-align:center;">stamp image<br/>(5cm wide)</span>`;
+    previewStampCell.innerHTML = `<span style="font-size:10px;color:#9ca3af;text-align:center;">signature only</span>`;
 
     // Show the uploaded files' real pixel dimensions to help pick a well-sized source image.
     const dimParts = [];
@@ -11778,11 +11744,6 @@ async function openStampSetup() {
       const im = new Image();
       im.onload = () => { dimParts.push(`Signature: ${im.naturalWidth}×${im.naturalHeight}px`); reportDims(); };
       im.src = sigSrc;
-    }
-    if (stampInput.files[0]) {
-      const im2 = new Image();
-      im2.onload = () => { dimParts.push(`Stamp: ${im2.naturalWidth}×${im2.naturalHeight}px`); reportDims(); };
-      im2.src = stampSrc;
     }
     if (dimParts.length === 0) previewDims.textContent = '';
   };
@@ -11839,25 +11800,6 @@ async function openStampSetup() {
     }
   });
 
-  // Stamp image input
-  const dropZone   = document.getElementById('stampImageDropZone');
-  const stampInput = document.getElementById('stampImageInput');
-  const stampName  = document.getElementById('stampImageName');
-  dropZone.addEventListener('click', () => stampInput.click());
-  stampInput.addEventListener('change', async () => {
-    if (stampInput.files[0]) {
-      const cleanedFile = await cleanStampImageFile(stampInput.files[0]);
-      stampInput.value = '';
-      const dataTransfer = new DataTransfer();
-      dataTransfer.items.add(cleanedFile);
-      stampInput.files = dataTransfer.files;
-      stampName.textContent = `✓ ${cleanedFile.name}`;
-      stampName.style.display = 'block';
-      dropZone.style.borderColor = '#28a745';
-      _updateStampPreviewFn && _updateStampPreviewFn();
-    }
-  });
-
   // Save
   document.getElementById('saveStampBtn').addEventListener('click', async () => {
     const btn = document.getElementById('saveStampBtn');
@@ -11871,13 +11813,9 @@ async function openStampSetup() {
       } else if (!uploadingSig && _signaturePad && !_signaturePad.isEmpty()) {
         fd.append('signatureBase64', _signaturePad.toDataURL('image/png'));
       }
-      if (stampInput.files[0]) {
-        fd.append('stampImage', stampInput.files[0]);
-      }
       const hasSignature = fd.has('signatureImageFile') || fd.has('signatureBase64');
-      const hasStampImage = fd.has('stampImage');
-      if (!hasSignature && !hasStampImage) {
-        alert('Add a signature (drawn or uploaded) or a company stamp image — at least one is required.');
+      if (!hasSignature) {
+        alert('Add a signature (drawn or uploaded) before saving.');
         btn.disabled = false; btn.textContent = '💾 Save Stamp';
         return;
       }
