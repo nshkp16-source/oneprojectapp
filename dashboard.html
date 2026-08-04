@@ -6637,6 +6637,39 @@ function toggleRecordDetail(recordId, tabKey) {
   }
 }
 
+async function promptForStampChoice({ title, subtitle, continueLabel = 'Continue', cancelLabel = 'Cancel', primaryLabel = 'Choose position on the document', secondaryLabel = 'Add stamp on a new page at the end of the document' } = {}) {
+  return new Promise((resolve) => {
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:24px;width:min(460px,100%);box-shadow:0 20px 40px rgba(0,0,0,0.18);">
+        <div style="font-size:18px;font-weight:700;color:#0f172a;margin-bottom:8px;">${title}</div>
+        <div style="font-size:13px;color:#64748b;margin-bottom:14px;">${subtitle}</div>
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;font-size:13px;color:#334155;">
+          <input type="radio" name="stampChoice" value="none" checked />
+          <span>Continue without stamping</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;font-size:13px;color:#334155;">
+          <input type="radio" name="stampChoice" value="position" />
+          <span>${primaryLabel}</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;cursor:pointer;font-size:13px;color:#334155;">
+          <input type="radio" name="stampChoice" value="append" />
+          <span>${secondaryLabel}</span>
+        </label>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+          <button type="button" id="stampChoiceCancel" style="padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#334155;cursor:pointer;">${cancelLabel}</button>
+          <button type="button" id="stampChoiceOk" style="padding:10px 12px;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-weight:700;">${continueLabel}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    const choiceValue = () => modal.querySelector('input[name="stampChoice"]:checked')?.value || 'none';
+    modal.querySelector('#stampChoiceCancel').addEventListener('click', () => { modal.remove(); resolve('cancel'); });
+    modal.querySelector('#stampChoiceOk').addEventListener('click', () => { modal.remove(); resolve(choiceValue()); });
+    modal.addEventListener('click', (e) => { if (e.target === modal) { modal.remove(); resolve('cancel'); } });
+  });
+}
+
 // =======================================================================
 //  DECISION MAKER ACTION
 // =======================================================================
@@ -6657,35 +6690,9 @@ async function handleDecisionMakerAction(recordId, tabKey, action) {
     let didStamp = false;
 
     if (isPdf) {
-      const stampChoice = await new Promise((resolve) => {
-        const modal = document.createElement('div');
-        modal.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
-        modal.innerHTML = `
-          <div style="background:#fff;border-radius:12px;padding:24px;width:min(460px,100%);box-shadow:0 20px 40px rgba(0,0,0,0.18);">
-            <div style="font-size:18px;font-weight:700;color:#0f172a;margin-bottom:8px;">Stamp this document before approving?</div>
-            <div style="font-size:13px;color:#64748b;margin-bottom:14px;">Choose how the stamp should be added.</div>
-            <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;font-size:13px;color:#334155;">
-              <input type="radio" name="approvalStampChoice" value="none" checked />
-              <span>Continue without stamping</span>
-            </label>
-            <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;font-size:13px;color:#334155;">
-              <input type="radio" name="approvalStampChoice" value="position" />
-              <span>Choose position on the document</span>
-            </label>
-            <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;cursor:pointer;font-size:13px;color:#334155;">
-              <input type="radio" name="approvalStampChoice" value="append" />
-              <span>Add stamp on a new page at the end of the document</span>
-            </label>
-            <div style="display:flex;gap:10px;justify-content:flex-end;">
-              <button type="button" id="approvalStampCancel" style="padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#334155;cursor:pointer;">Cancel</button>
-              <button type="button" id="approvalStampOk" style="padding:10px 12px;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-weight:700;">Continue</button>
-            </div>
-          </div>`;
-        document.body.appendChild(modal);
-        const choiceValue = () => modal.querySelector('input[name="approvalStampChoice"]:checked')?.value || 'none';
-        modal.querySelector('#approvalStampCancel').addEventListener('click', () => { modal.remove(); resolve('cancel'); });
-        modal.querySelector('#approvalStampOk').addEventListener('click', () => { modal.remove(); resolve(choiceValue()); });
-        modal.addEventListener('click', (e) => { if (e.target === modal) { modal.remove(); resolve('cancel'); } });
+      const stampChoice = await promptForStampChoice({
+        title: 'Stamp this document before approving?',
+        subtitle: 'Choose how the stamp should be added.',
       });
 
       if (stampChoice === 'cancel') return;
@@ -6763,35 +6770,11 @@ async function handleTeamMemberAction(recordId, tabKey, action) {
     let didStamp = false;
 
     if (action === 'approved' && isPdf) {
-      const stampChoice = await new Promise((resolve) => {
-        const modal = document.createElement('div');
-        modal.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
-        modal.innerHTML = `
-          <div style="background:#fff;border-radius:12px;padding:24px;width:min(460px,100%);box-shadow:0 20px 40px rgba(0,0,0,0.18);">
-            <div style="font-size:18px;font-weight:700;color:#0f172a;margin-bottom:8px;">Add your signature before approving?</div>
-            <div style="font-size:13px;color:#64748b;margin-bottom:14px;">Choose whether to add your signature block to the document.</div>
-            <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;font-size:13px;color:#334155;">
-              <input type="radio" name="approvalStampChoice" value="none" checked />
-              <span>Continue without signing</span>
-            </label>
-            <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer;font-size:13px;color:#334155;">
-              <input type="radio" name="approvalStampChoice" value="position" />
-              <span>Place your signature on the document</span>
-            </label>
-            <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;cursor:pointer;font-size:13px;color:#334155;">
-              <input type="radio" name="approvalStampChoice" value="append" />
-              <span>Add signature on a new page at the end</span>
-            </label>
-            <div style="display:flex;gap:10px;justify-content:flex-end;">
-              <button type="button" id="approvalStampCancel" style="padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#334155;cursor:pointer;">Cancel</button>
-              <button type="button" id="approvalStampOk" style="padding:10px 12px;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-weight:700;">Continue</button>
-            </div>
-          </div>`;
-        document.body.appendChild(modal);
-        const choiceValue = () => modal.querySelector('input[name="approvalStampChoice"]:checked')?.value || 'none';
-        modal.querySelector('#approvalStampCancel').addEventListener('click', () => { modal.remove(); resolve('cancel'); });
-        modal.querySelector('#approvalStampOk').addEventListener('click', () => { modal.remove(); resolve(choiceValue()); });
-        modal.addEventListener('click', (e) => { if (e.target === modal) { modal.remove(); resolve('cancel'); } });
+      const stampChoice = await promptForStampChoice({
+        title: 'Add your signature before approving?',
+        subtitle: 'Choose whether to add your signature block to the document.',
+        primaryLabel: 'Place your signature on the document',
+        secondaryLabel: 'Add signature on a new page at the end',
       });
 
       if (stampChoice === 'cancel') return;
@@ -7067,12 +7050,41 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
                 style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
                 border-radius:4px;cursor:pointer;font-size:13px;text-decoration:line-through;">S</button>
               <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
+              <button type="button" data-cmd="formatBlock" data-value="<h1>"
+                style="width:36px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:11px;font-weight:700;">H1</button>
+              <button type="button" data-cmd="formatBlock" data-value="<h2>"
+                style="width:36px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:11px;font-weight:700;">H2</button>
+              <button type="button" data-cmd="formatBlock" data-value="<p>"
+                style="width:36px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:11px;">P</button>
+              <button type="button" data-cmd="formatBlock" data-value="<blockquote>"
+                style="width:42px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:11px;">Quote</button>
+              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
               <button type="button" data-cmd="insertUnorderedList"
                 style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
                 border-radius:4px;cursor:pointer;font-size:14px;">☰</button>
               <button type="button" data-cmd="insertOrderedList"
                 style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
                 border-radius:4px;cursor:pointer;font-size:13px;">1.</button>
+              <button type="button" data-cmd="createLink"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
+                border-radius:4px;cursor:pointer;font-size:13px;">🔗</button>
+              <button type="button" data-cmd="unlink"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
+                border-radius:4px;cursor:pointer;font-size:13px;">⛓</button>
+              <button type="button" data-cmd="insertHorizontalRule"
+                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
+                border-radius:4px;cursor:pointer;font-size:13px;">—</button>
+              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
+              <label title="Text color" style="display:flex;align-items:center;gap:2px;background:#fff;border:1px solid #ddd;border-radius:4px;padding:2px 4px;">
+                <input type="color" id="recordTextColorPicker" value="#2563eb" style="width:20px;height:20px;border:none;background:transparent;padding:0;cursor:pointer;" />
+                <button type="button" data-cmd="foreColor" data-color-target="recordTextColorPicker"
+                  style="width:28px;height:28px;background:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:700;">A</button>
+              </label>
+              <label title="Highlight color" style="display:flex;align-items:center;gap:2px;background:#fff;border:1px solid #ddd;border-radius:4px;padding:2px 4px;">
+                <input type="color" id="recordHighlightColorPicker" value="#fde68a" style="width:20px;height:20px;border:none;background:transparent;padding:0;cursor:pointer;" />
+                <button type="button" data-cmd="hiliteColor" data-color-target="recordHighlightColorPicker"
+                  style="width:28px;height:28px;background:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:700;">H</button>
+              </label>
               <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
               <button type="button" data-cmd="justifyLeft"
                 style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
@@ -7153,7 +7165,11 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
     const btn = e.target.closest('button[data-cmd]');
     if (!btn) return;
     e.preventDefault();
-    document.execCommand(btn.getAttribute('data-cmd'), false, null);
+    const cmd = btn.getAttribute('data-cmd');
+    const value = btn.getAttribute('data-value') || null;
+    const colorTargetId = btn.getAttribute('data-color-target');
+    const colorValue = colorTargetId ? document.getElementById(colorTargetId)?.value : null;
+    document.execCommand(cmd, false, colorValue || value);
     document.querySelectorAll('#editorToolbar button[data-cmd]').forEach(b => {
       try { b.classList.toggle('active', document.queryCommandState(b.getAttribute('data-cmd'))); } catch(_) {}
     });
@@ -7225,8 +7241,6 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       if (title.length < 3)     throw new Error('Title must be at least 3 characters.');
       if (!descText)            throw new Error('Content is required.');
       if (descText.length < 10) throw new Error('Content must be at least 10 characters.');
-      if (fileInput.files[0] && fileInput.files[0].size > 10*1024*1024)
-        throw new Error('File size must not exceed 10MB.');
 
       const stampChoice = document.querySelector('input[name="stampChoice"]:checked')?.value || 'save';
       console.log('[save-record] stampChoice:', stampChoice);
@@ -7236,6 +7250,10 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       // If nothing was prepared (e.g. no file attached at all), fall back to the raw input.
       let attachmentFile = window.__preparedFile || fileInput.files[0] || null;
       let clientStamped = false;
+
+      if (attachmentFile && attachmentFile.size > 10 * 1024 * 1024) {
+        throw new Error('File size must not exceed 10MB.');
+      }
 
       if (stampChoice === 'stamp') {
         if (!attachmentFile) throw new Error('Attach a document before adding a stamp.');
@@ -11519,6 +11537,7 @@ let _signaturePad = null;
 let _updateStampPreviewFn = null;
 let _activeSigPreviewUrl = null;
 let _activeStampPreviewUrl = null;
+let _selectedSignatureColor = '#1e3a5f';
 
 async function cleanStampImageFile(file) {
   if (!file) return null;
@@ -11625,7 +11644,15 @@ async function openStampSetup() {
             <div style="margin-top:4px;font-size:10px;color:#9ca3af;">
               This box matches the shape your signature will actually appear in on documents.
             </div>
-            <div style="display:flex;gap:8px;margin-top:6px;">
+            <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;">
+              <div style="font-size:11px;font-weight:700;color:#475569;">Choose signature color</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="sigColorBtn" data-color="#1e3a5f" style="width:28px;height:28px;border-radius:999px;border:2px solid #1e3a5f;background:#1e3a5f;cursor:pointer;box-shadow:0 0 0 2px rgba(37,99,235,0.15);"></button>
+                <button type="button" class="sigColorBtn" data-color="#111827" style="width:28px;height:28px;border-radius:999px;border:2px solid #111827;background:#111827;cursor:pointer;"></button>
+                <button type="button" class="sigColorBtn" data-color="#0f766e" style="width:28px;height:28px;border-radius:999px;border:2px solid #0f766e;background:#0f766e;cursor:pointer;"></button>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px;">
               <button type="button" onclick="clearStampSignature()"
                 style="padding:5px 12px;font-size:11px;background:#f3f4f6;color:#374151;
                 border:1px solid #d1d5db;border-radius:5px;cursor:pointer;">Clear</button>
@@ -11756,12 +11783,31 @@ async function openStampSetup() {
       const rect = canvas.getBoundingClientRect();
       canvas.width  = rect.width  || canvas.offsetWidth  || 300;
       canvas.height = rect.height || canvas.offsetHeight || 120;
-      _signaturePad = new SignaturePad(canvas, { penColor: '#1e3a5f', minWidth: 1, maxWidth: 2.5, backgroundColor: 'transparent' });
+      _signaturePad = new SignaturePad(canvas, { penColor: _selectedSignatureColor, minWidth: 1, maxWidth: 2.5, backgroundColor: 'transparent' });
       canvas.addEventListener('pointerup', updateStampPreview);
       canvas.addEventListener('pointerleave', updateStampPreview);
     }
     updateStampPreview();
   });
+
+  const sigColorButtons = [...document.querySelectorAll('.sigColorBtn')];
+  const updateSignatureColorButtons = (color) => {
+    sigColorButtons.forEach((btn) => {
+      const isActive = btn.dataset.color === color;
+      btn.style.boxShadow = isActive ? '0 0 0 2px rgba(37,99,235,0.15)' : 'none';
+      btn.style.borderWidth = isActive ? '2px' : '2px';
+      btn.style.opacity = isActive ? '1' : '0.75';
+    });
+  };
+  const applySignatureColor = (color) => {
+    _selectedSignatureColor = color;
+    if (_signaturePad) _signaturePad.penColor = color;
+    updateSignatureColorButtons(color);
+  };
+  sigColorButtons.forEach((btn) => {
+    btn.addEventListener('click', () => applySignatureColor(btn.dataset.color));
+  });
+  updateSignatureColorButtons(_selectedSignatureColor);
 
   // Signature mode toggle: draw vs upload an image
   const drawBtn = document.getElementById('sigModeDrawBtn');
