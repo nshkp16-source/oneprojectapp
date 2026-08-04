@@ -11554,6 +11554,15 @@ window.openDocumentApprovalForm = _daOpenCreateForm;
 // gets stretched, squished, or drawn tiny with wasted space around it.
 const SIGNATURE_RATIO = 2.5; // width : height
 
+// The overall stamp box (signature + details [+ company stamp] columns) has
+// its own, wider ratio than the signature alone. This is the single source
+// of truth for that shape — the setup live-preview box and the placement
+// modal's drag marker both derive their dimensions from it so what a user
+// sees while setting up their stamp matches what they see (and get) while
+// placing it on a document.
+const STAMP_BOX_RATIO = 3.78; // width : height
+const STAMP_BOX_MARKER_WIDTH = 320; // px, used for the placement-modal marker
+
 // Show "My Stamp" nav item for decision makers only
 function initStampNav() {
   const role = window.currentUserRole || '';
@@ -11618,6 +11627,9 @@ function revokePreviewUrl(url) {
 async function openStampSetup() {
   const projectId = localStorage.getItem('activeProjectId');
   const projectName = localStorage.getItem('activeProjectName') || 'this project';
+  const role = window.currentUserRole || '';
+  const isDM = isDecisionMakerRole(role);
+  const isTM = isTeamMemberRole(role);
 
   if (!projectId) {
     alert('Open a project first — your stamp is set up per project.');
@@ -11712,7 +11724,34 @@ async function openStampSetup() {
           </div>
         </div>
 
+        ${isDM ? `
         <!-- Company Stamp Upload -->
+        <div style="margin-bottom:20px;">
+          <label style="display:block;font-weight:700;color:#007B8A;font-size:12px;
+            text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">
+            🏷️ Company Stamp <span style="font-weight:400;color:#9ca3af;text-transform:none;">(optional)</span>
+          </label>
+          ${existing && existing.stamp_image_url ? `
+            <div style="margin-bottom:8px;">
+              <div style="font-size:11px;color:#6b7280;margin-bottom:4px;">Current stamp:</div>
+              <img src="${existing.stamp_image_url}" style="max-width:160px;max-height:80px;
+                border:1px solid #e5e7eb;border-radius:4px;background:#fff;" />
+            </div>` : ''}
+          <div id="stampImageDropZone"
+            style="display:flex;align-items:center;gap:12px;padding:14px;
+            border:2px dashed #d1d5db;border-radius:6px;cursor:pointer;">
+            <span style="font-size:24px;">🏷️</span>
+            <div>
+              <div style="font-weight:600;color:#333;font-size:13px;">Upload a company stamp image</div>
+              <div style="font-size:11px;color:#9ca3af;">PNG or JPG, transparent background recommended</div>
+              <input type="file" id="stampImageInput" style="display:none;" accept=".png,.jpg,.jpeg" />
+            </div>
+          </div>
+          <div id="stampImageName" style="margin-top:6px;font-size:12px;color:#28a745;display:none;"></div>
+        </div>
+        ` : ''}
+        ${isTM ? `<div style="margin-bottom:20px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;font-size:11px;color:#475569;">ℹ️ Team members only set their signature here. Company stamp upload is available only for decision makers.</div>` : ''}
+
         <div style="padding:8px 10px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;
           font-size:11px;color:#0369a1;">
           ℹ️ Your name, position, side, and the date/time are added automatically when you sign a
@@ -11725,7 +11764,7 @@ async function openStampSetup() {
             text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">
             👁️ Live preview — how your stamp will look
           </label>
-          <div id="stampPreviewBox" style="width:100%;aspect-ratio:3.78/1;max-width:480px;
+          <div id="stampPreviewBox" style="width:100%;aspect-ratio:var(--stamp-box-ratio, 3.78)/1;max-width:480px;
             display:flex;border:1.4px solid #2563eb;border-radius:6px;background:transparent;
             overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
             <div id="previewSigCell" style="flex:0 0 19%;display:flex;align-items:center;justify-content:center;
@@ -11737,12 +11776,12 @@ async function openStampSetup() {
               <div style="font-size:9px;color:#777;">Digitally signed by</div>
               <div id="previewSignedLine" style="font-size:11px;font-weight:700;color:#0b7089;
                 white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Your Name (Role)</div>
-              <div id="previewCompanyLine" style="font-size:10px;color:#0b7089;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Your Company</div>
+              <div id="previewCompanyLine" style="font-size:10px;color:#0b7089;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Position • Team</div>
               <div style="font-size:9px;color:#777;" id="previewDateLine"></div>
             </div>
             <div id="previewStampCell" style="flex:1;display:flex;align-items:center;justify-content:center;
               padding:4px;overflow:hidden;">
-              <span style="font-size:10px;color:#9ca3af;text-align:center;">signature only</span>
+              <span style="font-size:10px;color:#9ca3af;text-align:center;">stamp (optional)</span>
             </div>
           </div>
           <div id="stampPreviewDims" style="margin-top:6px;font-size:10px;color:#9ca3af;"></div>
@@ -11768,6 +11807,8 @@ async function openStampSetup() {
 
   // Live preview: mirrors createStampedFileBlob's exact 3-column layout so the
   // user can judge image size/shape before saving anything.
+  const stampPreviewBoxEl = document.getElementById('stampPreviewBox');
+  if (stampPreviewBoxEl) stampPreviewBoxEl.style.setProperty('--stamp-box-ratio', STAMP_BOX_RATIO);
   const previewSigCell = document.getElementById('previewSigCell');
   const previewStampCell = document.getElementById('previewStampCell');
   const previewSignedLine = document.getElementById('previewSignedLine');
@@ -11779,6 +11820,8 @@ async function openStampSetup() {
   previewCompanyLine.textContent = identityMeta.secondaryLine;
   previewDateLine.textContent = new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })
     + ', ' + new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+
+  const stampInput = document.getElementById('stampImageInput');
 
   const updateStampPreview = () => {
     const isDrawMode = drawPanel.style.display !== 'none';
@@ -11798,7 +11841,17 @@ async function openStampSetup() {
       : `<span style="font-size:10px;color:#9ca3af;text-align:center;">signature</span>`;
 
     let stampSrc = null;
-    previewStampCell.innerHTML = `<span style="font-size:10px;color:#9ca3af;text-align:center;">signature only</span>`;
+    if (stampInput.files[0]) {
+      const selectedStamp = stampInput.files[0];
+      revokePreviewUrl(_activeStampPreviewUrl);
+      _activeStampPreviewUrl = URL.createObjectURL(selectedStamp);
+      stampSrc = _activeStampPreviewUrl;
+    } else if (existing && existing.stamp_image_url) {
+      stampSrc = existing.stamp_image_url;
+    }
+    previewStampCell.innerHTML = stampSrc
+      ? `<img src="${stampSrc}" style="max-width:100%;max-height:100%;object-fit:contain;background:transparent;" />`
+      : `<span style="font-size:10px;color:#9ca3af;text-align:center;">stamp (optional)</span>`;
 
     // Show the uploaded files' real pixel dimensions to help pick a well-sized source image.
     const dimParts = [];
@@ -11807,6 +11860,11 @@ async function openStampSetup() {
       const im = new Image();
       im.onload = () => { dimParts.push(`Signature: ${im.naturalWidth}×${im.naturalHeight}px`); reportDims(); };
       im.src = sigSrc;
+    }
+    if (stampInput.files[0]) {
+      const sim = new Image();
+      sim.onload = () => { dimParts.push(`Stamp: ${sim.naturalWidth}×${sim.naturalHeight}px`); reportDims(); };
+      sim.src = stampSrc;
     }
     if (dimParts.length === 0) previewDims.textContent = '';
   };
@@ -11882,18 +11940,39 @@ async function openStampSetup() {
     }
   });
 
+  const stampDropZone = document.getElementById('stampImageDropZone');
+  const stampName = document.getElementById('stampImageName');
+  stampDropZone.addEventListener('click', () => stampInput.click());
+  stampInput.addEventListener('change', async () => {
+    if (stampInput.files[0]) {
+      const cleanedFile = await cleanStampImageFile(stampInput.files[0]);
+      stampInput.value = '';
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(cleanedFile);
+      stampInput.files = dataTransfer.files;
+      stampName.textContent = `✓ ${cleanedFile.name}`;
+      stampName.style.display = 'block';
+      stampDropZone.style.borderColor = '#28a745';
+      _updateStampPreviewFn && _updateStampPreviewFn();
+    }
+  });
+
   // Save
   document.getElementById('saveStampBtn').addEventListener('click', async () => {
     const btn = document.getElementById('saveStampBtn');
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
       const uploadingSig = uploadPanel.style.display !== 'none';
+      const isDM = isDecisionMakerRole(window.currentUserRole || '');
       const fd = new FormData();
       fd.append('projectId', projectId);
       if (uploadingSig && sigInput.files[0]) {
         fd.append('signatureImageFile', sigInput.files[0]);
       } else if (!uploadingSig && _signaturePad && !_signaturePad.isEmpty()) {
         fd.append('signatureBase64', _signaturePad.toDataURL('image/png'));
+      }
+      if (isDM && stampInput && stampInput.files[0]) {
+        fd.append('stampImageFile', stampInput.files[0]);
       }
       const hasSignature = fd.has('signatureImageFile') || fd.has('signatureBase64');
       if (!hasSignature) {
@@ -11945,6 +12024,17 @@ async function openStampPlacementModal(file, onApply, onCancel) {
   modal.style.zIndex = '99999';
   modal.style.padding = '20px';
   modal.innerHTML = `
+    <style>
+      /* Below 768px (same breakpoint used across the rest of the app) the
+         fixed 280px control column doesn't fit — stack it above the
+         document preview instead, as a normal top bar. */
+      @media (max-width: 768px) {
+        #stampPlacementGrid { grid-template-columns: 1fr !important; max-height: none !important; overflow: visible !important; }
+        #stampPlacementControls { flex-direction: row !important; flex-wrap: wrap !important; align-items: center !important; }
+        #stampPlacementControls > label { flex-basis: 100%; }
+        #stampPlacementPreview { min-height: 320px !important; max-height: 50vh !important; }
+      }
+    </style>
     <div style="width:min(1100px, 100%);max-height:90vh;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.25);">
       <div style="padding:16px 18px;border-bottom:1px solid #e5e7eb;background:#f8fafc;display:flex;justify-content:space-between;align-items:center;">
         <div>
@@ -11953,8 +12043,8 @@ async function openStampPlacementModal(file, onApply, onCancel) {
         </div>
         <button type="button" id="stampPlacementClose" style="border:none;background:#ef4444;color:#fff;border-radius:6px;padding:7px 12px;cursor:pointer;">✕ Close</button>
       </div>
-      <div style="display:grid;grid-template-columns:280px 1fr;gap:16px;padding:16px;max-height:calc(90vh - 120px);overflow:hidden;">
-        <div style="display:flex;flex-direction:column;gap:10px;">
+      <div id="stampPlacementGrid" style="display:grid;grid-template-columns:280px 1fr;gap:16px;padding:16px;max-height:calc(90vh - 120px);overflow:hidden;">
+        <div id="stampPlacementControls" style="display:flex;flex-direction:column;gap:10px;">
           <label style="font-size:12px;font-weight:700;color:#334155;">Page number</label>
           <div style="display:flex;align-items:center;gap:8px;">
             <button type="button" id="stampPlacementPrevPage" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;cursor:pointer;">← Prev</button>
@@ -12075,7 +12165,8 @@ async function openStampPlacementModal(file, onApply, onCancel) {
   const now = new Date();
   const nowLabel = `${now.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}, ${now.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
   const marker = document.createElement('div');
-  marker.style.cssText = 'position:absolute;width:320px;height:88px;border:1.5px solid rgba(37,99,235,0.9);border-radius:8px;transform:translate(-50%,-50%);cursor:grab;display:none;z-index:4;background:rgba(255,255,255,0.18);box-shadow:0 4px 10px rgba(15,23,42,0.18);box-sizing:border-box;font-family:inherit;';
+  const markerHeight = Math.round(STAMP_BOX_MARKER_WIDTH / STAMP_BOX_RATIO);
+  marker.style.cssText = `position:absolute;width:${STAMP_BOX_MARKER_WIDTH}px;height:${markerHeight}px;border:1.5px solid rgba(37,99,235,0.9);border-radius:8px;transform:translate(-50%,-50%);cursor:grab;display:none;z-index:4;background:rgba(255,255,255,0.18);box-shadow:0 4px 10px rgba(15,23,42,0.18);box-sizing:border-box;font-family:inherit;`;
   // two-column marker when no stamp image is present (team-member signature only)
   marker.innerHTML = `
     <div style="display:flex;height:100%;">
