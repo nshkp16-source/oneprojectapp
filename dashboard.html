@@ -5118,6 +5118,18 @@ function openActualProgressPage(savedSchedule) {
     const accentColor = isPostExt ? 'var(--c-ext)' : 'var(--c-brand)';
     const msEnd       = ms.end || ms.planned_end;
     const dLeft       = msEnd ? _daysUntil(msEnd) : null;
+    const msStartDate  = ms.start || ms.planned_start;
+    const plannedDays  = msStartDate && msEnd
+      ? Math.max(1, Math.ceil((new Date(msEnd) - new Date(msStartDate)) / 86400000))
+      : null;
+    const elapsedDays  = msStartDate
+      ? Math.max(0, Math.ceil((new Date() - new Date(msStartDate)) / 86400000))
+      : null;
+    const dailyRate    = elapsedDays > 0 ? exec / elapsedDays : 0;
+    const projectedDays = dailyRate > 0 && planned > exec ? Math.ceil((planned - exec) / dailyRate) : null;
+    const projectedDate = projectedDays !== null
+      ? new Date(Date.now() + projectedDays * 86400000).toISOString().slice(0, 10)
+      : null;
     // FIX 5/6: determine which table this milestone belongs to
     const isExtMs     = ms._sourceTable === 'additional_milestones';
 
@@ -5136,32 +5148,40 @@ function openActualProgressPage(savedSchedule) {
           </span>
         </div>
       </div>
-      <div style="padding:16px 20px;">
-        <div style="font-size:16px;font-weight:600;color:var(--c-text);margin-bottom:4px;">
+      <div style="padding:16px 20px 20px;">
+        <div style="font-size:24px;line-height:1.1;font-weight:700;color:var(--c-text);margin-bottom:4px;">
           ${isPostExt ? `<span style="font-size:12px;background:var(--c-ext-light);color:var(--c-ext);border-radius:4px;padding:2px 6px;margin-right:6px;font-family:var(--font-mono);font-weight:700;">EXT</span>` : ''}
           ${ms.title || 'Untitled'}
         </div>
-        <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;">${ms.description || ms.desc || '—'}</div>
+        <div style="font-size:13px;color:var(--c-muted);margin-bottom:16px;">${ms.description || ms.desc || 'Activity milestone'}</div>
 
-          ${[
-            ['Planned Start', ms.start || '—'],
-            ['Planned End',   ms.end   || '—'],
-            ['Planned Qty',   `${planned} ${ms.unit || ''}`],
-            ['Executed',      `${exec} ${ms.unit || ''}`],
-          ].map(([l, v]) => `
-          <div style="background:#f5f7f6;border-radius:var(--radius);padding:10px;">
-            <div style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;
-                 color:var(--c-muted);font-family:var(--font-mono);margin-bottom:4px;">${l}</div>
-            <div style="font-size:14px;font-weight:600;color:var(--c-text);font-family:var(--font-mono);">${v}</div>
-          </div>`).join('')}
-        <div style="display:flex;align-items:center;gap:12px;">
-          <div style="font-size:12px;color:var(--c-muted);min-width:70px;">${pct.toFixed(1)}% done</div>
-          <div class="sc-pbar" style="flex:1;height:10px;">
-            <div class="sc-pfill" style="width:${pct}%;background:${accentColor};"></div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px;">
+          <div style="background:linear-gradient(135deg,#f1f6f5,#e8efee);border-radius:10px;padding:12px;min-height:112px;">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--c-text);margin-bottom:8px;">Timeline</div>
+            <div style="font-size:10px;color:var(--c-muted);">Planned start</div>
+            <div style="font-size:15px;font-weight:700;font-family:var(--font-mono);">${msStartDate || '—'}</div>
+            <div style="font-size:10px;color:var(--c-muted);margin-top:6px;">Planned end</div>
+            <div style="font-size:15px;font-weight:700;font-family:var(--font-mono);">${msEnd || '—'}</div>
           </div>
-          <div style="font-size:11px;color:var(--c-muted);min-width:90px;text-align:right;font-family:var(--font-mono);">
-            ${exec} / ${planned} ${ms.unit || ''}
+          <div style="background:linear-gradient(135deg,#f1f6f5,#e8efee);border-radius:10px;padding:12px;min-height:112px;">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--c-text);margin-bottom:8px;">Quantity${ms.unit ? ` (${ms.unit})` : ''}</div>
+            <div style="font-size:10px;color:var(--c-muted);">Planned quantity</div>
+            <div style="font-size:20px;font-weight:700;font-family:var(--font-mono);">${planned}</div>
+            <div style="font-size:10px;color:var(--c-muted);margin-top:6px;">Executed</div>
+            <div style="font-size:17px;font-weight:700;color:${accentColor};font-family:var(--font-mono);">${exec}</div>
           </div>
+          <div style="background:linear-gradient(135deg,#f1f6f5,#e8efee);border-radius:10px;padding:12px;min-height:112px;">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--c-text);margin-bottom:8px;">Progress</div>
+            <div style="font-size:26px;font-weight:700;color:${accentColor};">${pct.toFixed(1)}%</div>
+            <div style="height:12px;background:#d5dfdf;border-radius:99px;overflow:hidden;margin-top:10px;">
+              <div style="width:${Math.min(100, Math.max(0, pct))}%;height:100%;background:${accentColor};border-radius:99px;"></div>
+            </div>
+            <div style="font-size:10px;color:var(--c-muted);margin-top:6px;">${exec} / ${planned} ${ms.unit || ''}</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;background:#eaf5f1;border-radius:8px;color:#155e52;font-size:12px;">
+          <span>📈 ${projectedDate && !completed ? `Projected completion: <strong>${projectedDate}</strong>` : completed ? '<strong>Completed</strong>' : 'Progress is ready for a new entry'}</span>
+          <span style="font-family:var(--font-mono);white-space:nowrap;">${plannedDays ? `${plannedDays} day plan` : ''}</span>
         </div>
       </div>
     </div>
