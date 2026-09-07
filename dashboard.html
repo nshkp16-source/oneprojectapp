@@ -3962,9 +3962,20 @@ function openProjectScheduleForm(existingSchedule, focusMilestoneId = null) {
             </select>
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;padding:0 20px 12px;">
+        <div style="display:grid;grid-template-columns:1.2fr .8fr .8fr 2fr;gap:12px;padding:0 20px 12px;">
           <div class="sc-fw"><span class="sc-fl">Dependency</span>
             <select id="sfMsDep"><option value="None">None</option></select>
+          </div>
+          <div class="sc-fw"><span class="sc-fl">Relationship</span>
+            <select id="sfMsDepType">
+              <option value="FS">FS · Finish to Start</option>
+              <option value="SS">SS · Start to Start</option>
+              <option value="FF">FF · Finish to Finish</option>
+              <option value="SF">SF · Start to Finish</option>
+            </select>
+          </div>
+          <div class="sc-fw"><span class="sc-fl">Lag / Lead (days)</span>
+            <input type="number" id="sfMsLag" step="1" value="0" placeholder="0"/>
           </div>
           <div class="sc-fw"><span class="sc-fl">Attachment</span>
             <label class="sc-fzone"><input type="file" id="sfMsFile" accept="*/*"/>
@@ -4013,6 +4024,8 @@ function openProjectScheduleForm(existingSchedule, focusMilestoneId = null) {
     qty:             ms.quantity || ms.qty || '',
     unit:            ms.unit || 'm³',
     dep:             ms.dep || ms.depends_on || 'None',
+    dependencyType:  ms.dependencyType || 'FS',
+    dependencyLagDays: Number(ms.dependencyLagDays || 0),
     fileName:        ms.fileName || null,
     fileObject:      null,
     executed:        Number(ms.executed || 0),
@@ -4103,6 +4116,7 @@ function openProjectScheduleForm(existingSchedule, focusMilestoneId = null) {
             </div>
             <div style="font-size:11px;color:#888;font-family:var(--font-mono);margin-top:4px;">
               📅 ${ms.start} → ${ms.end} · ⏱ ${m.d}d · 🔗 ${_depLabel(ms.dep)}
+              ${ms.dep && ms.dep !== 'None' ? `· ${ms.dependencyType || 'FS'} ${Number(ms.dependencyLagDays || 0) >= 0 ? '+' : ''}${Number(ms.dependencyLagDays || 0)}d` : ''}
               ${oor ? '<span style="color:var(--c-danger);margin-left:6px;font-weight:600;">⚠ Outside timeline</span>' : ''}
             </div>
             ${pct > 0 || ms.executed > 0 ? `<div style="margin-top:8px;">
@@ -4165,6 +4179,8 @@ function openProjectScheduleForm(existingSchedule, focusMilestoneId = null) {
     if (_el('sfMsU')) _el('sfMsU').value = ms.unit;
     _sfRefDep();
     if (_el('sfMsDep')) _el('sfMsDep').value = ms.dep || 'None';
+    if (_el('sfMsDepType')) _el('sfMsDepType').value = ms.dependencyType || 'FS';
+    if (_el('sfMsLag')) _el('sfMsLag').value = Number(ms.dependencyLagDays || 0);
     attached = null;
     if (_el('sfFzt'))           _el('sfFzt').textContent           = ms.fileName || 'Click to attach a file';
     if (_el('sfSetMs'))         _el('sfSetMs').textContent         = '✓ Update Milestone';
@@ -4192,6 +4208,8 @@ function openProjectScheduleForm(existingSchedule, focusMilestoneId = null) {
     editingId = null;
     ['sfMsT','sfMsD','sfMsS','sfMsE','sfMsQ'].forEach(id => { const e = _el(id); if (e) e.value = ''; });
     if (_el('sfMsU'))          _el('sfMsU').value              = 'm³';
+    if (_el('sfMsDepType'))    _el('sfMsDepType').value        = 'FS';
+    if (_el('sfMsLag'))        _el('sfMsLag').value            = '0';
     attached = null;
     if (_el('sfFzt'))           _el('sfFzt').textContent           = 'Click to attach a file';
     if (_el('sfSetMs'))         _el('sfSetMs').textContent         = '+ Add Milestone';
@@ -4248,6 +4266,8 @@ function openProjectScheduleForm(existingSchedule, focusMilestoneId = null) {
     const start = _val('sfMsS'), end   = _val('sfMsE');
     const qty   = _val('sfMsQ'), unit  = _el('sfMsU')?.value;
     const depId = _el('sfMsDep')?.value || 'None';
+    const dependencyType = _el('sfMsDepType')?.value || 'FS';
+    const dependencyLagDays = Number.parseInt(_el('sfMsLag')?.value || '0', 10) || 0;
 
     if (!title)         return alert('Title is required.');
     if (!start || !end) return alert('Start and end dates are required.');
@@ -4273,6 +4293,7 @@ function openProjectScheduleForm(existingSchedule, focusMilestoneId = null) {
         ...milestones[idx],
         title, desc: desc || '', start, end,
         qty: qty || '', unit: unit || 'm³', dep: depId,
+        dependencyType, dependencyLagDays,
         fileName:   attached ? attached.name : (milestones[idx].fileName || null),
         fileObject: attached || null,
         executed:        origMs?.executed        ?? milestones[idx].executed,
@@ -4289,6 +4310,7 @@ function openProjectScheduleForm(existingSchedule, focusMilestoneId = null) {
         id:         'ms-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
         title, desc: desc || '', start, end,
         qty: qty || '', unit: unit || 'm³', dep: depId,
+        dependencyType, dependencyLagDays,
         fileName: attached ? attached.name : null, fileObject: attached || null,
         executed: 0, progress_pct: 0, activity_status: 'not_started', entries: [],
         added_via_extension: isAfterBaseline,
