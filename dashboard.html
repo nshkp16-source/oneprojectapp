@@ -1377,7 +1377,16 @@
                   <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;background:#28a745;border-radius:2px;display:inline-block;"></span><span data-translate="legend-actual">Actual</span></span>
                   <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;background:#dc3545;border-radius:2px;display:inline-block;"></span><span data-translate="legend-behind">Behind</span></span>
                 </div>
-                <div id="summaryChart" style="width:100%; max-height:300px; overflow-y:auto; background:#f4f9fc; border-radius:8px; display:flex; flex-direction:column; gap:8px; padding:12px; scroll-snap-type:y mandatory;">
+                <div id="summaryChartNav" style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
+                  <button id="summaryChartPrev" type="button" onclick="summaryChartNavPrev()" aria-label="View previous milestone" title="Previous milestone" style="width:28px; height:28px; border:1px solid #cbd5e1; background:#fff; color:#007B8A; border-radius:5px; cursor:pointer; font-size:16px; line-height:1;">&#8592;</button>
+                  <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; min-width:0; flex:1;">
+                    <span id="summaryChartPrevious" style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; font-size:10px; color:#94a3b8;"></span>
+                    <span id="summaryChartCurrent" style="flex:1.4; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:center; font-size:11px; font-weight:700; color:#007B8A;"></span>
+                    <span id="summaryChartNext" style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; font-size:10px; color:#94a3b8;"></span>
+                  </div>
+                  <button id="summaryChartNextBtn" type="button" onclick="summaryChartNavNext()" aria-label="View next milestone" title="Next milestone" style="width:28px; height:28px; border:1px solid #cbd5e1; background:#fff; color:#007B8A; border-radius:5px; cursor:pointer; font-size:16px; line-height:1;">&#8594;</button>
+                </div>
+                <div id="summaryChart" style="width:100%; min-height:132px; background:#f4f9fc; border-radius:8px; display:flex; align-items:stretch; padding:12px;">
                   <div style="font-size:12px;color:#bbb;padding:20px;text-align:center;" data-translate="loading-milestones">Loading milestones…</div>
                 </div>
                 <div style="font-size:9px; color:#999; text-align:center; margin-top:10px; padding:8px; background:#f0f0f0; border-radius:6px; border-left:3px solid #007B8A;">
@@ -2531,6 +2540,71 @@ function initializeSummaryPanel() {
   setInterval(updateDateTime, 1000);
 }
 
+let summaryChartMilestones = [];
+let summaryChartCurrentIndex = 0;
+
+function renderSummaryChartAtIndex(index) {
+  const chartEl = document.getElementById('summaryChart');
+  const navEl = document.getElementById('summaryChartNav');
+  if (!chartEl || !summaryChartMilestones.length) return;
+
+  summaryChartCurrentIndex = Math.max(0, Math.min(index, summaryChartMilestones.length - 1));
+  const milestone = summaryChartMilestones[summaryChartCurrentIndex];
+  const previous = summaryChartMilestones[summaryChartCurrentIndex - 1];
+  const next = summaryChartMilestones[summaryChartCurrentIndex + 1];
+  const setLabel = (id, value) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value ? value.title : '';
+  };
+
+  setLabel('summaryChartPrevious', previous);
+  setLabel('summaryChartCurrent', milestone);
+  setLabel('summaryChartNext', next);
+
+  const previousBtn = document.getElementById('summaryChartPrev');
+  const nextBtn = document.getElementById('summaryChartNextBtn');
+  if (previousBtn) previousBtn.disabled = !previous;
+  if (nextBtn) nextBtn.disabled = !next;
+  [previousBtn, nextBtn].forEach((button) => {
+    if (button) button.style.opacity = button.disabled ? '0.35' : '1';
+  });
+  if (navEl) navEl.style.display = summaryChartMilestones.length > 1 ? 'flex' : 'none';
+
+  const isLate = milestone.actual_pct < milestone.planned_pct - 5 && milestone.planned_pct > 0;
+  const actualColor = milestone.activity_status === 'completed' ? '#007B8A'
+                    : isLate ? '#dc3545' : '#28a745';
+  const planHeight = Math.max(Math.round((milestone.planned_pct / 100) * 92), 4);
+  const actualHeight = Math.max(Math.round((milestone.actual_pct / 100) * 92), 4);
+  const statusLabel = milestone.activity_status === 'completed' ? 'Completed'
+                    : milestone.activity_status === 'in_progress' ? 'In progress' : 'Planned';
+
+  chartEl.innerHTML = `
+    <div style="width:100%; display:flex; flex-direction:column; justify-content:space-between; gap:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+        <div style="font-size:12px; font-weight:700; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${milestone.title}</div>
+        <div style="font-size:11px; color:${actualColor}; font-weight:700; white-space:nowrap;">${milestone.actual_pct.toFixed(0)}%</div>
+      </div>
+      <div style="display:flex; align-items:flex-end; justify-content:center; gap:14px; height:96px; padding:4px 0; border-bottom:1px solid #dbe5ec;">
+        <div style="width:34px; height:${planHeight}px; background:#007B8A; opacity:0.35; border-radius:4px 4px 0 0;" title="Planned: ${milestone.planned_pct.toFixed(1)}%"></div>
+        <div style="width:34px; height:${actualHeight}px; background:${actualColor}; border-radius:4px 4px 0 0;" title="Actual: ${milestone.actual_pct.toFixed(1)}%"></div>
+      </div>
+      <div style="display:flex; justify-content:space-between; gap:8px; font-size:10px; color:#667085;">
+        <span>Planned ${milestone.planned_pct.toFixed(1)}%</span>
+        <span>${statusLabel}</span>
+        <span>Actual ${milestone.actual_pct.toFixed(1)}%</span>
+      </div>
+    </div>
+  `;
+}
+
+function summaryChartNavPrev() {
+  renderSummaryChartAtIndex(summaryChartCurrentIndex - 1);
+}
+
+function summaryChartNavNext() {
+  renderSummaryChartAtIndex(summaryChartCurrentIndex + 1);
+}
+
 // =========================
 // LIVE WEATHER via Open-Meteo (no API key needed)
 // =========================
@@ -2675,6 +2749,9 @@ async function loadSummaryPanelData() {
       });
       const sc = document.getElementById('summaryChart');
       if (sc) sc.innerHTML = '<div style="font-size:11px;color:#bbb;padding:12px;width:100%;text-align:center;">No schedule data</div>';
+      const chartNav = document.getElementById('summaryChartNav');
+      if (chartNav) chartNav.style.display = 'none';
+      summaryChartMilestones = [];
       const sp = document.getElementById('summaryPhotos');
       if (sp) sp.innerHTML = '<div style="font-size:12px;color:#bbb;text-align:center;padding:16px;">No photos yet.</div>';
       updateScheduleBadge(0);
@@ -2726,37 +2803,22 @@ async function loadSummaryPanelData() {
       lastMsEl.style.color = progress.last_completed ? '#28a745' : '#888';
     }
 
-    // ── Progress chart (all milestones, no modal) ──
-    const chartEl  = document.getElementById('summaryChart');
-    if (chartEl && data.all_milestones_for_modal && data.all_milestones_for_modal.length) {
-      const allMilestones = data.all_milestones_for_modal;
-      chartEl.innerHTML = allMilestones.map((ms, idx) => {
-        const isLate      = ms.actual_pct < ms.planned_pct - 5 && ms.planned_pct > 0;
-        const actualColor = ms.activity_status === 'completed' ? '#007B8A'
-                          : isLate ? '#dc3545' : '#28a745';
-        const planH   = Math.round((ms.planned_pct / 100) * 100);
-        const actualH = Math.round((ms.actual_pct  / 100) * 100);
-        const statusBadge = ms.activity_status === 'completed' ? '✓' : ms.activity_status === 'in_progress' ? '▶' : '◯';
-        return `
-          <div style="padding:8px; background:#fff; border-radius:6px; border-left:3px solid ${actualColor}; font-size:12px; scroll-snap-align:start;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-              <div style="font-weight:600; color:#333; flex:1;">${statusBadge} ${ms.title}</div>
-              <div style="font-size:10px; color:#666; white-space:nowrap; margin-left:8px;">${ms.actual_pct.toFixed(0)}%</div>
-            </div>
-            <div style="display:flex; gap:2px; height:24px; align-items:flex-end; background:#f0f0f0; border-radius:4px; padding:2px; overflow:hidden;">
-              <div style="flex:${Math.max(planH, 5)}%; height:${Math.max(planH*0.6, 4)}px; background:#007B8A; opacity:0.35; border-radius:2px; min-width:2px;" title="Planned: ${ms.planned_pct.toFixed(1)}%"></div>
-              <div style="flex:${Math.max(actualH, 5)}%; height:${Math.max(actualH*0.6, 4)}px; background:${actualColor}; border-radius:2px; min-width:2px;" title="Actual: ${ms.actual_pct.toFixed(1)}%"></div>
-            </div>
-            <div style="font-size:10px; color:#666; margin-top:4px; display:flex; justify-content:space-between;">
-              <span>Planned: ${ms.planned_pct.toFixed(1)}%</span>
-              <span>Actual: ${ms.actual_pct.toFixed(1)}%</span>
-            </div>
-          </div>
-        `;
-      }).join('');
-      chartEl.style.cssText = 'width:100%; max-height:300px; overflow-y:auto; background:#f4f9fc; border-radius:8px; display:flex; flex-direction:column; gap:8px; padding:12px; scroll-snap-type:y mandatory;';
+    // ── Progress chart: one milestone at a time with previous/current/next navigation ──
+    const chartEl = document.getElementById('summaryChart');
+    const allMilestones = data.all_milestones_for_modal || [];
+    summaryChartMilestones = allMilestones;
+    if (chartEl && allMilestones.length) {
+      const currentTitle = data.current_milestone?.title;
+      const currentIndex = currentTitle
+        ? allMilestones.findIndex(ms => ms.title === currentTitle)
+        : -1;
+      const firstOpenIndex = allMilestones.findIndex(ms => ms.activity_status !== 'completed');
+      summaryChartCurrentIndex = currentIndex >= 0 ? currentIndex : firstOpenIndex >= 0 ? firstOpenIndex : allMilestones.length - 1;
+      renderSummaryChartAtIndex(summaryChartCurrentIndex);
     } else if (chartEl) {
-      chartEl.innerHTML = '<div style="font-size:12px;color:#bbb;padding:20px;text-align:center;">No milestones yet</div>';
+      chartEl.innerHTML = '<div style="font-size:12px;color:#bbb;padding:20px;text-align:center;width:100%;">No milestones yet</div>';
+      const chartNav = document.getElementById('summaryChartNav');
+      if (chartNav) chartNav.style.display = 'none';
     }
 
     // ── Photos ──
