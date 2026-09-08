@@ -1332,17 +1332,17 @@
               </div>
 
               <!-- Weather -->
-              <div style="width:100%; padding:16px; background:rgba(255,255,255,0.95); border-radius:12px;">
-                <div style="font-size:12px; font-weight:bold; color:#007B8A; margin-bottom:12px; text-transform:uppercase; letter-spacing:0.5px;" data-translate="weather">🌤️ Weather</div>
-                <div style="display:flex; flex-direction:column; gap:12px;">
-                  <div style="padding:12px; background:#f0f8ff; border-radius:8px; border-left:4px solid #007B8A;">
-                    <div style="font-size:11px; color:#666; margin-bottom:6px; font-weight:600;" data-translate="current-weather">Current Weather</div>
-                    <div id="summaryWeatherText" style="font-size:16px; font-weight:bold; color:#333; line-height:1.4;" data-translate-default="no-weather">No weather available.</div>
+              <div style="width:100%; padding:14px; background:rgba(255,255,255,0.95); border-radius:12px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px;">
+                  <div style="font-size:12px; font-weight:bold; color:#007B8A; text-transform:uppercase; letter-spacing:0.5px;" data-translate="weather">🌤️ Weather</div>
+                  <button type="button" onclick="openWeatherForecastDialog()" style="border:0; background:#e8f5f7; color:#007B8A; border-radius:999px; padding:5px 9px; font-size:11px; font-weight:700; cursor:pointer;">View forecast</button>
+                </div>
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 12px; background:#f0f8ff; border-left:4px solid #007B8A; border-radius:8px;">
+                  <div>
+                    <div style="font-size:11px; color:#666; margin-bottom:4px; font-weight:600;" data-translate="current-weather">Current Weather</div>
+                    <div id="summaryWeatherText" style="font-size:15px; font-weight:bold; color:#333; line-height:1.35;" data-translate-default="no-weather">No weather available.</div>
                   </div>
-                  <div style="padding:12px; background:#fff8f0; border-radius:8px; border-left:4px solid #ff9800;">
-                    <div style="font-size:11px; color:#666; margin-bottom:6px; font-weight:600;" data-translate="forecast">Today &amp; Tomorrow Forecast</div>
-                    <div id="summaryWeatherForecast" style="font-size:13px; color:#333; line-height:1.8; font-weight:500;" data-translate-default="select-location-weather">Select a saved location to load weather.</div>
-                  </div>
+                  <div id="summaryWeatherMeta" style="font-size:11px; color:#64748b; text-align:right; line-height:1.5;"></div>
                 </div>
               </div>
 
@@ -1439,6 +1439,24 @@
                   <div style="font-size:13px; color:#bbb;">Loading chart…</div>
                 </div>
                 <div id="expandChartLabels" style="display:flex; gap:6px; margin-top:12px; padding:0 20px; font-size:11px; color:#999; text-align:center;"></div>
+              </div>
+            </div>
+
+            <!-- Weather Forecast Dialog -->
+            <div class="modal-overlay" id="weatherForecastModal" aria-hidden="true" style="z-index:10000;">
+              <div class="modal-content" style="width:min(92vw,620px); max-height:88vh; overflow:auto; padding:18px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px;">
+                  <div>
+                    <h3 style="margin:0;">Weather forecast</h3>
+                    <div id="weatherForecastLocation" style="font-size:12px; color:#64748b; margin-top:3px;"></div>
+                  </div>
+                  <button type="button" onclick="closeWeatherForecastDialog()" aria-label="Close weather forecast" style="background:none; border:0; font-size:24px; line-height:1; color:#64748b; cursor:pointer;">&times;</button>
+                </div>
+                <div id="weatherForecastCurrent" style="padding:12px; border-radius:9px; background:#f0f8ff; margin-bottom:12px; font-size:13px; color:#334155;">Loading weather...</div>
+                <div id="weatherForecastList" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(125px,1fr)); gap:8px;"></div>
+                <div class="modal-actions" style="margin-top:14px;">
+                  <button type="button" onclick="closeWeatherForecastDialog()">Close</button>
+                </div>
               </div>
             </div>
 
@@ -2610,6 +2628,54 @@ function summaryChartNavNext() {
   renderSummaryChartAtIndex(summaryChartCurrentIndex + 1);
 }
 
+let summaryWeatherData = null;
+let summaryWeatherLocation = null;
+
+function openWeatherForecastDialog() {
+  const dialog = document.getElementById('weatherForecastModal');
+  if (!dialog) return;
+  dialog.classList.add('active');
+  dialog.setAttribute('aria-hidden', 'false');
+  renderWeatherForecastDialog();
+}
+
+function closeWeatherForecastDialog() {
+  const dialog = document.getElementById('weatherForecastModal');
+  if (!dialog) return;
+  dialog.classList.remove('active');
+  dialog.setAttribute('aria-hidden', 'true');
+}
+
+function renderWeatherForecastDialog() {
+  const currentEl = document.getElementById('weatherForecastCurrent');
+  const listEl = document.getElementById('weatherForecastList');
+  const locationEl = document.getElementById('weatherForecastLocation');
+  if (!currentEl || !listEl) return;
+  const data = summaryWeatherData;
+  const locationName = summaryWeatherLocation?.name || summaryWeatherLocation?.display_name || 'Project location';
+  if (locationEl) locationEl.textContent = locationName;
+  if (!data?.current || !data?.daily) {
+    currentEl.textContent = 'Set a saved project location to view the forecast.';
+    listEl.innerHTML = '';
+    return;
+  }
+  const current = data.current;
+  currentEl.innerHTML = `<strong>${_weatherCodeIcon(current.weathercode)} ${_weatherCodeLabel(current.weathercode)}</strong> · ${Math.round(current.temperature)}°C · Wind ${Math.round(current.windspeed || 0)} km/h`;
+  const daily = data.daily;
+  listEl.innerHTML = (daily.time || []).map((date, index) => {
+    const code = daily.weathercode?.[index];
+    const rain = daily.precipitation_probability_max?.[index];
+    const day = new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
+    return `<div style="padding:11px 9px; border:1px solid #dbe5ec; border-radius:8px; background:#fff; text-align:center;">
+      <div style="font-size:12px; font-weight:700; color:#334155;">${day}</div>
+      <div style="font-size:23px; margin:6px 0;">${_weatherCodeIcon(code)}</div>
+      <div style="font-size:12px; color:#334155;">${_weatherCodeLabel(code)}</div>
+      <div style="font-size:12px; margin-top:6px; color:#007B8A; font-weight:700;">${Math.round(daily.temperature_2m_max?.[index] ?? 0)}° / ${Math.round(daily.temperature_2m_min?.[index] ?? 0)}°C</div>
+      <div style="font-size:10px; margin-top:4px; color:#64748b;">Rain ${rain ?? 0}%</div>
+    </div>`;
+  }).join('');
+}
+
 // =========================
 // LIVE WEATHER via Open-Meteo (no API key needed)
 // =========================
@@ -2660,23 +2726,25 @@ function _weatherCodeLabel(code) {
 
 async function loadSummaryWeather(location) {
   const weatherText = document.getElementById('summaryWeatherText');
-  const weatherForecast = document.getElementById('summaryWeatherForecast');
+  const weatherMeta = document.getElementById('summaryWeatherMeta');
+  summaryWeatherLocation = location || null;
+  summaryWeatherData = null;
   
   // Validate location has numeric coordinates
   if (!location || typeof location.lat !== 'number' || typeof location.lng !== 'number') {
     if (weatherText) weatherText.textContent = 'No saved coordinates available for weather.';
-    if (weatherForecast) weatherForecast.textContent = 'Set a project location to display weather.';
+    if (weatherMeta) weatherMeta.textContent = 'Set a project location';
     return;
   }
 
   if (weatherText) weatherText.textContent = 'Loading weather…';
-  if (weatherForecast) weatherForecast.textContent = '';
+  if (weatherMeta) weatherMeta.textContent = '';
 
   try {
-    // Send coordinates to Open-Meteo API for current and 2-day forecast
+    // Send coordinates to Open-Meteo API for current conditions and a fuller forecast.
     const lat = location.lat;  // numeric value
     const lon = location.lng;  // numeric value
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=auto&forecast_days=2`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&daily=temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max&timezone=auto&forecast_days=7`;
     
     console.log('[Weather API] Fetching from Open-Meteo:', {lat, lon, url});
     const res = await fetch(url);
@@ -2685,29 +2753,22 @@ async function loadSummaryWeather(location) {
     const current = weather.current_weather;
     const daily = weather.daily;
     if (!current || !daily) throw new Error('Incomplete weather response');
+    summaryWeatherData = { current, daily };
 
     // Display current weather with icon
     const currentLabel = _weatherCodeLabel(current.weathercode);
     const currentIcon = _weatherCodeIcon(current.weathercode);
-    const currentDisplay = `${currentIcon} ${currentLabel}, ${current.temperature.toFixed(0)}°C · Wind ${current.windspeed.toFixed(0)} km/h`;
+    const currentDisplay = `${currentIcon} ${current.temperature.toFixed(0)}°C · ${currentLabel}`;
     if (weatherText) weatherText.textContent = currentDisplay;
+    if (weatherMeta) weatherMeta.textContent = `Wind ${current.windspeed.toFixed(0)} km/h`;
     console.log('[Weather] Current:', currentDisplay);
-
-    // Display today + tomorrow forecast with icons
-    const todayHigh = daily.temperature_2m_max?.[0];
-    const todayLow = daily.temperature_2m_min?.[0];
-    const tomorrowCode = daily.weathercode?.[1];
-    const tomorrowLabel = tomorrowCode != null ? _weatherCodeLabel(tomorrowCode) : null;
-    const tomorrowIcon = tomorrowCode != null ? _weatherCodeIcon(tomorrowCode) : '';
-    const tomorrowHigh = daily.temperature_2m_max?.[1];
-    const tomorrowLow = daily.temperature_2m_min?.[1];
-    const forecastDisplay = `Today ${todayHigh != null ? Math.round(todayHigh) : '—'}°C / ${todayLow != null ? Math.round(todayLow) : '—'}°C<br>Tomorrow ${tomorrowIcon} ${tomorrowLabel || '—'} ${tomorrowHigh != null ? Math.round(tomorrowHigh) : '—'}°C / ${tomorrowLow != null ? Math.round(tomorrowLow) : '—'}°C`;
-    if (weatherForecast) weatherForecast.innerHTML = forecastDisplay;
-    console.log('[Weather] Forecast:', forecastDisplay);
+    renderWeatherForecastDialog();
   } catch (err) {
     console.error('[Weather] Error fetching from Open-Meteo:', err);
     if (weatherText) weatherText.textContent = 'Unable to load weather.';
-    if (weatherForecast) weatherForecast.textContent = 'Check network connection and location coordinates.';
+    if (weatherMeta) weatherMeta.textContent = 'Check network or location';
+    summaryWeatherData = null;
+    renderWeatherForecastDialog();
   }
 }
 
