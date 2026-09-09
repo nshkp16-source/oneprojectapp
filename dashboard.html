@@ -2753,7 +2753,18 @@ function renderWeatherForecastDialog() {
   listEl.innerHTML = (daily.time || []).map((date, index) => {
     const code = daily.weathercode?.[index];
     const rain = daily.precipitation_probability_max?.[index];
-    const day = new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
+    let day = '—';
+    try {
+      const parts = String(date).split('-');
+      if (parts.length === 3) {
+        const dateObj = new Date(Date.UTC(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])));
+        if (!isNaN(dateObj.getTime())) {
+          day = dateObj.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
+        }
+      }
+    } catch (e) {
+      console.warn('Invalid date in weather forecast:', date);
+    }
     return `<div style="padding:11px 7px; border:1px solid rgba(255,255,255,0.09); border-radius:8px; background:rgba(255,255,255,0.07); text-align:center;">
       <div style="font-size:11px; font-weight:700; color:#dbeafe;">${day}</div>
       <div style="font-size:25px; margin:9px 0;">${_weatherCodeIcon(code)}</div>
@@ -2938,9 +2949,20 @@ async function loadSummaryPanelData() {
 
     const timelineEl = document.getElementById('summaryTimelineDates');
     if (timelineEl) {
-      const formatTimelineDate = value => value
-        ? new Date(`${value}T00:00:00`).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' })
-        : '—';
+      const formatTimelineDate = value => {
+        if (!value) return '—';
+        try {
+          // Handle YYYY-MM-DD format from backend
+          const parts = String(value).split('-');
+          if (parts.length !== 3) return '—';
+          const date = new Date(Date.UTC(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])));
+          if (isNaN(date.getTime())) return '—';
+          return date.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
+        } catch (e) {
+          console.warn('Invalid date format:', value);
+          return '—';
+        }
+      };
       timelineEl.textContent = `${formatTimelineDate(timeline?.start)} – ${formatTimelineDate(timeline?.finish)}`;
     }
 
