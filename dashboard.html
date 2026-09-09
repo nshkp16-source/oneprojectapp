@@ -1392,9 +1392,35 @@
                   </div>
 
                   <!-- Recent milestone (span both columns on smaller screens, but not forcing) -->
-                  <div style="padding:14px; background:#ffffff; border:1px solid #e0ecf1; border-radius:9px; grid-column:1/-1;">
-                    <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">Recent milestone</div>
+                  <div id="summaryLastMsCard" style="padding:14px; background:#ffffff; border:1px solid #e0ecf1; border-radius:9px; grid-column:1/-1; cursor:pointer; transition:all 0.3s ease; position:relative;">
+                    <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+                      <span>Recent milestone</span>
+                      <span id="summaryLastMsToggle" style="font-size:12px; color:#007B8A; transition:transform 0.3s ease; display:none;">▼</span>
+                    </div>
                     <div id="summaryLastMs" style="font-size:15px; font-weight:600; color:#28a745; line-height:1.4;">—</div>
+                    <!-- Details panel (hidden by default) -->
+                    <div id="summaryLastMsDetails" style="margin-top:14px; padding-top:14px; border-top:1px solid #e0ecf1; display:none; font-size:12px; color:#52707c; line-height:1.6;">
+                      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                          <div style="font-weight:700; color:#64748b; margin-bottom:4px;">Planned Duration</div>
+                          <div id="summaryLastMsPlannedDays" style="color:#007B8A; font-weight:600;">—</div>
+                        </div>
+                        <div>
+                          <div style="font-weight:700; color:#64748b; margin-bottom:4px;">Actual Duration</div>
+                          <div id="summaryLastMsActualDays" style="color:#28a745; font-weight:600;">—</div>
+                        </div>
+                      </div>
+                      <div style="margin-top:12px; padding:10px; background:#f0fdf4; border-radius:6px; border-left:3px solid #28a745;">
+                        <div id="summaryLastMsVariance" style="font-size:11px; color:#187a3d;">—</div>
+                      </div>
+                      <div style="margin-top:12px;">
+                        <div style="font-weight:700; color:#64748b; margin-bottom:4px;">Timeline</div>
+                        <div style="display:grid; gap:6px;">
+                          <div><span style="color:#888;">Start:</span> <span id="summaryLastMsStart" style="color:#52707c;">—</span></div>
+                          <div><span style="color:#888;">Completed:</span> <span id="summaryLastMsEnd" style="color:#52707c;">—</span></div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -3012,11 +3038,42 @@ async function loadSummaryPanelData() {
 
     // ── Last completed milestone ──
     const lastMsEl = document.getElementById('summaryLastMs');
+    const lastMsCard = document.getElementById('summaryLastMsCard');
     if (lastMsEl) {
       lastMsEl.textContent = progress.last_completed
         ? '✓ ' + progress.last_completed
         : 'No milestones completed yet.';
       lastMsEl.style.color = progress.last_completed ? '#28a745' : '#888';
+      
+      // Find the completed milestone data
+      const allMs = data.all_milestones_for_modal || [];
+      const lastMs = allMs.find(m => m.title === progress.last_completed);
+      
+      if (lastMs && lastMsCard) {
+        // Store milestone data on card for click handler
+        lastMsCard.dataset.milestoneName = lastMs.title;
+        lastMsCard.dataset.msStart = lastMs.start || '—';
+        lastMsCard.dataset.msEnd = lastMs.end || '—';
+        lastMsCard.dataset.plannedPct = lastMs.planned_pct || 0;
+        lastMsCard.dataset.actualPct = lastMs.actual_pct || 0;
+        
+        // Calculate durations
+        const startDate = new Date(lastMs.start);
+        const endDate = new Date(lastMs.end);
+        const plannedDays = Math.ceil((endDate - startDate) / 86400000) + 1;
+        
+        // Get completed date (could be same as end date or actual completion)
+        const completedDate = new Date(lastMs.end);
+        const actualDays = Math.ceil((completedDate - startDate) / 86400000) + 1;
+        
+        lastMsCard.dataset.plannedDays = plannedDays;
+        lastMsCard.dataset.actualDays = actualDays;
+        lastMsCard.dataset.variance = actualDays - plannedDays;
+        
+        // Show toggle icon when milestone data exists
+        const toggleIcon = document.getElementById('summaryLastMsToggle');
+        if (toggleIcon) toggleIcon.style.display = 'inline';
+      }
     }
 
     // ── Progress chart: one milestone at a time with previous/current/next navigation ──
@@ -3085,6 +3142,9 @@ async function loadSummaryPanelData() {
     } else {
       updateScheduleBadge(0);
     }
+
+    // Re-initialize milestone card click handler with new data
+    initRecentMilestoneCard();
 
   } catch (err) {
     console.error('Summary panel error:', err);
@@ -3238,6 +3298,74 @@ function showGrayPanel() {
   setGrayToggleArrow('>');
   loadSummaryPanelData();   // ← refresh live data when panel reopens
 }
+
+// =======================================================================
+//  RECENT MILESTONE EXPANDABLE DETAILS
+// =======================================================================
+function initRecentMilestoneCard() {
+  const card = document.getElementById('summaryLastMsCard');
+  const detailsPanel = document.getElementById('summaryLastMsDetails');
+  const toggleIcon = document.getElementById('summaryLastMsToggle');
+  
+  if (!card || !detailsPanel) return;
+  
+  card.addEventListener('click', function() {
+    const isExpanded = detailsPanel.style.display === 'flex' || detailsPanel.style.display === 'block';
+    
+    if (isExpanded) {
+      // Collapse
+      detailsPanel.style.display = 'none';
+      if (toggleIcon) toggleIcon.style.transform = 'rotate(0deg)';
+      card.style.background = '#ffffff';
+    } else {
+      // Expand and populate details
+      const msName = card.dataset.milestoneName;
+      if (!msName) return; // No milestone data
+      
+      // Format dates
+      const formatDate = dateStr => {
+        if (!dateStr || dateStr === '—') return '—';
+        try {
+          const parts = String(dateStr).split('-');
+          if (parts.length !== 3) return '—';
+          const date = new Date(Date.UTC(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])));
+          if (isNaN(date.getTime())) return '—';
+          return date.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
+        } catch (e) {
+          return '—';
+        }
+      };
+      
+      // Update details
+      document.getElementById('summaryLastMsPlannedDays').textContent = 
+        (card.dataset.plannedDays || '—') + ' day' + (card.dataset.plannedDays != 1 ? 's' : '');
+      
+      document.getElementById('summaryLastMsActualDays').textContent = 
+        (card.dataset.actualDays || '—') + ' day' + (card.dataset.actualDays != 1 ? 's' : '');
+      
+      const variance = parseInt(card.dataset.variance) || 0;
+      const varianceEl = document.getElementById('summaryLastMsVariance');
+      if (variance > 0) {
+        varianceEl.textContent = `⚠ Took ${variance} more day${variance !== 1 ? 's' : ''} than planned`;
+      } else if (variance < 0) {
+        varianceEl.textContent = `✓ Completed ${Math.abs(variance)} day${Math.abs(variance) !== 1 ? 's' : ''} ahead of schedule`;
+      } else {
+        varianceEl.textContent = `✓ Completed on schedule`;
+      }
+      
+      document.getElementById('summaryLastMsStart').textContent = formatDate(card.dataset.msStart);
+      document.getElementById('summaryLastMsEnd').textContent = formatDate(card.dataset.msEnd);
+      
+      // Show details
+      detailsPanel.style.display = 'block';
+      if (toggleIcon) toggleIcon.style.transform = 'rotate(180deg)';
+      card.style.background = '#f9fafb';
+    }
+  });
+}
+
+// Call on page load
+initRecentMilestoneCard();
 
 // =======================================================================
 //  PANEL EVENT LISTENERS
