@@ -1454,7 +1454,12 @@
               <!-- Site photos -->
               <div style="width:100%; padding:14px; background:rgba(255,255,255,0.95); border-radius:12px;">
                 <div style="font-size:12px; font-weight:bold; color:#007B8A; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;" data-translate="site-photos">Site Photos</div>
-                <div id="summaryPhotos" style="width:100%; max-height:220px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; scroll-snap-type:y mandatory;">
+                <div id="summaryPhotoNav" style="display:none; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px;">
+                  <button id="summaryPhotoPrev" type="button" aria-label="View previous milestone photos" onclick="summaryPhotoNavPrev()" style="width:32px; height:32px; border:1px solid #9ccfd8; border-radius:8px; background:#fff; color:#007B8A; font-size:20px; line-height:1; cursor:pointer;">&#9664;</button>
+                  <div id="summaryPhotoMilestone" style="flex:1; min-width:0; text-align:center; font-size:12px; font-weight:700; color:#007B8A; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
+                  <button id="summaryPhotoNext" type="button" aria-label="View next milestone photos" onclick="summaryPhotoNavNext()" style="width:32px; height:32px; border:1px solid #007B8A; border-radius:8px; background:#fff; color:#007B8A; font-size:20px; line-height:1; cursor:pointer;">&#9654;</button>
+                </div>
+                <div id="summaryPhotos" style="width:100%; max-height:220px; overflow-x:auto; overflow-y:hidden; display:flex; gap:8px; scroll-snap-type:x mandatory;">
                   <div style="font-size:12px;color:#bbb;text-align:center;padding:16px;" data-translate="loading-photos">Loading photos…</div>
                 </div>
                 <div id="summaryPhotoCounter" style="font-size:10px;color:#999;text-align:center;margin-top:6px;"></div>
@@ -2638,6 +2643,63 @@ function initializeSummaryPanel() {
 
 let summaryChartMilestones = [];
 let summaryChartCurrentIndex = 0;
+let summaryPhotoMilestones = [];
+let summaryPhotoCurrentIndex = 0;
+
+function formatSummaryPhotoDate(value) {
+  if (!value) return 'Date not recorded';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Date not recorded' : date.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
+}
+
+function openSummaryPhoto(url) {
+  if (!url) return;
+  const lightbox = document.createElement('div');
+  lightbox.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10000;display:flex;align-items:center;justify-content:center;cursor:zoom-out;padding:20px;';
+  const image = document.createElement('img');
+  image.src = url;
+  image.style.cssText = 'max-width:90vw;max-height:90vh;border-radius:8px;';
+  lightbox.appendChild(image);
+  lightbox.onclick = () => lightbox.remove();
+  document.body.appendChild(lightbox);
+}
+
+function renderSummaryPhotosAtIndex(index) {
+  const photosEl = document.getElementById('summaryPhotos');
+  const navEl = document.getElementById('summaryPhotoNav');
+  if (!photosEl || !summaryPhotoMilestones.length) return;
+
+  summaryPhotoCurrentIndex = Math.max(0, Math.min(index, summaryPhotoMilestones.length - 1));
+  const group = summaryPhotoMilestones[summaryPhotoCurrentIndex];
+  const previousBtn = document.getElementById('summaryPhotoPrev');
+  const nextBtn = document.getElementById('summaryPhotoNext');
+  const titleEl = document.getElementById('summaryPhotoMilestone');
+  if (titleEl) titleEl.textContent = group.title;
+  if (previousBtn) previousBtn.disabled = summaryPhotoCurrentIndex === 0;
+  if (nextBtn) nextBtn.disabled = summaryPhotoCurrentIndex === summaryPhotoMilestones.length - 1;
+  [previousBtn, nextBtn].forEach(button => {
+    if (button) button.style.opacity = button.disabled ? '0.35' : '1';
+  });
+  if (navEl) navEl.style.display = summaryPhotoMilestones.length > 1 ? 'flex' : 'none';
+
+  photosEl.innerHTML = group.photos.map((photo, photoIndex) => `
+    <div style="flex:0 0 100%; scroll-snap-align:start; position:relative; border-radius:8px; overflow:hidden; cursor:zoom-in;">
+      <img src="${photo.cloudinary_url}" alt="${photo.file_name || 'Site photo'}" onclick="openSummaryPhoto('${photo.cloudinary_url}')" style="width:100%;height:180px;object-fit:cover;display:block;border-radius:8px;" loading="lazy" />
+      <div style="position:absolute;bottom:0;left:0;right:0;padding:7px 10px;background:linear-gradient(transparent,rgba(0,0,0,0.65));font-size:11px;color:#fff;">
+        ${photo.file_name || 'Site photo'} · Added ${formatSummaryPhotoDate(photo.uploaded_at)}
+      </div>
+      <div style="position:absolute;top:6px;right:8px;font-size:10px;background:rgba(0,0,0,0.45);color:#fff;padding:2px 6px;border-radius:10px;">${photoIndex + 1} / ${group.photos.length}</div>
+    </div>`).join('');
+  photosEl.scrollLeft = photosEl.scrollWidth;
+}
+
+function summaryPhotoNavPrev() {
+  renderSummaryPhotosAtIndex(summaryPhotoCurrentIndex - 1);
+}
+
+function summaryPhotoNavNext() {
+  renderSummaryPhotosAtIndex(summaryPhotoCurrentIndex + 1);
+}
 
 function renderSummaryChartAtIndex(index) {
   const chartEl = document.getElementById('summaryChart');
@@ -3112,41 +3174,32 @@ async function loadSummaryPanelData() {
     if (!photosEl) return;
 
     if (!photos.length) {
+      summaryPhotoMilestones = [];
+      summaryPhotoCurrentIndex = 0;
       photosEl.innerHTML = '<div style="font-size:12px;color:#bbb;text-align:center;padding:16px;">No site photos yet.</div>';
       if (counterEl) counterEl.textContent = '';
       return;
     }
 
-    if (counterEl) {
-      counterEl.textContent = `${photos.length} photo${photos.length !== 1 ? 's' : ''} · ${progress.completed_count + progress.in_progress_count} active milestone${progress.completed_count + progress.in_progress_count !== 1 ? 's' : ''}`;
-    }
+    if (counterEl) counterEl.textContent = `${photos.length} photo${photos.length !== 1 ? 's' : ''} across ${new Set(photos.map(photo => photo.ms_title)).size} milestone${new Set(photos.map(photo => photo.ms_title)).size !== 1 ? 's' : ''}`;
 
-    photosEl.innerHTML = photos.map((p, i) => `
-      <div style="flex-shrink:0;width:100%;scroll-snap-align:start;position:relative;
-           border-radius:8px;overflow:hidden;cursor:zoom-in;margin-bottom:2px;"
-           onclick="(function(){
-             var lb=document.createElement('div');
-             lb.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10000;display:flex;align-items:center;justify-content:center;cursor:zoom-out;';
-             lb.innerHTML='<img src=\\'${p.cloudinary_url}\\' style=\\'max-width:90vw;max-height:90vh;border-radius:8px;\\'>';
-             lb.onclick=function(){lb.remove();};
-             document.body.appendChild(lb);
-           })()">
-        <img src="${p.cloudinary_url}"
-             alt="${p.file_name || 'Site photo'}"
-             style="width:100%;height:180px;object-fit:cover;display:block;border-radius:8px;"
-             loading="lazy"/>
-        <div style="position:absolute;bottom:0;left:0;right:0;padding:5px 10px;
-             background:linear-gradient(transparent,rgba(0,0,0,0.55));
-             font-size:11px;color:#fff;border-radius:0 0 8px 8px;">
-          ${p.ms_title || ''}${p.file_name ? ' · ' + p.file_name : ''}
-          ${p.is_extension ? ' <span style="background:#e67e22;padding:1px 5px;border-radius:3px;font-size:9px;">EXT</span>' : ''}
-        </div>
-        <div style="position:absolute;top:6px;right:8px;font-size:10px;
-             background:rgba(0,0,0,0.45);color:#fff;padding:2px 6px;border-radius:10px;">
-          ${i + 1} / ${photos.length}
-        </div>
-      </div>`
-    ).join('');
+    const milestoneOrder = data.all_milestones_for_modal || [];
+    const groupedPhotos = new Map();
+    photos.forEach(photo => {
+      const key = `${photo.is_extension ? 'extension' : 'standard'}:${photo.ms_title}`;
+      if (!groupedPhotos.has(key)) groupedPhotos.set(key, { title: photo.ms_title || 'Unassigned milestone', photos: [] });
+      groupedPhotos.get(key).photos.push(photo);
+    });
+    summaryPhotoMilestones = [...groupedPhotos.values()].sort((left, right) => {
+      const leftIndex = milestoneOrder.findIndex(ms => ms.title === left.title);
+      const rightIndex = milestoneOrder.findIndex(ms => ms.title === right.title);
+      return (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex) - (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex);
+    });
+    summaryPhotoMilestones.forEach(group => group.photos.sort((left, right) => new Date(left.uploaded_at || 0) - new Date(right.uploaded_at || 0)));
+    const currentTitle = data.current_milestone?.title;
+    const currentPhotoIndex = currentTitle ? summaryPhotoMilestones.findIndex(group => group.title === currentTitle) : -1;
+    summaryPhotoCurrentIndex = currentPhotoIndex >= 0 ? currentPhotoIndex : summaryPhotoMilestones.length - 1;
+    renderSummaryPhotosAtIndex(summaryPhotoCurrentIndex);
 
     /* Update schedule badge with milestone count */
     if (data.all_milestones_for_modal && data.all_milestones_for_modal.length) {
