@@ -5121,6 +5121,52 @@ function openExtensionPanel(existingSchedule) {
   });
 }
 
+function openExtensionDetailsModal(extensions, milestones) {
+  document.getElementById('extensionDetailsOverlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'extensionDetailsOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,30,28,0.65);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;';
+  const items = extensions || [];
+  const milestoneItems = milestones || [];
+  const date = value => value ? String(value).slice(0, 10) : '—';
+  const typeLabel = value => String(value || '—').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const groupedMilestones = extensionId => milestoneItems.filter(ms => String(ms.extensionId || '') === String(extensionId));
+
+  overlay.innerHTML = _css + `
+    <div style="background:var(--c-surface);border-radius:16px;width:min(760px,96vw);max-height:88vh;display:flex;flex-direction:column;box-shadow:0 16px 60px rgba(0,0,0,0.35);font-family:var(--font);overflow:hidden;">
+      <div style="padding:18px 24px;border-bottom:1px solid var(--c-border);display:flex;align-items:center;justify-content:space-between;background:var(--c-dark);color:#e8f4f2;">
+        <div><div style="font-size:15px;font-weight:600;">Extension Details</div><div style="font-size:11px;color:#7dd3c4;margin-top:3px;font-family:var(--font-mono);">${items.length} extension${items.length === 1 ? '' : 's'} for this project</div></div>
+        <button id="extensionDetailsClose" class="sc-btn sc-btn-ghost-dark" type="button">✕ Close</button>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:18px 24px;display:flex;flex-direction:column;gap:12px;">
+        ${items.length ? items.map((extension, index) => {
+          const related = groupedMilestones(extension.id);
+          const fileName = extension.supporting_file_name || extension.supportingFileName;
+          const fileUrl = extension.supporting_file_url || extension.supportingFileUrl;
+          return `<article style="border:1px solid #f1c98d;border-left:4px solid var(--c-ext);border-radius:10px;background:#fffaf3;padding:14px 16px;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+              <div><div style="font-size:13px;font-weight:700;color:var(--c-text);">Extension ${index + 1} · ${typeLabel(extension.extension_type || extension.extensionType)}</div><div style="font-size:11px;color:var(--c-muted);font-family:var(--font-mono);margin-top:4px;">${date(extension.new_planned_start)} → ${date(extension.new_planned_finish)} · +${Number(extension.extension_days || extension.extensionDays || 0)} days</div></div>
+              <span class="sc-tag ${String(extension.status).toLowerCase() === 'approved' ? 'sc-tag-ok' : 'sc-tag-warn'}">${_esc(typeLabel(extension.status || 'Pending'))}</span>
+            </div>
+            <div style="margin-top:12px;font-size:12px;line-height:1.6;color:var(--c-text);"><strong>Reason:</strong> ${_esc(extension.reason || '—')}</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;">
+              ${fileUrl ? `<a class="sc-btn sc-btn-ghost" href="${_esc(fileUrl)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;">📎 ${_esc(fileName || 'Open supporting document')}</a>` : '<span style="font-size:11px;color:var(--c-muted);">No supporting document attached</span>'}
+              <span style="font-size:11px;color:var(--c-muted);padding:8px 0;">Created ${date(extension.created_at)}</span>
+            </div>
+            ${related.length ? `<div style="margin-top:14px;padding-top:10px;border-top:1px solid #f1dfc4;"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--c-ext);font-family:var(--font-mono);margin-bottom:7px;">Related milestones</div>${related.map(ms => `<div style="font-size:12px;color:var(--c-text);padding:5px 0;display:flex;justify-content:space-between;gap:10px;"><span>${_esc(ms.title || 'Untitled')}</span><span style="font-family:var(--font-mono);color:var(--c-muted);">${date(ms.start)} → ${date(ms.end)}</span></div>`).join('')}</div>` : ''}
+          </article>`;
+        }).join('') : '<div style="padding:30px;text-align:center;color:var(--c-muted);">No extensions recorded for this project.</div>'}
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#extensionDetailsClose')?.addEventListener('click', close);
+  overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+  overlay.addEventListener('keydown', event => { if (event.key === 'Escape') close(); });
+  overlay.tabIndex = -1;
+  overlay.focus();
+}
+
 // ============================================================
 //  SECTION 3 — Daily tracking + Gantt
 //
@@ -5368,7 +5414,9 @@ function openActualProgressPage(savedSchedule) {
       <div class="p3sk"><span class="p3sk-l">Planned Start</span><span class="p3sk-v">${tl.start ? _fmtDateShort(tl.start) : '—'}</span></div>
       <div class="p3sk"><span class="p3sk-l">Baseline Finish</span><span class="p3sk-v">${tl.finish ? _fmtDateShort(tl.finish) : '—'}</span></div>
       <!-- FIX 3: count of ALL extensions (not approved-only) -->
-      <div class="p3sk"><span class="p3sk-l">Extensions</span><span class="p3sk-v">${totalExtCount > 0 ? `${totalExtCount} ext` : '0'}</span></div>
+      <button class="p3sk" id="p3ExtensionsTile" type="button" aria-label="View extension details" title="View extension details" style="border:0;border-right:1px solid rgba(255,255,255,0.08);text-align:left;cursor:pointer;background:transparent;color:inherit;font:inherit;">
+        <span class="p3sk-l">Extensions</span><span class="p3sk-v">${totalExtCount > 0 ? `${totalExtCount} ext` : '0'}</span>
+      </button>
       <div class="p3sk">
         <span class="p3sk-l">Selected Milestone</span>
         <span class="p3sk-v" id="p3DaysLeftMsVal">—</span>
@@ -5433,6 +5481,7 @@ function openActualProgressPage(savedSchedule) {
   const _el = id => document.getElementById(id);
 
   _el('p3Back')?.addEventListener('click', () => collapseGrayPart());
+  _el('p3ExtensionsTile')?.addEventListener('click', () => openExtensionDetailsModal(extensions, pms));
   // FIX 1: Edit Plan passes full savedSchedule (with both milestone arrays)
   _el('p3EditPlan')?.addEventListener('click', () => openProjectScheduleForm(savedSchedule));
   _el('p3Extension')?.addEventListener('click', () => openExtensionPanel(savedSchedule));
