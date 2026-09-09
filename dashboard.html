@@ -1400,13 +1400,13 @@
                     <div id="summaryLastMs" style="font-size:15px; font-weight:600; color:#28a745; line-height:1.4;">—</div>
                     <!-- Details panel (hidden by default) -->
                     <div id="summaryLastMsDetails" style="margin-top:14px; padding-top:14px; border-top:1px solid #e0ecf1; display:none; font-size:12px; color:#52707c; line-height:1.6;">
-                      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                      <div style="display:grid; grid-template-columns:1fr; gap:10px;">
                         <div>
-                          <div style="font-weight:700; color:#64748b; margin-bottom:4px;">Planned Duration</div>
+                          <div style="font-weight:700; color:#64748b; margin-bottom:4px;">Planned execution time</div>
                           <div id="summaryLastMsPlannedDays" style="color:#007B8A; font-weight:600;">—</div>
                         </div>
                         <div>
-                          <div style="font-weight:700; color:#64748b; margin-bottom:4px;">Actual Duration</div>
+                          <div style="font-weight:700; color:#64748b; margin-bottom:4px;">Recorded completion time</div>
                           <div id="summaryLastMsActualDays" style="color:#28a745; font-weight:600;">—</div>
                         </div>
                       </div>
@@ -3054,6 +3054,7 @@ async function loadSummaryPanelData() {
         lastMsCard.dataset.milestoneName = lastMs.title;
         lastMsCard.dataset.msStart = lastMs.start || '—';
         lastMsCard.dataset.msEnd = lastMs.end || '—';
+        lastMsCard.dataset.completedAt = lastMs.actual_completed_at || '';
         lastMsCard.dataset.plannedPct = lastMs.planned_pct || 0;
         lastMsCard.dataset.actualPct = lastMs.actual_pct || 0;
         
@@ -3062,17 +3063,28 @@ async function loadSummaryPanelData() {
         const endDate = new Date(lastMs.end);
         const plannedDays = Math.ceil((endDate - startDate) / 86400000) + 1;
         
-        // Get completed date (could be same as end date or actual completion)
-        const completedDate = new Date(lastMs.end);
-        const actualDays = Math.ceil((completedDate - startDate) / 86400000) + 1;
+        // Actual duration is available only when the activity was explicitly completed.
+        const completedDate = lastMs.completed_at ? new Date(lastMs.completed_at) : null;
+        const actualDays = completedDate && !isNaN(completedDate.getTime())
+          ? Math.max(1, Math.ceil((completedDate - startDate) / 86400000) + 1)
+          : null;
         
         lastMsCard.dataset.plannedDays = plannedDays;
-        lastMsCard.dataset.actualDays = actualDays;
-        lastMsCard.dataset.variance = actualDays - plannedDays;
+        lastMsCard.dataset.actualDays = actualDays ?? '';
+        lastMsCard.dataset.variance = actualDays == null ? '' : actualDays - plannedDays;
         
         // Show toggle icon when milestone data exists
         const toggleIcon = document.getElementById('summaryLastMsToggle');
         if (toggleIcon) toggleIcon.style.display = 'inline';
+      } else if (lastMsCard) {
+        delete lastMsCard.dataset.milestoneName;
+        delete lastMsCard.dataset.msStart;
+        delete lastMsCard.dataset.msEnd;
+        delete lastMsCard.dataset.completedAt;
+        delete lastMsCard.dataset.actualDays;
+        delete lastMsCard.dataset.variance;
+        const toggleIcon = document.getElementById('summaryLastMsToggle');
+        if (toggleIcon) toggleIcon.style.display = 'none';
       }
     }
 
@@ -3328,9 +3340,10 @@ function initRecentMilestoneCard() {
       const formatDate = dateStr => {
         if (!dateStr || dateStr === '—') return '—';
         try {
-          const parts = String(dateStr).split('-');
-          if (parts.length !== 3) return '—';
-          const date = new Date(Date.UTC(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])));
+          const value = String(dateStr);
+          const date = /^\d{4}-\d{2}-\d{2}$/.test(value)
+            ? new Date(`${value}T00:00:00Z`)
+            : new Date(value);
           if (isNaN(date.getTime())) return '—';
           return date.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
         } catch (e) {
@@ -3340,14 +3353,20 @@ function initRecentMilestoneCard() {
       
       // Update details
       document.getElementById('summaryLastMsPlannedDays').textContent = 
-        (card.dataset.plannedDays || '—') + ' day' + (card.dataset.plannedDays != 1 ? 's' : '');
+        card.dataset.plannedDays
+          ? `Planned to be executed in ${card.dataset.plannedDays} day${card.dataset.plannedDays != 1 ? 's' : ''}`
+          : 'Planned duration not available';
       
       document.getElementById('summaryLastMsActualDays').textContent = 
-        (card.dataset.actualDays || '—') + ' day' + (card.dataset.actualDays != 1 ? 's' : '');
+        card.dataset.actualDays
+          ? `Completed in ${card.dataset.actualDays} day${card.dataset.actualDays != 1 ? 's' : ''}`
+          : 'Actual completion duration not recorded';
       
-      const variance = parseInt(card.dataset.variance) || 0;
       const varianceEl = document.getElementById('summaryLastMsVariance');
-      if (variance > 0) {
+      const variance = card.dataset.variance === '' ? null : parseInt(card.dataset.variance, 10);
+      if (variance == null || Number.isNaN(variance)) {
+        varianceEl.textContent = 'Completion date was not recorded.';
+      } else if (variance > 0) {
         varianceEl.textContent = `⚠ Took ${variance} more day${variance !== 1 ? 's' : ''} than planned`;
       } else if (variance < 0) {
         varianceEl.textContent = `✓ Completed ${Math.abs(variance)} day${Math.abs(variance) !== 1 ? 's' : ''} ahead of schedule`;
@@ -3356,7 +3375,9 @@ function initRecentMilestoneCard() {
       }
       
       document.getElementById('summaryLastMsStart').textContent = formatDate(card.dataset.msStart);
-      document.getElementById('summaryLastMsEnd').textContent = formatDate(card.dataset.msEnd);
+      document.getElementById('summaryLastMsEnd').textContent = card.dataset.completedAt
+        ? formatDate(card.dataset.completedAt)
+        : 'Not recorded';
       
       // Show details
       detailsPanel.style.display = 'block';
