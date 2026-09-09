@@ -5195,6 +5195,7 @@ function openExtensionEditForm(extension, closeDetails) {
     <label class="sc-fw"><span class="sc-fl">Extension type</span><select id="extensionEditType"><option value="delay">Delay</option><option value="scope_addition">Scope Addition</option><option value="force_majeure">Force Majeure</option><option value="design_change">Design Change</option></select></label>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;"><label class="sc-fw"><span class="sc-fl">Additional days</span><input id="extensionEditDays" type="number" min="1" value="${Number(extension.extension_days || 1)}" required></label><label class="sc-fw"><span class="sc-fl">New planned finish</span><input id="extensionEditFinish" type="date" value="${String(extension.new_planned_finish || '').slice(0, 10)}" required></label></div>
     <label class="sc-fw"><span class="sc-fl">Reason / justification</span><textarea id="extensionEditReason" rows="4" required>${_esc(extension.reason || '')}</textarea></label>
+    <div class="sc-fw"><span class="sc-fl">Supporting document</span><input id="extensionEditFile" type="file" accept="*/*"><label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--c-muted);"><input id="extensionRemoveFile" type="checkbox"> Remove current document</label><span style="font-size:11px;color:var(--c-muted);">${_esc(extension.supporting_file_name || extension.supportingFileName || 'No document attached')}</span></div>
     <div style="display:flex;justify-content:flex-end;gap:8px;"><button type="button" id="extensionEditCancel" class="sc-btn sc-btn-ghost">Cancel</button><button type="submit" class="sc-btn sc-btn-primary">Save changes</button></div>
   </form>`;
   document.body.appendChild(overlay);
@@ -5204,15 +5205,16 @@ function openExtensionEditForm(extension, closeDetails) {
   overlay.querySelector('#extensionEditForm').addEventListener('submit', async event => {
     event.preventDefault();
     const button = overlay.querySelector('button[type="submit"]'); button.disabled = true;
-    const response = await fetch(`${BACKEND}/api/schedule-extensions/${encodeURIComponent(extension.id)}`, {
-      method: 'PATCH', headers: _authHeaders(true), body: JSON.stringify({
-        projectId: AppState.projectId,
-        extensionType: overlay.querySelector('#extensionEditType').value,
-        extensionDays: Number(overlay.querySelector('#extensionEditDays').value),
-        newPlannedFinish: overlay.querySelector('#extensionEditFinish').value,
-        reason: overlay.querySelector('#extensionEditReason').value.trim(),
-      }),
-    });
+    const form = new FormData();
+    form.append('projectId', AppState.projectId);
+    form.append('extensionType', overlay.querySelector('#extensionEditType').value);
+    form.append('extensionDays', String(Number(overlay.querySelector('#extensionEditDays').value)));
+    form.append('newPlannedFinish', overlay.querySelector('#extensionEditFinish').value);
+    form.append('reason', overlay.querySelector('#extensionEditReason').value.trim());
+    form.append('removeSupportingDoc', String(overlay.querySelector('#extensionRemoveFile').checked));
+    const file = overlay.querySelector('#extensionEditFile').files[0];
+    if (file) form.append('supportingDoc', file, file.name);
+    const response = await fetch(`${BACKEND}/api/schedule-extensions/${encodeURIComponent(extension.id)}`, { method: 'PATCH', headers: _authHeaders(), body: form });
     if (!response.ok) { const error = await response.json().catch(() => ({})); alert(error.error || 'Failed to update extension.'); button.disabled = false; return; }
     overlay.remove(); closeDetails(); openSchedulePanel();
   });
