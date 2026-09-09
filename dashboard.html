@@ -1459,7 +1459,7 @@
                   <div id="summaryPhotoMilestone" style="flex:1; min-width:0; text-align:center; font-size:12px; font-weight:700; color:#007B8A; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
                   <button id="summaryPhotoNext" type="button" aria-label="View next milestone photos" onclick="summaryPhotoNavNext()" style="width:32px; height:32px; border:1px solid #007B8A; border-radius:8px; background:#fff; color:#007B8A; font-size:20px; line-height:1; cursor:pointer;">&#9654;</button>
                 </div>
-                <div id="summaryPhotos" style="width:100%; max-height:220px; overflow-x:auto; overflow-y:hidden; display:flex; gap:8px; scroll-snap-type:x mandatory;">
+                <div id="summaryPhotos" style="width:100%; max-height:220px; overflow-y:auto; overflow-x:hidden; display:flex; flex-direction:column; gap:8px; scroll-snap-type:y mandatory;">
                   <div style="font-size:12px;color:#bbb;text-align:center;padding:16px;" data-translate="loading-photos">Loading photos…</div>
                 </div>
                 <div id="summaryPhotoCounter" style="font-size:10px;color:#999;text-align:center;margin-top:6px;"></div>
@@ -2682,15 +2682,20 @@ function renderSummaryPhotosAtIndex(index) {
   });
   if (navEl) navEl.style.display = summaryPhotoMilestones.length > 1 ? 'flex' : 'none';
 
+  if (!group.photos.length) {
+    photosEl.innerHTML = '<div style="font-size:12px;color:#8899a6;text-align:center;padding:28px 16px;">No update photos for this milestone.</div>';
+    return;
+  }
+
   photosEl.innerHTML = group.photos.map((photo, photoIndex) => `
-    <div style="flex:0 0 100%; scroll-snap-align:start; position:relative; border-radius:8px; overflow:hidden; cursor:zoom-in;">
+    <div style="flex:0 0 auto; scroll-snap-align:start; position:relative; border-radius:8px; overflow:hidden; cursor:zoom-in;">
       <img src="${photo.cloudinary_url}" alt="${photo.file_name || 'Site photo'}" onclick="openSummaryPhoto('${photo.cloudinary_url}')" style="width:100%;height:180px;object-fit:cover;display:block;border-radius:8px;" loading="lazy" />
       <div style="position:absolute;bottom:0;left:0;right:0;padding:7px 10px;background:linear-gradient(transparent,rgba(0,0,0,0.65));font-size:11px;color:#fff;">
         ${photo.file_name || 'Site photo'} · Added ${formatSummaryPhotoDate(photo.uploaded_at)}
       </div>
       <div style="position:absolute;top:6px;right:8px;font-size:10px;background:rgba(0,0,0,0.45);color:#fff;padding:2px 6px;border-radius:10px;">${photoIndex + 1} / ${group.photos.length}</div>
     </div>`).join('');
-  photosEl.scrollLeft = photosEl.scrollWidth;
+  photosEl.scrollTop = photosEl.scrollHeight;
 }
 
 function summaryPhotoNavPrev() {
@@ -3174,10 +3179,18 @@ async function loadSummaryPanelData() {
     if (!photosEl) return;
 
     if (!photos.length) {
-      summaryPhotoMilestones = [];
-      summaryPhotoCurrentIndex = 0;
-      photosEl.innerHTML = '<div style="font-size:12px;color:#bbb;text-align:center;padding:16px;">No site photos yet.</div>';
-      if (counterEl) counterEl.textContent = '';
+      const currentTitle = data.current_milestone?.title;
+      if (currentTitle) {
+        summaryPhotoMilestones = [{ title: currentTitle, photos: [] }];
+        summaryPhotoCurrentIndex = 0;
+        renderSummaryPhotosAtIndex(0);
+        if (counterEl) counterEl.textContent = '0 photos for this milestone';
+      } else {
+        summaryPhotoMilestones = [];
+        summaryPhotoCurrentIndex = 0;
+        photosEl.innerHTML = '<div style="font-size:12px;color:#bbb;text-align:center;padding:16px;">No site photos yet.</div>';
+        if (counterEl) counterEl.textContent = '';
+      }
       return;
     }
 
@@ -3185,6 +3198,10 @@ async function loadSummaryPanelData() {
 
     const milestoneOrder = data.all_milestones_for_modal || [];
     const groupedPhotos = new Map();
+    milestoneOrder.forEach(milestone => {
+      const key = `${milestone.is_extension ? 'extension' : 'standard'}:${milestone.title}`;
+      groupedPhotos.set(key, { title: milestone.title || 'Unnamed milestone', photos: [] });
+    });
     photos.forEach(photo => {
       const key = `${photo.is_extension ? 'extension' : 'standard'}:${photo.ms_title}`;
       if (!groupedPhotos.has(key)) groupedPhotos.set(key, { title: photo.ms_title || 'Unassigned milestone', photos: [] });
@@ -3198,7 +3215,9 @@ async function loadSummaryPanelData() {
     summaryPhotoMilestones.forEach(group => group.photos.sort((left, right) => new Date(left.uploaded_at || 0) - new Date(right.uploaded_at || 0)));
     const currentTitle = data.current_milestone?.title;
     const currentPhotoIndex = currentTitle ? summaryPhotoMilestones.findIndex(group => group.title === currentTitle) : -1;
-    summaryPhotoCurrentIndex = currentPhotoIndex >= 0 ? currentPhotoIndex : summaryPhotoMilestones.length - 1;
+    summaryPhotoCurrentIndex = currentPhotoIndex >= 0
+      ? currentPhotoIndex
+      : summaryPhotoMilestones.length - 1;
     renderSummaryPhotosAtIndex(summaryPhotoCurrentIndex);
 
     /* Update schedule badge with milestone count */
