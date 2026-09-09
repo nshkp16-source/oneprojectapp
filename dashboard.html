@@ -5737,6 +5737,7 @@ function openActualProgressPage(savedSchedule) {
           ${isPostExt ? 'Post-Extension Milestone' : 'Baseline Milestone'}
         </span>
         <div style="display:flex;align-items:center;gap:8px;">
+          ${isPostExt && AppState.canWrite ? `<button class="sc-btn sc-btn-ghost" id="p3EditMsBtn" style="padding:5px 9px;font-size:11px;">Edit</button><button class="sc-btn sc-btn-danger" id="p3DelMsBtn" style="padding:5px 9px;font-size:11px;">Delete</button>` : ''}
           ${dLeft !== null && !completed ? `<span class="sc-tag ${dLeft < 0 ? 'sc-tag-crit' : dLeft === 0 ? 'sc-tag-warn' : 'sc-tag-ns'}">
             ⏱ ${_fmtDaysLeft(dLeft)}
           </span>` : ''}
@@ -5817,6 +5818,7 @@ function openActualProgressPage(savedSchedule) {
             <div style="font-size:13px;font-weight:600;color:var(--c-text);min-width:80px;">+${e.qty} ${ms.unit || ''}</div>
             <div style="font-size:12px;color:#6b8f8a;min-width:200px;">${e.remarks || '—'}</div>
             <div style="font-size:11px;font-family:var(--font-mono);color:var(--c-faint);min-width:120px;">${e.cumulative} ${ms.unit || ''} total</div>
+            ${AppState.canWrite ? `<div style="display:flex;gap:6px;margin-left:auto;"><button class="sc-btn sc-btn-ghost p3-entry-edit" data-entry-id="${e.id}" style="padding:4px 8px;font-size:11px;">Edit</button><button class="sc-btn sc-btn-danger p3-entry-delete" data-entry-id="${e.id}" style="padding:4px 8px;font-size:11px;">Delete</button></div>` : ''}
           </div>`).join('')
         }
       </div>
@@ -5851,6 +5853,13 @@ function openActualProgressPage(savedSchedule) {
       });
     }
 
+    _el('p3EntriesLog')?.querySelectorAll('.p3-entry-edit').forEach(btn => {
+      btn.addEventListener('click', () => editProgressEntry(btn.dataset.entryId));
+    });
+    _el('p3EntriesLog')?.querySelectorAll('.p3-entry-delete').forEach(btn => {
+      btn.addEventListener('click', () => deleteProgressEntry(btn.dataset.entryId));
+    });
+
     let photosLoaded = false;
     _el('p3PhotosToggleHdr')?.addEventListener('click', () => {
       const body = _el('p3PhotosBody');
@@ -5866,6 +5875,30 @@ function openActualProgressPage(savedSchedule) {
         loadMilestonePhotos(ms.id, token, isExtMs);
       }
     });
+  }
+
+  async function editProgressEntry(entryId) {
+    const entry = msList.flatMap(item => item.entries || []).find(item => String(item.id) === String(entryId));
+    if (!entry) return;
+    const qty = prompt('Executed quantity:', entry.qty);
+    if (qty === null) return;
+    const remarks = prompt('Remarks / notes:', entry.remarks || '') ?? '';
+    const res = await fetch(`${BACKEND}/api/schedule-progress/${encodeURIComponent(entryId)}`, {
+      method: 'PATCH', headers: _authHeaders(true),
+      body: JSON.stringify({ projectId: AppState.projectId, qtyExecuted: Number(qty), remarks }),
+    });
+    if (!res.ok) { const error = await res.json().catch(() => ({})); alert(error.error || 'Failed to edit progress entry.'); return; }
+    openSchedulePanel();
+  }
+
+  async function deleteProgressEntry(entryId) {
+    if (!confirm('Delete this recorded progress entry? The milestone total will be recalculated.')) return;
+    const res = await fetch(`${BACKEND}/api/schedule-progress/${encodeURIComponent(entryId)}`, {
+      method: 'DELETE', headers: _authHeaders(true),
+      body: JSON.stringify({ projectId: AppState.projectId }),
+    });
+    if (!res.ok) { const error = await res.json().catch(() => ({})); alert(error.error || 'Failed to delete progress entry.'); return; }
+    openSchedulePanel();
   }
 
   // ── Photo functions ──
