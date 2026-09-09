@@ -5146,7 +5146,10 @@ function openExtensionDetailsModal(extensions, milestones) {
           return `<article style="border:1px solid #f1c98d;border-left:4px solid var(--c-ext);border-radius:10px;background:#fffaf3;padding:14px 16px;">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
               <div><div style="font-size:13px;font-weight:700;color:var(--c-text);">Extension ${index + 1} · ${typeLabel(extension.extension_type || extension.extensionType)}</div><div style="font-size:11px;color:var(--c-muted);font-family:var(--font-mono);margin-top:4px;">${date(extension.new_planned_start)} → ${date(extension.new_planned_finish)} · +${Number(extension.extension_days || extension.extensionDays || 0)} days</div></div>
-              <span class="sc-tag ${String(extension.status).toLowerCase() === 'approved' ? 'sc-tag-ok' : 'sc-tag-warn'}">${_esc(typeLabel(extension.status || 'Pending'))}</span>
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+                <span class="sc-tag ${String(extension.status).toLowerCase() === 'approved' ? 'sc-tag-ok' : 'sc-tag-warn'}">${_esc(typeLabel(extension.status || 'Pending'))}</span>
+                ${AppState.canWrite ? `<button class="sc-btn sc-btn-ghost ext-edit-btn" data-extension-id="${extension.id}" type="button" style="padding:4px 8px;font-size:11px;">Edit</button><button class="sc-btn sc-btn-danger ext-delete-btn" data-extension-id="${extension.id}" type="button" style="padding:4px 8px;font-size:11px;">Delete</button>` : ''}
+              </div>
             </div>
             <div style="margin-top:12px;font-size:12px;line-height:1.6;color:var(--c-text);"><strong>Reason:</strong> ${_esc(extension.reason || '—')}</div>
             <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;">
@@ -5163,8 +5166,56 @@ function openExtensionDetailsModal(extensions, milestones) {
   overlay.querySelector('#extensionDetailsClose')?.addEventListener('click', close);
   overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
   overlay.addEventListener('keydown', event => { if (event.key === 'Escape') close(); });
+  overlay.querySelectorAll('.ext-edit-btn').forEach(button => {
+    button.addEventListener('click', () => openExtensionEditForm(items.find(item => String(item.id) === String(button.dataset.extensionId)), close));
+  });
+  overlay.querySelectorAll('.ext-delete-btn').forEach(button => {
+    button.addEventListener('click', async () => {
+      const extension = items.find(item => String(item.id) === String(button.dataset.extensionId));
+      if (!extension || !confirm('Delete this extension and its extension milestones? This cannot be undone.')) return;
+      const response = await fetch(`${BACKEND}/api/schedule-extensions/${encodeURIComponent(extension.id)}`, {
+        method: 'DELETE', headers: _authHeaders(true), body: JSON.stringify({ projectId: AppState.projectId }),
+      });
+      if (!response.ok) { const error = await response.json().catch(() => ({})); alert(error.error || 'Failed to delete extension.'); return; }
+      close(); openSchedulePanel();
+    });
+  });
   overlay.tabIndex = -1;
   overlay.focus();
+}
+
+function openExtensionEditForm(extension, closeDetails) {
+  if (!extension) return;
+  document.getElementById('extensionEditOverlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'extensionEditOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,30,28,.7);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.innerHTML = _css + `<form id="extensionEditForm" style="background:var(--c-surface);border-radius:14px;width:min(520px,96vw);padding:22px;display:flex;flex-direction:column;gap:14px;font-family:var(--font);">
+    <div style="font-size:16px;font-weight:700;color:var(--c-text);">Edit Extension</div>
+    <label class="sc-fw"><span class="sc-fl">Extension type</span><select id="extensionEditType"><option value="delay">Delay</option><option value="scope_addition">Scope Addition</option><option value="force_majeure">Force Majeure</option><option value="design_change">Design Change</option></select></label>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;"><label class="sc-fw"><span class="sc-fl">Additional days</span><input id="extensionEditDays" type="number" min="1" value="${Number(extension.extension_days || 1)}" required></label><label class="sc-fw"><span class="sc-fl">New planned finish</span><input id="extensionEditFinish" type="date" value="${String(extension.new_planned_finish || '').slice(0, 10)}" required></label></div>
+    <label class="sc-fw"><span class="sc-fl">Reason / justification</span><textarea id="extensionEditReason" rows="4" required>${_esc(extension.reason || '')}</textarea></label>
+    <div style="display:flex;justify-content:flex-end;gap:8px;"><button type="button" id="extensionEditCancel" class="sc-btn sc-btn-ghost">Cancel</button><button type="submit" class="sc-btn sc-btn-primary">Save changes</button></div>
+  </form>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#extensionEditType').value = extension.extension_type || 'delay';
+  overlay.querySelector('#extensionEditCancel').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', event => { if (event.target === overlay) overlay.remove(); });
+  overlay.querySelector('#extensionEditForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = overlay.querySelector('button[type="submit"]'); button.disabled = true;
+    const response = await fetch(`${BACKEND}/api/schedule-extensions/${encodeURIComponent(extension.id)}`, {
+      method: 'PATCH', headers: _authHeaders(true), body: JSON.stringify({
+        projectId: AppState.projectId,
+        extensionType: overlay.querySelector('#extensionEditType').value,
+        extensionDays: Number(overlay.querySelector('#extensionEditDays').value),
+        newPlannedFinish: overlay.querySelector('#extensionEditFinish').value,
+        reason: overlay.querySelector('#extensionEditReason').value.trim(),
+      }),
+    });
+    if (!response.ok) { const error = await response.json().catch(() => ({})); alert(error.error || 'Failed to update extension.'); button.disabled = false; return; }
+    overlay.remove(); closeDetails(); openSchedulePanel();
+  });
 }
 
 // ============================================================
