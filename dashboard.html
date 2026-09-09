@@ -5744,6 +5744,7 @@ function openActualProgressPage(savedSchedule) {
           <span class="sc-tag ${completed ? 'sc-tag-ok' : ms.activity_status === 'in_progress' ? 'sc-tag-ok' : 'sc-tag-ns'}">
             ${completed ? 'Completed' : ms.activity_status === 'in_progress' ? 'In Progress' : 'Not Started'}
           </span>
+          ${completed && AppState.canWrite ? `<button class="sc-btn sc-btn-warn" id="p3ReopenMsBtn" style="padding:5px 9px;font-size:11px;">Edit / Reopen</button>` : ''}
         </div>
       </div>
       <div style="padding:16px 20px 20px;">
@@ -5837,6 +5838,15 @@ function openActualProgressPage(savedSchedule) {
         markEnded(ms, isExtMs);
       });
     }
+    _el('p3ReopenMsBtn')?.addEventListener('click', async () => {
+      if (!confirm('Reopen this completed milestone so its entries, photos, and progress can be edited?')) return;
+      const res = await fetch(`${BACKEND}/api/reopen-milestone`, {
+        method: 'POST', headers: _authHeaders(true),
+        body: JSON.stringify({ projectId: AppState.projectId, milestoneId: ms.id, isExtensionMilestone: isExtMs }),
+      });
+      if (!res.ok) { const error = await res.json().catch(() => ({})); alert(error.error || 'Failed to reopen milestone.'); return; }
+      openSchedulePanel();
+    });
     if (isExtMs) {
       _el('p3EditMsBtn')?.addEventListener('click', () => {
         if (_renderToken !== token) return;
@@ -5880,15 +5890,32 @@ function openActualProgressPage(savedSchedule) {
   async function editProgressEntry(entryId) {
     const entry = msList.flatMap(item => item.entries || []).find(item => String(item.id) === String(entryId));
     if (!entry) return;
-    const qty = prompt('Executed quantity:', entry.qty);
-    if (qty === null) return;
-    const remarks = prompt('Remarks / notes:', entry.remarks || '') ?? '';
-    const res = await fetch(`${BACKEND}/api/schedule-progress/${encodeURIComponent(entryId)}`, {
-      method: 'PATCH', headers: _authHeaders(true),
-      body: JSON.stringify({ projectId: AppState.projectId, qtyExecuted: Number(qty), remarks }),
+    document.getElementById('p3EntryEditOverlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'p3EntryEditOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,30,28,.65);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.innerHTML = _css + `<form id="p3EntryEditForm" style="background:var(--c-surface);border-radius:12px;width:min(460px,96vw);padding:20px;display:flex;flex-direction:column;gap:12px;font-family:var(--font);">
+      <div style="font-size:15px;font-weight:700;color:var(--c-text);">Edit progress entry</div>
+      <label class="sc-fw"><span class="sc-fl">Report date</span><input id="p3EditDate" type="date" value="${entry.date || ''}" required></label>
+      <label class="sc-fw"><span class="sc-fl">Executed quantity</span><input id="p3EditQty" type="number" min="0.01" step="any" value="${entry.qty || ''}" required></label>
+      <label class="sc-fw"><span class="sc-fl">Remarks / notes</span><textarea id="p3EditRemarks" rows="4" style="resize:vertical;">${entry.remarks || ''}</textarea></label>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;"><button type="button" id="p3EditCancel" class="sc-btn sc-btn-ghost">Cancel</button><button class="sc-btn sc-btn-primary" type="submit">Save changes</button></div>
+    </form>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#p3EditCancel').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', event => { if (event.target === overlay) overlay.remove(); });
+    overlay.querySelector('#p3EntryEditForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const reportDate = overlay.querySelector('#p3EditDate').value;
+      const qty = Number(overlay.querySelector('#p3EditQty').value);
+      const remarks = overlay.querySelector('#p3EditRemarks').value;
+      const form = new FormData();
+      form.append('projectId', AppState.projectId); form.append('reportDate', reportDate); form.append('qtyExecuted', String(qty)); form.append('remarks', remarks);
+      const saveButton = overlay.querySelector('button[type="submit"]'); saveButton.disabled = true;
+      const res = await fetch(`${BACKEND}/api/schedule-progress/${encodeURIComponent(entryId)}`, { method: 'PATCH', headers: { Authorization: `Bearer ${AppState.token}` }, body: form });
+      if (!res.ok) { const error = await res.json().catch(() => ({})); alert(error.error || 'Failed to edit progress entry.'); saveButton.disabled = false; return; }
+      overlay.remove(); openSchedulePanel();
     });
-    if (!res.ok) { const error = await res.json().catch(() => ({})); alert(error.error || 'Failed to edit progress entry.'); return; }
-    openSchedulePanel();
   }
 
   async function deleteProgressEntry(entryId) {
