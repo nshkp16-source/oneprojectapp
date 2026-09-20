@@ -8021,9 +8021,7 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
             <div id="supportingFilesName" style="margin-top:8px;font-size:12px;color:#52707c;display:none;"></div>
           </div>
 
-          <div id="pdfSaveOption" style="display:none;margin-bottom:16px;"></div>
-
-          <!-- Stamp Step — shown after file selected, for decision makers only -->
+          <!-- Optional stamp step — available only for decision makers with a stamp profile -->
           <div id="stampStepContainer" style="display:none;margin-bottom:16px;"></div>
 
         </form>
@@ -8096,13 +8094,24 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
   dropZone.addEventListener('dragover',  (e) => { e.preventDefault(); dropZone.style.borderColor = '#007B8A'; });
   dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = '#ddd'; });
   const onAttachmentSelected = (file) => {
-    // Reset any prior prepared/stamped state whenever a new file is picked
-    window.__preparedFile = null;
+    const isPdf = file
+      && /\.pdf$/i.test(file.name || '')
+      && (!file.type || /^application\/pdf$/i.test(file.type));
+    if (file && !isPdf) {
+      attachInput.value = '';
+      attachNameEl.textContent = '';
+      attachNameEl.style.display = 'none';
+      dropZone.style.borderColor = '#dc2626';
+      window.__stampPlacement = null;
+      const stampContainer = document.getElementById('stampStepContainer');
+      if (stampContainer) { stampContainer.style.display = 'none'; stampContainer.innerHTML = ''; }
+      alert('Only PDF files can be selected as the Official Record.');
+      return;
+    }
     window.__stampPlacement = null;
-    const convertContainer = document.getElementById('pdfSaveOption');
     const stampContainer = document.getElementById('stampStepContainer');
     if (stampContainer) { stampContainer.style.display = 'none'; stampContainer.innerHTML = ''; }
-    if (file && convertContainer) renderConvertStep(file, convertContainer, stampContainer);
+    if (file && stampContainer) renderStampStep(file, stampContainer);
   };
 
   dropZone.addEventListener('drop', (e) => {
@@ -8150,10 +8159,9 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       const stampChoice = document.querySelector('input[name="stampChoice"]:checked')?.value || 'save';
       console.log('[save-record] stampChoice:', stampChoice);
 
-      // Base attachment is whatever the convert-to-PDF step prepared (already
-      // converted to PDF when needed, or the original file for unsupported types).
-      // If nothing was prepared (e.g. no file attached at all), fall back to the raw input.
-      let attachmentFile = window.__preparedFile || fileInput.files[0] || null;
+      // The official record is already required to be a PDF. Supporting files
+      // never enter the stamping flow.
+      let attachmentFile = fileInput.files[0] || null;
       let clientStamped = false;
 
       if (!attachmentFile || !/\.pdf$/i.test(attachmentFile.name || '') || !/^application\/pdf$/i.test(attachmentFile.type || '')) {
