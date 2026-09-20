@@ -7354,6 +7354,19 @@ function renderRecordsList(records, tabKey) {
                 </div>
                </div>` : ''}
 
+          ${Array.isArray(doc.supporting_files) && doc.supporting_files.length
+            ? `<div style="margin-bottom:12px;">
+                <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+                  letter-spacing:.5px;margin-bottom:6px;">Supporting Files</div>
+                <div style="display:flex;flex-direction:column;gap:6px;">
+                  ${doc.supporting_files.map(file => `<a href="${escapeHtml(file.url || '#')}" target="_blank" rel="noopener"
+                    style="display:flex;align-items:center;gap:7px;color:#52707c;font-size:12px;text-decoration:none;">
+                    📎 <span>${escapeHtml(file.name || 'Supporting file')}</span>
+                    <span style="color:#9ca3af;">${escapeHtml(file.mime || '')}</span>
+                  </a>`).join('')}
+                </div>
+              </div>` : ''}
+
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
               letter-spacing:.5px;margin-bottom:6px;">Review History</div>
@@ -7982,21 +7995,30 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
             </style>
           </div>
 
-          <div style="margin-bottom:24px;">
+          <div style="margin-bottom:18px;">
             <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
-              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Attach Document</label>
+              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Official Record PDF <span style="color:#dc2626;">*</span></label>
             <div id="attachmentDropZone"
               style="display:flex;align-items:center;gap:12px;padding:16px;border:2px dashed #ddd;
               border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
               <div style="font-size:24px;">📎</div>
               <div style="flex:1;">
                 <div style="font-weight:bold;color:#333;font-size:14px;">Click to upload or drag &amp; drop</div>
-                <div style="font-size:12px;color:#999;margin-top:4px;">PDF, DOC, DOCX, XLS, XLSX, JPG, PNG (Max 10MB)</div>
-                <input type="file" id="recordAttachment" style="display:none;"
-                  accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"/>
+                <div style="font-size:12px;color:#999;margin-top:4px;">PDF only (Max 10MB)</div>
+                <input type="file" id="recordAttachment" name="officialDocument" style="display:none;" accept="application/pdf,.pdf"/>
               </div>
             </div>
             <div id="attachmentName" style="margin-top:8px;font-size:12px;color:#28a745;font-weight:bold;display:none;"></div>
+          </div>
+
+          <div style="margin-bottom:24px;">
+            <label style="display:block;font-weight:bold;color:#52707c;text-transform:uppercase;
+              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Supporting Files <span style="font-weight:normal;text-transform:none;letter-spacing:0;">(optional)</span></label>
+            <input type="file" id="supportingFiles" name="supportingFiles" multiple
+              accept=".xlsx,.xls,.docx,.doc,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv"
+              style="width:100%;padding:10px;border:1px solid #d7e7eb;border-radius:6px;background:#fff;" />
+            <div style="font-size:12px;color:#999;margin-top:5px;">Excel, Word, CAD, images, ZIP, or CSV. Up to 10 files, 10MB each.</div>
+            <div id="supportingFilesName" style="margin-top:8px;font-size:12px;color:#52707c;display:none;"></div>
           </div>
 
           <div id="pdfSaveOption" style="display:none;margin-bottom:16px;"></div>
@@ -8056,6 +8078,8 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
   const dropZone     = document.getElementById('attachmentDropZone');
   const attachInput  = document.getElementById('recordAttachment');
   const attachNameEl = document.getElementById('attachmentName');
+  const supportingInput = document.getElementById('supportingFiles');
+  const supportingNameEl = document.getElementById('supportingFilesName');
 
   const updateAttachDisplay = () => {
     if (attachInput.files.length > 0) {
@@ -8094,6 +8118,16 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
     updateAttachDisplay();
     onAttachmentSelected(attachInput.files[0]);
   });
+  supportingInput?.addEventListener('change', () => {
+    const files = Array.from(supportingInput.files || []);
+    if (supportingNameEl) {
+      supportingNameEl.textContent = files.length
+        ? files.map(file => `• ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`).join('\n')
+        : '';
+      supportingNameEl.style.display = files.length ? 'block' : 'none';
+      supportingNameEl.style.whiteSpace = 'pre-line';
+    }
+  });
 
   document.getElementById('saveRecordBtn').addEventListener('click', async () => {
     try {
@@ -8102,6 +8136,7 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       const descHtml  = descEl ? descEl.innerHTML.trim() : '';
       const descText  = descEl ? (descEl.innerText || descEl.textContent || '').trim() : '';
       const fileInput = document.getElementById('recordAttachment');
+      const supportingInput = document.getElementById('supportingFiles');
       const rType     = document.getElementById('formRecordType').value;
       const rTabKey   = document.getElementById('formTabKey').value;
       const rKind     = document.getElementById('recordKindField').value;
@@ -8120,6 +8155,10 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
       // If nothing was prepared (e.g. no file attached at all), fall back to the raw input.
       let attachmentFile = window.__preparedFile || fileInput.files[0] || null;
       let clientStamped = false;
+
+      if (!attachmentFile || !/\.pdf$/i.test(attachmentFile.name || '') || !/^application\/pdf$/i.test(attachmentFile.type || '')) {
+        throw new Error('An official PDF document is required.');
+      }
 
       if (attachmentFile && attachmentFile.size > 10 * 1024 * 1024) {
         throw new Error('File size must not exceed 10MB.');
@@ -8157,9 +8196,8 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null) {
         formData.append('stampX', String(placement.x ?? 0.8));
         formData.append('stampY', String(placement.y ?? 0.08));
       }
-      // Only ONE file is ever sent — the prepared/converted file, or the stamped
-      // version replacing it when the user chose to stamp.
-      if (attachmentFile) formData.append('attachment', attachmentFile);
+      formData.append('officialDocument', attachmentFile, attachmentFile.name);
+      Array.from(supportingInput?.files || []).forEach(file => formData.append('supportingFiles', file, file.name));
 
       const saveBtn = document.getElementById('saveRecordBtn');
       if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = stampChoice === 'stamp' ? 'Preparing stamp…' : 'Saving…'; }
