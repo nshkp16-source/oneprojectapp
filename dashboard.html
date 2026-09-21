@@ -568,6 +568,24 @@
       background: #fbfdfe !important;
       border-top: 1px solid #e5eef1 !important;
     }
+    .record-list-back {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      margin: 0 0 10px;
+      padding: 8px 0;
+      border: 0;
+      color: var(--accent-dark);
+      background: transparent;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      text-align: left;
+    }
+    .record-list-back:hover { color: var(--accent); text-decoration: underline; }
+    .record-card.record-focused { margin-bottom: 0 !important; }
+    .record-card.record-focused .record-card-header { cursor: default; }
     .record-card-detail > div {
       padding: 12px 0;
       margin-bottom: 0 !important;
@@ -7593,7 +7611,13 @@ bottomContent.addEventListener('click', (e) => {
     const item     = actionEl.closest('.doc-item');
     const tabKey   = item.getAttribute('data-tab-key');
     const recordId = item.getAttribute('data-id');
+    if (item?.classList.contains('record-focused')) return;
     toggleRecordDetail(recordId, tabKey);
+    return;
+  }
+
+  if (action === 'record-list-back') {
+    restoreRecordList();
     return;
   }
 
@@ -7631,8 +7655,9 @@ function toggleRecordDetail(recordId, tabKey) {
   const detail  = document.getElementById(`detail-${recordId}`);
   const chevron = document.querySelector(`.chevron-${recordId}`);
   if (!detail) return;
+  const card = detail.closest('.doc-item');
   const isOpen = detail.style.display !== 'none';
-  closeExpandedRecordCards(recordId);
+  if (!isOpen) focusRecordCard(card);
   if (!isOpen) {
     const cached = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
     if (cached && !cached.is_uploader && !cached.is_viewed) {
@@ -7644,27 +7669,47 @@ function toggleRecordDetail(recordId, tabKey) {
   /* Scroll the card header into view so the expanded detail is reachable
      on short screens where the list area has limited height */
   if (!isOpen) {
-    const card = detail.closest('.doc-item');
     if (card) {
       setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 30);
     }
   }
 }
 
-function closeExpandedRecordCards(exceptRecordId = null) {
-  document.querySelectorAll('#recordsList .doc-detail').forEach(detail => {
-    const card = detail.closest('.doc-item');
-    if (!card || String(card.dataset.id) === String(exceptRecordId)) return;
-    detail.style.display = 'none';
+function focusRecordCard(card) {
+  const list = document.getElementById('recordsList');
+  if (!list || !card) return;
+  list.querySelectorAll('.record-card').forEach(otherCard => {
+    if (otherCard !== card) otherCard.style.display = 'none';
+  });
+  card.classList.add('record-focused');
+  if (!document.getElementById('recordListBack')) {
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.id = 'recordListBack';
+    back.className = 'record-list-back';
+    back.setAttribute('data-action', 'record-list-back');
+    back.textContent = '← Back to records';
+    list.insertBefore(back, card);
+  }
+}
+
+function restoreRecordList() {
+  const list = document.getElementById('recordsList');
+  if (!list) return;
+  document.getElementById('recordListBack')?.remove();
+  list.querySelectorAll('.record-card').forEach(card => {
+    card.style.display = '';
+    card.classList.remove('record-focused');
+    const detail = card.querySelector('.doc-detail');
     const chevron = card.querySelector('[class^="chevron-"]');
+    if (detail) detail.style.display = 'none';
     if (chevron) chevron.textContent = '▾';
   });
 }
 
 document.addEventListener('click', (event) => {
   if (event.target.closest('.modal-overlay, #recordPreviewModal, [data-record-related]')) return;
-  if (event.target.closest('#recordsList .doc-item')) return;
-  closeExpandedRecordCards();
+  if (event.target.closest('#recordsList .doc-item, #recordListBack')) return;
 });
 
 async function promptForStampChoice({ title, subtitle, continueLabel = 'Continue', cancelLabel = 'Cancel', primaryLabel = 'Choose position on the document', secondaryLabel = 'Add stamp on a new page at the end of the document' } = {}) {
