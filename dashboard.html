@@ -135,7 +135,7 @@
       transform: scale(1.05);
     }
     .profile-dialog {
-      --profile-max-w: 340px;
+      --profile-max-w: 520px;
       position: fixed;
       top: 110px;
       left: calc(var(--left-w) + 10px);
@@ -169,8 +169,15 @@
     #profilePreview .preview-box {
       width: 100%; max-width: 100%; min-height: 200px;
       border: 1px solid var(--border); border-radius: var(--r-md);
-      background-size: contain; background-repeat: no-repeat; background-position: center;
-      position: relative; overflow: hidden;
+      background: #f7f9fa; position: relative; overflow: hidden;
+      display: flex; align-items: center; justify-content: center; padding: 12px;
+    }
+    #profilePreview .preview-image {
+      display: block; width: auto; max-width: 100%;
+      max-height: min(60vh, 520px); object-fit: contain;
+    }
+    #profilePreview .preview-actions {
+      display: flex; justify-content: flex-end; margin-top: 10px;
     }
     #profilePreview .preview-close {
       position: absolute; top: 8px; right: 10px;
@@ -2280,6 +2287,7 @@ const profileUpload     = document.getElementById('profileUpload');
 const profileIconLarge  = document.getElementById('profileIconLarge');
 const profileEmail      = document.getElementById('profileEmail');
 const profileRole       = document.getElementById('profileRole');
+let profilePictureUrl = "";
 const projectSelector   = document.getElementById("projectSelector");
 const projectDialog     = document.getElementById("projectDialog");
 const activeProject     = document.getElementById("activeProject");
@@ -2325,11 +2333,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     const profile = await apiRequest(`https://oneprojectapp-backend.onrender.com${API_PREFIX}/profile`, { method: "GET" });
     if (profile.profile_picture && profile.profile_picture.trim() !== "") {
-      profileIcon.style.backgroundImage      = `url("${profile.profile_picture}")`;
-      profileIconLarge.style.backgroundImage = `url("${profile.profile_picture}")`;
+      profilePictureUrl = profile.profile_picture;
+      profileIcon.style.backgroundImage      = `url("${profilePictureUrl}")`;
+      profileIconLarge.style.backgroundImage = `url("${profilePictureUrl}")`;
       profileIcon.textContent      = "";
       profileIconLarge.textContent = "";
     } else {
+      profilePictureUrl = "";
       const ch = (userEmail || "?").charAt(0).toUpperCase();
       profileIcon.textContent      = ch;
       profileIconLarge.textContent = ch;
@@ -2478,8 +2488,9 @@ profileUpload.addEventListener('change', async (e) => {
   formData.append("profile_picture", file);
   try {
     const data = await apiRequest(`https://oneprojectapp-backend.onrender.com${API_PREFIX}/upload-picture`, { method: "POST", body: formData });
-    profileIcon.style.backgroundImage      = `url("${data.url}")`;
-    profileIconLarge.style.backgroundImage = `url("${data.url}")`;
+    profilePictureUrl = data.url;
+    profileIcon.style.backgroundImage      = `url("${profilePictureUrl}")`;
+    profileIconLarge.style.backgroundImage = `url("${profilePictureUrl}")`;
     profileIcon.textContent      = "";
     profileIconLarge.textContent = "";
   } catch (err) { console.error("Upload error:", err); alert("Failed to upload profile picture."); }
@@ -2487,6 +2498,7 @@ profileUpload.addEventListener('change', async (e) => {
 deletePictureBtn.addEventListener('click', async () => {
   try {
     await apiRequest(`https://oneprojectapp-backend.onrender.com${API_PREFIX}/delete-picture`, { method: "POST" });
+    profilePictureUrl = "";
     const ch = contractorEmail.charAt(0).toUpperCase();
     profileIcon.style.backgroundImage      = "";
     profileIcon.textContent                = ch;
@@ -2495,23 +2507,38 @@ deletePictureBtn.addEventListener('click', async () => {
   } catch (err) { console.error("Delete error:", err); alert("Failed to delete profile picture."); }
 });
 profileIconLarge.addEventListener("click", () => {
-  const pictureUrl = profileIconLarge.style.backgroundImage.replace(/^url\(["']?/, "").replace(/["']?\)$/, "");
+  const pictureUrl = profilePictureUrl;
   if (!pictureUrl) return;
   if (profileDefault) profileDefault.style.display = "none";
   if (profilePreview) { profilePreview.style.display = "block"; profilePreview.innerHTML = ""; }
   const previewBox = document.createElement("div");
   previewBox.className = 'preview-box';
-  previewBox.style.backgroundImage = `url("${pictureUrl}")`;
+  const previewImage = document.createElement("img");
+  previewImage.className = "preview-image";
+  previewImage.src = pictureUrl;
+  previewImage.alt = "Profile picture preview";
   const closeIcon = document.createElement("span");
   closeIcon.className = 'preview-close';
   closeIcon.textContent = "✖";
-  closeIcon.style.cssText = "position:absolute;top:2px;right:6px;cursor:pointer;color:#333;font-weight:bold;";
+  closeIcon.style.cssText = "position:absolute;top:8px;right:10px;cursor:pointer;color:#333;font-weight:bold;";
   closeIcon.addEventListener("click", () => {
     if (profilePreview)  { profilePreview.style.display = "none"; profilePreview.innerHTML = ""; }
     if (profileDefault)  profileDefault.style.display = "block";
   });
+  previewBox.appendChild(previewImage);
   previewBox.appendChild(closeIcon);
   profilePreview.appendChild(previewBox);
+  const previewActions = document.createElement("div");
+  previewActions.className = "preview-actions";
+  const downloadLink = document.createElement("a");
+  downloadLink.className = "btn";
+  downloadLink.href = pictureUrl;
+  downloadLink.download = "profile-picture";
+  downloadLink.target = "_blank";
+  downloadLink.rel = "noopener";
+  downloadLink.textContent = "Download picture";
+  previewActions.appendChild(downloadLink);
+  profilePreview.appendChild(previewActions);
 });
 
 // =========================
