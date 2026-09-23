@@ -344,6 +344,32 @@
             margin-top: 5px; border-radius: 10px; cursor: pointer;
             border: 1px solid rgba(0,0,0,0.07);
         }
+        .media-preview {
+            display: none;
+            position: fixed; inset: 0; z-index: 200;
+            align-items: center; justify-content: center;
+            padding: 24px; background: rgba(15,23,42,0.82);
+        }
+        .media-preview.open { display: flex; }
+        .media-preview-content {
+            position: relative; display: flex; flex-direction: column;
+            align-items: center; gap: 12px; max-width: min(92vw, 900px); max-height: 92vh;
+        }
+        .media-preview-image {
+            display: block; max-width: 92vw; max-height: 78vh;
+            width: auto; height: auto; object-fit: contain;
+            border-radius: 10px; box-shadow: var(--shadow-md);
+        }
+        .media-preview-actions { display: flex; gap: 8px; align-items: center; }
+        .media-preview-actions a,
+        .media-preview-close {
+            display: inline-flex; align-items: center; justify-content: center;
+            min-height: 36px; padding: 7px 13px; border-radius: var(--radius-full);
+            border: 1px solid rgba(255,255,255,0.35); background: rgba(255,255,255,0.95);
+            color: var(--text-main); font-size: 13px; text-decoration: none; cursor: pointer;
+        }
+        .media-preview-close { position: absolute; top: -46px; right: 0; }
+        .upload-status { color: var(--green-dark); font-size: 11px; }
         /* ── Video player ── */
         .msg-video {
             display: block;
@@ -738,6 +764,15 @@
             <button class="send-btn" id="sendBtn" aria-label="Send or record audio">➤</button>
         </div>
     </div>
+    <div class="media-preview" id="mediaPreview" role="dialog" aria-modal="true" aria-label="Image preview">
+        <div class="media-preview-content">
+            <button class="media-preview-close" id="mediaPreviewClose" type="button" aria-label="Close image preview">Close</button>
+            <img class="media-preview-image" id="mediaPreviewImage" alt="">
+            <div class="media-preview-actions">
+                <a id="mediaPreviewDownload" href="#" download="chat-image" target="_blank" rel="noopener">Download image</a>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -825,6 +860,10 @@ const replyBarClose  = $('replyBarClose');
 const recBar         = $('recBar');
 const recTimer       = $('recTimer');
 const recCancel      = $('recCancel');
+const mediaPreview   = $('mediaPreview');
+const mediaPreviewImage = $('mediaPreviewImage');
+const mediaPreviewDownload = $('mediaPreviewDownload');
+const mediaPreviewClose = $('mediaPreviewClose');
 
 /* ── STATE ── */
 let currentChat  = null;
@@ -833,6 +872,7 @@ let pendingFile  = null;
 let pollTimer    = null;
 let replyTarget  = null;
 let isMobile     = () => window.innerWidth < 768;
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 /* ── AUDIO RECORDING STATE ── */
 let mediaRecorder   = null;
@@ -1079,6 +1119,21 @@ function friendlyDate(iso) {
     if (d.toDateString() === now.toDateString()) return 'Today';
     if (d.toDateString() === yd.toDateString())  return 'Yesterday';
     return d.toLocaleDateString(undefined,{weekday:'short',day:'numeric',month:'short'});
+}
+
+function openMediaPreview(url, name) {
+    mediaPreviewImage.src = url;
+    mediaPreviewImage.alt = name || 'Chat image';
+    mediaPreviewDownload.href = url;
+    mediaPreviewDownload.download = name || 'chat-image';
+    mediaPreview.classList.add('open');
+    mediaPreviewClose.focus();
+}
+
+function closeMediaPreview() {
+    mediaPreview.classList.remove('open');
+    mediaPreviewImage.removeAttribute('src');
+    mediaPreviewDownload.href = '#';
 }
 
 function strColor(s) {
@@ -1416,7 +1471,9 @@ function renderContacts(filter) {
    — inline video player
    — custom audio player
 ══════════════════════════════════════ */
-function renderMessages() {
+function renderMessages(forceBottom = false) {
+    const wasNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 80;
+    const previousScrollTop = chatMessages.scrollTop;
     chatMessages.innerHTML = '';
     if (!currentChat) {
         chatMessages.innerHTML='<div class="state-box"><div class="state-icon">💬</div><div>Select a conversation</div></div>';
@@ -1512,7 +1569,7 @@ function renderMessages() {
                 const img = document.createElement('img');
                 img.src = m.attachmentUrl; img.className = 'msg-image';
                 img.alt = name||'Image'; img.loading = 'lazy';
-                img.addEventListener('click',()=>window.open(m.attachmentUrl,'_blank'));
+                img.addEventListener('click',()=>openMediaPreview(m.attachmentUrl, name));
                 bubble.appendChild(img);
             } else {
                 const a = document.createElement('a');
@@ -1554,7 +1611,8 @@ function renderMessages() {
         chatMessages.appendChild(row);
     });
 
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    if (forceBottom || wasNearBottom) chatMessages.scrollTop = chatMessages.scrollHeight;
+    else chatMessages.scrollTop = previousScrollTop;
 }
 
 /* ══════════════════════════════════════
@@ -1586,7 +1644,7 @@ async function selectChat(contact) {
     }
 
     renderContacts(searchInput.value);
-    renderMessages();
+    renderMessages(true);
     msgInput.focus();
     startPoll();
 }
@@ -1659,7 +1717,7 @@ async function sendMessage() {
         updateSendBtn();
 
         renderContacts(searchInput.value);
-        renderMessages();
+        renderMessages(true);
     } catch(err) {
         alert('Send failed: '+err.message);
     } finally {
@@ -1671,6 +1729,16 @@ async function sendMessage() {
    FILE UPLOAD (images, video, audio, docs)
 ══════════════════════════════════════ */
 async function uploadAndSendFile(file, sendImmediately) {
+    if (file.size > MAX_UPLOAD_BYTES) {
+        alert('Files must be 25 MB or smaller.');
+        return;
+    }
+    if (!file.type && !file.name) {
+        alert('This file type is not supported.');
+        return;
+    }
+    attachPillName.textContent = 'Uploading…';
+    attachPill.classList.add('visible');
     const fd = new FormData();
     fd.append('attachment', file);
     console.log('[uploadAndSendFile] Uploading file:', file.name, 'type:', file.type, 'size:', file.size);
@@ -1699,6 +1767,9 @@ async function uploadAndSendFile(file, sendImmediately) {
     } catch(err) {
         console.error('[uploadAndSendFile] Exception:', err);
         alert('Upload failed: '+err.message);
+        pendingFile = null;
+        attachPill.classList.remove('visible');
+        attachPillName.textContent = '';
     }
 }
 
@@ -1710,6 +1781,9 @@ mobileBack.addEventListener('click', showSidebarPanel);
 groupBtn.addEventListener('click', ()=>{ const g=contacts.find(c=>c.isGroup); if(g) selectChat(g); });
 searchInput.addEventListener('input', e=>renderContacts(e.target.value));
 replyBarClose.addEventListener('click', clearReply);
+mediaPreviewClose.addEventListener('click', closeMediaPreview);
+mediaPreview.addEventListener('click', e=>{ if (e.target===mediaPreview) closeMediaPreview(); });
+document.addEventListener('keydown', e=>{ if (e.key==='Escape') closeMediaPreview(); });
 msgInput.addEventListener('keypress', e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();} });
 
 /* Attach: supports images, video, and other files */
