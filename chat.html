@@ -452,6 +452,19 @@
         .msg-time  { font-size: 10.5px; color: var(--text-muted); }
         .msg-ticks { font-size: 12px; color: var(--text-muted); line-height: 1; }
         .msg-ticks.read { color: var(--blue-read); }  /* blue ✓✓ */
+        .read-receipt-wrap { position: relative; display: inline-flex; align-items: center; }
+        .read-receipt-wrap:focus { outline: none; }
+        .read-receipt-details {
+            display: none; position: absolute; right: 0; bottom: calc(100% + 7px);
+            z-index: 20; min-width: 170px; max-width: 260px;
+            padding: 8px 10px; border: 1px solid var(--border);
+            border-radius: 8px; background: var(--bg-white); color: var(--text-main);
+            box-shadow: var(--shadow-md); font-size: 12px; line-height: 1.4;
+            white-space: normal; pointer-events: none;
+        }
+        .read-receipt-wrap:hover .read-receipt-details,
+        .read-receipt-wrap:focus-within .read-receipt-details { display: block; }
+        .read-receipt-title { display: block; font-weight: 700; margin-bottom: 3px; }
 
         /* State boxes */
         .state-box {
@@ -1176,6 +1189,13 @@ function buildAvatarContent(contact) {
     return esc(contact.initial || initial(contact.email));
 }
 
+function getReadByNames(readBy) {
+    const ids = new Set((readBy || []).map(id => Number(id)).filter(Number.isFinite));
+    return contacts
+        .filter(contact => !contact.isGroup && ids.has(Number(contact.recipientId)) && Number(contact.recipientId) !== currentUserId)
+        .map(contact => contact.name);
+}
+
 /* ── Detect media types ── */
 function isImageMime(mime, name) {
     return (mime && mime.startsWith('image/')) || /\.(jpg|jpeg|png|gif|webp|bmp|svg)$/i.test(name||'');
@@ -1610,7 +1630,25 @@ function renderMessages(forceBottom = false) {
             tk.className = 'msg-ticks' + (isRead ? ' read' : '');
             tk.textContent = isRead ? '✓✓' : (isDelivered ? '✓✓' : '✓');
             tk.title = isRead ? 'Read' : (isDelivered ? 'Delivered' : 'Sent');
-            footer.appendChild(tk);
+            if (currentChat.isGroup) {
+                const receiptWrap = document.createElement('span');
+                receiptWrap.className = 'read-receipt-wrap';
+                receiptWrap.tabIndex = 0;
+                receiptWrap.setAttribute('aria-label', 'View who viewed this message');
+                const names = getReadByNames(m.readBy);
+                const detail = document.createElement('span');
+                detail.className = 'read-receipt-details';
+                const detailTitle = document.createElement('span');
+                detailTitle.className = 'read-receipt-title';
+                detailTitle.textContent = names.length ? 'Viewed by' : 'Not viewed yet';
+                detail.appendChild(detailTitle);
+                if (names.length) detail.appendChild(document.createTextNode(names.join(', ')));
+                receiptWrap.appendChild(tk);
+                receiptWrap.appendChild(detail);
+                footer.appendChild(receiptWrap);
+            } else {
+                footer.appendChild(tk);
+            }
         }
         bubble.appendChild(footer);
         row.appendChild(bubble);
