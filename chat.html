@@ -1190,7 +1190,13 @@ function buildAvatarContent(contact) {
 }
 
 function getReadByNames(readBy, readByDetails) {
-    const details = Array.isArray(readByDetails) ? readByDetails : [];
+    let details = Array.isArray(readByDetails) ? readByDetails : [];
+    if (!details.length && typeof readByDetails === 'string') {
+        try {
+            const parsed = JSON.parse(readByDetails);
+            if (Array.isArray(parsed)) details = parsed;
+        } catch (e) {}
+    }
     if (details.length) {
         return details
             .filter(receipt => Number(receipt.user_id) !== currentUserId)
@@ -1202,9 +1208,11 @@ function getReadByNames(readBy, readByDetails) {
     }
 
     const ids = new Set((readBy || []).map(id => Number(id)).filter(Number.isFinite));
-    return contacts
+    const names = contacts
         .filter(contact => !contact.isGroup && ids.has(Number(contact.recipientId)) && Number(contact.recipientId) !== currentUserId)
         .map(contact => contact.name);
+    if (names.length || !ids.size) return names;
+    return [...ids].filter(id => id !== currentUserId).map(id => `User (${id})`);
 }
 
 /* ── Detect media types ── */
@@ -1448,7 +1456,7 @@ async function fetchMessages(contact) {
             time:               new Date(msg.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),
             createdAt:          msg.created_at,
             readBy,
-            readByDetails:     Array.isArray(msg.read_by_details) ? msg.read_by_details : [],
+            readByDetails:     msg.read_by_details || [],
             replyToMessageId:  msg.reply_to_message_id||null,
             replyToText:       msg.reply_to_content||null,
             replyToSenderName: msg.reply_to_sender_email?(msg.reply_to_sender_email.split('@')[0]):null,
@@ -1652,7 +1660,7 @@ function renderMessages(forceBottom = false) {
                 detail.className = 'read-receipt-details';
                 const detailTitle = document.createElement('span');
                 detailTitle.className = 'read-receipt-title';
-                detailTitle.textContent = names.length ? 'Viewed by' : 'Not viewed yet';
+                detailTitle.textContent = names.length ? 'Viewed by' : (isRead ? 'Viewed by another participant' : 'Not viewed yet');
                 detail.appendChild(detailTitle);
                 if (names.length) detail.appendChild(document.createTextNode(names.join(', ')));
                 receiptWrap.appendChild(tk);
