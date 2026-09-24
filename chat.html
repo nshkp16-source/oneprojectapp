@@ -174,6 +174,12 @@
         }
         .avatar.sm { width: 28px; height: 28px; font-size: 11px; }
         .avatar.lg { width: 42px; height: 42px; font-size: 15px; }
+        .chat-profile-avatar { cursor: pointer; }
+        .chat-profile-avatar:hover,
+        .chat-profile-avatar:focus-visible {
+            outline: 3px solid rgba(37,211,102,0.35);
+            outline-offset: 2px;
+        }
 
         /* ══ CHAT AREA ══ */
         .chat-area {
@@ -701,7 +707,7 @@
         <div class="chat-header">
             <button class="mobile-back-btn" id="mobileBack" title="Back" aria-label="Back">‹</button>
             <div class="chat-header-info">
-                <div class="avatar online lg" id="chatAvatar">P</div>
+                <div class="avatar online lg" id="chatAvatar" role="button" tabindex="0" aria-label="View profile picture">P</div>
                 <div style="min-width:0">
                     <div class="chat-name" id="chatName">Select a conversation</div>
                     <div class="chat-status" id="chatStatus">Messages with project teammates appear here</div>
@@ -1121,11 +1127,12 @@ function friendlyDate(iso) {
     return d.toLocaleDateString(undefined,{weekday:'short',day:'numeric',month:'short'});
 }
 
-function openMediaPreview(url, name) {
+function openMediaPreview(url, name, allowDownload = true) {
     mediaPreviewImage.src = url;
     mediaPreviewImage.alt = name || 'Chat image';
     mediaPreviewDownload.href = url;
     mediaPreviewDownload.download = name || 'chat-image';
+    mediaPreviewDownload.style.display = allowDownload ? 'inline-flex' : 'none';
     mediaPreview.classList.add('open');
     mediaPreviewClose.focus();
 }
@@ -1134,6 +1141,12 @@ function closeMediaPreview() {
     mediaPreview.classList.remove('open');
     mediaPreviewImage.removeAttribute('src');
     mediaPreviewDownload.href = '#';
+    mediaPreviewDownload.style.display = 'inline-flex';
+}
+
+function openChatProfilePicture() {
+    if (!currentChat?.pictureUrl) return;
+    openMediaPreview(currentChat.pictureUrl, currentChat.name + ' profile picture', false);
 }
 
 function strColor(s) {
@@ -1631,6 +1644,10 @@ async function selectChat(contact) {
     chatAvatar.innerHTML  = buildAvatarContent(contact);
     chatAvatar.className  = 'avatar lg'+(contact.online?' online':'');
     chatAvatar.style.background = contact.pictureUrl ? '' : strColor(contact.name);
+    chatAvatar.classList.toggle('chat-profile-avatar', Boolean(contact.pictureUrl));
+    chatAvatar.tabIndex = contact.pictureUrl ? 0 : -1;
+    chatAvatar.setAttribute('aria-label', contact.pictureUrl ? 'View '+contact.name+' profile picture' : contact.name+' profile');
+    chatAvatar.title = contact.pictureUrl ? 'View profile picture' : '';
 
     chatMessages.innerHTML = '<div class="state-box"><div class="spinner"></div><div>Loading…</div></div>';
     showChatPanel();
@@ -1784,6 +1801,13 @@ replyBarClose.addEventListener('click', clearReply);
 mediaPreviewClose.addEventListener('click', closeMediaPreview);
 mediaPreview.addEventListener('click', e=>{ if (e.target===mediaPreview) closeMediaPreview(); });
 document.addEventListener('keydown', e=>{ if (e.key==='Escape') closeMediaPreview(); });
+chatAvatar.addEventListener('click', openChatProfilePicture);
+chatAvatar.addEventListener('keydown', e=>{
+    if ((e.key==='Enter'||e.key===' ') && currentChat?.pictureUrl) {
+        e.preventDefault();
+        openChatProfilePicture();
+    }
+});
 msgInput.addEventListener('keypress', e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();} });
 
 /* Attach: supports images, video, and other files */
