@@ -312,6 +312,15 @@
         }
         .message-action-menu button:hover,
         .message-action-menu button:focus-visible { background: var(--bg-surface); outline: none; }
+        .reaction-options { display: flex; gap: 2px; padding: 4px; border-bottom: 1px solid var(--border); }
+        .reaction-options button { width: 28px; padding: 4px 0; text-align: center; font-size: 18px; }
+        .message-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+        .message-reaction {
+            border: 1px solid var(--border); border-radius: var(--radius-full);
+            background: rgba(255,255,255,0.72); padding: 2px 7px; cursor: pointer;
+            font-size: 12px; color: var(--text-main);
+        }
+        .message-reaction.active { border-color: var(--green-dark); background: var(--green-mid); }
         .message.received .message-bubble {
             background: var(--bg-white);
             color: var(--text-main);
@@ -845,6 +854,7 @@ const EMOJIS   = ['😀','😃','😄','😁','😆','😅','😂','🤣','😊'
                    '❤️','💔','🔥','✨','⭐','✅','❌','⚠️','❗','❓','💯','🎉','🎊','🚀','🏆','🎯','💡','📌','🔔',
                    '📎','📁','📋','📞','📧','📝','🧾','🏗️','🛠️','🏢','🏠','🌍','☀️','🌧️','🍎','☕','🍕','🎂',
                    '⚽','🎵','🎶','🎮','🎁','💬','🗨️','💭','🙌','👋','🤲','💖','💙','💚','💛','🧡','💜'];
+const MESSAGE_REACTIONS = ['👍','❤️','😂','😮','😢','🙏'];
 
 /* ── JWT ── */
 function parseJwt(t) {
@@ -1249,6 +1259,27 @@ function getReadByNames(readBy, readByDetails) {
     return [...ids].filter(id => id !== currentUserId).map(id => `User (${id})`);
 }
 
+async function toggleReaction(message, reaction) {
+    const result = await api('/chat/messages/'+encodeURIComponent(message.id)+'/reactions', {
+        method: 'POST',
+        body: { reaction }
+    });
+    message.reactions = result.reactions || [];
+    renderMessages();
+}
+
+function renderReactionChips(message) {
+    const grouped = new Map();
+    (message.reactions || []).forEach(item => {
+        if (!item?.reaction) return;
+        const entry = grouped.get(item.reaction) || { count: 0, active: false };
+        entry.count++;
+        if (Number(item.user_id) === currentUserId && normRole(item.user_role) === currentUserRole) entry.active = true;
+        grouped.set(item.reaction, entry);
+    });
+    return grouped;
+}
+
 /* ── Detect media types ── */
 function isImageMime(mime, name) {
     return (mime && mime.startsWith('image/')) || /\.(jpg|jpeg|png|gif|webp|bmp|svg)$/i.test(name||'');
@@ -1426,10 +1457,10 @@ function startPoll() {
         if (!currentChat) return;
         try {
             const prevLen   = currentChat.messages.length;
-            const prevTicks = JSON.stringify(currentChat.messages.map(m=>m.readBy));
+            const prevTicks = JSON.stringify(currentChat.messages.map(m=>({readBy:m.readBy,reactions:m.reactions})));
             const wasNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 80;
             await fetchMessages(currentChat);
-            const newTicks  = JSON.stringify(currentChat.messages.map(m=>m.readBy));
+            const newTicks  = JSON.stringify(currentChat.messages.map(m=>({readBy:m.readBy,reactions:m.reactions})));
             const addedMessages = Math.max(0, currentChat.messages.length - prevLen);
             if (currentChat.messages.length !== prevLen || newTicks !== prevTicks) {
                 if (addedMessages && !wasNearBottom) {
@@ -1529,6 +1560,10 @@ async function fetchMessages(contact) {
             createdAt:          msg.created_at,
             readBy,
             readByDetails:     msg.read_by_details || [],
+            reactions:         Array.isArray(msg.reactions) ? msg.reactions : (() => {
+                try { return typeof msg.reactions === 'string' ? JSON.parse(msg.reactions || '[]') : []; }
+                catch (e) { return []; }
+            })(),
             replyToMessageId:  msg.reply_to_message_id||null,
             replyToText:       msg.reply_to_content||null,
             replyToSenderName: msg.reply_to_sender_email?(msg.reply_to_sender_email.split('@')[0]):null,
@@ -1703,7 +1738,23 @@ function renderMessages(forceBottom = false) {
             actionToggle.setAttribute('aria-expanded', 'false');
         });
 
-        actionMenu.append(replyAction, copyAction, selectAction);
+        const reactionOptions = document.createElement('div');
+        reactionOptions.className = 'reaction-options';
+        MESSAGE_REACTIONS.forEach(reaction => {
+            const reactionButton = document.createElement('button');
+            reactionButton.type = 'button';
+            reactionButton.textContent = reaction;
+            reactionButton.title = 'React '+reaction;
+            reactionButton.addEventListener('click', async e => {
+                e.stopPropagation();
+                try { await toggleReaction(m, reaction); }
+                catch (err) { alert('Could not update reaction: '+err.message); }
+                actionMenu.classList.remove('open');
+                actionToggle.setAttribute('aria-expanded', 'false');
+            });
+            reactionOptions.appendChild(reactionButton);
+        });
+        actionMenu.append(reactionOptions, replyAction, copyAction, selectAction);
         if (m.sent) {
             const deleteAction = document.createElement('button');
             deleteAction.type = 'button';
@@ -1858,6 +1909,25 @@ function renderMessages(forceBottom = false) {
             }
         }
         bubble.appendChild(footer);
+        const reactionChips = renderReactionChips(m);
+        if (reactionChips.size) {
+            const reactionRow = document.createElement('div');
+            reactionRow.className = 'message-reactions';
+            reactionChips.forEach((value, reaction) => {
+                const chip = document.createElement('button');
+                chip.className = 'message-reaction'+(value.active ? ' active' : '');
+                chip.type = 'button';
+                chip.textContent = reaction+' '+value.count;
+                chip.title = value.active ? 'Remove reaction' : 'React '+reaction;
+                chip.addEventListener('click', async e => {
+                    e.stopPropagation();
+                    try { await toggleReaction(m, reaction); }
+                    catch (err) { alert('Could not update reaction: '+err.message); }
+                });
+                reactionRow.appendChild(chip);
+            });
+            bubble.appendChild(reactionRow);
+        }
         row.appendChild(bubble);
 
         if (m.sent) {
