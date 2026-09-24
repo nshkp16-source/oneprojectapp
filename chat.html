@@ -1289,8 +1289,19 @@ function buildAudioWidget(url, durationHint, mime = 'audio/webm') {
 
     function fmt(s) { s=Math.floor(s||0); return Math.floor(s/60)+':'+(s%60<10?'0':'')+(s%60); }
 
+    function updateDuration() {
+        if (Number.isFinite(audio.duration) && audio.duration > 0) {
+            timeEl.textContent = fmt(audio.currentTime)+' / '+fmt(audio.duration);
+        }
+    }
+
+    audio.addEventListener('loadedmetadata', updateDuration);
+    audio.addEventListener('durationchange', updateDuration);
+
     audio.addEventListener('timeupdate', () => {
-        timeEl.textContent = fmt(audio.currentTime);
+        timeEl.textContent = Number.isFinite(audio.duration) && audio.duration > 0
+            ? fmt(audio.currentTime)+' / '+fmt(audio.duration)
+            : fmt(audio.currentTime);
         // Animate waveform bars based on progress
         const pct = audio.duration ? audio.currentTime / audio.duration : 0;
         waveWrap.querySelectorAll('span').forEach((b, i) => {
@@ -1300,15 +1311,17 @@ function buildAudioWidget(url, durationHint, mime = 'audio/webm') {
     audio.addEventListener('ended', () => {
         playing = false;
         playBtn.innerHTML = '▶';
-        timeEl.textContent = fmt(audio.duration);
+        updateDuration();
         waveWrap.querySelectorAll('span').forEach(b => b.style.opacity = '0.35');
     });
 
     audio.addEventListener('error', () => {
         console.warn('[buildAudioWidget] audio playback error', url, audio.error);
         playBtn.innerHTML = '⚠';
-        timeEl.textContent = 'Error';
+        timeEl.textContent = 'Unavailable';
     });
+
+    audio.load();
 
     playBtn.addEventListener('click', () => {
         if (playing) { audio.pause(); playBtn.innerHTML = '▶'; playing = false; }
