@@ -1189,7 +1189,18 @@ function buildAvatarContent(contact) {
     return esc(contact.initial || initial(contact.email));
 }
 
-function getReadByNames(readBy) {
+function getReadByNames(readBy, readByDetails) {
+    const details = Array.isArray(readByDetails) ? readByDetails : [];
+    if (details.length) {
+        return details
+            .filter(receipt => Number(receipt.user_id) !== currentUserId)
+            .map(receipt => contacts.find(contact =>
+                !contact.isGroup
+                && Number(contact.recipientId) === Number(receipt.user_id)
+                && normRole(contact.recipientRole) === normRole(receipt.user_role)
+            )?.name || `${receipt.user_role || 'User'} (${receipt.user_id})`);
+    }
+
     const ids = new Set((readBy || []).map(id => Number(id)).filter(Number.isFinite));
     return contacts
         .filter(contact => !contact.isGroup && ids.has(Number(contact.recipientId)) && Number(contact.recipientId) !== currentUserId)
@@ -1437,6 +1448,7 @@ async function fetchMessages(contact) {
             time:               new Date(msg.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),
             createdAt:          msg.created_at,
             readBy,
+            readByDetails:     Array.isArray(msg.read_by_details) ? msg.read_by_details : [],
             replyToMessageId:  msg.reply_to_message_id||null,
             replyToText:       msg.reply_to_content||null,
             replyToSenderName: msg.reply_to_sender_email?(msg.reply_to_sender_email.split('@')[0]):null,
@@ -1635,7 +1647,7 @@ function renderMessages(forceBottom = false) {
                 receiptWrap.className = 'read-receipt-wrap';
                 receiptWrap.tabIndex = 0;
                 receiptWrap.setAttribute('aria-label', 'View who viewed this message');
-                const names = getReadByNames(m.readBy);
+                const names = getReadByNames(m.readBy, m.readByDetails);
                 const detail = document.createElement('span');
                 detail.className = 'read-receipt-details';
                 const detailTitle = document.createElement('span');
