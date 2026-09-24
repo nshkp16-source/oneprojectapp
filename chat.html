@@ -945,6 +945,7 @@ let isRecording     = false;
 let isStartingRecording = false;
 let longPressTimer  = null;
 let audioCtx        = null;
+let activeMediaElement = null;
 
 /* ── INIT ── */
 projectLabel.textContent = projectName ? 'Project: ' + projectName : 'ID: ' + projectId;
@@ -993,6 +994,7 @@ function renderPendingAttachment() {
         audio.className = 'pending-media-preview';
         audio.controls = true;
         audio.src = pendingFile.localUrl;
+        audio.addEventListener('play', () => pauseOtherMedia(audio));
         attachPill.insertBefore(audio, attachPillRm);
     } else if (pendingFile.mime?.startsWith('video/')) {
         const video = document.createElement('video');
@@ -1000,6 +1002,7 @@ function renderPendingAttachment() {
         video.controls = true;
         video.preload = 'metadata';
         video.src = pendingFile.localUrl;
+        video.addEventListener('play', () => pauseOtherMedia(video));
         attachPill.insertBefore(video, attachPillRm);
     }
 }
@@ -1081,7 +1084,7 @@ function stopRecording(send) {
             return;
         }
 
-        const mime = getSupportedMime();
+        const mime = mediaRecorder.mimeType || getSupportedMime();
         const blob = new Blob(audioChunks, { type: mime });
         console.log('[stopRecording] blob created. size:', blob.size, 'bytes. mime:', mime);
         audioChunks = [];
@@ -1118,6 +1121,13 @@ function getSupportedMime() {
     const types = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/mp4'];
     for (const t of types) { if (MediaRecorder.isTypeSupported(t)) return t; }
     return 'audio/webm';
+}
+
+function pauseOtherMedia(current) {
+    document.querySelectorAll('audio, video').forEach(media => {
+        if (media !== current && !media.paused) media.pause();
+    });
+    activeMediaElement = current;
 }
 
 recCancel.addEventListener('click', () => cancelRecording());
@@ -1318,10 +1328,13 @@ function buildAudioWidget(url, durationHint, mime = 'audio/webm') {
     audio.addEventListener('error', () => {
         console.warn('[buildAudioWidget] audio playback error', url, audio.error);
         playBtn.innerHTML = '⚠';
-        timeEl.textContent = 'Unavailable';
+        timeEl.textContent = url.includes('/raw/upload/') ? 'Re-upload needed' : 'Unavailable';
     });
 
+    audio.addEventListener('play', () => pauseOtherMedia(audio));
     audio.load();
+    audio.style.display = 'none';
+    wrap.appendChild(audio);
 
     playBtn.addEventListener('click', () => {
         if (playing) { audio.pause(); playBtn.innerHTML = '▶'; playing = false; }
