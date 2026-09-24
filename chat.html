@@ -1253,7 +1253,7 @@ function isAudioMime(mime, name) {
 /* ══════════════════════════════════════
    AUDIO PLAYER WIDGET
 ══════════════════════════════════════ */
-function buildAudioWidget(url, durationHint) {
+function buildAudioWidget(url, durationHint, mime = 'audio/webm') {
     const wrap  = document.createElement('div');
     wrap.className = 'msg-audio-wrap';
 
@@ -1279,7 +1279,12 @@ function buildAudioWidget(url, durationHint) {
     wrap.appendChild(waveWrap);
     wrap.appendChild(timeEl);
 
-    const audio = new Audio(url);
+    const audio = document.createElement('audio');
+    audio.preload = 'metadata';
+    const source = document.createElement('source');
+    source.src = url;
+    source.type = mime.split(';')[0] || 'audio/webm';
+    audio.appendChild(source);
     let playing = false;
 
     function fmt(s) { s=Math.floor(s||0); return Math.floor(s/60)+':'+(s%60<10?'0':'')+(s%60); }
@@ -1307,7 +1312,15 @@ function buildAudioWidget(url, durationHint) {
 
     playBtn.addEventListener('click', () => {
         if (playing) { audio.pause(); playBtn.innerHTML = '▶'; playing = false; }
-        else { audio.play(); playBtn.innerHTML = '⏸'; playing = true; }
+        else {
+            audio.play().then(() => {
+                playBtn.innerHTML = '⏸';
+                playing = true;
+            }).catch(() => {
+                playBtn.innerHTML = '⚠';
+                timeEl.textContent = 'Unsupported audio';
+            });
+        }
     });
 
     return wrap;
@@ -1756,7 +1769,7 @@ function renderMessages(forceBottom = false) {
 
             if (isAudioMime(mime, name)) {
                 /* Custom audio player */
-                bubble.appendChild(buildAudioWidget(m.attachmentUrl));
+                bubble.appendChild(buildAudioWidget(m.attachmentUrl, undefined, mime));
             } else if (isVideoMime(mime, name)) {
                 /* Inline video player */
                 const vid = document.createElement('video');
