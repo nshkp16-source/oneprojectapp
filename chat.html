@@ -282,8 +282,11 @@
             font-size: 14px;
             line-height: 1.45;
             position: relative;
-            cursor: pointer;
+            cursor: default;
+            touch-action: pan-y;
+            transition: transform 0.16s ease;
         }
+        .message-bubble.reply-swipe { transform: translateX(8px); }
         .message.received .message-bubble {
             background: var(--bg-white);
             color: var(--text-main);
@@ -1584,10 +1587,37 @@ function renderMessages(forceBottom = false) {
 
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble';
-        bubble.title = 'Tap to reply';
-        bubble.addEventListener('click', e => {
+        let swipeStartX = null;
+        let swipeStartY = null;
+        let swipeTriggered = false;
+        bubble.addEventListener('pointerdown', e => {
             if (e.target.closest('a')||e.target.closest('img')||e.target.closest('video')||e.target.closest('.msg-audio-play')) return;
-            setReply(m);
+            swipeStartX = e.clientX;
+            swipeStartY = e.clientY;
+            swipeTriggered = false;
+            bubble.setPointerCapture?.(e.pointerId);
+        });
+        bubble.addEventListener('pointermove', e => {
+            if (swipeStartX === null) return;
+            const deltaX = e.clientX - swipeStartX;
+            const deltaY = Math.abs(e.clientY - swipeStartY);
+            if (deltaX > 8 && deltaX > deltaY) bubble.classList.add('reply-swipe');
+            if (deltaX >= 48 && deltaX > deltaY * 1.25) swipeTriggered = true;
+        });
+        bubble.addEventListener('pointerup', e => {
+            if (swipeStartX === null) return;
+            if (swipeTriggered) setReply(m);
+            bubble.classList.remove('reply-swipe');
+            swipeStartX = null;
+            swipeStartY = null;
+            swipeTriggered = false;
+            bubble.releasePointerCapture?.(e.pointerId);
+        });
+        bubble.addEventListener('pointercancel', () => {
+            swipeStartX = null;
+            swipeStartY = null;
+            swipeTriggered = false;
+            bubble.classList.remove('reply-swipe');
         });
 
         if (currentChat.isGroup && !m.sent && !consecutive) {
