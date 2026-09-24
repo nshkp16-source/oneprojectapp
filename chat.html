@@ -287,6 +287,31 @@
             transition: transform 0.16s ease;
         }
         .message-bubble.reply-swipe { transform: translateX(8px); }
+        .message-actions { position: absolute; top: 3px; right: 5px; z-index: 3; }
+        .message.sent .message-actions { right: auto; left: 5px; }
+        .message-action-toggle {
+            width: 24px; height: 22px; padding: 0;
+            border: 0; border-radius: 5px; background: rgba(255,255,255,0.72);
+            color: var(--text-muted); cursor: pointer; font-size: 14px; line-height: 1;
+            opacity: 0; transition: opacity 0.12s, background 0.12s;
+        }
+        .message-bubble:hover .message-action-toggle,
+        .message-action-toggle:focus-visible { opacity: 1; }
+        .message-action-toggle:hover { background: rgba(255,255,255,0.96); color: var(--text-main); }
+        .message-action-menu {
+            display: none; position: absolute; top: 25px; right: 0; min-width: 130px;
+            padding: 4px; border: 1px solid var(--border); border-radius: 8px;
+            background: var(--bg-white); box-shadow: var(--shadow-md); z-index: 10;
+        }
+        .message.sent .message-action-menu { right: auto; left: 0; }
+        .message-action-menu.open { display: block; }
+        .message-action-menu button {
+            display: block; width: 100%; padding: 7px 9px; border: 0; border-radius: 5px;
+            background: transparent; color: var(--text-main); text-align: left; cursor: pointer;
+            font: inherit; font-size: 12px; white-space: nowrap;
+        }
+        .message-action-menu button:hover,
+        .message-action-menu button:focus-visible { background: var(--bg-surface); outline: none; }
         .message.received .message-bubble {
             background: var(--bg-white);
             color: var(--text-main);
@@ -477,6 +502,14 @@
             text-align: center; padding: 40px;
         }
         .state-icon { font-size: 44px; opacity: 0.55; }
+        .new-messages-btn {
+            display: none; position: absolute; right: 18px; bottom: 76px; z-index: 8;
+            border: 1px solid var(--green-dark); border-radius: var(--radius-full);
+            padding: 7px 12px; background: var(--bg-white); color: var(--green-dark);
+            box-shadow: var(--shadow-md); cursor: pointer; font-size: 12px; font-weight: 600;
+        }
+        .new-messages-btn.visible { display: block; }
+        .search-result-count { padding: 5px 14px; color: var(--text-muted); font-size: 11px; border-bottom: 1px solid var(--border); }
         .spinner {
             width: 30px; height: 30px;
             border: 3px solid var(--border);
@@ -573,6 +606,8 @@
         }
         .attach-pill.visible { display: flex; }
         .attach-pill-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .attach-pill audio { width: 180px; height: 28px; }
+        .attach-pill video { width: 120px; height: 68px; object-fit: contain; border-radius: 5px; }
         .attach-pill-rm { background: none; border: none; cursor: pointer; color: var(--green-dark); font-size: 14px; padding: 0; line-height: 1; }
 
         /* Send / mic button */
@@ -741,6 +776,7 @@
                 <div>Select a conversation to start chatting</div>
             </div>
         </div>
+        <button class="new-messages-btn" id="newMessagesBtn" type="button">New messages</button>
 
         <!-- Reply bar -->
         <div class="reply-bar" id="replyBar">
@@ -765,7 +801,7 @@
         <!-- Input area -->
         <div class="input-area">
             <div id="emojiPicker">
-                <div class="ep-label">Quick emojis</div>
+                    <div class="ep-label">Emojis & stickers</div>
                 <div id="emojiGrid"></div>
             </div>
 
@@ -804,9 +840,11 @@
 /* ── CONFIG ── */
 const API_BASE = window.BACKEND_URL || 'https://oneprojectapp-backend.onrender.com';
 const POLL_MS  = 5000;
-const EMOJIS   = ['😊','😄','😂','😍','🙏','👍','👎','🔥','✅','❌','⚠️','📌',
-                   '📎','📁','📋','💡','🎯','🚀','⏳','✔️','👏','💪','🤝','📞',
-                   '📧','🏗️','🗂️','📊','📈','📉','⭐','🔔','💬','🖊️','📝','🧾'];
+const EMOJIS   = ['😀','😃','😄','😁','😆','😅','😂','🤣','😊','🙂','🙃','😉','😌','😍','🥰','😘','😎','🤩','🥳',
+                   '🤔','🤗','😮','😯','😢','😭','😡','🤬','😴','🤝','🙏','👏','👍','👎','👌','✌️','🤞','💪','🫶',
+                   '❤️','💔','🔥','✨','⭐','✅','❌','⚠️','❗','❓','💯','🎉','🎊','🚀','🏆','🎯','💡','📌','🔔',
+                   '📎','📁','📋','📞','📧','📝','🧾','🏗️','🛠️','🏢','🏠','🌍','☀️','🌧️','🍎','☕','🍕','🎂',
+                   '⚽','🎵','🎶','🎮','🎁','💬','🗨️','💭','🙌','👋','🤲','💖','💙','💚','💛','🧡','💜'];
 
 /* ── JWT ── */
 function parseJwt(t) {
@@ -860,6 +898,7 @@ const chatAvatar     = $('chatAvatar');
 const chatName       = $('chatName');
 const chatStatus     = $('chatStatus');
 const chatMessages   = $('chatMessages');
+const newMessagesBtn = $('newMessagesBtn');
 const contactsList   = $('contactsList');
 const searchInput    = $('searchInput');
 const backBtn        = $('backBtn');
@@ -895,6 +934,7 @@ let pollTimer    = null;
 let replyTarget  = null;
 let isMobile     = () => window.innerWidth < 768;
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+let pendingNewMessageCount = 0;
 
 /* ── AUDIO RECORDING STATE ── */
 let mediaRecorder   = null;
@@ -902,6 +942,7 @@ let audioChunks     = [];
 let recTimerInt     = null;
 let recSeconds      = 0;
 let isRecording     = false;
+let isStartingRecording = false;
 let longPressTimer  = null;
 let audioCtx        = null;
 
@@ -944,66 +985,40 @@ function updateSendBtn() {
         console.log('[updateSendBtn] Set mode to MIC (empty input, no file)');
     }
 }
+function renderPendingAttachment() {
+    attachPill.querySelectorAll('.pending-media-preview').forEach(node => node.remove());
+    if (!pendingFile?.localUrl) return;
+    if (pendingFile.mime?.startsWith('audio/')) {
+        const audio = document.createElement('audio');
+        audio.className = 'pending-media-preview';
+        audio.controls = true;
+        audio.src = pendingFile.localUrl;
+        attachPill.insertBefore(audio, attachPillRm);
+    } else if (pendingFile.mime?.startsWith('video/')) {
+        const video = document.createElement('video');
+        video.className = 'pending-media-preview';
+        video.controls = true;
+        video.preload = 'metadata';
+        video.src = pendingFile.localUrl;
+        attachPill.insertBefore(video, attachPillRm);
+    }
+}
 msgInput.addEventListener('input', updateSendBtn);
 
-sendBtn.addEventListener('click', e => {
+sendBtn.addEventListener('click', async e => {
     const mode = sendBtn.getAttribute('data-mode');
     if (mode === 'send') { sendMessage(); return; }
-    // mic: single click = nothing (need hold) but show hint
-});
-
-/* Long-press mic on desktop/touch */
-function startLongPress() {
-    const mode = sendBtn.getAttribute('data-mode');
-    console.log('[startLongPress] Button mode:', mode, 'isRecording:', isRecording);
-    if (mode !== 'mic') {
-        console.log('[startLongPress] Not in mic mode, ignoring');
-        return;
-    }
-    console.log('[startLongPress] Starting 200ms timer before recording...');
-    longPressTimer = setTimeout(() => {
-        console.log('[startLongPress] Timer fired, calling startRecording()');
-        startRecording();
-    }, 200);
-}
-function endLongPress() {
-    console.log('[endLongPress] Button released. isRecording:', isRecording);
-    clearTimeout(longPressTimer);
-    if (isRecording) {
-        console.log('[endLongPress] Recording active, stopping and sending...');
-        stopRecording(true);
-    }
-}
-
-sendBtn.addEventListener('mousedown', e => {
-    console.log('[sendBtn.mousedown] Event triggered');
-    startLongPress();
-});
-sendBtn.addEventListener('mouseup', e => {
-    console.log('[sendBtn.mouseup] Event triggered');
-    endLongPress();
-});
-sendBtn.addEventListener('mouseleave', () => {
-    console.log('[sendBtn.mouseleave] Event triggered');
     if (isRecording) stopRecording(true);
-    clearTimeout(longPressTimer);
+    else await startRecording();
 });
-sendBtn.addEventListener('touchstart', e => {
-    console.log('[sendBtn.touchstart] Event triggered');
-    e.preventDefault();
-    startLongPress();
-}, {passive:false});
-sendBtn.addEventListener('touchend', e => {
-    console.log('[sendBtn.touchend] Event triggered');
-    e.preventDefault();
-    endLongPress();
-}, {passive:false});
 
 /* ══════════════════════════════════════
    AUDIO RECORDING
 ══════════════════════════════════════ */
 async function startRecording() {
-    if (isRecording) return;
+    if (isRecording || isStartingRecording) return;
+    isStartingRecording = true;
+    sendBtn.disabled = true;
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         audioChunks = [];
@@ -1040,6 +1055,9 @@ async function startRecording() {
             code: err.code
         });
         alert('[ERROR] Microphone access failed: ' + err.message + '\n\nMake sure:\n1. You granted microphone permission\n2. Another app isn\'t using the mic\n3. Try a different browser');
+    } finally {
+        isStartingRecording = false;
+        sendBtn.disabled = false;
     }
 }
 
@@ -1072,8 +1090,11 @@ function stopRecording(send) {
         const file = new File([blob], 'voice-'+Date.now()+'.'+ext, { type: mime });
         console.log('[stopRecording] File created:', file.name, 'size:', file.size, 'type:', file.type);
 
-        // Upload then send
-        await uploadAndSendFile(file, true);
+        pendingFile = { file, name: file.name, mime: file.type, localUrl: URL.createObjectURL(file) };
+        attachPillName.textContent = 'Voice message ready';
+        attachPill.classList.add('visible');
+        renderPendingAttachment();
+        updateSendBtn();
     }, {once:true});
 
     mediaRecorder.stop();
@@ -1367,9 +1388,18 @@ function startPoll() {
         try {
             const prevLen   = currentChat.messages.length;
             const prevTicks = JSON.stringify(currentChat.messages.map(m=>m.readBy));
+            const wasNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 80;
             await fetchMessages(currentChat);
             const newTicks  = JSON.stringify(currentChat.messages.map(m=>m.readBy));
-            if (currentChat.messages.length !== prevLen || newTicks !== prevTicks) renderMessages();
+            const addedMessages = Math.max(0, currentChat.messages.length - prevLen);
+            if (currentChat.messages.length !== prevLen || newTicks !== prevTicks) {
+                if (addedMessages && !wasNearBottom) {
+                    pendingNewMessageCount += addedMessages;
+                    newMessagesBtn.textContent = pendingNewMessageCount + ' new message' + (pendingNewMessageCount === 1 ? '' : 's');
+                    newMessagesBtn.classList.add('visible');
+                }
+                renderMessages(wasNearBottom);
+            }
             renderContacts(searchInput.value);
         } catch(e){ console.warn('poll',e); }
     }, POLL_MS);
@@ -1495,7 +1525,7 @@ async function fetchMessages(contact) {
 function renderContacts(filter) {
     filter = (filter||'').trim().toLowerCase();
     const list = contacts
-        .filter(c=>!filter||[c.name,c.role,c.email,c.lastMessage].filter(Boolean).some(t=>t.toLowerCase().includes(filter)))
+        .filter(c=>!filter||[c.name,c.role,c.email,c.lastMessage,...(c.messages||[]).map(m=>m.text)].filter(Boolean).some(t=>t.toLowerCase().includes(filter)))
         .sort((a,b) => {
             // Unread contacts float to top, sorted by unread count desc
             const ud = (b.unreadCount||0)-(a.unreadCount||0);
@@ -1541,6 +1571,7 @@ function renderMessages(forceBottom = false) {
     const wasNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 80;
     const previousScrollTop = chatMessages.scrollTop;
     chatMessages.innerHTML = '';
+    newMessagesBtn.classList.remove('visible');
     if (!currentChat) {
         chatMessages.innerHTML='<div class="state-box"><div class="state-icon">💬</div><div>Select a conversation</div></div>';
         return;
@@ -1587,11 +1618,88 @@ function renderMessages(forceBottom = false) {
 
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble';
+        const actions = document.createElement('div');
+        actions.className = 'message-actions';
+        const actionToggle = document.createElement('button');
+        actionToggle.className = 'message-action-toggle';
+        actionToggle.type = 'button';
+        actionToggle.textContent = '⌄';
+        actionToggle.setAttribute('aria-label', 'Message actions');
+        actionToggle.setAttribute('aria-expanded', 'false');
+        const actionMenu = document.createElement('div');
+        actionMenu.className = 'message-action-menu';
+        actionMenu.setAttribute('role', 'menu');
+
+        const replyAction = document.createElement('button');
+        replyAction.type = 'button';
+        replyAction.textContent = 'Reply';
+        replyAction.addEventListener('click', e => {
+            e.stopPropagation();
+            actionMenu.classList.remove('open');
+            actionToggle.setAttribute('aria-expanded', 'false');
+            setReply(m);
+        });
+
+        const copyAction = document.createElement('button');
+        copyAction.type = 'button';
+        copyAction.textContent = 'Copy text';
+        copyAction.addEventListener('click', async e => {
+            e.stopPropagation();
+            if (m.text) await navigator.clipboard?.writeText(m.text);
+            actionMenu.classList.remove('open');
+            actionToggle.setAttribute('aria-expanded', 'false');
+        });
+
+        const selectAction = document.createElement('button');
+        selectAction.type = 'button';
+        selectAction.textContent = 'Select text';
+        selectAction.addEventListener('click', e => {
+            e.stopPropagation();
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(bubble);
+            selection.removeAllRanges();
+            selection.addRange(range);
+            actionMenu.classList.remove('open');
+            actionToggle.setAttribute('aria-expanded', 'false');
+        });
+
+        actionMenu.append(replyAction, copyAction, selectAction);
+        if (m.sent) {
+            const deleteAction = document.createElement('button');
+            deleteAction.type = 'button';
+            deleteAction.textContent = 'Delete';
+            deleteAction.style.color = 'var(--red)';
+            deleteAction.addEventListener('click', async e => {
+                e.stopPropagation();
+                if (!window.confirm('Delete this message for everyone?')) return;
+                deleteAction.disabled = true;
+                try {
+                    await api('/chat/messages/'+encodeURIComponent(m.id)+'?projectId='+encodeURIComponent(projectId), { method: 'DELETE' });
+                    currentChat.messages = currentChat.messages.filter(message => String(message.id) !== String(m.id));
+                    renderContacts(searchInput.value);
+                    renderMessages();
+                } catch (err) {
+                    deleteAction.disabled = false;
+                    alert('Could not delete message: '+err.message);
+                }
+                actionMenu.classList.remove('open');
+                actionToggle.setAttribute('aria-expanded', 'false');
+            });
+            actionMenu.appendChild(deleteAction);
+        }
+        actionToggle.addEventListener('click', e => {
+            e.stopPropagation();
+            const isOpen = actionMenu.classList.toggle('open');
+            actionToggle.setAttribute('aria-expanded', String(isOpen));
+        });
+        actions.append(actionToggle, actionMenu);
+        bubble.appendChild(actions);
         let swipeStartX = null;
         let swipeStartY = null;
         let swipeTriggered = false;
         bubble.addEventListener('pointerdown', e => {
-            if (e.target.closest('a')||e.target.closest('img')||e.target.closest('video')||e.target.closest('.msg-audio-play')) return;
+            if (e.target.closest('a')||e.target.closest('img')||e.target.closest('video')||e.target.closest('.msg-audio-play')||e.target.closest('.message-actions')) return;
             swipeStartX = e.clientX;
             swipeStartY = e.clientY;
             swipeTriggered = false;
@@ -1733,6 +1841,7 @@ async function selectChat(contact) {
     clearReply();
     stopPoll();
     currentChat = contact;
+    pendingNewMessageCount = 0;
     currentChat.unreadCount = 0;
 
     chatName.textContent = contact.name;
@@ -1760,6 +1869,7 @@ async function selectChat(contact) {
 
     renderContacts(searchInput.value);
     renderMessages(true);
+    newMessagesBtn.classList.remove('visible');
     msgInput.focus();
     startPoll();
 }
@@ -1770,9 +1880,19 @@ async function selectChat(contact) {
 async function sendMessage() {
     const text = msgInput.value.trim();
     if (!currentChat) return;
-    if (!text && !pendingFile?.url) return;
+    if (!text && !pendingFile?.url && !pendingFile?.file) return;
 
     sendBtn.disabled = true;
+    if (pendingFile?.file && !pendingFile.url) {
+        try {
+            const uploaded = await uploadFile(pendingFile.file);
+            pendingFile.url = uploaded.url;
+        } catch (err) {
+            sendBtn.disabled = false;
+            alert('Upload failed: '+err.message);
+            return;
+        }
+    }
     const payload = {
         projectId,
         content:          text,
@@ -1827,9 +1947,11 @@ async function sendMessage() {
         currentChat.sortAt = nowIso;
 
         msgInput.value = '';
+        if (pendingFile?.localUrl) URL.revokeObjectURL(pendingFile.localUrl);
         pendingFile = null;
         attachPill.classList.remove('visible');
         attachPillName.textContent = '';
+        attachPill.querySelectorAll('.pending-media-preview').forEach(node => node.remove());
         clearReply();
         updateSendBtn();
 
@@ -1856,17 +1978,8 @@ async function uploadAndSendFile(file, sendImmediately) {
     }
     attachPillName.textContent = 'Uploading…';
     attachPill.classList.add('visible');
-    const fd = new FormData();
-    fd.append('attachment', file);
-    console.log('[uploadAndSendFile] Uploading file:', file.name, 'type:', file.type, 'size:', file.size);
     try {
-        const res = await fetch(API_BASE+'/api/upload-attachment',{
-            method:'POST',
-            headers:{'Authorization':'Bearer '+(authToken||localStorage.getItem('authToken'))},
-            body: fd
-        });
-        const d = await res.json();
-        console.log('[uploadAndSendFile] Upload response:', d);
+        const d = await uploadFile(file);
         if (d?.url) {
             console.log('[uploadAndSendFile] Stored pendingFile with url:', d.url, 'mime:', d.mime, 'name:', d.name);
             pendingFile = {url:d.url, name:file.name, mime:file.type};
@@ -1890,6 +2003,28 @@ async function uploadAndSendFile(file, sendImmediately) {
     }
 }
 
+async function uploadFile(file) {
+    return await new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open('POST', API_BASE+'/api/upload-attachment');
+        request.setRequestHeader('Authorization', 'Bearer '+(authToken||localStorage.getItem('authToken')));
+        request.upload.addEventListener('progress', e => {
+            if (!e.lengthComputable) return;
+            attachPillName.textContent = 'Uploading '+Math.round(e.loaded / e.total * 100)+'%';
+        });
+        request.addEventListener('load', () => {
+            let data = {};
+            try { data = JSON.parse(request.responseText); } catch (e) {}
+            if (request.status >= 200 && request.status < 300 && data?.url) resolve(data);
+            else reject(new Error(data?.error || 'Upload failed'));
+        });
+        request.addEventListener('error', () => reject(new Error('Network error during upload')));
+        const formData = new FormData();
+        formData.append('attachment', file);
+        request.send(formData);
+    });
+}
+
 /* ══════════════════════════════════════
    EVENT LISTENERS
 ══════════════════════════════════════ */
@@ -1897,10 +2032,22 @@ backBtn.addEventListener('click', goBack);
 mobileBack.addEventListener('click', showSidebarPanel);
 groupBtn.addEventListener('click', ()=>{ const g=contacts.find(c=>c.isGroup); if(g) selectChat(g); });
 searchInput.addEventListener('input', e=>renderContacts(e.target.value));
+newMessagesBtn.addEventListener('click', () => {
+    pendingNewMessageCount = 0;
+    newMessagesBtn.classList.remove('visible');
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+});
 replyBarClose.addEventListener('click', clearReply);
 mediaPreviewClose.addEventListener('click', closeMediaPreview);
 mediaPreview.addEventListener('click', e=>{ if (e.target===mediaPreview) closeMediaPreview(); });
 document.addEventListener('keydown', e=>{ if (e.key==='Escape') closeMediaPreview(); });
+document.addEventListener('click', e=>{
+    if (e.target.closest('.message-actions')) return;
+    document.querySelectorAll('.message-action-menu.open').forEach(menu => {
+        menu.classList.remove('open');
+        menu.previousElementSibling?.setAttribute('aria-expanded', 'false');
+    });
+});
 chatAvatar.addEventListener('click', openChatProfilePicture);
 chatAvatar.addEventListener('keydown', e=>{
     if ((e.key==='Enter'||e.key===' ') && currentChat?.pictureUrl) {
@@ -1916,13 +2063,29 @@ fileInput.addEventListener('change', async e => {
     const file = e.target.files?.[0];
     if (!file) return;
     fileInput.value = '';
-    await uploadAndSendFile(file, false);
+    if (file.size > MAX_UPLOAD_BYTES) {
+        alert('Files must be 25 MB or smaller.');
+        return;
+    }
+    pendingFile = { file, name: file.name, mime: file.type, localUrl: URL.createObjectURL(file) };
+    attachPillName.textContent = file.name;
+    attachPill.classList.add('visible');
+    renderPendingAttachment();
+    updateSendBtn();
 });
 attachPillRm.addEventListener('click', ()=>{
+    if (pendingFile?.localUrl) URL.revokeObjectURL(pendingFile.localUrl);
     pendingFile = null;
     attachPill.classList.remove('visible');
     attachPillName.textContent = '';
+    attachPill.querySelectorAll('.pending-media-preview').forEach(node => node.remove());
     updateSendBtn();
+});
+attachPill.addEventListener('click', e => {
+    if (!pendingFile?.localUrl || e.target.closest('#attachPillRm')) return;
+    if (isImageMime(pendingFile.mime, pendingFile.name)) {
+        openMediaPreview(pendingFile.localUrl, pendingFile.name);
+    }
 });
 
 /* Kick off */
