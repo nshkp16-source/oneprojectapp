@@ -1234,6 +1234,39 @@ function buildAvatarContent(contact) {
 }
 
 function getReadByNames(readBy, readByDetails) {
+    const candidateContacts = (contacts || []).filter(contact => !contact.isGroup);
+
+    function resolveReceiptName(receipt) {
+        const receiptUserId = Number(receipt?.user_id);
+        const receiptRole = normRole(receipt?.user_role);
+
+        const byUserId = candidateContacts.find(contact => {
+            const contactId = Number(contact.recipientId);
+            if (!Number.isFinite(contactId)) return false;
+            return contactId === receiptUserId;
+        });
+        if (byUserId && Number(byUserId.recipientId) !== currentUserId) return byUserId.name;
+
+        const byRoleAndId = candidateContacts.find(contact => {
+            const contactId = Number(contact.recipientId);
+            if (!Number.isFinite(contactId)) return false;
+            const contactRole = normRole(contact.recipientRole || contact.role);
+            return contactId === receiptUserId && (!receiptRole || contactRole === receiptRole);
+        });
+        if (byRoleAndId && Number(byRoleAndId.recipientId) !== currentUserId) return byRoleAndId.name;
+
+        const byRoleOnly = candidateContacts.find(contact => {
+            const contactRole = normRole(contact.recipientRole || contact.role);
+            return !!receiptRole && !!contactRole && contactRole === receiptRole;
+        });
+        if (byRoleOnly && Number(byRoleOnly.recipientId) !== currentUserId) return byRoleOnly.name;
+
+        if (Number.isFinite(receiptUserId) && receiptUserId !== currentUserId) {
+            return `${receiptRole || 'User'} (${receiptUserId})`;
+        }
+        return receiptRole || 'User';
+    }
+
     let details = Array.isArray(readByDetails) ? readByDetails : [];
     if (!details.length && typeof readByDetails === 'string') {
         try {
@@ -1243,16 +1276,13 @@ function getReadByNames(readBy, readByDetails) {
     }
     if (details.length) {
         return details
-            .filter(receipt => Number(receipt.user_id) !== currentUserId)
-            .map(receipt => contacts.find(contact =>
-                !contact.isGroup
-                && Number(contact.recipientId) === Number(receipt.user_id)
-                && normRole(contact.recipientRole) === normRole(receipt.user_role)
-            )?.name || `${receipt.user_role || 'User'} (${receipt.user_id})`);
+            .map(resolveReceiptName)
+            .filter(Boolean)
+            .filter((name, index, arr) => arr.indexOf(name) === index);
     }
 
     const ids = new Set((readBy || []).map(id => Number(id)).filter(Number.isFinite));
-    const names = contacts
+    const names = candidateContacts
         .filter(contact => !contact.isGroup && ids.has(Number(contact.recipientId)) && Number(contact.recipientId) !== currentUserId)
         .map(contact => contact.name);
     if (names.length || !ids.size) return names;
