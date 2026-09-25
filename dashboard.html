@@ -7870,10 +7870,11 @@ async function handleDecisionMakerAction(recordId, tabKey, action) {
 
     const fileUrl = cached?.file_path || '';
     const isPdf = /\.pdf$/i.test((fileUrl || '').split('?')[0]) || (fileUrl || '').toLowerCase().includes('.pdf');
+    const shouldStampForApproval = ['approved', 'accepted'].includes(action);
     let stampedFile = null;
     let didStamp = false;
 
-    if (isPdf) {
+    if (isPdf && shouldStampForApproval) {
       const stampChoice = await promptForStampChoice({
         title: 'Stamp this document before approving?',
         subtitle: 'Choose how the stamp should be added.',
@@ -7909,8 +7910,8 @@ async function handleDecisionMakerAction(recordId, tabKey, action) {
           alert('Stamp placement was canceled.');
           return;
         }
-        const stampedBlob = await createStampedFileBlob(sourceFile, placement, 'STAMPED', stampProfile);
-        const stampedName = `${(sourceFile.name || 'document').replace(/\.[^/.]+$/, '')}-stamped.pdf`;
+        const stampedBlob = await createStampedFileBlob(sourceFile, placement, 'APPROVED', stampProfile);
+        const stampedName = `${(sourceFile.name || 'document').replace(/\.[^/.]+$/, '')}-approved.pdf`;
         stampedFile = new File([stampedBlob], stampedName, { type: 'application/pdf' });
         didStamp = true;
         body.append('stampDocument', 'true');
@@ -7994,8 +7995,8 @@ async function handleTeamMemberAction(recordId, tabKey, action) {
           alert('Signature placement was canceled.');
           return;
         }
-        const stampedBlob = await createStampedFileBlob(sourceFile, placement, 'SIGNED', stampProfile);
-        const stampedName = `${(sourceFile.name || 'document').replace(/\.[^/.]+$/, '')}-signed.pdf`;
+        const stampedBlob = await createStampedFileBlob(sourceFile, placement, 'APPROVED', stampProfile);
+        const stampedName = `${(sourceFile.name || 'document').replace(/\.[^/.]+$/, '')}-approved.pdf`;
         stampedFile = new File([stampedBlob], stampedName, { type: 'application/pdf' });
         didStamp = true;
         body.append('stampDocument', 'true');
@@ -13968,7 +13969,7 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
   const identityMeta = buildSignatureIdentityMeta(stampProfile);
   const signerName = identityMeta.signerName;
   const secondaryLine = identityMeta.secondaryLine || 'Team Member';
-  const signedLine1 = 'Digitally signed by';
+  const signedLine1 = stampType === 'APPROVED' ? 'Digitally approved by' : 'Digitally signed by';
   const signerLine = signerName;
   const detailLine = secondaryLine;
 
