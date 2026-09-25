@@ -13933,19 +13933,18 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
   }
   const { width, height } = page.getSize();
 
-  // Compact three-part approval block: [ signature | approval details | stamp ]
+  // Compact approval block: [ signature 40% | approval details 60% ]
+  // This is the default compact style: text-heavy approval block with a left
+  // signature area occupying roughly 40% of the box width.
   const PT_PER_CM = 28.3465;
   const PAD = 7;
-  const GAP = 7;
-  const SIG_COL_W = 4 * PT_PER_CM; // tighter signature column
+  const GAP = 8;
+  const SIG_COL_W = 0.4 * 200; // 40% signature area in the compact block
   const MID_COL_W = 170;
-  // Keep the full approval block compact and unified; if a stamp image is
-  // present it stays in the same approval group instead of becoming a separate
-  // oversized element.
-  const hasStamp = !!(stampProfile && stampProfile.stamp_image_url);
-  const STAMP_COL_W = hasStamp ? 4 * PT_PER_CM : 0;
-  const rectWidth = Math.min(PAD * 2 + SIG_COL_W + GAP + MID_COL_W + (hasStamp ? GAP + STAMP_COL_W : 0), width * 0.52);
-  const rectHeight = Math.min(102, height * 0.18);
+  const hasStamp = false;
+  const STAMP_COL_W = 0;
+  const rectWidth = Math.min(PAD * 2 + SIG_COL_W + GAP + MID_COL_W, width * 0.52);
+  const rectHeight = Math.min(92, height * 0.16);
 
   const x = Math.min(Math.max((placement.x ?? 0.8) * width, 10), width - rectWidth - 10);
   const y = Math.min(Math.max(height - ((placement.y ?? 0.08) * height) - rectHeight, 10), height - rectHeight - 10);
@@ -13980,10 +13979,6 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
   // Divider line between signature and details column
   const dividerColor = PDFLib.rgb(0.82, 0.85, 0.88);
   page.drawLine({ start: { x: midColX - GAP / 2, y: y + 8 }, end: { x: midColX - GAP / 2, y: y + rectHeight - 8 }, thickness: 0.75, color: dividerColor });
-  // If we have a stamp column, draw its divider as well
-  if (hasStamp) {
-    page.drawLine({ start: { x: stampColX - GAP / 2, y: y + 8 }, end: { x: stampColX - GAP / 2, y: y + rectHeight - 8 }, thickness: 0.75, color: dividerColor });
-  }
 
   // ── Middle column: signer name + position/side + date/time ──
   const identityMeta = buildSignatureIdentityMeta(stampProfile);
@@ -14049,29 +14044,6 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
     page.drawText(line, { x: midColX, y: lineY, size: 9.2, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
   });
   page.drawText(dateTimeLabel, { x: midColX, y: y + rectHeight - 62 - ((wrappedSignerLines.length + wrappedDetailLines.length) * 10), size: 8.5, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
-
-  // ── Right column: stamp image, fixed 5cm wide (only if present) ──
-  if (hasStamp) {
-    try {
-      const stampResp = await fetch(stampProfile.stamp_image_url);
-      const stampData = await stampResp.arrayBuffer();
-      const stampContentType = stampResp.headers.get('content-type') || '';
-      const stampIsPng = stampContentType.includes('png') || stampProfile.stamp_image_url.toLowerCase().endsWith('.png');
-      const stampImg = stampIsPng
-        ? await pdfDoc.embedPng(stampData)
-        : await pdfDoc.embedJpg(stampData);
-      const targetW = STAMP_COL_W - PAD; // leave a little breathing room inside the box
-      const targetH = Math.min((stampImg.height / stampImg.width) * targetW, rectHeight - PAD * 2);
-      const finalW = targetH === rectHeight - PAD * 2 ? targetH * (stampImg.width / stampImg.height) : targetW;
-      page.drawImage(stampImg, {
-        x: stampColX + (STAMP_COL_W - finalW) / 2,
-        y: y + (rectHeight - targetH) / 2,
-        width: finalW, height: targetH,
-      });
-    } catch (err) {
-      console.warn('[STAMP] Could not embed stamp image:', err);
-    }
-  }
 
   const pdfBytes = await pdfDoc.save();
   return new Blob([pdfBytes], { type: 'application/pdf' });
