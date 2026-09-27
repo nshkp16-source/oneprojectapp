@@ -142,13 +142,29 @@
   const role        = localStorage.getItem("verifiedRole") || decoded?.role;
   const projectId   = localStorage.getItem("activeProjectId");
   const projectName = localStorage.getItem("activeProjectName");
+  let projectWriteAllowed = false;
 
-  document.addEventListener("DOMContentLoaded", () => {
+  document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("projectContext").textContent = `${projectName} (ID: ${projectId})`;
+    try {
+      const response = await fetch(`https://oneprojectapp-backend.onrender.com/api/project-lifecycle?projectId=${encodeURIComponent(projectId)}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const lifecycle = await response.json();
+      projectWriteAllowed = response.ok && lifecycle.writeAllowed === true;
+      if (!projectWriteAllowed) {
+        document.getElementById("memberMessage").textContent = lifecycle.readOnlyReason || lifecycle.error || "This project is read-only.";
+        document.querySelectorAll("#teamForm input, #teamForm button").forEach(control => { control.disabled = true; });
+      }
+    } catch {
+      document.getElementById("memberMessage").textContent = "Unable to verify project edit access. Assignment is disabled.";
+      document.querySelectorAll("#teamForm input, #teamForm button").forEach(control => { control.disabled = true; });
+    }
   });
 
   function addMember(e) {
     e.preventDefault();
+    if (!projectWriteAllowed) return;
 
     let assignedPart;
     if (role.startsWith("Client"))     assignedPart = "Client";
@@ -194,6 +210,7 @@
   }
 
   async function saveAssignment(assignRole, data) {
+    if (!projectWriteAllowed) return;
     const response = await fetch("https://oneprojectapp-backend.onrender.com/assign", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },

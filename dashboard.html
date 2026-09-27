@@ -1525,10 +1525,6 @@
         <span id="activeProject">Housing Complex A</span>
         <span class="switch-project" data-translate="switch-project">Switch Project</span>
       </div>
-      <div id="projectLifecycleBanner" role="status" style="display:none;margin:8px 12px;padding:10px 12px;border-left:4px solid #a83232;background:#fff2f0;color:#6f2525;font-size:13px;">
-        <span id="projectLifecycleMessage"></span>
-        <a id="projectLifecycleLink" href="project-lifecycle.html" style="display:inline-block;margin-left:6px;color:#087f83;font-weight:700;">View options</a>
-      </div>
       <div class="project-dialog" id="projectDialog">
         <div class="project-item" data-project="Housing Complex A">🏗️ Housing Complex A</div>
         <div class="project-item" data-project="Office Tower B">🏢 Office Tower B</div>
@@ -1907,6 +1903,20 @@
               </div>
             </div>
 
+            <!-- Exit Project Dialog -->
+            <div class="modal-overlay" id="exitProjectDialog">
+              <div class="modal-content">
+                <h3 data-translate="exit-project-title">Exit Project</h3>
+                <p data-translate="exit-project-msg">Your access becomes read-only immediately. Membership is removed after 15 days unless you cancel.</p>
+                <div class="modal-actions">
+                  <button onclick="document.getElementById('exitProjectDialog').classList.remove('active')" data-translate="cancel">Cancel</button>
+                  <button class="primary" id="confirmExitBtn" data-translate="ok">OK</button>
+                </div>
+              </div>
+            </div>
+
+
+
           </div><!-- end grayPlaceholder -->
         </div><!-- end grayRightPart -->
       </div><!-- end right-main-part -->
@@ -2195,18 +2205,16 @@ function isTeamMemberRole(role) {
 function applyRoleRestrictions() {
   const role = window.currentUserRole || userRoleRaw;
   const isTM = isTeamMemberRole(role);
-  const isExitPending = window.currentProjectExitPending === true;
-  const hideWriteControls = isTM || isExitPending;
 
   // Hide static/dynamically-rendered add buttons
   ['#addRecordBtn', '#addRecordBtnRendered'].forEach(sel => {
-    document.querySelectorAll(sel).forEach(el => el.style.display = hideWriteControls ? 'none' : '');
+    document.querySelectorAll(sel).forEach(el => el.style.display = isTM ? 'none' : '');
   });
-  document.querySelectorAll('.add-doc-btn').forEach(el => el.style.display = hideWriteControls ? 'none' : '');
+  document.querySelectorAll('.add-doc-btn').forEach(el => el.style.display = isTM ? 'none' : '');
 
   // Hide meeting plan and minute creation controls
-  document.querySelectorAll('.meeting-btn[data-view="plan"]').forEach(el => el.style.display = hideWriteControls ? 'none' : '');
-  document.querySelectorAll('.add-minute-btn').forEach(el => el.style.display = hideWriteControls ? 'none' : '');
+  document.querySelectorAll('.meeting-btn[data-view="plan"]').forEach(el => el.style.display = isTM ? 'none' : '');
+  document.querySelectorAll('.add-minute-btn').forEach(el => el.style.display = isTM ? 'none' : '');
 
   // Hide the Assign Team Members nav item for Team Members (no other
   // role's UI is affected by this)
@@ -2378,50 +2386,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   } catch (err) {
     console.error("Projects fetch error:", err);
     activeProject.textContent = "Error loading projects";
-  }
-
-  // Resolve project permissions after selecting the initial project.
-  const initialProjectId = ProjectContext.getId();
-  if (initialProjectId) {
-    try {
-      const lifecycleRes = await authFetch(`${API}/project-lifecycle?projectId=${encodeURIComponent(initialProjectId)}`);
-      if (lifecycleRes && lifecycleRes.ok) {
-        const lifecycleData = await lifecycleRes.json();
-        window.currentProjectExitPending = lifecycleData.exitRequest?.status === 'pending';
-        if (lifecycleData.project?.lifecycle_status === 'pending_deletion') {
-          const banner = document.getElementById('projectLifecycleBanner');
-          const message = document.getElementById('projectLifecycleMessage');
-          const link = document.getElementById('projectLifecycleLink');
-          const deletionDate = new Date(lifecycleData.project.deletion_scheduled_at).toLocaleString();
-          message.textContent = `Read-only: this project is scheduled for deletion on ${deletionDate}.`;
-          link.textContent = lifecycleData.isClientOwner ? 'Cancel or view details' : 'View details';
-          banner.style.display = 'block';
-        } else if (window.currentProjectExitPending) {
-          const banner = document.getElementById('projectLifecycleBanner');
-          const message = document.getElementById('projectLifecycleMessage');
-          const link = document.getElementById('projectLifecycleLink');
-          const exitDate = new Date(lifecycleData.exitRequest.effective_at).toLocaleString();
-          message.textContent = `Your access to this project is read-only until ${exitDate}. Other members can continue working.`;
-          link.textContent = 'Cancel exit';
-          banner.style.display = 'block';
-        }
-      }
-    } catch (err) {
-      console.error('Project lifecycle status lookup failed:', err);
-    }
-
-    try {
-      const assignmentRes = await authFetch(
-        `${API}/user-assignment?projectId=${encodeURIComponent(initialProjectId)}`
-      );
-      if (assignmentRes && assignmentRes.ok) {
-        const assignment = await assignmentRes.json();
-        window.currentUserSide = assignment.side;
-        window.isCurrentUserLeader = assignment.isLeader === true;
-      }
-    } catch (err) {
-      console.error("Initial project permission lookup failed:", err);
-    }
   }
 
 // 5. Load tabs + records
@@ -2596,9 +2560,24 @@ function assignTeamSourceForRole() {
   return ASSIGN_TEAM_SOURCE_BY_ROLE[userRoleKey] || null;
 }
 
-function openAssignTeam(source) {
+async function openAssignTeam(source) {
   if (!localStorage.getItem("authToken")) { alert("No token found. Please log in again."); window.location.href = "home.html"; return; }
   if (!source) { console.error("openAssignTeam called without a valid source"); window.location.href = "home.html"; return; }
+  const projectId = localStorage.getItem('activeProjectId');
+  try {
+    const response = await fetch(`${BACKEND}/api/project-lifecycle?projectId=${encodeURIComponent(projectId)}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('authToken')}` }
+    });
+    if (response.ok) {
+      const lifecycle = await response.json();
+      if (lifecycle.writeAllowed === false) {
+        alert(lifecycle.readOnlyReason || 'This project is read-only.');
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn('Could not check project lifecycle before opening Assign Team:', err);
+  }
   sessionStorage.setItem("redirectSource", "dashboard");
   window.location.href = "assign-team.html";
 }
@@ -2612,10 +2591,6 @@ const resetPasswordBtn = document.getElementById('resetPasswordBtn');
 const changeLanguageBtn= document.getElementById('changeLanguageBtn');
 const exitProjectBtn   = document.getElementById('exitProjectBtn');
 
-if (exitProjectBtn) {
-  exitProjectBtn.setAttribute('data-translate', userRoleKey === 'Client' ? 'delete-project' : 'exit-project');
-}
-
 settingsToggle.addEventListener('click', (e) => { e.stopPropagation(); settingsDialog.classList.add('active'); });
 resetPasswordBtn.addEventListener('click',  () => { 
   settingsDialog.classList.remove('active');
@@ -2627,15 +2602,7 @@ resetPasswordBtn.addEventListener('click',  () => {
   window.location.href = 'reset-password.html';
 });
 changeLanguageBtn.addEventListener('click', (e) => { e.stopPropagation(); settingsDialog.classList.remove('active'); document.getElementById('languageDialog').classList.add('active'); });
-exitProjectBtn.addEventListener('click', (e) => {
-  e.stopPropagation();
-  settingsDialog.classList.remove('active');
-  if (!ProjectContext.getId()) {
-    alert('Select a project first.');
-    return;
-  }
-  window.location.href = 'project-lifecycle.html';
-});
+exitProjectBtn.addEventListener('click',    (e) => { e.stopPropagation(); settingsDialog.classList.remove('active'); document.getElementById('exitProjectDialog').classList.add('active'); });
 
 // =========================
 // Translation
@@ -2719,7 +2686,6 @@ const translationDictionary = {
     'reset-password': '🔑 Reset Password',
     'change-language': '🌐 Change Language',
     'exit-project': '❌ Exit Project',
-    'delete-project': '🗑 Delete Project',
     'confirm-close': 'Close',
     /* language dialog */
     'select-language': 'Select your preferred language:',
@@ -2729,7 +2695,7 @@ const translationDictionary = {
     'reset-password-msg': 'Do you want to change your password?',
     /* exit project dialog */
     'exit-project-title': 'Exit Project',
-    'exit-project-msg': 'Are you sure you want to exit this project?',
+    'exit-project-msg': 'Your access becomes read-only immediately. Membership is removed after 15 days unless you cancel.',
     /* logout dialog */
     'logout-title': 'Logout',
     'logout-msg': 'Are you sure you want to log out of your account?',
@@ -2795,7 +2761,6 @@ const translationDictionary = {
     'reset-password': '🔑 Réinitialiser le Mot de Passe',
     'change-language': '🌐 Changer la Langue',
     'exit-project': '❌ Quitter le Projet',
-    'delete-project': '🗑 Supprimer le Projet',
     'confirm-close': 'Fermer',
     /* language dialog */
     'select-language': 'Sélectionnez votre langue préférée :',
@@ -2805,7 +2770,7 @@ const translationDictionary = {
     'reset-password-msg': 'Voulez-vous changer votre mot de passe ?',
     /* exit project dialog */
     'exit-project-title': 'Quitter le projet',
-    'exit-project-msg': 'Êtes-vous sûr de vouloir quitter ce projet ?',
+    'exit-project-msg': 'Votre accès passe immédiatement en lecture seule. Votre adhésion sera supprimée après 15 jours, sauf si vous annulez.',
     /* logout dialog */
     'logout-title': 'Déconnexion',
     'logout-msg': 'Êtes-vous sûr de vouloir vous déconnecter ?',
@@ -2879,6 +2844,17 @@ document.getElementById('confirmResetBtn').addEventListener('click', () => {
   localStorage.setItem("resetRole", decoded?.role || "");
   sessionStorage.setItem("redirectSource", "dashboard");
   window.location.href = 'reset-password.html';
+});
+
+// =========================
+// Exit project dialog
+// =========================
+const exitProjectDialog = document.getElementById('exitProjectDialog');
+const confirmExitBtn    = document.getElementById('confirmExitBtn');
+
+confirmExitBtn.addEventListener('click', () => {
+  exitProjectDialog.classList.remove('active');
+  window.location.href = 'project-lifecycle.html';
 });
 
 // =========================
@@ -3967,6 +3943,7 @@ let AppState = {
   projectId: null,
   token:     null,
   canWrite:  false,
+  readOnlyReason: null,
 };
 
 // ============================================================
@@ -4334,6 +4311,15 @@ async function openSchedulePanel() {
   }
   expandGrayPart(_loadingHTML('Checking schedule…'));
   try {
+    const lifecycleResponse = await fetch(
+      `${BACKEND}/api/project-lifecycle?projectId=${encodeURIComponent(AppState.projectId)}`,
+      { headers: _authHeaders() }
+    );
+    if (!lifecycleResponse.ok) throw new Error('Unable to verify project edit access.');
+    const lifecycle = await lifecycleResponse.json();
+    AppState.canWrite = AppState.canWrite && lifecycle.writeAllowed === true;
+    AppState.readOnlyReason = lifecycle.readOnlyReason || null;
+
     const res = await fetch(
       `${BACKEND}/api/get-schedule?projectId=${encodeURIComponent(AppState.projectId)}`,
       { headers: _authHeaders(true) }
@@ -4471,7 +4457,8 @@ function _topbar(icon, title, sub, buttons = [], extraHtml = '') {
 }
 
 function _viewOnlyBanner() {
-  return `<div class="lock-banner">🔒 View-only mode — your role (${AppState.user.role}) cannot make changes.</div>`;
+  const reason = AppState.readOnlyReason || `Your role (${AppState.user.role}) cannot make changes.`;
+  return `<div class="lock-banner">🔒 View-only mode — ${reason}</div>`;
 }
 
 // ============================================================
@@ -6691,12 +6678,6 @@ async function authFetch(url, options = {}) {
       return null;
     }
   }
-  if (res.status === 423) {
-    const error = await res.clone().json().catch(() => ({}));
-    if (error.code === 'PROJECT_EXIT_READ_ONLY') {
-      alert('Your exit request makes you read-only in this project. You can still review or download files, or cancel your exit in Settings. Other project members are unaffected.');
-    }
-  }
   return res;
 }
 
@@ -6846,7 +6827,7 @@ function setTabContent(tabKey) {
 //  ── Add button hidden for team members ──
 // =======================================================================
 function renderBottomContent(description, placeholder) {
-  const leader = window.isCurrentUserLeader === true && window.currentProjectExitPending !== true;
+  const leader = window.isCurrentUserLeader === true;
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
       ${leader ? `<button class="btn primary add-doc-btn" type="button" id="addRecordBtnRendered">➕ Add</button>` : ''}
@@ -6881,7 +6862,7 @@ async function getMeetingScope(context) {
 
 // ── Plan Meeting tab hidden for team members ──
 function renderMeetingContent(activeView = 'minutes', context = 'global') {
-  const leader = window.isCurrentUserLeader === true && window.currentProjectExitPending !== true;
+  const leader = window.isCurrentUserLeader === true;
 
   // If a non-leader somehow requests the plan view, redirect to minutes
   if (activeView === 'plan' && !leader) activeView = 'minutes';

@@ -500,6 +500,7 @@ let currentEmail = '';
 let currentId    = 0;
 let projectId    = '';
 let projectData  = null;
+let projectWriteAllowed = false;
 let modalCb      = null;
 
 /* Profile picture cache: key = email, value = url | null */
@@ -633,12 +634,13 @@ function isTeamMember(role) {
 
 // Can edit the project base fields?
 function canEditProject() {
-  return isClientSide(currentRole);
+  return projectWriteAllowed && isClientSide(currentRole);
 }
 
 // Can edit a party's company block (client/contractor/consultant)?
 // Leaders only — PMs cannot edit the company block.
 function canEditCompany(side) {
+  if (!projectWriteAllowed) return false;
   const n = normalizeRole(currentRole);
   if (isTeamMember(currentRole)) return false;
   // Client leader can edit client company; client PM cannot
@@ -650,7 +652,7 @@ function canEditCompany(side) {
 
 // Can delete a full party (contractor / consultant)?  Client only.
 function canDeleteParty(side) {
-  return normalizeRole(currentRole) === 'Client' && side !== 'client';
+  return projectWriteAllowed && normalizeRole(currentRole) === 'Client' && side !== 'client';
 }
 
 // Can edit a PM block?
@@ -658,6 +660,7 @@ function canDeleteParty(side) {
 // PM can edit their OWN block.
 // Client leader can edit any PM.
 function canEditPM(side) {
+  if (!projectWriteAllowed) return false;
   const n = normalizeRole(currentRole);
   if (isTeamMember(currentRole)) return false;
   if (n === 'Client') return true;              // client leader manages all PMs
@@ -673,6 +676,7 @@ function canRemovePM(side) { return canEditPM(side); }
 // Same-side leader or PM can edit members on their side.
 // TeamMember cannot edit others.
 function canManageTeamMember(memberSide) {
+  if (!projectWriteAllowed) return false;
   if (isTeamMember(currentRole)) return false;
   const userSide = getSide(currentRole);
   if (userSide === 'client') return true;           // client side manages all
@@ -798,6 +802,9 @@ function navigateBack() {
 async function loadProjectData() {
   showLoad();
   try {
+    const lifecycleRes = await authFetch(`${API}/api/project-lifecycle?projectId=${encodeURIComponent(projectId)}`);
+    const lifecycle = await lifecycleRes.json().catch(() => ({}));
+    projectWriteAllowed = lifecycleRes.ok && lifecycle.writeAllowed === true;
     const res  = await authFetch(`${API}/api/project-info/${projectId}`);
     const data = await res.json();
     hideLoad();
@@ -806,6 +813,7 @@ async function loadProjectData() {
     }
     projectData = data.project;
     renderAll();
+    if (!projectWriteAllowed) toast(lifecycle.readOnlyReason || lifecycle.error || 'This project is read-only.', 'info', 6000);
   } catch (err) {
     hideLoad();
     console.error(err);
@@ -1279,8 +1287,8 @@ function renderTeamSection(side) {
         <button class="btn btn-edit btn-sm" onclick="toggleMemberEdit(${m.id})">✏️ Edit</button>
         <button class="btn btn-danger btn-sm" onclick="removeMember(${m.id}, '${esc(m.name || m.email)}', false)">⛔ Remove</button>
       `;
-    } else if (isSelf) {
-      btnHTML = `<button class="btn btn-danger btn-sm" onclick="removeMember(${m.id}, 'yourself', true)">🚪 Leave</button>`;
+    } else if (projectWriteAllowed && isSelf) {
+      btnHTML = `<button class="btn btn-danger btn-sm" onclick="window.location.href='project-lifecycle.html'">Schedule Exit</button>`;
     }
 
     row.innerHTML = `

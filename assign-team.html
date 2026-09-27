@@ -150,6 +150,19 @@
   const token = localStorage.getItem("authToken");
   const decoded = parseJwt(token);
 
+  async function checkProjectWriteAccess(projectId) {
+    if (!token || !projectId) return { allowed: true };
+    const response = await fetch(`https://oneprojectapp-backend.onrender.com/api/project-lifecycle?projectId=${encodeURIComponent(projectId)}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!response.ok) return { allowed: true };
+    const lifecycle = await response.json();
+    return {
+      allowed: lifecycle.writeAllowed !== false,
+      message: lifecycle.readOnlyReason || 'This project is read-only.'
+    };
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     const projectId = localStorage.getItem("activeProjectId");
     const projectName = localStorage.getItem("activeProjectName");
@@ -161,6 +174,13 @@
       return;
     }
 
+    checkProjectWriteAccess(projectId).then(access => {
+      if (!access.allowed) {
+        document.getElementById("loginBtn").disabled = true;
+        document.getElementById("loginMessage").textContent = access.message;
+      }
+    }).catch(() => {});
+
     document.getElementById("projectInfo").textContent = `${projectName} (ID: ${projectId})`;
     document.getElementById("roleInfo").textContent = role;
     document.getElementById("emailInfo").textContent = email;
@@ -171,6 +191,17 @@
     const role = localStorage.getItem("verifiedRole") || decoded?.role;
     const projectId = localStorage.getItem("activeProjectId");
     const password = document.getElementById("passwordInput").value;
+
+    try {
+      const access = await checkProjectWriteAccess(projectId);
+      if (!access.allowed) {
+        document.getElementById("loginMessage").textContent = access.message;
+        document.getElementById("loginBtn").disabled = true;
+        return;
+      }
+    } catch {
+      // The backend write guard remains authoritative if the status check is unavailable.
+    }
 
     const validPassword = /^(?=.*[A-Za-z])(?=.*\d).{6,}$/.test(password);
     if (!validPassword) {
@@ -207,6 +238,14 @@
           headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
           body: JSON.stringify({ projectId, assignments: [] })
         }).then(r => r.json());
+
+        if (res.code === 'PROJECT_READ_ONLY') {
+          document.getElementById("optionsPage").style.display = "none";
+          document.getElementById("loginPage").style.display = "block";
+          document.getElementById("loginMessage").textContent = res.error;
+          document.getElementById("loginBtn").disabled = true;
+          return;
+        }
 
         if (res.hasPM) {
           const pmBtn = document.getElementById("pmBtn");
