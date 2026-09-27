@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project actions | OneProject</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17343b;
+      --muted: #5e7378;
+      --line: #d8e3e4;
+      --paper: #f3f7f6;
+      --teal: #087f83;
+      --danger: #a83232;
+      --danger-bg: #fff2f0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #edf6f4 0%, #f8faf8 52%, #edf2f5 100%);
+      color: var(--ink);
+      font: 15px/1.55 "Segoe UI", sans-serif;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 64px;
+      padding: 12px clamp(18px, 5vw, 64px);
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.82);
+    }
+    .brand { font-weight: 750; letter-spacing: .02em; }
+    a { color: var(--teal); text-decoration: none; font-weight: 650; }
+    a:hover { text-decoration: underline; }
+    main { width: min(720px, calc(100% - 32px)); margin: clamp(32px, 8vh, 76px) auto; }
+    .eyebrow { margin: 0 0 8px; color: var(--teal); font-size: 12px; font-weight: 750; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(28px, 5vw, 38px); line-height: 1.15; }
+    .lede { max-width: 620px; margin: 14px 0 28px; color: var(--muted); }
+    .project-line { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 20px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .project-line strong { overflow-wrap: anywhere; }
+    .status { color: var(--muted); font-size: 13px; font-weight: 700; }
+    .notice { margin-top: 22px; padding: 17px 18px; border-left: 4px solid var(--teal); background: #e8f4f1; }
+    .notice.danger { border-color: var(--danger); background: var(--danger-bg); }
+    .notice p { margin: 0; }
+    .notice p + p { margin-top: 8px; }
+    .details { margin: 18px 0 0; padding: 0; list-style: none; }
+    .details li { padding: 10px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
+    .details strong { color: var(--ink); }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+    button {
+      min-height: 44px;
+      padding: 10px 16px;
+      border: 1px solid var(--teal);
+      border-radius: 5px;
+      background: var(--teal);
+      color: white;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.secondary { background: white; color: var(--ink); border-color: #a8babc; }
+    button.danger { background: var(--danger); border-color: var(--danger); }
+    button:disabled { opacity: .55; cursor: wait; }
+    .confirm-box { margin-top: 20px; }
+    label { display: block; margin-bottom: 7px; font-size: 13px; font-weight: 700; }
+    input {
+      width: 100%; min-height: 44px; padding: 10px 12px;
+      border: 1px solid #a8babc; border-radius: 4px; background: white;
+      color: var(--ink); font: inherit;
+    }
+    #feedback { min-height: 26px; margin: 16px 0 0; color: var(--danger); }
+    [hidden] { display: none !important; }
+    @media (max-width: 520px) {
+      header { align-items: flex-start; flex-direction: column; }
+      main { margin-top: 32px; }
+      .actions { flex-direction: column; }
+      .actions button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">OneProject</div>
+    <a href="dashboard.html">← Back to dashboard</a>
+  </header>
+  <main>
+    <p class="eyebrow">Project settings</p>
+    <h1 id="title">Project action</h1>
+    <p class="lede" id="lede">Loading the selected project…</p>
+    <div class="project-line">
+      <strong id="projectName">Loading…</strong>
+      <span class="status" id="projectStatus"></span>
+    </div>
+    <section id="actionContent" aria-live="polite"></section>
+    <p id="feedback" role="status" aria-live="polite"></p>
+  </main>
+  <script>
+    const API = 'https://oneprojectapp-backend.onrender.com/api';
+    const projectId = localStorage.getItem('activeProjectId');
+    const titleEl = document.getElementById('title');
+    const ledeEl = document.getElementById('lede');
+    const projectNameEl = document.getElementById('projectName');
+    const projectStatusEl = document.getElementById('projectStatus');
+    const actionContent = document.getElementById('actionContent');
+    const feedback = document.getElementById('feedback');
+    let lifecycle = null;
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      })[char]);
+    }
+
+    function formatDate(value) {
+      if (!value) return '';
+      return new Intl.DateTimeFormat(undefined, { dateStyle: 'long', timeStyle: 'short' }).format(new Date(value));
+    }
+
+    async function request(path, options = {}) {
+      const token = localStorage.getItem('authToken');
+      if (!token) throw new Error('Your session has expired. Sign in again.');
+      const send = currentToken => fetch(`${API}${path}`, {
+        ...options,
+        headers: { 'Content-Type': 'application/json', ...(options.headers || {}), Authorization: `Bearer ${currentToken}` },
+      });
+      let response = await send(token);
+      if (response.status === 401 || response.status === 403) {
+        const refreshToken = localStorage.getItem('refreshToken');
+        if (refreshToken) {
+          const refresh = await fetch('https://oneprojectapp-backend.onrender.com/refresh', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken }),
+          });
+          const refreshed = await refresh.json();
+          if (refreshed.accessToken) {
+            localStorage.setItem('authToken', refreshed.accessToken);
+            response = await send(refreshed.accessToken);
+          }
+        }
+      }
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `Request failed (${response.status}).`);
+      return data;
+    }
+
+    function render() {
+      if (!lifecycle) return;
+      const project = lifecycle.project;
+      const isClient = lifecycle.isClientOwner;
+      projectNameEl.textContent = project.name;
+      projectStatusEl.textContent = project.lifecycle_status === 'pending_deletion'
+        ? 'Read-only · deletion scheduled'
+        : (!isClient && lifecycle.exitRequest?.status === 'pending' ? 'Your access is read-only · exit scheduled' : 'Active');
+      if (isClient) renderClient(project);
+      else renderMember(project);
+    }
+
+    function renderClient(project) {
+      titleEl.textContent = project.lifecycle_status === 'pending_deletion' ? 'Project deletion scheduled' : 'Delete this project';
+      if (project.lifecycle_status === 'pending_deletion') {
+        ledeEl.textContent = 'The project is frozen for everyone during the 60-day recovery period.';
+        actionContent.innerHTML = `
+          <div class="notice danger">
+            <p><strong>Scheduled for permanent deletion</strong></p>
+            <p>Deletion date: <strong>${escapeHtml(formatDate(project.deletion_scheduled_at))}</strong></p>
+            <p>Until then, project records remain available to view. No one can add, edit, or delete project content. Cancel below to restore normal project use.</p>
+          </div>
+          <div class="actions"><button class="secondary" id="cancelDeletion">Cancel deletion and restore project</button></div>`;
+        document.getElementById('cancelDeletion').addEventListener('click', cancelDeletion);
+        return;
+      }
+
+      ledeEl.textContent = 'Schedule permanent deletion of this project and its project data.';
+      actionContent.innerHTML = `
+        <div class="notice danger">
+          <p><strong>What happens next</strong></p>
+          <p>The project becomes read-only immediately. Everyone can view existing records during the 60-day recovery period, but nobody can add, edit, or delete project content.</p>
+          <p>You can cancel during those 60 days. Afterward, the project and its stored files are permanently deleted. This does not delete your client account or your other projects.</p>
+        </div>
+        <ul class="details">
+          <li><strong>Before continuing:</strong> save any files you need to keep.</li>
+          <li><strong>Notifications:</strong> project members receive an email and an in-app notification.</li>
+        </ul>
+        <div class="confirm-box">
+          <label for="confirmProjectName">Type the project name to confirm: <strong>${escapeHtml(project.name)}</strong></label>
+          <input id="confirmProjectName" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="actions"><button class="danger" id="scheduleDeletion" disabled>Schedule project deletion</button></div>`;
+      const input = document.getElementById('confirmProjectName');
+      const button = document.getElementById('scheduleDeletion');
+      input.addEventListener('input', () => { button.disabled = input.value.trim() !== project.name; });
+      button.addEventListener('click', scheduleDeletion);
+    }
+
+    function renderMember(project) {
+      titleEl.textContent = lifecycle.exitRequest?.status === 'pending' ? 'Project exit scheduled' : 'Exit this project';
+      if (project.lifecycle_status !== 'active') {
+        ledeEl.textContent = 'The client has scheduled deletion. Project content is read-only during the recovery period.';
+        actionContent.innerHTML = `
+          <div class="notice danger">
+            <p><strong>Project read-only</strong></p>
+            <p>Scheduled deletion: <strong>${escapeHtml(formatDate(project.deletion_scheduled_at))}</strong></p>
+            <p>You can view existing project content until deletion. The client can cancel the request.</p>
+          </div>`;
+        return;
+      }
+      if (lifecycle.exitRequest?.status === 'pending') {
+        ledeEl.textContent = 'Your project access is read-only during the 15-day exit period. Other members can continue working normally.';
+        actionContent.innerHTML = `
+          <div class="notice">
+            <p><strong>Exit date: ${escapeHtml(formatDate(lifecycle.exitRequest.effective_at))}</strong></p>
+            <p>You can review and download existing project files, but cannot add, edit, or delete project content. Your previous contributions stay in the project.</p>
+            <p>Other members are not restricted and can continue working. Cancel your exit request below to restore your own editing access.</p>
+          </div>
+          <div class="actions"><button class="secondary" id="cancelExit">Cancel exit request</button></div>`;
+        document.getElementById('cancelExit').addEventListener('click', cancelExit);
+        return;
+      }
+      ledeEl.textContent = 'Schedule removal of your membership from this project.';
+      actionContent.innerHTML = `
+        <div class="notice">
+          <p>After you schedule your exit, your own access becomes read-only immediately. You may review or download existing files, but cannot add, edit, or delete project content.</p>
+          <p>Your membership is removed after 15 days unless you cancel. Your existing contributions stay with the project.</p>
+          <p>Other project users will receive a notification when your exit takes effect. The project and other users’ access are not deleted or changed.</p>
+        </div>
+        <div class="actions"><button class="danger" id="scheduleExit">Schedule my exit</button></div>`;
+      document.getElementById('scheduleExit').addEventListener('click', scheduleExit);
+    }
+
+    async function refresh() {
+      if (!projectId) throw new Error('No active project is selected. Return to the dashboard and select a project.');
+      lifecycle = await request(`/project-lifecycle?projectId=${encodeURIComponent(projectId)}`);
+      render();
+    }
+
+    async function scheduleDeletion() {
+      const button = document.getElementById('scheduleDeletion');
+      button.disabled = true;
+      feedback.textContent = '';
+      try {
+        await request('/project-deletion/request', { method: 'POST', body: JSON.stringify({ projectId }) });
+        await refresh();
+      } catch (err) {
+        feedback.textContent = err.message;
+        button.disabled = false;
+      }
+    }
+
+    async function cancelDeletion() {
+      const button = document.getElementById('cancelDeletion');
+      button.disabled = true;
+      feedback.textContent = '';
+      try {
+        await request('/project-deletion/cancel', { method: 'POST', body: JSON.stringify({ projectId }) });
+        await refresh();
+      } catch (err) {
+        feedback.textContent = err.message;
+        button.disabled = false;
+      }
+    }
+
+    async function scheduleExit() {
+      const button = document.getElementById('scheduleExit');
+      button.disabled = true;
+      feedback.textContent = '';
+      try {
+        await request('/project-exit/request', { method: 'POST', body: JSON.stringify({ projectId }) });
+        await refresh();
+      } catch (err) {
+        feedback.textContent = err.message;
+        button.disabled = false;
+      }
+    }
+
+    async function cancelExit() {
+      const button = document.getElementById('cancelExit');
+      button.disabled = true;
+      feedback.textContent = '';
+      try {
+        await request('/project-exit/cancel', { method: 'POST', body: JSON.stringify({ projectId }) });
+        await refresh();
+      } catch (err) {
+        feedback.textContent = err.message;
+        button.disabled = false;
+      }
+    }
+
+    refresh().catch(err => {
+      titleEl.textContent = 'Unable to load project';
+      ledeEl.textContent = '';
+      projectNameEl.textContent = 'Project status unavailable';
+      projectStatusEl.textContent = '';
+      feedback.textContent = err.message;
+    });
+  </script>
+</body>
+</html>
