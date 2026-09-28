@@ -88,6 +88,7 @@
     .toast-item { background: #062b2a; color: #e6fff9; padding:10px 14px; border-radius:8px; box-shadow:var(--sh-md); font-weight:600; font-size:13px; }
     .toast-item.error { background:#6b1f1f; color:#fff1f1; }
     .toast-item.locked { background:#7a3028; color:#fff7f4; border-left:3px solid #f1a49a; }
+    .project-lifecycle-disabled { opacity:.48 !important; cursor:not-allowed !important; }
     .left-main-part::-webkit-scrollbar { width: 4px; }
     .left-main-part::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 4px; }
 
@@ -2318,6 +2319,10 @@ const projectDeletionBanner = document.getElementById('projectDeletionBanner');
 const projectDeletionDate = document.getElementById('projectDeletionDate');
 const projectDeletionNotice = document.getElementById('projectDeletionNotice');
 const projectDeletionAction = document.getElementById('projectDeletionAction');
+let projectLifecycleReadOnly = true;
+let projectLifecycleStatusKnown = false;
+let projectLifecycleReadOnlyReason = 'Checking project edit access. Project changes are temporarily disabled.';
+let projectLifecycleObserver = null;
 let profilePictureUrl = "";
 const projectSelector   = document.getElementById("projectSelector");
 const projectDialog     = document.getElementById("projectDialog");
@@ -2393,13 +2398,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       ProjectContext.set(activeProjectObj);
       activeProject.textContent = activeProjectObj.name;
       updateTeamMemberProfileFields(activeProjectObj);
-      refreshProjectDeletionBanner(activeProjectObj.id);
+      await refreshProjectDeletionBanner(activeProjectObj.id);
       projects.forEach(project => {
         const item = document.createElement("div");
         item.className   = "project-item";
         item.textContent = `${project.name} (${project.location})`;
         projectDialog.appendChild(item);
-        item.addEventListener("click", () => {
+        item.addEventListener("click", async () => {
           const previousProjectId = ProjectContext.getId();
           ProjectContext.set(project);
           if (String(previousProjectId) !== String(project.id)) {
@@ -2408,7 +2413,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             activeProject.textContent = project.name;
             updateTeamMemberProfileFields(project);
             projectDialog.style.display = "none";
-            refreshProjectDeletionBanner(project.id);
+            await refreshProjectDeletionBanner(project.id);
             fetchProjectDetails(project.id);
           }
         });
@@ -2433,10 +2438,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 
 window.addEventListener('pageshow', () => {
-  if (document.visibilityState === 'visible') updateChatUnreadBadge();
-  refreshProjectDeletionBanner(ProjectContext.getId());
+  if (document.visibilityState === 'visible') {
+    updateChatUnreadBadge();
+    refreshProjectDeletionBanner(ProjectContext.getId());
+  }
 });
 window.addEventListener('focus', updateChatUnreadBadge);
+window.addEventListener('focus', () => refreshProjectDeletionBanner(ProjectContext.getId()));
+setInterval(() => refreshProjectDeletionBanner(ProjectContext.getId()), 30000);
 
 setInterval(() => {
   updateNotificationBadge();
@@ -2459,16 +2468,33 @@ async function fetchProjectDetails(projectId) {
 
 async function refreshProjectDeletionBanner(projectId) {
   if (!projectDeletionBanner) return;
-  projectDeletionBanner.hidden = true;
-  if (!projectId) return;
+  if (!projectId) {
+    projectDeletionBanner.hidden = true;
+    projectLifecycleStatusKnown = false;
+    projectLifecycleReadOnly = true;
+    projectLifecycleReadOnlyReason = 'Select a project to verify edit access.';
+    applyProjectLifecycleLock();
+    return;
+  }
   try {
     const response = await fetch(
       `https://oneprojectapp-backend.onrender.com/api/project-lifecycle?projectId=${encodeURIComponent(projectId)}`,
       { headers: { Authorization: `Bearer ${localStorage.getItem('authToken')}` } }
     );
-    if (!response.ok) return;
+    if (!response.ok) {
+      if (!projectLifecycleStatusKnown) projectLifecycleReadOnlyReason = 'Unable to verify project edit access. Project changes are temporarily disabled.';
+      applyProjectLifecycleLock();
+      return;
+    }
     const lifecycle = await response.json();
-    if (lifecycle.project?.lifecycle_status !== 'pending_deletion') return;
+    projectLifecycleStatusKnown = true;
+    projectLifecycleReadOnly = lifecycle.writeAllowed === false;
+    projectLifecycleReadOnlyReason = lifecycle.readOnlyReason || 'Project changes are disabled during the scheduled lifecycle period.';
+    applyProjectLifecycleLock();
+    if (lifecycle.project?.lifecycle_status !== 'pending_deletion') {
+      projectDeletionBanner.hidden = true;
+      return;
+    }
     projectDeletionDate.textContent = lifecycle.project.deletion_scheduled_at
       ? new Date(lifecycle.project.deletion_scheduled_at).toLocaleDateString()
       : '—';
@@ -2479,8 +2505,95 @@ async function refreshProjectDeletionBanner(projectId) {
     projectDeletionBanner.hidden = false;
   } catch (err) {
     console.warn('Could not load project deletion banner:', err);
+    if (!projectLifecycleStatusKnown) projectLifecycleReadOnlyReason = 'Unable to verify project edit access. Project changes are temporarily disabled.';
+    applyProjectLifecycleLock();
   }
 }
+
+function lifecycleControlIsMutation(control) {
+  if (control.id === 'assignTeamNavItem' || control.id === 'stampSetupNav') return true;
+  if (control.matches?.('.meeting-btn[data-view="plan"], .add-minute-btn')) return true;
+  const text = `${control.textContent || ''} ${control.getAttribute('aria-label') || ''} ${control.title || ''} ${control.id || ''} ${control.getAttribute('onclick') || ''} ${control.dataset?.action || ''}`;
+  return /\b(add|create|edit|save|submit|upload|delete|remove|assign|approve|accept|reject|share|complete|reopen|validate|report|update|log)\b|open\w*(form|create|add)|_wcOpenCreateForm|_peOpenAddForm|_daOpenCreateForm|_crOpenCreateForm/i.test(text);
+}
+
+function applyProjectLifecycleLock() {
+  if (projectLifecycleReadOnly && !projectLifecycleObserver && document.body) {
+    projectLifecycleObserver = new MutationObserver(() => {
+      if (projectLifecycleLockFrame) return;
+      projectLifecycleLockFrame = requestAnimationFrame(() => {
+        projectLifecycleLockFrame = 0;
+        applyProjectLifecycleLock();
+      });
+    });
+    projectLifecycleObserver.observe(document.body, { childList: true, subtree: true });
+  } else if (!projectLifecycleReadOnly && projectLifecycleObserver) {
+    projectLifecycleObserver.disconnect();
+    projectLifecycleObserver = null;
+  }
+  if (arretBar) arretBar.title = projectLifecycleReadOnly ? 'View arrets (project is read-only)' : 'Click to add or view arrets';
+
+  const candidates = document.querySelectorAll('.right-main-part button, .right-main-part [role="button"], .right-main-part summary, .right-main-part [onclick], .gray-right-part button, .gray-right-part [role="button"], .gray-right-part summary, .gray-right-part [onclick], .modal-overlay button, #assignTeamNavItem, #stampSetupNav');
+  candidates.forEach(control => {
+    const isSidebarProjectAction = control.id === 'assignTeamNavItem' || control.id === 'stampSetupNav';
+    if (!isSidebarProjectAction && control.closest('#sidebar, #errorFormModal')) return;
+    const mutationControl = lifecycleControlIsMutation(control);
+    if (projectLifecycleReadOnly && mutationControl) {
+      if (!control.hasAttribute('data-lifecycle-lock-original-disabled')) {
+        control.setAttribute('data-lifecycle-lock-original-disabled', String(Boolean(control.disabled)));
+        control.setAttribute('data-lifecycle-lock-original-title', control.getAttribute('title') || '');
+      }
+      if ('disabled' in control) control.disabled = true;
+      control.setAttribute('aria-disabled', 'true');
+      control.classList.add('project-lifecycle-disabled');
+      control.title = projectLifecycleReadOnlyReason;
+    } else if (!projectLifecycleReadOnly && control.hasAttribute('data-lifecycle-lock-original-disabled')) {
+      if ('disabled' in control) control.disabled = control.getAttribute('data-lifecycle-lock-original-disabled') === 'true';
+      control.setAttribute('title', control.getAttribute('data-lifecycle-lock-original-title') || '');
+      control.removeAttribute('aria-disabled');
+      control.classList.remove('project-lifecycle-disabled');
+      control.removeAttribute('data-lifecycle-lock-original-disabled');
+      control.removeAttribute('data-lifecycle-lock-original-title');
+    }
+  });
+
+  document.querySelectorAll('#bottomContent input:not([type="search"]), #bottomContent textarea, #bottomContent select, #bottomContent [contenteditable], #grayContent input:not([type="search"]), #grayContent textarea, #grayContent select, #grayContent [contenteditable], .modal-overlay:not(#errorFormModal) input:not([type="search"]), .modal-overlay:not(#errorFormModal) textarea, .modal-overlay:not(#errorFormModal) select, .modal-overlay:not(#errorFormModal) [contenteditable]').forEach(control => {
+    if (projectLifecycleReadOnly) {
+      if (!control.hasAttribute('data-lifecycle-lock-original-disabled')) {
+        control.setAttribute('data-lifecycle-lock-original-disabled', String(Boolean(control.disabled)));
+      }
+      if (control.getAttribute('contenteditable') === 'true') control.dataset.lifecycleLockWasEditable = 'true';
+      if ('disabled' in control) control.disabled = true;
+      if (control.hasAttribute('contenteditable')) control.setAttribute('contenteditable', 'false');
+      control.classList.add('project-lifecycle-disabled');
+    } else if (control.hasAttribute('data-lifecycle-lock-original-disabled')) {
+      if ('disabled' in control) control.disabled = control.getAttribute('data-lifecycle-lock-original-disabled') === 'true';
+      if (control.dataset.lifecycleLockWasEditable === 'true') control.setAttribute('contenteditable', 'true');
+      control.classList.remove('project-lifecycle-disabled');
+      control.removeAttribute('data-lifecycle-lock-original-disabled');
+      delete control.dataset.lifecycleLockWasEditable;
+    }
+  });
+}
+
+let projectLifecycleLockFrame = 0;
+
+document.addEventListener('click', event => {
+  if (!projectLifecycleReadOnly) return;
+  const control = event.target.closest('button, [role="button"], summary, [onclick], #assignTeamNavItem, #stampSetupNav');
+  if (!control || control.closest('#sidebar, #errorFormModal') && !['assignTeamNavItem', 'stampSetupNav'].includes(control.id)) return;
+  if (!lifecycleControlIsMutation(control)) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
+}, true);
+
+document.addEventListener('submit', event => {
+  if (!projectLifecycleReadOnly || !event.target.closest('#bottomContent, #grayContent, .right-main-part')) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
+}, true);
 
 function showProjectLifecycleNotice(message) {
   const container = document.getElementById('globalToast');
@@ -3534,13 +3647,16 @@ async function loadSummaryPanelData() {
     const varEl = document.getElementById('summaryVariance');
     if (varEl) {
       const sign        = progress.variance_pct >= 0 ? '+' : '';
-      varEl.textContent = `${sign}${progress.variance_pct.toFixed(1)}% vs plan today (plan: ${progress.planned_pct.toFixed(1)}%)`;
-      varEl.style.color = progress.variance_pct >= 0 ? '#28a745' : '#dc3545';
+      varEl.textContent = data.schedule_paused
+        ? `Paused since deletion request · ${sign}${progress.variance_pct.toFixed(1)}% vs plan at pause`
+        : `${sign}${progress.variance_pct.toFixed(1)}% vs plan today (plan: ${progress.planned_pct.toFixed(1)}%)`;
+      varEl.style.color = data.schedule_paused ? '#9a6700' : progress.variance_pct >= 0 ? '#28a745' : '#dc3545';
     }
 
     const statusBadge = document.getElementById('summaryStatusBadge');
     if (statusBadge) {
-      const status = progress.variance_pct < -2 ? { label:'Behind schedule', bg:'#fdecec', color:'#b42318' }
+      const status = data.schedule_paused ? { label:'Schedule paused', bg:'#fff4e5', color:'#9a6700' }
+        : progress.variance_pct < -2 ? { label:'Behind schedule', bg:'#fdecec', color:'#b42318' }
         : progress.variance_pct > 2 ? { label:'Ahead of schedule', bg:'#e8f5e9', color:'#187a3d' }
         : { label:'On track', bg:'#eef6ff', color:'#245b8f' };
       statusBadge.textContent = status.label;
@@ -4021,6 +4137,9 @@ let AppState = {
   token:     null,
   canWrite:  false,
   readOnlyReason: null,
+  effectiveToday: null,
+  schedulePaused: false,
+  schedulePauseStartedAt: null,
 };
 
 // ============================================================
@@ -4045,6 +4164,9 @@ function _initAppState() {
     projectId,
     token,
     canWrite: WRITE_ROLES.has(role),
+    effectiveToday: null,
+    schedulePaused: false,
+    schedulePauseStartedAt: null,
   };
   return true;
 }
@@ -4061,13 +4183,28 @@ function _authHeaders(json = false) {
 const _daysBetween = (a, b) =>
   Math.max(0, Math.round((new Date(b) - new Date(a)) / 86400000) + 1);
 
+function _parseScheduleDate(value) {
+  const match = String(value ?? '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : new Date(value);
+}
+
+function _scheduleTodayDate() {
+  const value = AppState.effectiveToday;
+  const date = value ? _parseScheduleDate(value) : new Date();
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
 const _daysUntil = (dateStr) => {
-  const t = new Date(); t.setHours(0,0,0,0);
-  const d = new Date(dateStr); d.setHours(0,0,0,0);
+  const t = _scheduleTodayDate();
+  const d = _parseScheduleDate(dateStr); d.setHours(0,0,0,0);
   return Math.round((d - t) / 86400000);
 };
 
-const _today = () => new Date().toISOString().slice(0, 10);
+const _today = () => {
+  const today = _scheduleTodayDate();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+};
 
 function _isoWeekNum(d) {
   const date   = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -4396,6 +4533,8 @@ async function openSchedulePanel() {
     const lifecycle = await lifecycleResponse.json();
     AppState.canWrite = AppState.canWrite && lifecycle.writeAllowed === true;
     AppState.readOnlyReason = lifecycle.readOnlyReason || null;
+    AppState.effectiveToday = lifecycle.effective_schedule_today || null;
+    AppState.schedulePaused = lifecycle.schedule_clock_paused === true;
 
     const res = await fetch(
       `${BACKEND}/api/get-schedule?projectId=${encodeURIComponent(AppState.projectId)}`,
@@ -4404,6 +4543,9 @@ async function openSchedulePanel() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const result = await res.json();
     const sched  = result.schedule;
+    AppState.effectiveToday = sched?.effective_today || result.effective_today || AppState.effectiveToday;
+    AppState.schedulePaused = sched?.schedule_paused === true || result.schedule_paused === true;
+    AppState.schedulePauseStartedAt = sched?.pause_started_at || result.pause_started_at || null;
     // Has either baseline milestones OR extension milestones
     const hasMilestones =
       (sched?.milestones?.length > 0) ||
@@ -4716,6 +4858,10 @@ function _wireLocationPicker(initialLocation) {
 //          extension days are shown separately as "+Nd ext".
 // ============================================================
 function openProjectScheduleForm(existingSchedule, focusMilestoneId = null) {
+  if (projectLifecycleReadOnly) {
+    showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
+    return;
+  }
   if (!AppState.canWrite) {
     alert('Your role does not have permission to create or edit schedules.');
     return;
@@ -5296,6 +5442,10 @@ function openProjectScheduleForm(existingSchedule, focusMilestoneId = null) {
 //  EXTENSION PANEL — time-only, no milestone creation here
 // ============================================================
 function openExtensionPanel(existingSchedule) {
+  if (projectLifecycleReadOnly) {
+    showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
+    return;
+  }
   if (!AppState.canWrite) { alert('Your role cannot add extensions.'); return; }
   document.getElementById('extOverlay')?.remove();
 
@@ -5614,6 +5764,9 @@ function openExtensionEditForm(extension, closeDetails) {
 //  FIX 4: Gantt body cells in extension period get amber background.
 // ============================================================
 function openActualProgressPage(savedSchedule) {
+  AppState.effectiveToday = savedSchedule.effective_today || AppState.effectiveToday;
+  AppState.schedulePaused = savedSchedule.schedule_paused === true || AppState.schedulePaused;
+  AppState.schedulePauseStartedAt = savedSchedule.pause_started_at || AppState.schedulePauseStartedAt;
   // FIX 1: merge both milestone arrays
   const pms = _mergeAllMilestones(savedSchedule).map(ms => ({
     ...ms,
@@ -5631,11 +5784,11 @@ function openActualProgressPage(savedSchedule) {
 
   const latestExtFinish = extensions.length
     ? extensions.reduce((latest, e) => {
-        const d = new Date(e.new_planned_finish || e.newPlannedFinish || 0);
+        const d = _parseScheduleDate(e.new_planned_finish || e.newPlannedFinish || 0);
         return d > latest ? d : latest;
       }, new Date(0))
     : null;
-  const baselineFinishDate = tl.finish ? new Date(tl.finish) : null;
+  const baselineFinishDate = tl.finish ? _parseScheduleDate(tl.finish) : null;
 
   const projectName = _projectName();
   let   ganttDirty  = true;
@@ -5830,7 +5983,9 @@ function openActualProgressPage(savedSchedule) {
         { id: 'p3Back', label: '← Back', cls: 'sc-btn sc-btn-ghost-dark' },
       ])}
     </div>
-    ${!AppState.canWrite ? `<div class="p3-viewonly-bar">🔒 View-only — your role (${AppState.user.role}) can view but cannot edit.</div>` : ''}
+    ${AppState.schedulePaused
+      ? `<div class="p3-viewonly-bar">⏸ Schedule paused at deletion request on ${_fmtDateShort(AppState.schedulePauseStartedAt)}. Delay tracking resumes if the project is restored.</div>`
+      : !AppState.canWrite ? `<div class="p3-viewonly-bar">🔒 View-only — your role (${AppState.user.role}) can view but cannot edit.</div>` : ''}
 
     <div class="p3sum" id="p3Sum">
       <div class="p3sk"><span class="p3sk-l">Overall</span><span class="p3sk-v" id="p3OverallPct">—</span></div>
@@ -5935,8 +6090,8 @@ function openActualProgressPage(savedSchedule) {
     // Plan % uses baseline timeline only (extensions don't affect planned work rate)
     let planPct = '0.0';
     if (tl.start && tl.finish) {
-      const elapsed = Math.max(0, (new Date() - new Date(tl.start)) / 86400000);
-      const dur     = Math.max(1, (new Date(tl.finish) - new Date(tl.start)) / 86400000);
+      const elapsed = Math.max(0, (_scheduleTodayDate() - _parseScheduleDate(tl.start)) / 86400000);
+      const dur     = Math.max(1, (_parseScheduleDate(tl.finish) - _parseScheduleDate(tl.start)) / 86400000);
       planPct = Math.min(100, elapsed / dur * 100).toFixed(1);
     }
     const variance = (parseFloat(overallPct) - parseFloat(planPct)).toFixed(1);
@@ -6111,7 +6266,7 @@ function openActualProgressPage(savedSchedule) {
   }
 
   function currentCalendarHTML() {
-    const today = new Date();
+    const today = _scheduleTodayDate();
     const year = today.getFullYear();
     const month = today.getMonth();
     const day = today.getDate();
@@ -6156,13 +6311,16 @@ function openActualProgressPage(savedSchedule) {
     const plannedDays  = msStartDate && msEnd
       ? Math.max(1, Math.ceil((new Date(msEnd) - new Date(msStartDate)) / 86400000))
       : null;
+    const scheduleToday = _scheduleTodayDate();
     const elapsedDays  = msStartDate
-      ? Math.max(0, Math.ceil((new Date() - new Date(msStartDate)) / 86400000))
+      ? Math.max(0, Math.ceil((scheduleToday - new Date(msStartDate)) / 86400000))
       : null;
     const dailyRate    = elapsedDays > 0 ? exec / elapsedDays : 0;
     const projectedDays = dailyRate > 0 && planned > exec ? Math.ceil((planned - exec) / dailyRate) : null;
-    const projectedDate = projectedDays !== null
-      ? new Date(Date.now() + projectedDays * 86400000).toISOString().slice(0, 10)
+    const projectedDateObj = projectedDays !== null ? new Date(scheduleToday) : null;
+    if (projectedDateObj) projectedDateObj.setDate(projectedDateObj.getDate() + projectedDays);
+    const projectedDate = projectedDateObj
+      ? `${projectedDateObj.getFullYear()}-${String(projectedDateObj.getMonth() + 1).padStart(2, '0')}-${String(projectedDateObj.getDate()).padStart(2, '0')}`
       : null;
     // FIX 5/6: determine which table this milestone belongs to
     const isExtMs     = ms._sourceTable === 'additional_milestones';
@@ -6554,13 +6712,13 @@ function openActualProgressPage(savedSchedule) {
     if (!msList.length || !tl.start || !tl.finish) return;
 
     const DAY_W       = 20;
-    const ganttStart  = new Date(tl.start);
-    let   ganttEndDate = new Date(tl.finish);
+    const ganttStart  = _parseScheduleDate(tl.start);
+    let   ganttEndDate = _parseScheduleDate(tl.finish);
     msList.forEach(ms => {
-      const e = new Date(ms.end || tl.finish);
+      const e = _parseScheduleDate(ms.end || tl.finish);
       if (e > ganttEndDate) ganttEndDate = new Date(e);
     });
-    if (latestExtFinish && latestExtFinish > ganttEndDate) ganttEndDate = new Date(latestExtFinish);
+    if (latestExtFinish && latestExtFinish > ganttEndDate) ganttEndDate = _parseScheduleDate(latestExtFinish);
     ganttEndDate.setDate(ganttEndDate.getDate() + 14);
 
     const days = [];
@@ -6595,7 +6753,7 @@ function openActualProgressPage(savedSchedule) {
     if (curW) weeks.push(curW);
 
     const totalW = days.length * DAY_W;
-    const today  = new Date(); today.setHours(0, 0, 0, 0);
+    const today  = _scheduleTodayDate();
 
     const monthHdr = `<div class="gtt-hdr-month" style="width:${totalW}px;">${
       months.map(m => `<div class="gtt-month-cell${m.extCount > 0 ? ' ext-zone' : ''}" style="width:${m.count * DAY_W}px;">${m.label}${m.extCount > 0 ? ' ⬤' : ''}</div>`).join('')
@@ -6612,8 +6770,8 @@ function openActualProgressPage(savedSchedule) {
     }</div>`;
 
     const rows = msList.map(ms => {
-      const pStart    = new Date(ms.start);
-      const pEnd      = new Date(ms.end);
+      const pStart    = _parseScheduleDate(ms.start);
+      const pEnd      = _parseScheduleDate(ms.end);
       const pct       = Number(ms.progress_pct || 0) / 100;
       const isPostExt = ms.added_via_extension || false;
       let planBar = '', actualBar = '', delayBar = '';
@@ -6646,7 +6804,7 @@ function openActualProgressPage(savedSchedule) {
     const todayOff  = Math.round((today - ganttStart) / 86400000);
     const todayLine = (todayOff >= 0 && todayOff < days.length)
       ? `<div style="position:absolute;left:${todayOff * DAY_W + 10}px;top:66px;bottom:0;width:2px;background:var(--c-brand);opacity:0.6;z-index:4;pointer-events:none;"></div>` : '';
-    const baseOff      = tl.finish ? Math.round((new Date(tl.finish) - ganttStart) / 86400000) : -1;
+    const baseOff      = tl.finish ? Math.round((_parseScheduleDate(tl.finish) - ganttStart) / 86400000) : -1;
     const baselineLine = (baseOff >= 0 && baseOff < days.length)
       ? `<div style="position:absolute;left:${baseOff * DAY_W + 10}px;top:66px;bottom:0;width:2px;background:var(--c-ext);opacity:0.5;z-index:4;pointer-events:none;" title="Baseline Finish"></div>` : '';
     let extFinishLine = '';
@@ -6664,7 +6822,7 @@ function openActualProgressPage(savedSchedule) {
     _el('p3GttLabels').innerHTML = msList.map(ms => {
       const pct       = Number(ms.progress_pct || 0);
       const isPostExt = ms.added_via_extension || false;
-      const isDelay   = ms.end && today > new Date(ms.end) && ms.activity_status !== 'completed';
+      const isDelay   = ms.end && today > _parseScheduleDate(ms.end) && ms.activity_status !== 'completed';
       const bg  = ms.activity_status === 'completed' ? 'var(--c-brand-light)'
         : isDelay ? 'var(--c-danger-light)'
         : isPostExt ? 'var(--c-ext-light)'
@@ -8440,6 +8598,10 @@ function openNoticeOfDetermination(recordId, tabKey, isRejection = false) {
 //  ADD RECORD PANEL
 // =======================================================================
 function openAddRecordPanel(noticeConfig = null, tabKey = null) {
+  if (projectLifecycleReadOnly) {
+    showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
+    return;
+  }
   const isNotice     = noticeConfig !== null;
   const recordKind   = isNotice ? noticeConfig.recordKind   : 'new';
   const noticeTiedId = isNotice ? noticeConfig.noticeTiedId : null;
@@ -9112,16 +9274,17 @@ async function openArretPanel() {
 }
 
 function renderArretPanel(arrets) {
+  const canChangeProject = !projectLifecycleReadOnly;
   const html = `
     <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:2px solid #007B8A;flex-shrink:0;">
       <div>
         <h3 style="margin:0;color:#333;font-size:18px;">🛑 Site Arrets</h3>
-        <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Add and review stop-work arret reports for this project.</p>
+        <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">${canChangeProject ? 'Add and review stop-work arret reports for this project.' : 'Project is read-only during its scheduled lifecycle period.'}</p>
       </div>
-      <button class="btn" type="button" onclick="openArretForm()">+ Add Arret</button>
+      ${canChangeProject ? '<button class="btn" type="button" onclick="openArretForm()">+ Add Arret</button>' : ''}
     </div>
     <div style="flex:1;overflow-y:auto;padding:16px 20px;">
-      ${arrets.length ? '<ul style="padding:0;margin:0;list-style:none;">' : '<div style="text-align:center;padding:40px 0;color:#9ca3af;"><div style="font-size:32px;margin-bottom:8px;">🛑</div><p style="margin:0;">No arrets yet. Add one now to flag a stop-work issue.</p></div>'}
+      ${arrets.length ? '<ul style="padding:0;margin:0;list-style:none;">' : `<div style="text-align:center;padding:40px 0;color:#9ca3af;"><div style="font-size:32px;margin-bottom:8px;">🛑</div><p style="margin:0;">${canChangeProject ? 'No arrets yet. Add one now to flag a stop-work issue.' : 'No arret reports are available for this project.'}</p></div>`}
       ${arrets.map(arret => {
           const attachmentMarkup = arret.attachments?.length ? `
           <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;">
@@ -9147,8 +9310,8 @@ function renderArretPanel(arrets) {
               </div>
               <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;">
                 <button type="button" class="btn" style="font-size:12px;padding:8px 12px;" data-arret-id="${arret.id}">View</button>
-                ${isArretCreator(arret) ? `<button type="button" class="btn secondary" style="font-size:12px;padding:8px 12px;" data-edit-arret-id="${arret.id}">Edit</button>` : ''}
-                ${isArretCreator(arret) ? `<button type="button" class="btn danger" style="font-size:12px;padding:8px 12px;" data-delete-arret-id="${arret.id}">Delete</button>` : ''}
+                ${canChangeProject && isArretCreator(arret) ? `<button type="button" class="btn secondary" style="font-size:12px;padding:8px 12px;" data-edit-arret-id="${arret.id}">Edit</button>` : ''}
+                ${canChangeProject && isArretCreator(arret) ? `<button type="button" class="btn danger" style="font-size:12px;padding:8px 12px;" data-delete-arret-id="${arret.id}">Delete</button>` : ''}
               </div>
             </div>
           </li>
@@ -9210,7 +9373,7 @@ async function handleArretView(recordId) {
   arret.is_viewed = true;
   updateArretBar();
 
-  const canEdit = isArretCreator(arret);
+  const canEdit = isArretCreator(arret) && !projectLifecycleReadOnly;
   const canDelete = canEdit;
 
   const attachmentHtml = arret.attachments?.length ? `
@@ -9336,6 +9499,10 @@ function showAttachmentPreview(url, name, mime) {
 }
 
 function openArretForm(arret = null) {
+  if (projectLifecycleReadOnly) {
+    showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
+    return;
+  }
   if (arret && typeof arret !== 'object') {
     arret = currentArrets.find(a => String(a.id) === String(arret)) || null;
   }
@@ -9407,6 +9574,10 @@ function setArretAttachmentPreview(files) {
 }
 
 async function submitArretForm() {
+  if (projectLifecycleReadOnly) {
+    showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
+    return;
+  }
   const title = document.getElementById('arretTitle')?.value?.trim();
   const description = document.getElementById('arretDescription')?.value?.trim();
   if (!title || !description) {
@@ -9454,6 +9625,10 @@ async function submitArretForm() {
 }
 
 async function deleteArret(arretId) {
+  if (projectLifecycleReadOnly) {
+    showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
+    return;
+  }
   if (!confirm('Delete this arret? This cannot be undone.')) return;
   try {
     const projectId = localStorage.getItem('activeProjectId');
@@ -10534,6 +10709,10 @@ async function _wcDownloadTaskFile(taskId, fileName) {
 //  CREATE FORM — gray panel
 // ███████████████████████████████████████████████████████████████████████
 async function _wcOpenCreateForm() {
+  if (projectLifecycleReadOnly) {
+    showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
+    return;
+  }
   if (window.isCurrentUserLeader !== true) {
     alert('Only side leaders can create tasks.'); return;
   }
@@ -11527,6 +11706,10 @@ async function _peDownloadTaskFile(taskId, fileName) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 async function _peOpenAddForm() {
+  if (projectLifecycleReadOnly) {
+    showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
+    return;
+  }
   if (!isWCLeader(window.currentUserRole)) {
     alert('Only side leaders can add activities.'); return;
   }
@@ -11536,6 +11719,10 @@ async function _peOpenAddForm() {
 }
 
 async function _peOpenEditForm(recordId) {
+  if (projectLifecycleReadOnly) {
+    showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
+    return;
+  }
   const tabKey = 'planning-execution';
   const cached = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
   if (!cached) return alert('Activity not found in cache. Please refresh.');
@@ -12478,6 +12665,10 @@ async function _daDownload(docId, fileName) {
 //  DOCUMENT & APPROVAL — Create / Resubmit form
 // ═══════════════════════════════════════════════════════════════════════
 function _daOpenCreateForm(existingDoc = null) {
+  if (projectLifecycleReadOnly) {
+    showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
+    return;
+  }
   const projectId = localStorage.getItem('activeProjectId');
   if (!projectId) { alert('No project selected.'); return; }
 
@@ -12844,6 +13035,10 @@ function _crRenderList(records) {
 //  Body:    FormData { projectId, doc_type, title, description, file }
 // ═══════════════════════════════════════════════════════════════════════
 function _crOpenCreateForm() {
+  if (projectLifecycleReadOnly) {
+    showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
+    return;
+  }
   const projectId = localStorage.getItem('activeProjectId');
   if (!projectId) { alert('No project selected.'); return; }
 
