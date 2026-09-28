@@ -45,8 +45,15 @@
     .status { color: var(--muted); font-size: 13px; font-weight: 700; }
     .notice { margin-top: 22px; padding: 17px 18px; border-left: 4px solid var(--teal); background: #e8f4f1; }
     .notice.danger { border-color: var(--danger); background: var(--danger-bg); }
+    .notice strong { display: block; margin-bottom: 5px; }
     .notice p { margin: 0; }
     .notice p + p { margin-top: 8px; }
+    .section-heading { margin: 28px 0 6px; font-size: 17px; }
+    .section-copy { margin: 0; color: var(--muted); }
+    .confirmation { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+    .confirmation-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .field-hint { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+    .notice.locked { border-color: var(--danger); background: var(--danger-bg); }
     .details { margin: 18px 0 0; padding: 0; list-style: none; }
     .details li { padding: 10px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
     .details strong { color: var(--ink); }
@@ -72,13 +79,15 @@
       border: 1px solid #a8babc; border-radius: 4px; background: white;
       color: var(--ink); font: inherit;
     }
-    #feedback { min-height: 26px; margin: 16px 0 0; color: var(--danger); }
+    #feedback { min-height: 26px; margin: 16px 0 0; color: var(--danger); font-weight: 650; }
+    #feedback.success { color: #176b53; }
     [hidden] { display: none !important; }
     @media (max-width: 520px) {
       header { align-items: flex-start; flex-direction: column; }
       main { margin-top: 32px; }
       .actions { flex-direction: column; }
       .actions button { width: 100%; }
+      .confirmation-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -163,12 +172,23 @@
       if (project.lifecycle_status === 'pending_deletion') {
         ledeEl.textContent = 'The project is frozen for everyone during the 60-day recovery period.';
         actionContent.innerHTML = `
-          <div class="notice danger">
-            <p><strong>Scheduled for permanent deletion</strong></p>
-            <p>Deletion date: <strong>${escapeHtml(formatDate(project.deletion_scheduled_at))}</strong></p>
+          <div class="notice danger locked">
+            <strong>Project is read-only</strong>
+            <p>Deletion is scheduled for <strong>${escapeHtml(formatDate(project.deletion_scheduled_at))}</strong>.</p>
             <p>Until then, project records remain available to view. No one can add, edit, or delete project content. Cancel below to restore normal project use.</p>
           </div>
-          <div class="actions"><button class="secondary" id="cancelDeletion">Cancel deletion and restore project</button></div>`;
+          <h2 class="section-heading">Restore project</h2>
+          <p class="section-copy">Confirm your identity with your account password. The project returns to active immediately.</p>
+          <div class="confirmation">
+            <div class="confirm-box">
+              <label for="cancelDeletionPassword">Client account password</label>
+              <input id="cancelDeletionPassword" type="password" autocomplete="current-password">
+            </div>
+            <div class="actions"><button class="secondary" id="cancelDeletion" disabled>Cancel scheduled deletion</button></div>
+          </div>`;
+        const password = document.getElementById('cancelDeletionPassword');
+        const button = document.getElementById('cancelDeletion');
+        password.addEventListener('input', () => { button.disabled = !password.value; });
         document.getElementById('cancelDeletion').addEventListener('click', cancelDeletion);
         return;
       }
@@ -184,14 +204,29 @@
           <li><strong>Before continuing:</strong> save any files you need to keep.</li>
           <li><strong>Notifications:</strong> project members receive an email and an in-app notification.</li>
         </ul>
-        <div class="confirm-box">
-          <label for="confirmProjectName">Type the project name to confirm: <strong>${escapeHtml(project.name)}</strong></label>
-          <input id="confirmProjectName" autocomplete="off" spellcheck="false">
+        <h2 class="section-heading">Confirm deletion</h2>
+        <p class="section-copy">Both checks are required before the 60-day recovery period begins.</p>
+        <div class="confirmation">
+          <div class="confirmation-grid">
+            <div class="confirm-box">
+              <label for="confirmProjectName">Type the project name</label>
+              <input id="confirmProjectName" autocomplete="off" spellcheck="false">
+              <p class="field-hint">Enter: ${escapeHtml(project.name)}</p>
+            </div>
+            <div class="confirm-box">
+              <label for="confirmProjectPassword">Client account password</label>
+              <input id="confirmProjectPassword" type="password" autocomplete="current-password">
+            </div>
+          </div>
+          <div class="actions"><button class="danger" id="scheduleDeletion" disabled>Schedule project deletion</button></div>
         </div>
-        <div class="actions"><button class="danger" id="scheduleDeletion" disabled>Schedule project deletion</button></div>`;
+      `;
       const input = document.getElementById('confirmProjectName');
+      const password = document.getElementById('confirmProjectPassword');
       const button = document.getElementById('scheduleDeletion');
-      input.addEventListener('input', () => { button.disabled = input.value.trim() !== project.name; });
+      const updateConfirmation = () => { button.disabled = input.value.trim() !== project.name || !password.value; };
+      input.addEventListener('input', updateConfirmation);
+      password.addEventListener('input', updateConfirmation);
       button.addEventListener('click', scheduleDeletion);
     }
 
@@ -238,11 +273,16 @@
 
     async function scheduleDeletion() {
       const button = document.getElementById('scheduleDeletion');
+      const projectName = document.getElementById('confirmProjectName').value.trim();
+      const password = document.getElementById('confirmProjectPassword').value;
       button.disabled = true;
       feedback.textContent = '';
+      feedback.classList.remove('success');
       try {
-        await request('/project-deletion/request', { method: 'POST', body: JSON.stringify({ projectId }) });
+        const result = await request('/project-deletion/request', { method: 'POST', body: JSON.stringify({ projectId, projectName, password }) });
         await refresh();
+        feedback.textContent = notificationFeedback(result.notifications);
+        feedback.classList.add('success');
       } catch (err) {
         feedback.textContent = err.message;
         button.disabled = false;
@@ -251,15 +291,27 @@
 
     async function cancelDeletion() {
       const button = document.getElementById('cancelDeletion');
+      const password = document.getElementById('cancelDeletionPassword').value;
       button.disabled = true;
       feedback.textContent = '';
+      feedback.classList.remove('success');
       try {
-        await request('/project-deletion/cancel', { method: 'POST', body: JSON.stringify({ projectId }) });
+        const result = await request('/project-deletion/cancel', { method: 'POST', body: JSON.stringify({ projectId, password }) });
         await refresh();
+        feedback.textContent = notificationFeedback(result.notifications);
+        feedback.classList.add('success');
       } catch (err) {
         feedback.textContent = err.message;
         button.disabled = false;
       }
+    }
+
+    function notificationFeedback(notifications) {
+      if (!notifications) return 'Project status updated.';
+      const emailText = `${notifications.emailSent} member email${notifications.emailSent === 1 ? '' : 's'} sent`;
+      const inAppText = notifications.inAppSent ? 'in-app notification posted' : 'no other members to notify in-app';
+      const failureText = notifications.emailFailed ? `; ${notifications.emailFailed} email${notifications.emailFailed === 1 ? '' : 's'} failed` : '';
+      return `Project status updated. ${emailText}; ${inAppText}${failureText}.`;
     }
 
     async function scheduleExit() {
