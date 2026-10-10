@@ -820,8 +820,10 @@
     .meeting-roster-meta { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
     .meeting-selected-people { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
     .meeting-person-chip { padding: 4px 8px; border-radius: 12px; background: #eef4f5; color: #31565a; font-size: 11px; }
+    .meeting-person-chip button { margin-left: 4px; padding: 0; border: 0; color: inherit; background: transparent; cursor: pointer; }
     .meeting-manual-entry { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
     .meeting-manual-entry input { flex: 1; min-width: 0; }
+    #meetingViewContainer .meeting-plan-form .meeting-manual-entry input[type="text"] { padding: 9px 0; border-bottom: 1px solid #cbd5db; }
     .meeting-plan-actions { display: flex; gap: 8px; margin-top: 18px; }
     .meeting-report-upload { padding: 16px 0; }
     .meeting-report-upload input { width: 100%; padding: 8px 0; }
@@ -7235,6 +7237,7 @@ function meetingParticipantKey(member) {
 }
 
 function meetingParticipantName(member) {
+  if (member.display_name) return member.display_name;
   const role = member.role || '';
   if (role === 'Client') return [member.representative, member.title, role].filter(Boolean).join(' · ');
   if (role === 'Contractor' || role === 'Consultant') return [member.representative, member.title_position, role].filter(Boolean).join(' · ');
@@ -7295,10 +7298,13 @@ async function loadMeetingProjectParticipants(projectId) {
   if (!list) return;
   try {
     const chatApi = API.replace(/\/api\/?$/, '');
-    const response = await authFetch(`${chatApi}/chat/members?projectId=${encodeURIComponent(projectId)}`);
+    const response = await authFetch(`${chatApi}/chat/conversations?projectId=${encodeURIComponent(projectId)}`);
     const data = response && response.ok ? await response.json() : null;
     if (!data?.success) throw new Error(data?.error || 'Could not load project participants');
-    meetingParticipantDraft.members = data.members || [];
+    meetingParticipantDraft.members = (data.members || []).filter(member =>
+      String(member.role_id) !== String(window.currentUserId)
+      || String(member.role).toLowerCase() !== String(window.currentUserRole).toLowerCase()
+    );
     renderMeetingParticipantList(document.getElementById('mParticipantSearch')?.value || '');
     renderSelectedMeetingParticipants();
   } catch (error) {
