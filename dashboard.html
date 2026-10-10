@@ -7232,6 +7232,11 @@ function toMeetingLocalDateTime(value) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 
+function currentLocalDateTimeInputValue() {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
 function meetingParticipantKey(member) {
   return `${member.role}:${member.role_id}`;
 }
@@ -7347,7 +7352,7 @@ function renderPlanMeetingForm(context, scope, scopeValue, meeting = null) {
       </div>
       <div class="form-group">
         <label for="mDateTime">Date and time</label>
-        <input type="datetime-local" id="mDateTime" value="${meeting?.date_time ? escapeHtml(toMeetingLocalDateTime(meeting.date_time)) : ''}" required>
+        <input type="datetime-local" id="mDateTime" min="${currentLocalDateTimeInputValue()}" value="${meeting?.date_time ? escapeHtml(toMeetingLocalDateTime(meeting.date_time)) : ''}" required>
       </div>
       <div class="form-group">
         <label for="mLocation">Location / access details</label>
@@ -7406,6 +7411,14 @@ function renderPlanMeetingForm(context, scope, scopeValue, meeting = null) {
   document.getElementById('mManualParticipant').addEventListener('keydown', event => {
     if (event.key === 'Enter') { event.preventDefault(); document.getElementById('mAddParticipant').click(); }
   });
+  document.getElementById('mDateTime').addEventListener('change', event => {
+    const field = event.currentTarget;
+    field.min = currentLocalDateTimeInputValue();
+    const instant = new Date(field.value);
+    field.setCustomValidity(field.value && instant.getTime() <= Date.now()
+      ? 'This meeting time has passed. Please choose a future date and time.'
+      : '');
+  });
   renderSelectedMeetingParticipants();
   loadMeetingProjectParticipants(localStorage.getItem('activeProjectId'));
   document.getElementById('savePlanMeetingBtn').addEventListener('click', () => savePlannedMeeting(context, scope, scopeValue, meeting));
@@ -7417,11 +7430,27 @@ async function savePlannedMeeting(context, scope, scopeValue, meeting = null) {
   const title = document.getElementById('mTitle').value.trim();
   const purpose = document.getElementById('mPurpose').innerText.trim();
   const dateTime = document.getElementById('mDateTime').value;
+  const scheduledInstant = new Date(dateTime);
   const location = document.getElementById('mLocation').value.trim();
   const participants = getMeetingParticipants();
   const agenda = document.getElementById('mAgenda').innerText.trim();
   const files = document.getElementById('mAttachments').files;
-  if (!type || !title || !purpose || !dateTime || !location || !participants.length || !agenda) {
+  const dateField = document.getElementById('mDateTime');
+  if (!dateTime) {
+    dateField.setCustomValidity('Please select a meeting date and time.');
+    dateField.reportValidity();
+    alert('Please select a meeting date and time before scheduling.');
+    return;
+  }
+  if (Number.isNaN(scheduledInstant.getTime()) || scheduledInstant.getTime() <= Date.now()) {
+    const message = 'This meeting date and time has passed. Please enter a future date and time.';
+    dateField.setCustomValidity(message);
+    dateField.reportValidity();
+    alert(message);
+    return;
+  }
+  dateField.setCustomValidity('');
+  if (!type || !title || !purpose || !location || !participants.length || !agenda) {
     alert('Complete each meeting detail and select or add at least one participant.');
     return;
   }
@@ -7435,6 +7464,7 @@ async function savePlannedMeeting(context, scope, scopeValue, meeting = null) {
     body.append('title', title);
     body.append('purpose', purpose);
     body.append('date_time', dateTime);
+    body.append('scheduled_at', scheduledInstant.toISOString());
     body.append('location', location);
     body.append('participants', participants.map(person => person.name).join('\n'));
     body.append('participant_details', JSON.stringify(participants));
