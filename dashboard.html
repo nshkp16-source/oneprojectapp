@@ -7704,6 +7704,82 @@ function readMeetingAgendaItems() {
   }));
 }
 
+function renderMeetingFormPreview() {
+  const read = id => document.getElementById(id)?.value.trim() || '';
+  const title = read('mTitle') || 'Untitled meeting';
+  const type = read('mType');
+  const typeLabel = { site: 'Site meeting', office: 'Office meeting', virtual: 'Virtual meeting' }[type] || 'Meeting';
+  const timeZone = read('mTimeZone');
+  const start = read('mDateTime');
+  const end = read('mEndTime');
+  const formatLocalDateTime = value => {
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+    if (!match) return value || 'Not scheduled yet';
+    const [, year, month, day, hour, minute] = match;
+    const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+    const dayName = new Intl.DateTimeFormat('en-GB', { weekday: 'short', timeZone: 'UTC' }).format(date);
+    const monthName = new Intl.DateTimeFormat('en-GB', { month: 'short', timeZone: 'UTC' }).format(date);
+    return `${dayName} ${day} ${monthName} ${year}, ${hour}:${minute}`;
+  };
+  const dateLabel = start
+    ? `${formatLocalDateTime(start)}${end ? ` – ${formatLocalDateTime(end).replace(/^[A-Za-z]{3} /, '')}` : ''}${timeZone ? ` ${timeZone}` : ''}`
+    : 'Not scheduled yet';
+  const projectName = projectMeetingInfo.name || '';
+  const projectReference = projectMeetingInfo.contract_reference || '';
+  const meetingNumber = read('mNumber');
+  const chairperson = read('mChairperson');
+  const minuteTaker = read('mMinuteTaker');
+  const purpose = safeMeetingRichHtml(document.getElementById('mPurpose')?.innerHTML || '');
+  const virtualLink = read('mVirtualLink');
+  const location = type === 'virtual' ? virtualLink : read('mLocation');
+  const safetyNotes = type === 'site' ? read('mSafetyNotes') : '';
+  const participants = getMeetingParticipants();
+  const participantList = participants.length
+    ? `<ul style="margin:0;padding-left:18px;">${participants.map(person => `<li>${escapeHtml(person.name || 'Participant')} <span class="meeting-roster-meta">${escapeHtml(person.email || person.role || (person.source === 'manual' ? 'External participant' : 'Project participant'))} · ${escapeHtml(({ required: 'Required', optional: 'Optional', information: 'For information' })[person.attendance_type] || 'Required')}</span></li>`).join('')}</ul>`
+    : '<ul style="margin:0;padding-left:18px;"><li>—</li></ul>';
+  const agendaItems = readMeetingAgendaItems();
+  const agenda = agendaItems.length
+    ? `<ol>${agendaItems.map(item => `<li><strong>${escapeHtml(item.title || 'Agenda topic')}</strong>${item.duration_minutes ? ` — ${escapeHtml(String(item.duration_minutes))} min` : ''}${item.presenter ? ` · ${escapeHtml(item.presenter)}` : ''}${item.details ? `<div class="meeting-rich-display">${safeMeetingRichHtml(item.details)}</div>` : ''}</li>`).join('')}</ol>`
+    : '—';
+  const recurrence = read('mRecurrence');
+  const attachments = [...(document.getElementById('mAttachments')?.files || [])].map(file => file.name);
+  const dayMatch = start.match(/^\d{4}-(\d{2})-(\d{2})T/);
+  const month = dayMatch
+    ? new Intl.DateTimeFormat('en-GB', { month: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(2000, Number(dayMatch[1]) - 1, 1)))
+    : '';
+  const day = dayMatch ? dayMatch[2] : '—';
+  const locationValue = type === 'virtual' && virtualLink
+    ? `<a href="${escapeHtml(virtualLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(virtualLink)}</a>`
+    : escapeHtml(location || '—');
+
+  return `<article class="meeting-card open meeting-preview-card">
+    <div class="meeting-card-header" aria-label="Meeting preview">
+      <span class="meeting-card-main">
+        <span class="meeting-date-tile" aria-hidden="true"><b>${escapeHtml(day)}</b><span>${escapeHtml(month)}</span></span>
+        <span style="min-width:0;">
+          <span class="meeting-card-title" style="display:block;">${escapeHtml(title)}</span>
+          <span class="meeting-card-meta" style="display:block;">${escapeHtml(typeLabel)} · ${escapeHtml(dateLabel)} · ${escapeHtml(type === 'virtual' ? 'Online' : location || 'Location not set')}</span>
+        </span>
+      </span>
+      <span class="meeting-card-side"><span class="mtg-badge upcoming">Preview</span></span>
+    </div>
+    <div class="meeting-card-body" style="display:block;">
+      <h4 class="meeting-section-title">Meeting plan</h4>
+      ${projectName ? `<div class="meeting-detail-row"><strong>Project</strong><span>${escapeHtml(projectName)}${projectReference ? ` · ${escapeHtml(projectReference)}` : ''}</span></div>` : ''}
+      ${meetingNumber ? `<div class="meeting-detail-row"><strong>Meeting number</strong><span>${escapeHtml(meetingNumber)}</span></div>` : ''}
+      ${chairperson ? `<div class="meeting-detail-row"><strong>Chairperson</strong><span>${escapeHtml(chairperson)}</span></div>` : ''}
+      ${minuteTaker ? `<div class="meeting-detail-row"><strong>Minute-taker</strong><span>${escapeHtml(minuteTaker)}</span></div>` : ''}
+      <div class="meeting-detail-row"><strong>Purpose</strong><span class="meeting-rich-display">${purpose || '—'}</span></div>
+      <div class="meeting-detail-row"><strong>Date and time</strong><span>${escapeHtml(dateLabel)}</span></div>
+      <div class="meeting-detail-row"><strong>Location / access</strong><span>${locationValue}${safetyNotes ? `<br>${escapeHtml(safetyNotes)}` : ''}</span></div>
+      <div class="meeting-detail-row"><strong>Participants</strong><span>${participantList}</span></div>
+      <div class="meeting-detail-row"><strong>Agenda</strong><span>${agenda}</span></div>
+      ${recurrence ? `<div class="meeting-detail-row"><strong>Recurring series</strong><span>${escapeHtml({ weekly: 'Weekly', biweekly: 'Every two weeks', monthly: 'Monthly' }[recurrence] || recurrence)}${read('mRecurrenceEnd') ? ` until ${escapeHtml(read('mRecurrenceEnd'))}` : ''}</span></div>` : ''}
+      ${attachments.length ? `<div class="meeting-detail-row"><strong>References</strong><span>${attachments.map(escapeHtml).join(' · ')}</span></div>` : ''}
+    </div>
+  </article>`;
+}
+
 function renderMeetingAgendaItems() {
   const list = document.getElementById('mAgendaItems');
   if (!list) return;
@@ -7922,8 +7998,7 @@ function renderPlanMeetingForm(context, scope, scopeValue, meeting = null) {
     if (event.target.closest('#previewMeetingBtn')) {
       const preview = document.getElementById('meetingPreview');
       preview.hidden = !preview.hidden;
-      const title = document.getElementById('mTitle').value || 'Untitled meeting';
-      preview.innerHTML = `<strong>${escapeHtml(title)}</strong><p>${escapeHtml(document.getElementById('mDateTime').value)} – ${escapeHtml(document.getElementById('mEndTime').value)} ${escapeHtml(document.getElementById('mTimeZone').value)}</p><p>${safeMeetingRichHtml(document.getElementById('mPurpose').innerHTML)}</p><ol>${readMeetingAgendaItems().map(item => `<li>${escapeHtml(item.title)} · ${escapeHtml(item.duration_minutes)} min${item.presenter ? ` · ${escapeHtml(item.presenter)}` : ''}</li>`).join('')}</ol>`;
+      preview.innerHTML = renderMeetingFormPreview();
       return;
     }
     if (event.target.closest('#savePlanMeetingBtn')) savePlannedMeeting(context, scope, scopeValue, meeting, false);
