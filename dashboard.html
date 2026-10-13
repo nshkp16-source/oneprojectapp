@@ -987,6 +987,50 @@
     .meeting-manual-entry input { flex: 1; min-width: 0; }
     #meetingViewContainer .meeting-plan-form .meeting-manual-entry input[type="text"] { padding: 9px 0; border-bottom: 1px solid #cbd5db; }
     .meeting-plan-actions { display: flex; gap: 8px; margin-top: 18px; }
+    .meeting-plan-form { max-width: 900px; margin: 0 auto; padding: 18px 12px 32px; }
+    .meeting-form-heading { margin: 8px 0 4px; color: var(--text); font-size: 22px; }
+    .meeting-form-section { margin: 16px 0; padding: 16px 18px; border: 1px solid #dce5e8; border-radius: 10px; background: #fff; box-shadow: 0 1px 3px rgba(15,23,42,.04); }
+    .meeting-form-section h4 { margin: 0 0 12px; color: #23434a; font-size: 14px; }
+    .meeting-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; }
+    .meeting-form-grid .form-group { min-width: 0; padding: 0; border: 0; }
+    .meeting-plan-form .form-group > label { display: block; margin: 0 0 6px; color: #334e58; font-size: 13px; font-weight: 650; }
+    .meeting-required { color: #b42318; }
+    #meetingViewContainer .meeting-plan-form input[type="text"],
+    #meetingViewContainer .meeting-plan-form input[type="email"],
+    #meetingViewContainer .meeting-plan-form input[type="url"],
+    #meetingViewContainer .meeting-plan-form input[type="number"],
+    #meetingViewContainer .meeting-plan-form input[type="date"],
+    #meetingViewContainer .meeting-plan-form input[type="datetime-local"],
+    #meetingViewContainer .meeting-plan-form select {
+      width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid #cbd5db; border-radius: 6px;
+      background: #fff; color: var(--text); font: inherit; outline: none; box-shadow: none;
+    }
+    #meetingViewContainer .meeting-plan-form input:focus,
+    #meetingViewContainer .meeting-plan-form select:focus,
+    .meeting-rich-editor:focus { border-color: var(--accent); outline: 2px solid rgba(18,108,118,.12); }
+    .meeting-help, .meeting-counter { color: #64748b; font-size: 11px; }
+    .meeting-field-error { min-height: 0; margin: 4px 0 0; color: #b42318; font-size: 12px; }
+    .meeting-field-error:empty { display: none; }
+    .meeting-invalid { border-color: #d92d20 !important; }
+    .meeting-rich-toolbar { display:flex; gap:4px; flex-wrap:wrap; margin-top:8px; }
+    .meeting-rich-toolbar button { padding:4px 8px; border:1px solid #d7e0e3; border-radius:5px; background:#f8fafb; color:#334e58; cursor:pointer; }
+    .meeting-rich-editor { min-height:100px; max-height:360px; overflow:auto; margin-top:6px; padding:10px 12px; border:1px solid #cbd5db; border-radius:6px; background:#fff; color:var(--text); font-size:14px; line-height:1.6; }
+    .meeting-rich-editor:empty::before { color:#94a3b8; content:attr(data-placeholder); pointer-events:none; }
+    .meeting-agenda-item { margin:10px 0; padding:12px; border:1px solid #dce5e8; border-radius:8px; background:#fbfdfe; }
+    .meeting-agenda-item-fields { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1.3fr) 110px auto; gap:8px; align-items:center; }
+    .meeting-agenda-item .meeting-rich-editor { min-height:56px; }
+    .meeting-form-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+    .meeting-preview { margin-top:12px; padding:14px; border:1px solid #b8cdd2; border-radius:8px; background:#f8fbfc; }
+    .meeting-rsvp-actions { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+    .mtg-badge.draft { background:#f1f5f9; color:#475569; }
+    .meeting-timezone-note { padding:8px 10px; border-radius:6px; background:#eff8ff; color:#175f85; font-size:12px; }
+    @media (max-width: 640px) {
+      .meeting-form-grid { grid-template-columns: 1fr; }
+      .meeting-form-section { padding:12px; }
+      .meeting-agenda-item-fields { grid-template-columns:1fr 1fr; }
+      .meeting-plan-actions, .meeting-form-actions { flex-direction:column; }
+      .meeting-plan-actions button, .meeting-form-actions button { width:100%; }
+    }
     .meeting-report-upload { padding: 16px 0; }
     .meeting-report-upload input { width: 100%; padding: 8px 0; }
     .meeting-detail-row { display: grid; grid-template-columns: minmax(120px, 170px) minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid #edf0f2; font-size: 13px; }
@@ -7321,18 +7365,23 @@ function meetingToast(message, type = 'info', timeout = 4500) {
 }
 
 function meetingWhen(meeting) {
-  return new Date(meeting.date_time_local || meeting.date_time);
+  return new Date(meeting.scheduled_at || meeting.date_time_local || meeting.date_time);
 }
 
-function formatMeetingDate(date) {
+function formatMeetingDate(date, timeZone = '') {
   if (!(date instanceof Date)) date = new Date(date);
   if (Number.isNaN(date.getTime())) return '—';
-  const p = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+  const p = new Intl.DateTimeFormat('en-GB', {
+    weekday: 'short', day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    ...(timeZone ? { timeZone } : {}),
+  })
     .formatToParts(date).reduce((o, x) => (o[x.type] = x.value, o), {});
-  return `${p.weekday} ${p.day} ${p.month} ${p.year}, ${p.hour}:${p.minute}`;
+  return `${p.weekday} ${p.day} ${p.month} ${p.year}, ${p.hour}:${p.minute}${timeZone ? ` ${timeZone}` : ''}`;
 }
 
 function getMeetingStatus(meeting) {
+  if (meeting.is_draft) return { key: 'draft', label: 'Draft' };
   if (meeting.status === 'cancelled' || meeting.cancelled_at) return { key: 'cancelled', label: 'Cancelled' };
   if (meetingWhen(meeting).getTime() > Date.now()) return { key: 'upcoming', label: 'Upcoming' };
   return meeting.has_minute
@@ -7472,17 +7521,21 @@ async function displayMeetingList(view, scope, scopeValue, context) {
       }
       const downloadPlan = event.target.closest('.meeting-download-plan');
       const downloadReport = event.target.closest('.meeting-download-report');
+      const downloadIcs = event.target.closest('.meeting-download-ics');
       const editMeeting = event.target.closest('.edit-meeting-btn');
       const cancelMeeting = event.target.closest('.cancel-meeting-btn');
+      const rsvpButton = event.target.closest('.meeting-rsvp');
       const minuteButton = event.target.closest('.add-minute-btn, .edit-minute-btn');
-      const button = downloadPlan || downloadReport || editMeeting || cancelMeeting || minuteButton;
+      const button = downloadPlan || downloadReport || downloadIcs || editMeeting || cancelMeeting || rsvpButton || minuteButton;
       if (!button) return;
       event.stopPropagation();
       const meeting = meetings.find(item => String(item.id) === button.getAttribute('data-meeting-id'));
       if (downloadPlan) downloadMeetingPdf(button.getAttribute('data-meeting-id'), 'plan');
       else if (downloadReport) downloadMeetingPdf(button.getAttribute('data-meeting-id'), 'minutes');
+      else if (downloadIcs) downloadMeetingCalendar(button.getAttribute('data-meeting-id'));
       else if (editMeeting && meeting) renderPlanMeetingForm(context, scope, scopeValue, meeting);
       else if (cancelMeeting && meeting) cancelPlannedMeeting(meeting, view, context);
+      else if (rsvpButton && meeting) submitMeetingRsvp(meeting.id, rsvpButton.dataset.response, context);
       else if (minuteButton && meeting) openAddMinuteInline(meeting, scope, scopeValue, button.classList.contains('edit-minute-btn'));
     });
 
@@ -7492,19 +7545,55 @@ async function displayMeetingList(view, scope, scopeValue, context) {
   }
 }
 
-let meetingParticipantDraft = { members: [], selected: new Set(), manual: [] };
+let meetingParticipantDraft = { members: [], selected: new Set(), attendance: new Map(), manual: [] };
+let meetingAgendaDraft = [];
+let projectMeetingInfo = { name: '', contract_reference: '', time_zone: '' };
 
-function toMeetingLocalDateTime(value) {
+function formatMeetingInputTime(value, timeZone) {
   const text = String(value || '');
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text) && !text.endsWith('Z')) return text.slice(0, 16);
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(date).reduce((result, part) => (result[part.type] = part.value, result), {});
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+  } catch { return ''; }
 }
 
-function currentLocalDateTimeInputValue() {
-  const now = new Date();
-  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+function currentMeetingInputTime(timeZone) {
+  return formatMeetingInputTime(new Date(), timeZone);
+}
+
+function safeMeetingRichHtml(value) {
+  const template = document.createElement('template');
+  template.innerHTML = String(value || '');
+  template.content.querySelectorAll('script,style,iframe,object,svg,math').forEach(element => element.remove());
+  const allowed = new Set(['P', 'BR', 'STRONG', 'B', 'EM', 'I', 'U', 'UL', 'OL', 'LI', 'H2', 'H3', 'BLOCKQUOTE']);
+  template.content.querySelectorAll('*').forEach(element => {
+    if (!allowed.has(element.tagName)) {
+      element.replaceWith(...element.childNodes);
+      return;
+    }
+    [...element.attributes].forEach(attribute => element.removeAttribute(attribute.name));
+  });
+  return template.innerHTML;
+}
+
+function meetingEditorMarkup(id, label, value, placeholder, maxLength) {
+  return `<div class="meeting-rich-toolbar" role="toolbar" aria-label="${escapeHtml(label)} formatting">
+      <button type="button" data-rich-command="bold"><strong>B</strong></button>
+      <button type="button" data-rich-command="italic"><em>I</em></button>
+      <button type="button" data-rich-command="underline"><u>U</u></button>
+      <button type="button" data-rich-command="insertUnorderedList">• List</button>
+      <button type="button" data-rich-command="insertOrderedList">1. List</button>
+      <button type="button" data-rich-command="formatBlock" data-rich-value="blockquote">Quote</button>
+    </div>
+    <div class="meeting-rich-editor" id="${id}" contenteditable="true" role="textbox" aria-label="${escapeHtml(label)}"
+      aria-multiline="true" data-placeholder="${escapeHtml(placeholder)}">${safeMeetingRichHtml(value)}</div>
+    <div class="meeting-counter" data-counter-for="${id}">0 / ${maxLength}</div>`;
 }
 
 function meetingParticipantKey(member) {
@@ -7525,8 +7614,12 @@ function getMeetingParticipants() {
   const selected = meetingParticipantDraft.members.filter(member => meetingParticipantDraft.selected.has(meetingParticipantKey(member))).map(member => ({
     source: 'project', role: member.role, role_id: member.role_id,
     name: meetingParticipantName(member), email: member.email || '', company_name: member.company_name || '',
+    attendance_type: meetingParticipantDraft.attendance.get(meetingParticipantKey(member)) || 'required',
   }));
-  return [...selected, ...meetingParticipantDraft.manual.map(person => ({ source: 'manual', name: person.name }))];
+  return [...selected, ...meetingParticipantDraft.manual.map(person => ({
+    source: 'manual', name: person.name, email: person.email,
+    attendance_type: person.attendance_type || 'required',
+  }))];
 }
 
 function renderMeetingParticipantList(filter = '') {
@@ -7551,6 +7644,9 @@ function renderMeetingParticipantList(filter = '') {
       <input type="checkbox" value="${escapeHtml(key)}" ${meetingParticipantDraft.selected.has(key) ? 'checked' : ''}>
       <span class="meeting-roster-avatar">${avatar}</span>
       <span><span class="meeting-roster-name">${escapeHtml(name)}</span><span class="meeting-roster-meta">${escapeHtml([member.email, member.company_name].filter(Boolean).join(' · ') || member.role)}</span></span>
+      <select class="meeting-attendance-select" data-person-key="${escapeHtml(key)}" aria-label="${escapeHtml(name)} attendance type">
+        ${[['required','Required'],['optional','Optional'],['information','For information']].map(([value,label]) => `<option value="${value}" ${(meetingParticipantDraft.attendance.get(key) || 'required') === value ? 'selected' : ''}>${label}</option>`).join('')}
+      </select>
     </label>`;
   }).join('');
 }
@@ -7561,11 +7657,16 @@ function renderSelectedMeetingParticipants() {
   const projectPeople = meetingParticipantDraft.members.filter(member => meetingParticipantDraft.selected.has(meetingParticipantKey(member)));
   selected.innerHTML = [
     ...projectPeople.map(member => `<span class="meeting-person-chip">${escapeHtml(meetingParticipantName(member))}</span>`),
-    ...meetingParticipantDraft.manual.map((person, index) => `<span class="meeting-person-chip">${escapeHtml(person.name)} <button type="button" data-remove-manual="${index}" aria-label="Remove attendee">&times;</button></span>`),
+    ...meetingParticipantDraft.manual.map((person, index) => `<span class="meeting-person-chip">${escapeHtml(person.name)} &lt;${escapeHtml(person.email)}&gt; <button type="button" data-remove-manual="${index}" aria-label="Remove attendee">&times;</button>
+      <select class="meeting-attendance-select" data-manual-index="${index}" aria-label="${escapeHtml(person.name)} attendance type">
+        ${[['required','Required'],['optional','Optional'],['information','For information']].map(([value,label]) => `<option value="${value}" ${(person.attendance_type || 'required') === value ? 'selected' : ''}>${label}</option>`).join('')}
+      </select></span>`),
   ].join('');
   const people = getMeetingParticipants();
   const count = document.getElementById('mParticipantCount');
   if (count) count.textContent = `${people.length} selected`;
+  const notice = document.getElementById('mNotifyCount');
+  if (notice) notice.textContent = `${people.length} ${people.length === 1 ? 'participant' : 'participants'} selected · external attendees receive an email; in-app notices follow the project visibility setting`;
 }
 
 async function loadMeetingProjectParticipants(projectId) {
@@ -7588,182 +7689,419 @@ async function loadMeetingProjectParticipants(projectId) {
   }
 }
 
+function readMeetingAgendaItems() {
+  return [...document.querySelectorAll('.meeting-agenda-item')].map(row => ({
+    title: row.querySelector('[data-agenda-title]').value.trim(),
+    presenter: row.querySelector('[data-agenda-presenter]').value.trim(),
+    duration_minutes: Number(row.querySelector('[data-agenda-minutes]').value),
+    details: row.querySelector('[data-agenda-details]').innerHTML,
+  }));
+}
+
+function renderMeetingAgendaItems() {
+  const list = document.getElementById('mAgendaItems');
+  if (!list) return;
+  list.innerHTML = meetingAgendaDraft.map((item, index) => `
+    <div class="meeting-agenda-item">
+      <div class="meeting-agenda-item-fields">
+        <input type="text" data-agenda-title maxlength="300" value="${escapeHtml(item.title || '')}" placeholder="Agenda topic ${index + 1} (max 300)" aria-label="Agenda topic ${index + 1}">
+        <input type="text" data-agenda-presenter maxlength="160" value="${escapeHtml(item.presenter || '')}" placeholder="Presenter (max 160, optional)" aria-label="Agenda presenter">
+        <input type="number" data-agenda-minutes min="1" max="480" value="${escapeHtml(String(item.duration_minutes || ''))}" placeholder="Minutes" aria-label="Agenda duration in minutes">
+        <button type="button" class="btn danger" data-remove-agenda="${index}" aria-label="Remove agenda item">Remove</button>
+      </div>
+      ${meetingEditorMarkup(`mAgendaDetails${index}`, `Agenda item ${index + 1} details`, item.details || '', 'Details or preparation notes (optional)', 8000)}
+    </div>`).join('');
+  const counter = document.getElementById('mAgendaCounter');
+  if (counter) {
+    const text = readMeetingAgendaItems().map(item => `${item.title} ${item.presenter} ${item.details.replace(/<[^>]*>/g, '')}`).join(' ').trim();
+    counter.textContent = `${text.length} / 8000 characters`;
+  }
+}
+
+function setMeetingFieldError(id, message) {
+  const input = document.getElementById(id);
+  const error = document.getElementById(`${id}Error`);
+  if (input) input.classList.toggle('meeting-invalid', Boolean(message));
+  if (error) error.textContent = message || '';
+}
+
 function renderPlanMeetingForm(context, scope, scopeValue, meeting = null) {
   const container = document.getElementById('meetingViewContainer');
-  meetingParticipantDraft = { members: [], selected: new Set(), manual: [] };
+  meetingParticipantDraft = { members: [], selected: new Set(), attendance: new Map(), manual: [] };
+  projectMeetingInfo = { name: localStorage.getItem('activeProjectName') || '', contract_reference: '', time_zone: '' };
   if (meeting) {
     (meeting.participant_details || []).forEach(person => {
-      if (person.source === 'project') meetingParticipantDraft.selected.add(`${person.role}:${person.role_id}`);
-      else if (person.name) meetingParticipantDraft.manual.push({ name: person.name });
+      if (person.source === 'project') {
+        const key = `${person.role}:${person.role_id}`;
+        meetingParticipantDraft.selected.add(key);
+        meetingParticipantDraft.attendance.set(key, person.attendance_type || 'required');
+      } else if (person.name) meetingParticipantDraft.manual.push({
+        name: person.name, email: person.email || '', attendance_type: person.attendance_type || 'required',
+      });
     });
     if (!meeting.participant_details?.length) {
-      meetingParticipantDraft.manual = (meeting.participants || '').split(/\r?\n/).map(name => name.trim()).filter(Boolean).map(name => ({ name }));
+      meetingParticipantDraft.manual = (meeting.participants || '').split(/\r?\n/).map(name => name.trim()).filter(Boolean).map(name => ({ name, email: '' }));
     }
   }
+  const startValue = meeting?.is_draft ? '' : meeting?.start_time_local || meeting?.date_time_local
+    || (meeting?.scheduled_at ? formatMeetingInputTime(meeting.scheduled_at, meeting.time_zone) : '');
+  const endValue = meeting?.end_time_local || (meeting?.end_at ? formatMeetingInputTime(meeting.end_at, meeting.time_zone) : '');
+  meetingAgendaDraft = Array.isArray(meeting?.agenda_items) && meeting.agenda_items.length
+    ? meeting.agenda_items.map(item => ({ ...item }))
+    : meeting?.agenda ? meeting.agenda.split(/\r?\n/).filter(Boolean).map(title => ({ title, presenter: '', duration_minutes: 10, details: '' }))
+      : [{ title: 'Review previous minutes and open actions', presenter: '', duration_minutes: 10, details: '' }];
+  const timeZone = meeting?.time_zone || Intl.DateTimeFormat().resolvedOptions().timeZone;
   container.innerHTML = `
     <div class="meeting-plan-form">
-      <h3 style="margin:14px 0 4px;color:var(--text);">${meeting ? 'Edit meeting' : 'Plan a meeting'}</h3>
-      <p class="meeting-scope-note" style="margin:0 0 6px;">${context === 'global' ? 'This meeting will be visible to everyone on the project.' : 'This meeting will be visible only to your side and its team.'}</p>
-      <div class="form-group">
-        <label for="mType">Meeting type</label>
-        <select id="mType" required>
-          <option value="">Select meeting type</option>
-          <option value="site" ${meeting?.meeting_type === 'site' ? 'selected' : ''}>Site meeting</option>
-          <option value="office" ${meeting?.meeting_type === 'office' ? 'selected' : ''}>Office meeting</option>
-          <option value="virtual" ${meeting?.meeting_type === 'virtual' ? 'selected' : ''}>Virtual meeting</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label for="mTitle">Subject / title</label>
-        <input type="text" id="mTitle" value="${escapeHtml(meeting?.title || '')}" required>
-      </div>
-      <div class="form-group">
-        <label for="mPurpose">Purpose</label>
-        <textarea id="mPurpose" class="meeting-editor" rows="3" required placeholder="What should this meeting achieve?">${escapeHtml(meeting?.purpose || '')}</textarea>
-      </div>
-      <div class="form-group">
-        <label for="mDateTime">Date and time</label>
-        <input type="datetime-local" id="mDateTime" min="${currentLocalDateTimeInputValue()}" value="${meeting?.date_time ? escapeHtml(toMeetingLocalDateTime(meeting.date_time)) : ''}" required>
-      </div>
-      <div class="form-group">
-        <label for="mLocation">Location / access details</label>
-        <input type="text" id="mLocation" value="${escapeHtml(meeting?.location || '')}" required>
-      </div>
-      <div class="form-group">
-        <label>Required participants</label>
+      <h3 class="meeting-form-heading">${meeting?.is_draft ? 'Edit meeting draft' : meeting ? 'Edit meeting' : 'Plan a meeting'}</h3>
+      <p class="meeting-scope-note">${context === 'global' ? 'Project meeting · visible to project participants' : 'Side meeting · visible only to your side and its team'}</p>
+      <div class="meeting-timezone-note" id="meetingProjectNote">Project: ${escapeHtml(projectMeetingInfo.name)}${projectMeetingInfo.contract_reference ? ` · Reference ${escapeHtml(projectMeetingInfo.contract_reference)}` : ''}</div>
+
+      <section class="meeting-form-section">
+        <h4>Meeting details</h4>
+        <div class="meeting-form-grid">
+          <div class="form-group"><label for="mType">Meeting type <span class="meeting-required">*</span></label>
+            <select id="mType" required><option value="">Select type</option>
+              <option value="site" ${meeting?.meeting_type === 'site' ? 'selected' : ''}>Site meeting</option>
+              <option value="office" ${meeting?.meeting_type === 'office' ? 'selected' : ''}>Office meeting</option>
+              <option value="virtual" ${meeting?.meeting_type === 'virtual' ? 'selected' : ''}>Virtual meeting</option></select>
+            <p class="meeting-field-error" id="mTypeError"></p></div>
+          <div class="form-group"><label for="mNumber">Meeting number / category</label>
+            <input type="text" id="mNumber" maxlength="80" value="${escapeHtml(meeting?.meeting_number || '')}" placeholder="e.g. Progress Meeting No. 12">
+            <p class="meeting-counter" data-counter-for="mNumber">0 / 80</p></div>
+          <div class="form-group"><label for="mTitle">Subject / title <span class="meeting-required">*</span></label>
+            <input type="text" id="mTitle" maxlength="200" value="${escapeHtml(meeting?.title === 'Untitled draft' ? '' : meeting?.title || '')}" placeholder="e.g. Weekly construction progress" required>
+            <p class="meeting-counter" data-counter-for="mTitle">0 / 200</p><p class="meeting-field-error" id="mTitleError"></p></div>
+          <div class="form-group"><label for="mChairperson">Chairperson</label>
+            <input type="text" id="mChairperson" maxlength="160" value="${escapeHtml(meeting?.chairperson || '')}" placeholder="Meeting chair">
+            <p class="meeting-counter" data-counter-for="mChairperson">0 / 160</p></div>
+          <div class="form-group"><label for="mMinuteTaker">Minute-taker</label>
+            <input type="text" id="mMinuteTaker" maxlength="160" value="${escapeHtml(meeting?.minute_taker || '')}" placeholder="Person responsible for the minutes">
+            <p class="meeting-counter" data-counter-for="mMinuteTaker">0 / 160</p></div>
+        </div>
+        <div class="form-group"><label>Purpose / description <span class="meeting-required">*</span></label>
+          ${meetingEditorMarkup('mPurpose', 'Purpose or description', meeting?.purpose || '', 'What should this meeting achieve?', 5000)}
+          <p class="meeting-field-error" id="mPurposeError"></p></div>
+      </section>
+
+      <section class="meeting-form-section">
+        <h4>When and where</h4>
+        <div class="meeting-form-grid">
+          <div class="form-group"><label for="mDateTime">Start <span class="meeting-required">*</span></label>
+            <input type="datetime-local" id="mDateTime" min="${escapeHtml(currentMeetingInputTime(timeZone))}" value="${escapeHtml(startValue)}" required>
+            <p class="meeting-field-error" id="mDateTimeError"></p></div>
+          <div class="form-group"><label for="mEndTime">End <span class="meeting-required">*</span></label>
+            <input type="datetime-local" id="mEndTime" value="${escapeHtml(endValue)}" required>
+            <p class="meeting-field-error" id="mEndTimeError"></p></div>
+          <div class="form-group"><label for="mTimeZone">Time zone <span class="meeting-required">*</span></label>
+            <input type="text" id="mTimeZone" list="meetingTimeZones" value="${escapeHtml(timeZone)}" placeholder="e.g. Europe/London" required>
+            <datalist id="meetingTimeZones"></datalist>
+            <small class="meeting-help">${projectMeetingInfo.time_zone ? 'Prefilled from project settings; change only for this meeting if needed.' : 'No project time zone is saved. Enter or choose the project time zone.'}</small>
+            <p class="meeting-field-error" id="mTimeZoneError"></p></div>
+          <div class="form-group" id="mLocationGroup"><label for="mLocation">Location / access details <span class="meeting-required">*</span></label>
+            <input type="text" id="mLocation" maxlength="300" value="${escapeHtml(meeting?.location || '')}" placeholder="Site address, gate or office room">
+            <p class="meeting-counter" data-counter-for="mLocation">0 / 300</p><p class="meeting-field-error" id="mLocationError"></p></div>
+          <div class="form-group" id="mVirtualGroup"><label for="mVirtualLink">Virtual meeting link <span class="meeting-required">*</span></label>
+            <input type="url" id="mVirtualLink" maxlength="500" value="${escapeHtml(meeting?.virtual_link || '')}" placeholder="https://…">
+            <p class="meeting-counter" data-counter-for="mVirtualLink">0 / 500</p>
+            <p class="meeting-field-error" id="mVirtualLinkError"></p></div>
+          <div class="form-group" id="mSafetyGroup"><label for="mSafetyNotes">Site access and safety notes</label>
+            <input type="text" id="mSafetyNotes" maxlength="2000" value="${escapeHtml(meeting?.safety_notes || '')}" placeholder="PPE, check-in point, site contact">
+            <p class="meeting-counter" data-counter-for="mSafetyNotes">0 / 2000</p></div>
+        </div>
+        <div class="meeting-form-grid">
+          <div class="form-group"><label for="mRecurrence">Repeat meeting</label>
+            <select id="mRecurrence" ${meeting ? 'disabled' : ''}><option value="">Does not repeat</option><option value="weekly">Weekly</option><option value="biweekly">Every two weeks</option><option value="monthly">Monthly</option></select>
+            ${meeting ? '<small class="meeting-help">Repeat settings are fixed for an existing occurrence; create a new series to change them.</small>' : ''}</div>
+          <div class="form-group" id="mRecurrenceEndGroup" hidden><label for="mRecurrenceEnd">Repeat until</label>
+            <input type="date" id="mRecurrenceEnd"><small class="meeting-help">Creates up to 52 individual meeting notices.</small></div>
+        </div>
+      </section>
+
+      <section class="meeting-form-section">
+        <h4>Participants and roles <span class="meeting-required">*</span></h4>
         <details class="meeting-participant-picker">
           <summary>Select project participants <span id="mParticipantCount">0 selected</span></summary>
           <input type="search" id="mParticipantSearch" aria-label="Search project participants" placeholder="Search by name, email or company">
-          <div class="meeting-roster-list" id="mParticipantList"><div style="padding:10px 2px;color:#77848d;font-size:12px;">Loading project participants…</div></div>
+          <div class="meeting-roster-list" id="mParticipantList"><div class="meeting-help">Loading project participants…</div></div>
         </details>
         <div id="mSelectedParticipants" class="meeting-selected-people"></div>
+        <p class="meeting-help" id="mNotifyCount">0 participants selected</p>
         <div class="meeting-manual-entry">
-          <input type="text" id="mManualParticipant" aria-label="Add external participant" placeholder="External participant name">
-          <button type="button" class="btn" id="mAddParticipant">Add name</button>
+          <input type="text" id="mManualParticipant" maxlength="160" aria-label="External participant name" placeholder="External participant name (max 160)">
+          <input type="email" id="mManualEmail" maxlength="254" aria-label="External participant email" placeholder="External participant email">
+          <button type="button" class="btn" id="mAddParticipant">Add external attendee</button>
         </div>
+        <p class="meeting-help">At least one project or external participant is required to schedule. External invitees receive an email with RSVP links.</p>
+        <p class="meeting-field-error" id="mParticipantsError"></p>
+      </section>
+
+      <section class="meeting-form-section">
+        <h4>Agenda <span class="meeting-required">*</span></h4>
+        <p class="meeting-help">Add a topic, time allocation and presenter for each item. A previous-minutes / open-actions review is included to get you started.</p>
+        <div id="mAgendaItems"></div>
+        <button type="button" class="btn" id="mAddAgendaItem">Add agenda item</button>
+        <p class="meeting-counter" id="mAgendaCounter">0 / 8000 characters</p>
+        <p class="meeting-field-error" id="mAgendaError"></p>
+      </section>
+
+      <section class="meeting-form-section">
+        <h4>Attachments and references</h4>
+        <div class="form-group"><label for="mAttachments">Supporting files</label><input type="file" id="mAttachments" multiple>
+          ${meeting?.attachments?.length ? `<div class="meeting-roster-meta">${meeting.attachments.map(file => escapeHtml(file.name)).join(' · ')}</div>` : ''}</div>
+      </section>
+
+      <div class="meeting-form-actions">
+        <button type="button" class="btn primary" id="savePlanMeetingBtn">${meeting ? 'Save changes and schedule' : 'Schedule meeting'}</button>
+        <button type="button" class="btn" id="saveMeetingDraftBtn">Save as draft</button>
+        <button type="button" class="btn" id="previewMeetingBtn">Preview notice</button>
+        <button type="button" class="btn" id="cancelPlanMeetingBtn">Cancel</button>
       </div>
-      <div class="form-group">
-        <label for="mAgenda">Agenda</label>
-        <textarea id="mAgenda" class="meeting-editor meeting-editor-agenda" rows="6" required placeholder="List the points to discuss, one per line">${escapeHtml(meeting?.agenda || '')}</textarea>
-      </div>
-      <div class="form-group">
-        <label for="mAttachments">Attachments / references</label>
-        <input type="file" id="mAttachments" multiple>
-        ${meeting?.attachments?.length ? `<div class="meeting-roster-meta">${meeting.attachments.map(file => escapeHtml(file.name)).join(' · ')}</div>` : ''}
-      </div>
-      <div class="meeting-plan-actions">
-        <button class="btn primary" id="savePlanMeetingBtn">${meeting ? 'Save changes' : 'Save & Schedule'}</button>
-        <button class="btn" type="button" id="cancelPlanMeetingBtn">Cancel</button>
-      </div>
+      <div id="meetingPreview" class="meeting-preview" hidden></div>
     </div>`;
 
-  document.getElementById('mParticipantList').addEventListener('change', event => {
-    const checkbox = event.target.closest('input[type="checkbox"]');
-    if (!checkbox) return;
-    if (checkbox.checked) meetingParticipantDraft.selected.add(checkbox.value);
-    else meetingParticipantDraft.selected.delete(checkbox.value);
-    renderSelectedMeetingParticipants();
+  renderMeetingAgendaItems();
+  const form = container.querySelector('.meeting-plan-form');
+  form.addEventListener('mousedown', event => {
+    if (event.target.closest('[data-rich-command]')) event.preventDefault();
+  });
+  form.addEventListener('paste', event => {
+    if (!event.target.closest('.meeting-rich-editor')) return;
+    event.preventDefault();
+    document.execCommand('insertText', false, event.clipboardData.getData('text/plain'));
+  });
+  form.addEventListener('click', event => {
+    const commandButton = event.target.closest('[data-rich-command]');
+    if (commandButton) {
+      const value = commandButton.dataset.richValue;
+      document.execCommand(commandButton.dataset.richCommand, false, value || null);
+      const editor = commandButton.closest('.form-group, .meeting-agenda-item')?.querySelector('.meeting-rich-editor');
+      if (editor) editor.focus();
+      return;
+    }
+    if (event.target.closest('#mAddAgendaItem')) {
+      meetingAgendaDraft = readMeetingAgendaItems();
+      meetingAgendaDraft.push({ title: '', presenter: '', duration_minutes: '', details: '' });
+      renderMeetingAgendaItems();
+      return;
+    }
+    const removeAgenda = event.target.closest('[data-remove-agenda]');
+    if (removeAgenda) {
+      meetingAgendaDraft = readMeetingAgendaItems();
+      meetingAgendaDraft.splice(Number(removeAgenda.dataset.removeAgenda), 1);
+      renderMeetingAgendaItems();
+      return;
+    }
+    const removePerson = event.target.closest('[data-remove-manual]');
+    if (removePerson) {
+      meetingParticipantDraft.manual.splice(Number(removePerson.dataset.removeManual), 1);
+      renderSelectedMeetingParticipants();
+      return;
+    }
+    if (event.target.closest('#mAddParticipant')) {
+      const name = document.getElementById('mManualParticipant').value.trim();
+      const email = document.getElementById('mManualEmail').value.trim().toLowerCase();
+      if (!name || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        document.getElementById('mParticipantsError').textContent = 'Enter the external participant’s name and a valid email address.';
+        return;
+      }
+      if (meetingParticipantDraft.manual.some(person => person.email.toLowerCase() === email)) return;
+      meetingParticipantDraft.manual.push({ name, email, attendance_type: 'required' });
+      document.getElementById('mManualParticipant').value = '';
+      document.getElementById('mManualEmail').value = '';
+      document.getElementById('mParticipantsError').textContent = '';
+      renderSelectedMeetingParticipants();
+      return;
+    }
+    if (event.target.closest('#previewMeetingBtn')) {
+      const preview = document.getElementById('meetingPreview');
+      preview.hidden = !preview.hidden;
+      const title = document.getElementById('mTitle').value || 'Untitled meeting';
+      preview.innerHTML = `<strong>${escapeHtml(title)}</strong><p>${escapeHtml(document.getElementById('mDateTime').value)} – ${escapeHtml(document.getElementById('mEndTime').value)} ${escapeHtml(document.getElementById('mTimeZone').value)}</p><p>${safeMeetingRichHtml(document.getElementById('mPurpose').innerHTML)}</p><ol>${readMeetingAgendaItems().map(item => `<li>${escapeHtml(item.title)} · ${escapeHtml(item.duration_minutes)} min${item.presenter ? ` · ${escapeHtml(item.presenter)}` : ''}</li>`).join('')}</ol>`;
+      return;
+    }
+    if (event.target.closest('#savePlanMeetingBtn')) savePlannedMeeting(context, scope, scopeValue, meeting, false);
+    if (event.target.closest('#saveMeetingDraftBtn')) savePlannedMeeting(context, scope, scopeValue, meeting, true);
+    if (event.target.closest('#cancelPlanMeetingBtn')) renderMeetingContent('scheduled', context);
+  });
+  form.addEventListener('change', event => {
+    const checkbox = event.target.closest('#mParticipantList input[type="checkbox"]');
+    if (checkbox) {
+      if (checkbox.checked) meetingParticipantDraft.selected.add(checkbox.value);
+      else meetingParticipantDraft.selected.delete(checkbox.value);
+      renderSelectedMeetingParticipants();
+      return;
+    }
+    const attendance = event.target.closest('.meeting-attendance-select');
+    if (attendance?.dataset.personKey) meetingParticipantDraft.attendance.set(attendance.dataset.personKey, attendance.value);
+    if (attendance?.dataset.manualIndex !== undefined) meetingParticipantDraft.manual[Number(attendance.dataset.manualIndex)].attendance_type = attendance.value;
+  });
+  form.addEventListener('input', event => {
+    const counterId = event.target.id || (event.target.matches('[data-agenda-title]') ? null : null);
+    const counter = counterId ? form.querySelector(`[data-counter-for="${counterId}"]`) : null;
+    if (counter) counter.textContent = `${event.target.value.length} / ${event.target.maxLength}`;
+    if (event.target.id === 'mRecurrence') document.getElementById('mRecurrenceEndGroup').hidden = !event.target.value;
+    if (event.target.matches('[contenteditable="true"]')) {
+      const richCounter = form.querySelector(`[data-counter-for="${event.target.id}"]`);
+      if (richCounter) richCounter.textContent = `${event.target.textContent.length} / ${event.target.id === 'mPurpose' ? 5000 : 8000}`;
+    }
+    if (event.target.matches('[data-agenda-title], [data-agenda-presenter], [data-agenda-minutes], .meeting-rich-editor')) {
+      const text = readMeetingAgendaItems().map(item => [item.title, item.presenter, item.details.replace(/<[^>]*>/g, '')].join(' ')).join(' ');
+      document.getElementById('mAgendaCounter').textContent = `${text.length} / 8000 characters`;
+    }
+    if (event.target.id === 'mType') updateMeetingLocationFields();
+    if (event.target.id === 'mTimeZone') document.getElementById('mDateTime').min = currentMeetingInputTime(event.target.value);
+    if (event.target.id) setMeetingFieldError(event.target.id, '');
+  });
+  form.addEventListener('change', event => {
+    if (event.target.id === 'mType') updateMeetingLocationFields();
   });
   document.getElementById('mParticipantSearch').addEventListener('input', event => renderMeetingParticipantList(event.target.value));
-  document.getElementById('mSelectedParticipants').addEventListener('click', event => {
-    const removeButton = event.target.closest('[data-remove-manual]');
-    if (!removeButton) return;
-    meetingParticipantDraft.manual.splice(Number(removeButton.getAttribute('data-remove-manual')), 1);
-    renderSelectedMeetingParticipants();
-  });
-  document.getElementById('mAddParticipant').addEventListener('click', () => {
-    const input = document.getElementById('mManualParticipant');
-    const name = input.value.trim();
-    if (!name || meetingParticipantDraft.manual.some(person => person.name.toLowerCase() === name.toLowerCase())) return;
-    meetingParticipantDraft.manual.push({ name });
-    input.value = '';
-    renderSelectedMeetingParticipants();
-  });
-  document.getElementById('mManualParticipant').addEventListener('keydown', event => {
-    if (event.key === 'Enter') { event.preventDefault(); document.getElementById('mAddParticipant').click(); }
-  });
-  document.getElementById('mDateTime').addEventListener('change', event => {
-    const field = event.currentTarget;
-    field.min = currentLocalDateTimeInputValue();
-    const instant = new Date(field.value);
-    field.setCustomValidity(field.value && instant.getTime() <= Date.now()
-      ? 'This meeting time has passed. Please choose a future date and time.'
-      : '');
+  document.getElementById('mRecurrence').value = meeting?.recurrence_rule?.frequency || '';
+  document.getElementById('mRecurrenceEnd').value = meeting?.recurrence_rule?.until || '';
+  document.getElementById('mRecurrenceEndGroup').hidden = !meeting?.recurrence_rule?.frequency;
+  updateMeetingLocationFields();
+  form.querySelectorAll('[data-counter-for]').forEach(counter => {
+    const field = document.getElementById(counter.dataset.counterFor);
+    if (field) counter.textContent = `${field.matches('[contenteditable="true"]') ? field.textContent.length : field.value.length} / ${field.maxLength > 0 ? field.maxLength : counter.textContent.split('/').pop().trim()}`;
   });
   renderSelectedMeetingParticipants();
   loadMeetingProjectParticipants(localStorage.getItem('activeProjectId'));
-  document.getElementById('savePlanMeetingBtn').addEventListener('click', () => savePlannedMeeting(context, scope, scopeValue, meeting));
-  document.getElementById('cancelPlanMeetingBtn').addEventListener('click', () => renderMeetingContent('scheduled', context));
+  const zones = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [];
+  document.getElementById('meetingTimeZones').innerHTML = zones.map(zone => `<option value="${escapeHtml(zone)}"></option>`).join('');
+  authFetch(`${API}/project-info/${encodeURIComponent(localStorage.getItem('activeProjectId'))}`)
+    .then(response => response?.ok ? response.json() : null)
+    .then(data => {
+      if (!data?.success) return;
+      projectMeetingInfo = data.project;
+      const note = document.getElementById('meetingProjectNote');
+      if (note) note.textContent = `Project: ${projectMeetingInfo.name}${projectMeetingInfo.contract_reference ? ` · Reference ${projectMeetingInfo.contract_reference}` : ''}`;
+      const zoneField = document.getElementById('mTimeZone');
+      if (zoneField && !meeting && projectMeetingInfo.time_zone) {
+        zoneField.value = projectMeetingInfo.time_zone;
+        document.getElementById('mDateTime').min = currentMeetingInputTime(projectMeetingInfo.time_zone);
+      }
+      const help = document.querySelector('#mTimeZone + datalist + .meeting-help');
+      if (help) help.textContent = projectMeetingInfo.time_zone ? 'Prefilled from project settings; change only for this meeting if needed.' : 'No project time zone is saved. Enter or choose the project time zone.';
+    })
+    .catch(error => console.error('Meeting project settings load failed:', error));
 }
 
-async function savePlannedMeeting(context, scope, scopeValue, meeting = null) {
+function updateMeetingLocationFields() {
+  const type = document.getElementById('mType')?.value;
+  const virtual = type === 'virtual';
+  const locationGroup = document.getElementById('mLocationGroup');
+  const virtualGroup = document.getElementById('mVirtualGroup');
+  const safetyGroup = document.getElementById('mSafetyGroup');
+  if (locationGroup) locationGroup.hidden = virtual;
+  if (virtualGroup) virtualGroup.hidden = !virtual;
+  if (safetyGroup) safetyGroup.hidden = virtual || document.getElementById('mType')?.value !== 'site';
+  const locationLabel = locationGroup?.querySelector('label');
+  const locationInput = document.getElementById('mLocation');
+  if (locationLabel) locationLabel.innerHTML = `${type === 'site' ? 'Site address / access details' : 'Office location / room'} <span class="meeting-required">*</span>`;
+  if (locationInput) locationInput.placeholder = type === 'site' ? 'Site address, gate or access point' : 'Office address or room';
+}
+
+function meetingInputToInstant(value, timeZone) {
+  if (!value || !timeZone) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const desired = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]));
+  let timestamp = desired;
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const parts = formatter.formatToParts(new Date(timestamp)).reduce((result, part) => (result[part.type] = part.value, result), {});
+      const represented = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute));
+      const adjustment = desired - represented;
+      if (!adjustment) break;
+      timestamp += adjustment;
+    }
+    return new Date(timestamp);
+  } catch { return null; }
+}
+
+async function savePlannedMeeting(context, scope, scopeValue, meeting = null, saveAsDraft = false, confirmConflicts = false) {
   const type = document.getElementById('mType').value;
   const title = document.getElementById('mTitle').value.trim();
-  const purpose = document.getElementById('mPurpose').value.trim();
+  const purposeHtml = document.getElementById('mPurpose').innerHTML.trim();
+  const purposeText = document.getElementById('mPurpose').textContent.trim();
   const dateTime = document.getElementById('mDateTime').value;
-  const scheduledInstant = new Date(dateTime);
-  const location = document.getElementById('mLocation').value.trim();
+  const endTime = document.getElementById('mEndTime').value;
+  const timeZone = document.getElementById('mTimeZone').value.trim();
+  const location = type === 'virtual' ? '' : document.getElementById('mLocation').value.trim();
+  const virtualLink = document.getElementById('mVirtualLink').value.trim();
   const participants = getMeetingParticipants();
-  const agenda = document.getElementById('mAgenda').value.trim();
+  const agendaItems = readMeetingAgendaItems();
   const files = document.getElementById('mAttachments').files;
-  const dateField = document.getElementById('mDateTime');
-  if (!dateTime) {
-    dateField.setCustomValidity('Please select a meeting date and time.');
-    dateField.reportValidity();
-    meetingToast('Please select a meeting date and time before scheduling.', 'error');
-    return;
+  const dateInstant = meetingInputToInstant(dateTime, timeZone);
+  const endInstant = meetingInputToInstant(endTime, timeZone);
+  ['mType','mTitle','mPurpose','mDateTime','mEndTime','mTimeZone','mLocation','mVirtualLink','mParticipants','mAgenda'].forEach(id => setMeetingFieldError(id, ''));
+  if (!saveAsDraft) {
+    if (!type) setMeetingFieldError('mType', 'Choose a meeting type.');
+    if (!title) setMeetingFieldError('mTitle', 'Enter a meeting title.');
+    if (!purposeText) setMeetingFieldError('mPurpose', 'Add a purpose or description.');
+    if (!dateTime || !dateInstant || dateInstant <= new Date()) setMeetingFieldError('mDateTime', 'Choose a future start time in the selected time zone.');
+    if (!endTime || !endInstant || !dateInstant || endInstant <= dateInstant || endInstant - dateInstant > 12 * 60 * 60 * 1000) setMeetingFieldError('mEndTime', 'End time must be after the start and within 12 hours.');
+    try { new Intl.DateTimeFormat('en', { timeZone }).format(); }
+    catch { setMeetingFieldError('mTimeZone', 'Enter a valid IANA time zone, such as Europe/London.'); }
+    if (type === 'virtual' && !/^https?:\/\/\S+$/i.test(virtualLink)) setMeetingFieldError('mVirtualLink', 'Enter a valid meeting URL.');
+    if (type !== 'virtual' && !location) setMeetingFieldError('mLocation', 'Enter the meeting location.');
+    if (!participants.length) setMeetingFieldError('mParticipants', 'Add at least one project or external participant.');
+    if (!agendaItems.length || agendaItems.some(item => !item.title || !Number.isInteger(item.duration_minutes) || item.duration_minutes < 1 || item.duration_minutes > 480)) {
+      setMeetingFieldError('mAgenda', 'Each agenda item needs a topic and duration from 1 to 480 minutes.');
+    }
+    if (document.querySelector('.meeting-field-error:not(:empty)')) {
+      meetingToast('Please review the highlighted fields before scheduling.', 'error');
+      return;
+    }
+    if (document.getElementById('mRecurrence').value && !document.getElementById('mRecurrenceEnd').value) {
+      meetingToast('Choose an end date for the recurring meeting.', 'error');
+      return;
+    }
   }
-  if (Number.isNaN(scheduledInstant.getTime()) || scheduledInstant.getTime() <= Date.now()) {
-    const message = 'This meeting date and time has passed. Please enter a future date and time.';
-    dateField.setCustomValidity(message);
-    dateField.reportValidity();
-    meetingToast(message, 'error');
-    return;
-  }
-  dateField.setCustomValidity('');
-  const missingFields = [];
-  if (!type) missingFields.push('meeting type');
-  if (!title) missingFields.push('subject / title');
-  if (!purpose) missingFields.push('purpose');
-  if (!location) missingFields.push('location / access details');
-  if (!participants.length) missingFields.push('at least one project participant');
-  if (!agenda) missingFields.push('agenda');
-  if (missingFields.length) {
-    meetingToast(`Complete the required fields: ${missingFields.join(', ')}. Adding an external participant is optional.`, 'error', 6000);
-    return;
-  }
-  const btn = document.getElementById('savePlanMeetingBtn');
+  const btn = document.getElementById(saveAsDraft ? 'saveMeetingDraftBtn' : 'savePlanMeetingBtn');
   btn.disabled = true;
   btn.textContent = 'Saving…';
   try {
-    const body = new FormData();
-    body.append('project_id', localStorage.getItem('activeProjectId'));
-    body.append('meeting_type', type);
-    body.append('title', title);
-    body.append('purpose', purpose);
-    body.append('date_time', dateTime);
-    body.append('scheduled_at', scheduledInstant.toISOString());
-    body.append('location', location);
-    body.append('participants', participants.map(person => person.name).join('\n'));
-    body.append('participant_details', JSON.stringify(participants));
-    body.append('agenda', agenda);
-    body.append('scope', scope);
-    if (scopeValue) body.append('scope_value', scopeValue);
-    for (const file of files) body.append('attachments', file);
+    const submit = new FormData();
+    const fields = {
+      project_id: localStorage.getItem('activeProjectId'), meeting_type: type, meeting_number: document.getElementById('mNumber').value.trim(),
+      title, purpose: purposeHtml, date_time: dateTime, end_time: endTime, time_zone: timeZone,
+      location, virtual_link: virtualLink, safety_notes: document.getElementById('mSafetyNotes').value.trim(),
+      chairperson: document.getElementById('mChairperson').value.trim(), minute_taker: document.getElementById('mMinuteTaker').value.trim(),
+      agenda_items: JSON.stringify(agendaItems), participants: participants.map(person => person.name).join('\n'),
+      participant_details: JSON.stringify(participants), scope, scope_value: scopeValue || '',
+      recurrence_frequency: meeting?.recurrence_rule?.frequency || (meeting ? '' : document.getElementById('mRecurrence').value),
+      recurrence_until: meeting?.recurrence_rule?.until || document.getElementById('mRecurrenceEnd').value,
+      is_draft: String(saveAsDraft), confirm_conflicts: String(confirmConflicts),
+    };
+    Object.entries(fields).forEach(([key, value]) => submit.append(key, value));
+    for (const file of files) submit.append('attachments', file);
     const url = meeting ? `${API}/meetings/${meeting.id}` : `${API}/meetings`;
-    const response = await authFetch(url, { method: meeting ? 'PUT' : 'POST', body });
+    const response = await authFetch(url, { method: meeting ? 'PUT' : 'POST', body: submit });
     if (!response) throw new Error('The server could not be reached. Check your connection and try again.');
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `The server could not save this meeting (HTTP ${response.status}).`);
+    const result = await response.json().catch(() => ({}));
+    if (response.status === 409 && Array.isArray(result.conflicts) && !confirmConflicts) {
+      const summary = result.conflicts.map(conflict => `${conflict.title} (${conflict.when || 'time unavailable'})`).join('\n');
+      if (confirm(`The following meetings overlap for selected participants:\n\n${summary}\n\nSchedule anyway?`)) {
+        return savePlannedMeeting(context, scope, scopeValue, meeting, saveAsDraft, true);
+      }
+      btn.disabled = false;
+      btn.textContent = saveAsDraft ? 'Save as draft' : meeting ? 'Save changes and schedule' : 'Schedule meeting';
+      return;
     }
-    meetingToast(meeting ? 'Meeting updated.' : 'Meeting scheduled.');
+    if (!response.ok) throw new Error(result.error || `The server could not save this meeting (HTTP ${response.status}).`);
+    const warning = Array.isArray(result.notification_warnings) && result.notification_warnings.length
+      ? ` ${result.notification_warnings.join(' ')}`
+      : '';
+    meetingToast(`${saveAsDraft ? 'Meeting draft saved.' : meeting?.is_draft ? 'Meeting scheduled.' : meeting ? 'Meeting updated.' : 'Meeting scheduled.'}${warning}`, warning ? 'error' : 'info', 7000);
     renderMeetingContent('scheduled', context);
   } catch (error) {
     console.error('Save meeting error:', error);
     meetingToast(error.message || 'Could not save the meeting. Please try again.', 'error');
     btn.disabled = false;
-    btn.textContent = meeting ? 'Save changes' : 'Save & Schedule';
+    btn.textContent = saveAsDraft ? 'Save as draft' : meeting ? 'Save changes and schedule' : 'Schedule meeting';
   }
 }
 
@@ -7791,21 +8129,70 @@ async function downloadMeetingPdf(meetingId, kind) {
   }
 }
 
+async function downloadMeetingCalendar(meetingId) {
+  try {
+    const response = await authFetch(`${API}/meetings/${meetingId}/ics`);
+    if (!response || !response.ok) throw new Error('Calendar file download failed.');
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(await response.blob());
+    link.href = url;
+    link.download = `meeting-${meetingId}.ics`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error('Calendar file download error:', error);
+    meetingToast(error.message || 'Could not download the calendar file.', 'error');
+  }
+}
+
+async function submitMeetingRsvp(meetingId, response, context) {
+  try {
+    const result = await authFetch(`${API}/meetings/${meetingId}/rsvp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ response }),
+    });
+    const data = result && await result.json().catch(() => ({}));
+    if (!result?.ok) throw new Error(data?.error || 'Could not save your RSVP.');
+    meetingToast(`Your RSVP was ${response}.`);
+    renderMeetingContent('scheduled', context);
+  } catch (error) {
+    console.error('Meeting RSVP error:', error);
+    meetingToast(error.message || 'Could not save your RSVP.', 'error');
+  }
+}
+
 function renderMeetingCard(meeting, view) {
   const typeLabel = { site: 'Site', office: 'Office', virtual: 'Virtual' }[meeting.meeting_type] || meeting.meeting_type;
   const when = meetingWhen(meeting);
-  const dateStr = formatMeetingDate(when);
+  const dateStr = meeting.is_draft ? 'Not scheduled yet' : formatMeetingDate(when, meeting.time_zone);
   const status = getMeetingStatus(meeting);
   const participantList = Array.isArray(meeting.participant_details) && meeting.participant_details.length
-    ? meeting.participant_details.map(person => `<li>${escapeHtml(person.name || 'Participant')}${person.role ? ` <span class="meeting-roster-meta">${escapeHtml(person.role)}${person.email ? ` · ${escapeHtml(person.email)}` : ''}</span>` : '<span class="meeting-roster-meta">External participant</span>'}</li>`).join('')
+    ? meeting.participant_details.map(person => `<li>${escapeHtml(person.name || 'Participant')} <span class="meeting-roster-meta">${escapeHtml(person.email || person.role || 'External participant')} · ${escapeHtml(({ required: 'Required', optional: 'Optional', information: 'For information' })[person.attendance_type] || 'Required')}</span></li>`).join('')
     : (meeting.participants || '').split(/\r?\n/).filter(Boolean).map(name => `<li>${escapeHtml(name)}</li>`).join('');
   const references = (meeting.attachments || []).map(file => `<a href="${escapeHtml(file.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(file.name)}</a>`).join(' · ');
   const planner = isMeetingPlanner(meeting);
   const id = escapeHtml(String(meeting.id));
-  const validDate = !Number.isNaN(when.getTime());
-  const day = validDate ? String(when.getDate()).padStart(2, '0') : '—';
-  const mon = validDate ? when.toLocaleString('en-GB', { month: 'short' }) : '';
+  let day = '—', mon = '';
+  if (!meeting.is_draft && !Number.isNaN(when.getTime())) {
+    try {
+      const dateParts = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', ...(meeting.time_zone ? { timeZone: meeting.time_zone } : {}) })
+        .formatToParts(when).reduce((result, part) => (result[part.type] = part.value, result), {});
+      day = dateParts.day;
+      mon = dateParts.month;
+    } catch { /* Invalid historical time zones are handled by the displayed time string. */ }
+  }
   const canCancel = MEETING_FEATURES.cancel && planner && status.key === 'upcoming';
+  const currentRsvp = (meeting.rsvps || []).find(item => item.participant_source === 'project'
+    && item.participant_key === `project:${window.currentUserRole}:${window.currentUserId}`);
+  const agenda = Array.isArray(meeting.agenda_items) && meeting.agenda_items.length
+    ? `<ol>${meeting.agenda_items.map(item => `<li><strong>${escapeHtml(item.title)}</strong> — ${escapeHtml(String(item.duration_minutes || ''))} min${item.presenter ? ` · ${escapeHtml(item.presenter)}` : ''}${item.details ? `<div class="meeting-rich-display">${safeMeetingRichHtml(item.details)}</div>` : ''}</li>`).join('')}</ol>`
+    : escapeHtml(meeting.agenda || '—');
+  const locationText = meeting.meeting_type === 'virtual'
+    ? `<a href="${escapeHtml(meeting.virtual_link || '')}" target="_blank" rel="noopener noreferrer">${escapeHtml(meeting.virtual_link || 'Virtual meeting')}</a>`
+    : escapeHtml(meeting.location || '—');
 
   return `
     <div class="meeting-card ${status.key === 'cancelled' ? 'cancelled' : ''}" data-id="${id}">
@@ -7814,7 +8201,7 @@ function renderMeetingCard(meeting, view) {
           <span class="meeting-date-tile" aria-hidden="true"><b>${escapeHtml(day)}</b><span>${escapeHtml(mon)}</span></span>
           <span style="min-width:0;">
             <span class="meeting-card-title" style="display:block;">${escapeHtml(meeting.title)}</span>
-            <span class="meeting-card-meta" style="display:block;">${escapeHtml(typeLabel)} · ${escapeHtml(dateStr)} · ${escapeHtml(meeting.location)}</span>
+            <span class="meeting-card-meta" style="display:block;">${escapeHtml(typeLabel)} · ${escapeHtml(dateStr)} · ${meeting.meeting_type === 'virtual' ? 'Online' : escapeHtml(meeting.location || 'Location not set')}</span>
             <span class="mtg-badge ${status.key} meeting-card-badge-mobile">${escapeHtml(status.label)}</span>
           </span>
         </span>
@@ -7826,17 +8213,27 @@ function renderMeetingCard(meeting, view) {
       <div class="meeting-card-body" id="meeting-body-${id}">
         <div class="meeting-actions">
           <button type="button" class="btn meeting-download-plan" data-meeting-id="${id}">Download meeting plan (PDF)</button>
-          ${planner && status.key !== 'cancelled' ? `<button type="button" class="btn edit-meeting-btn" data-meeting-id="${id}">Edit meeting</button>` : ''}
+          ${!meeting.is_draft ? `<button type="button" class="btn meeting-download-ics" data-meeting-id="${id}">Add to calendar (.ics)</button>` : ''}
+          ${planner && status.key !== 'cancelled' ? `<button type="button" class="btn edit-meeting-btn" data-meeting-id="${id}">${meeting.is_draft ? 'Edit draft' : 'Edit meeting'}</button>` : ''}
           ${canCancel ? `<button type="button" class="btn danger cancel-meeting-btn" data-meeting-id="${id}">Cancel meeting</button>` : ''}
+          ${currentRsvp && !meeting.is_draft ? `<span class="meeting-roster-meta">Your RSVP: ${escapeHtml(currentRsvp.response)}</span>
+            <button type="button" class="btn meeting-rsvp" data-response="accepted" data-meeting-id="${id}">Accept</button>
+            <button type="button" class="btn meeting-rsvp" data-response="declined" data-meeting-id="${id}">Decline</button>` : ''}
         </div>
         <h4 class="meeting-section-title">Meeting plan</h4>
+        ${meeting.project_name ? `<div class="meeting-detail-row"><strong>Project</strong><span>${escapeHtml(meeting.project_name)}${meeting.project_reference ? ` · ${escapeHtml(meeting.project_reference)}` : ''}</span></div>` : ''}
+        ${meeting.meeting_number ? `<div class="meeting-detail-row"><strong>Meeting number</strong><span>${escapeHtml(meeting.meeting_number)}</span></div>` : ''}
         ${meeting.planned_by_name ? `<div class="meeting-detail-row"><strong>Planned by</strong><span>${escapeHtml(meeting.planned_by_name)}</span></div>` : ''}
         ${status.key === 'cancelled' ? `<div class="meeting-detail-row"><strong>Cancelled</strong><span>${escapeHtml(meeting.cancelled_at ? formatMeetingDate(meeting.cancelled_at) : 'Yes')}${meeting.cancel_reason ? ` — ${escapeHtml(meeting.cancel_reason)}` : ''}</span></div>` : ''}
-        <div class="meeting-detail-row"><strong>Purpose</strong><span>${escapeHtml(meeting.purpose || '—')}</span></div>
-        <div class="meeting-detail-row"><strong>Date and time</strong><span>${escapeHtml(dateStr)}</span></div>
-        <div class="meeting-detail-row"><strong>Location / access</strong><span>${escapeHtml(meeting.location)}</span></div>
+        ${meeting.chairperson ? `<div class="meeting-detail-row"><strong>Chairperson</strong><span>${escapeHtml(meeting.chairperson)}</span></div>` : ''}
+        ${meeting.minute_taker ? `<div class="meeting-detail-row"><strong>Minute-taker</strong><span>${escapeHtml(meeting.minute_taker)}</span></div>` : ''}
+        <div class="meeting-detail-row"><strong>Purpose</strong><span class="meeting-rich-display">${safeMeetingRichHtml(meeting.purpose || '—')}</span></div>
+        <div class="meeting-detail-row"><strong>Date and time</strong><span>${escapeHtml(dateStr)}${meeting.end_at ? ` – ${escapeHtml(formatMeetingDate(meeting.end_at, meeting.time_zone))}` : ''}</span></div>
+        <div class="meeting-detail-row"><strong>Location / access</strong><span>${locationText}${meeting.safety_notes ? `<br>${escapeHtml(meeting.safety_notes)}` : ''}</span></div>
         <div class="meeting-detail-row"><strong>Participants</strong><span><ul style="margin:0;padding-left:18px;">${participantList || '<li>—</li>'}</ul></span></div>
-        <div class="meeting-detail-row"><strong>Agenda</strong><span>${escapeHtml(meeting.agenda)}</span></div>
+        <div class="meeting-detail-row"><strong>Agenda</strong><span>${agenda}</span></div>
+        ${meeting.recurrence_group ? `<div class="meeting-detail-row"><strong>Recurring series</strong><span>${escapeHtml(meeting.recurrence_rule?.frequency || 'Recurring')} · occurrence ${escapeHtml(String(meeting.series_index || ''))}</span></div>` : ''}
+        ${meeting.rsvps?.length ? `<div class="meeting-detail-row"><strong>RSVPs</strong><span>${meeting.rsvps.map(rsvp => `${escapeHtml(rsvp.participant_name)}: ${escapeHtml(rsvp.response)}`).join('<br>')}</span></div>` : ''}
         ${references ? `<div class="meeting-detail-row"><strong>References</strong><span>${references}</span></div>` : ''}
         ${view === 'minutes' && status.key !== 'cancelled' ? renderMinuteSection(meeting) : ''}
       </div>
