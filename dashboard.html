@@ -14266,14 +14266,6 @@ window.openDocumentApprovalForm = _daOpenCreateForm;
 // gets stretched, squished, or drawn tiny with wasted space around it.
 const SIGNATURE_RATIO = 2.5; // width : height
 
-// The overall stamp box (signature + details [+ company stamp] columns) has
-// its own, wider ratio than the signature alone. This is the single source
-// of truth for that shape — the setup live-preview box and the placement
-// modal's drag marker both derive their dimensions from it so what a user
-// sees while setting up their stamp matches what they see (and get) while
-// placing it on a document.
-const STAMP_BOX_RATIO = 3.78; // width : height
-const STAMP_BOX_MARKER_WIDTH = 320; // px, used for the placement-modal marker
 const STAMP_STYLE_COMPACT = 'compact';
 const STAMP_STYLE_THREE_PART = 'three-part';
 const STAMP_STYLE_SIGNATURE_STAMP = 'signature-stamp';
@@ -14357,21 +14349,14 @@ function resetStampPreviewState() {
   if (sigName) { sigName.textContent = ''; sigName.style.display = 'none'; }
   if (stampName) { stampName.textContent = ''; stampName.style.display = 'none'; }
 
-  const previewSigCell = document.getElementById('previewSigCell');
-  const previewStampCell = document.getElementById('previewStampCell');
-  const previewSignedLine = document.getElementById('previewSignedLine');
-  const previewCompanyLine = document.getElementById('previewCompanyLine');
-  const previewDateLine = document.getElementById('previewDateLine');
   const previewDims = document.getElementById('stampPreviewDims');
-  if (previewSigCell) {
-    previewSigCell.innerHTML = '<span style="font-size:10px;color:#9ca3af;text-align:center;">signature</span>';
+  const previewCanvas = document.getElementById('stampPreviewCanvas');
+  const previewStatus = document.getElementById('stampPreviewStatus');
+  if (previewCanvas) previewCanvas.style.display = 'none';
+  if (previewStatus) {
+    previewStatus.textContent = 'Preparing stamp preview…';
+    previewStatus.style.display = 'block';
   }
-  if (previewStampCell) {
-    previewStampCell.innerHTML = '<span style="font-size:10px;color:#9ca3af;text-align:center;">stamp (optional)</span>';
-  }
-  if (previewSignedLine) previewSignedLine.textContent = 'Your Name (Role)';
-  if (previewCompanyLine) previewCompanyLine.textContent = 'Position • Team';
-  if (previewDateLine) previewDateLine.textContent = '';
   if (previewDims) previewDims.textContent = '';
 }
 
@@ -14542,25 +14527,11 @@ async function openStampSetup() {
             text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">
             👁️ Live preview — how your stamp will look
           </label>
-          <div id="stampPreviewBox" style="width:100%;aspect-ratio:var(--stamp-box-ratio, 3.78)/1;max-width:480px;
-            display:flex;border:1.4px solid #2563eb;border-radius:6px;background:transparent;
-            overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
-            <div id="previewSigCell" style="flex:0 0 19%;display:flex;align-items:center;justify-content:center;
-              border-right:1px solid #e5e7eb;padding:4px;overflow:hidden;">
-              <span style="font-size:10px;color:#9ca3af;text-align:center;">signature</span>
-            </div>
-            <div style="flex:0 0 40%;padding:6px 8px;display:flex;flex-direction:column;
-              justify-content:center;gap:2px;border-right:1px solid #e5e7eb;overflow:hidden;">
-              <div style="font-size:10px;color:#777;">Digitally signed by</div>
-              <div id="previewSignedLine" style="font-size:12px;font-weight:700;color:#0b7089;
-                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Your Name (Role)</div>
-              <div id="previewCompanyLine" style="font-size:11px;color:#0b7089;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Position • Team</div>
-              <div style="font-size:10px;color:#777;" id="previewDateLine"></div>
-            </div>
-            <div id="previewStampCell" style="flex:1;display:flex;align-items:center;justify-content:center;
-              padding:4px;overflow:hidden;">
-              <span style="font-size:10px;color:#9ca3af;text-align:center;">stamp (optional)</span>
-            </div>
+          <div id="stampPreviewBox" style="width:100%;max-width:480px;min-height:112px;display:flex;
+            align-items:center;justify-content:center;border:1px solid #e5e7eb;border-radius:8px;
+            background:#f8fafc;overflow:hidden;padding:12px;box-sizing:border-box;">
+            <span id="stampPreviewStatus" style="font-size:12px;color:#64748b;">Preparing stamp preview…</span>
+            <canvas id="stampPreviewCanvas" style="display:none;max-width:100%;height:auto;"></canvas>
           </div>
           <div id="stampPreviewDims" style="margin-top:6px;font-size:10px;color:#9ca3af;"></div>
         </div>
@@ -14583,24 +14554,13 @@ async function openStampSetup() {
 
   expandGrayPart(html);
 
-  // Live preview: mirrors createStampedFileBlob's exact 3-column layout so the
-  // user can judge image size/shape before saving anything.
-  const stampPreviewBoxEl = document.getElementById('stampPreviewBox');
-  if (stampPreviewBoxEl) stampPreviewBoxEl.style.setProperty('--stamp-box-ratio', STAMP_BOX_RATIO);
-  const previewSigCell = document.getElementById('previewSigCell');
-  const previewStampCell = document.getElementById('previewStampCell');
-  const previewSignedLine = document.getElementById('previewSignedLine');
-  const previewDateLine = document.getElementById('previewDateLine');
+  // Render the live preview from the same PDF drawing code used for saved stamps.
+  const stampPreviewCanvas = document.getElementById('stampPreviewCanvas');
+  const stampPreviewStatus = document.getElementById('stampPreviewStatus');
   const previewDims = document.getElementById('stampPreviewDims');
-  const previewCompanyLine = document.getElementById('previewCompanyLine');
   const stampStyleInputs = [...document.querySelectorAll('input[name="stampStyle"]')];
   _selectedStampStyle = [STAMP_STYLE_THREE_PART, STAMP_STYLE_SIGNATURE_STAMP].includes(existing?.stamp_style)
     ? existing.stamp_style : STAMP_STYLE_COMPACT;
-  const identityMeta = buildSignatureIdentityMeta(existing);
-  previewSignedLine.textContent = identityMeta.signerName;
-  previewCompanyLine.textContent = identityMeta.secondaryLine;
-  previewDateLine.textContent = new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })
-    + ', ' + new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
 
   const stampInput = document.getElementById('stampImageInput');
   const companyStampSection = document.getElementById('companyStampSection');
@@ -14610,23 +14570,11 @@ async function openStampSetup() {
     if (companyStampSection) companyStampSection.style.display = usesCompanyStamp ? 'block' : 'none';
   };
 
-  const updateStampPreview = () => {
+  let previewRenderVersion = 0;
+  const updateStampPreview = async () => {
     const selectedStyle = document.querySelector('input[name="stampStyle"]:checked')?.value || STAMP_STYLE_COMPACT;
     _selectedStampStyle = [STAMP_STYLE_THREE_PART, STAMP_STYLE_SIGNATURE_STAMP].includes(selectedStyle)
       ? selectedStyle : STAMP_STYLE_COMPACT;
-    const previewMiddleCell = previewSignedLine?.parentElement;
-    if (previewSigCell && previewMiddleCell && previewStampCell) {
-      const isThreePart = _selectedStampStyle === STAMP_STYLE_THREE_PART;
-      const isSignatureStamp = _selectedStampStyle === STAMP_STYLE_SIGNATURE_STAMP;
-      previewSigCell.style.flex = isThreePart ? '0 0 19%' : isSignatureStamp ? '0 0 24%' : '0 0 40%';
-      previewMiddleCell.style.flex = isThreePart || isSignatureStamp ? '1 1 auto' : '1 1 auto';
-      previewMiddleCell.style.borderRight = isThreePart || isSignatureStamp ? '1px solid #e5e7eb' : 'none';
-      previewMiddleCell.style.order = isSignatureStamp ? '3' : '2';
-      previewStampCell.style.display = isThreePart || isSignatureStamp ? 'flex' : 'none';
-      previewStampCell.style.flex = isSignatureStamp ? '0 0 24%' : '1 1 auto';
-      previewStampCell.style.order = isSignatureStamp ? '2' : '3';
-      previewSigCell.style.order = '1';
-    }
     updateStampStyleSections();
     const isDrawMode = drawPanel.style.display !== 'none';
     let sigSrc = null;
@@ -14640,10 +14588,6 @@ async function openStampSetup() {
     } else if (existing && existing.signature_image) {
       sigSrc = existing.signature_image;
     }
-    previewSigCell.innerHTML = sigSrc
-      ? `<img src="${sigSrc}" style="max-width:100%;max-height:100%;object-fit:contain;background:transparent;" />`
-      : `<span style="font-size:10px;color:#9ca3af;text-align:center;">signature</span>`;
-
     let stampSrc = null;
     if (stampInput.files[0]) {
       const selectedStamp = stampInput.files[0];
@@ -14653,9 +14597,30 @@ async function openStampSetup() {
     } else if (existing && existing.stamp_image_url) {
       stampSrc = existing.stamp_image_url;
     }
-    previewStampCell.innerHTML = stampSrc
-      ? `<img src="${stampSrc}" style="max-width:100%;max-height:100%;object-fit:contain;background:transparent;" />`
-      : `<span style="font-size:10px;color:#9ca3af;text-align:center;">stamp (optional)</span>`;
+    const renderVersion = ++previewRenderVersion;
+    const previewProfile = {
+      ...(existing || {}),
+      signature_image: sigSrc,
+      stamp_image_url: stampSrc,
+      stamp_style: _selectedStampStyle,
+      company_name: existing?.company_name || window.currentUserCompany || null,
+    };
+    try {
+      const artwork = await createStampArtworkCanvas(previewProfile, 'APPROVED', 900);
+      if (renderVersion !== previewRenderVersion || !stampPreviewCanvas?.isConnected) return;
+      stampPreviewCanvas.width = artwork.width;
+      stampPreviewCanvas.height = artwork.height;
+      stampPreviewCanvas.getContext('2d').drawImage(artwork, 0, 0);
+      stampPreviewCanvas.style.display = 'block';
+      if (stampPreviewStatus) stampPreviewStatus.style.display = 'none';
+    } catch (err) {
+      console.error('[STAMP] Could not render setup preview:', err);
+      if (renderVersion === previewRenderVersion && stampPreviewStatus) {
+        stampPreviewStatus.textContent = 'Stamp preview could not be rendered.';
+        stampPreviewStatus.style.display = 'block';
+        stampPreviewCanvas.style.display = 'none';
+      }
+    }
 
     // Show the uploaded files' real pixel dimensions to help pick a well-sized source image.
     const dimParts = [];
@@ -14853,7 +14818,7 @@ function isDecisionMakerRole(role) {
   return ['contractor','contractorpm','consultant','consultantpm','client','clientpm'].includes(r);
 }
 
-async function openStampPlacementModal(file, onApply, onCancel) {
+async function openStampPlacementModal(file, onApply, onCancel, stampType = 'APPROVED') {
   const stampProfile = await loadStampProfile();
 
   const modal = document.createElement('div');
@@ -14960,6 +14925,7 @@ async function openStampPlacementModal(file, onApply, onCancel) {
           const pageWrap = document.createElement('div');
           pageWrap.className = 'stampPlacementPageWrap';
           pageWrap.dataset.page = String(pageNum);
+          pageWrap.dataset.pdfWidth = String(baseViewport.width);
           pageWrap.style.cssText = `position:relative;width:${viewport.width}px;height:${viewport.height}px;box-shadow:0 1px 4px rgba(15,23,42,0.15);cursor:crosshair;flex-shrink:0;`;
 
           const canvas = document.createElement('canvas');
@@ -14988,6 +14954,10 @@ async function openStampPlacementModal(file, onApply, onCancel) {
     const img = document.createElement('img');
     img.src = previewUrl;
     img.style.cssText = 'display:block;max-width:100%;max-height:calc(90vh - 260px);object-fit:contain;pointer-events:none;';
+    img.addEventListener('load', () => {
+      imgWrap.dataset.pdfWidth = String(img.naturalWidth);
+      if (marker.parentElement === imgWrap) placeMarkerOnPage(1);
+    });
     imgWrap.appendChild(img);
     previewContainer.appendChild(imgWrap);
     previewElement = img;
@@ -14996,37 +14966,12 @@ async function openStampPlacementModal(file, onApply, onCancel) {
     previewContainer.innerHTML = '<div style="color:#64748b;font-size:13px;text-align:center;">Preview is not available for this file type. You can still choose the stamp placement manually.</div>';
   }
 
-  // The marker shows the user's REAL stamp — same columns, dividers, text,
-  // and images that createStampedFileBlob() will actually burn into the PDF.
-  // It's re-parented into whichever page wrapper is currently targeted, so it
-  // scrolls naturally along with that page instead of floating over the whole
-  // (now much taller) scrollable preview.
-  const identityMeta = buildSignatureIdentityMeta(stampProfile);
-  const companyLabel = identityMeta.signerName || ((stampProfile && (stampProfile.company_name || stampProfile.role)) || 'Decision Maker');
-  const roleLabel = identityMeta.secondaryLine || (stampProfile && stampProfile.role) || '';
-  const now = new Date();
-  const nowLabel = `${now.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}, ${now.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
-  const markerIsThreePart = stampProfile?.stamp_style === STAMP_STYLE_THREE_PART;
-  const markerIsSignatureStamp = stampProfile?.stamp_style === STAMP_STYLE_SIGNATURE_STAMP;
-  const markerHasCompanyStamp = markerIsThreePart || markerIsSignatureStamp;
+  // Use the same PDF-rendered stamp artwork for placement as for final output.
   const marker = document.createElement('div');
-  const markerHeight = Math.round(STAMP_BOX_MARKER_WIDTH / STAMP_BOX_RATIO);
-  marker.style.cssText = `position:absolute;width:${STAMP_BOX_MARKER_WIDTH}px;height:${markerHeight}px;border:1.5px solid rgba(37,99,235,0.9);border-radius:8px;transform:translate(-50%,-50%);cursor:grab;display:none;z-index:4;background:rgba(255,255,255,0.18);box-shadow:0 4px 10px rgba(15,23,42,0.18);box-sizing:border-box;font-family:inherit;`;
-  marker.innerHTML = `
-    <div style="display:flex;height:100%;">
-      <div style="width:${markerIsThreePart ? '19%' : markerIsSignatureStamp ? '24%' : '40%'};flex-shrink:0;display:flex;align-items:center;justify-content:center;border-right:1px solid #e5e7eb;padding:4px;order:1;">
-        ${stampProfile && stampProfile.signature_image ? `<img src="${stampProfile.signature_image}" style="max-width:100%;aspect-ratio:${SIGNATURE_RATIO}/1;object-fit:contain;pointer-events:none;" />` : '<span style="font-size:9px;color:#9ca3af;">signature</span>'}
-      </div>
-      <div style="${markerIsThreePart ? 'width:40%;border-right:1px solid #e5e7eb;' : markerIsSignatureStamp ? 'flex:1;order:3;' : 'flex:1;'}min-width:0;padding:6px 8px;display:flex;flex-direction:column;justify-content:center;gap:2px;">
-        <div style="font-size:10px;color:#777;">Digitally signed by</div>
-        <div style="font-size:12px;font-weight:700;color:#0b7089;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${companyLabel}</div>
-        ${roleLabel ? `<div style="font-size:11px;color:#475569;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${roleLabel}</div>` : ''}
-        <div style="font-size:10px;color:#777;">${nowLabel}</div>
-      </div>
-      ${markerHasCompanyStamp ? `<div style="${markerIsSignatureStamp ? 'width:24%;order:2;border-right:1px solid #e5e7eb;' : 'flex:1;'}display:flex;align-items:center;justify-content:center;padding:4px;overflow:hidden;">
-        ${stampProfile?.stamp_image_url ? `<img src="${stampProfile.stamp_image_url}" style="max-width:100%;max-height:100%;object-fit:contain;pointer-events:none;" />` : '<span style="font-size:9px;color:#9ca3af;text-align:center;">stamp (optional)</span>'}
-      </div>` : ''}
-    </div>`;
+  marker.style.cssText = 'position:absolute;transform:translate(-50%,-50%);cursor:grab;display:none;z-index:4;box-shadow:0 4px 10px rgba(15,23,42,0.18);box-sizing:border-box;';
+  const markerArtwork = await createStampArtworkCanvas(stampProfile, stampType, 900);
+  marker.appendChild(markerArtwork);
+  markerArtwork.style.cssText = 'display:block;width:100%;height:auto;pointer-events:none;';
 
   const getPageEl = (pageNum) => pageEls.find(el => Number(el.dataset.page) === pageNum) || null;
 
@@ -15034,11 +14979,22 @@ async function openStampPlacementModal(file, onApply, onCancel) {
   // and positions it there using the current x/y ratios.
   const placeMarkerOnPage = (pageNum) => {
     const targetEl = getPageEl(pageNum);
-    if (!targetEl) return;
+    if (!targetEl || !targetEl.clientWidth || !targetEl.clientHeight) return;
     if (marker.parentElement !== targetEl) targetEl.appendChild(marker);
+    const maxStampWidth = stampProfile?.stamp_style === STAMP_STYLE_THREE_PART || stampProfile?.stamp_style === STAMP_STYLE_SIGNATURE_STAMP ? 300 : 272;
+    const pdfWidth = Number(targetEl.dataset.pdfWidth) || targetEl.clientWidth;
+    const markerWidth = Math.min(maxStampWidth * targetEl.clientWidth / pdfWidth, targetEl.clientWidth * 0.52);
+    marker.style.width = `${markerWidth}px`;
+    const markerHeight = markerWidth * markerArtwork.height / markerArtwork.width;
+    const margin = 10 * targetEl.clientWidth / pdfWidth;
+    const minX = (markerWidth / 2 + margin) / targetEl.clientWidth;
+    const minY = (markerHeight / 2 + margin) / targetEl.clientHeight;
+    state.x = Math.max(minX, Math.min(1 - minX, state.x));
+    state.y = Math.max(minY, Math.min(1 - minY, state.y));
     marker.style.left = `${Math.round(state.x * 100)}%`;
     marker.style.top = `${Math.round((1 - state.y) * 100)}%`;
     marker.style.display = 'block';
+    updateLabels();
   };
 
   const updateLabels = () => {
@@ -15096,7 +15052,6 @@ async function openStampPlacementModal(file, onApply, onCancel) {
     state.x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
     state.y = Math.max(0, Math.min(1, 1 - (event.clientY - rect.top) / rect.height));
     state.page = pageNum;
-    updateLabels();
     placeMarkerOnPage(state.page);
   });
 
@@ -15108,11 +15063,9 @@ async function openStampPlacementModal(file, onApply, onCancel) {
     const hostEl = marker.parentElement;
     if (!hostEl) return;
     const rect = hostEl.getBoundingClientRect();
-    state.x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    state.y = Math.max(0, Math.min(1, 1 - (e.clientY - rect.top) / rect.height));
-    updateLabels();
-    marker.style.left = `${Math.round(state.x * 100)}%`;
-    marker.style.top = `${Math.round((1 - state.y) * 100)}%`;
+    state.x = (e.clientX - rect.left) / rect.width;
+    state.y = 1 - (e.clientY - rect.top) / rect.height;
+    placeMarkerOnPage(state.page);
   });
   window.addEventListener('pointerup', () => { dragging = false; marker.style.cursor = 'grab'; });
 
@@ -15299,7 +15252,7 @@ async function renderStampStep(file, stampStepContainer) {
       openStampPlacementModal(file, (placement) => {
         stampPlacementSummary.textContent = `Placement saved: page ${placement.page} • x ${Math.round(placement.x * 100)}% • y ${Math.round(placement.y * 100)}%`;
         window.__stampPlacement = placement;
-      });
+      }, undefined, 'STAMPED');
     });
   }
 }
@@ -15316,6 +15269,230 @@ async function loadStampProfile() {
     console.error('[STAMP] loadStampProfile error:', err);
     return null;
   }
+}
+
+async function embedStampImage(pdfDoc, source) {
+  if (!source) return null;
+  const value = String(source);
+  const match = value.match(/^data:image\/(png|jpeg|jpg);base64,(.+)$/i);
+  let bytes;
+  let isPng;
+  if (match) {
+    isPng = match[1].toLowerCase() === 'png';
+    bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0));
+  } else {
+    const response = await fetch(value);
+    if (!response.ok) throw new Error(`Could not load stamp image (${response.status}).`);
+    bytes = await response.arrayBuffer();
+    const contentType = response.headers.get('content-type') || '';
+    isPng = contentType.includes('png') || value.toLowerCase().endsWith('.png');
+  }
+  return isPng ? pdfDoc.embedPng(bytes) : pdfDoc.embedJpg(bytes);
+}
+
+async function drawStampOnPdfPage(page, pdfDoc, stampProfile, stampType, options = {}) {
+  const { width, height } = page.getSize();
+  const isThreePart = stampProfile?.stamp_style === STAMP_STYLE_THREE_PART;
+  const isSignatureStamp = stampProfile?.stamp_style === STAMP_STYLE_SIGNATURE_STAMP;
+  const hasCompanyStamp = isThreePart || isSignatureStamp;
+  const PAD = 8;
+  const GAP = 7;
+  const rectWidth = Math.min(hasCompanyStamp ? 300 : 272, width * 0.52);
+  const contentWidth = rectWidth - PAD * 2 - (hasCompanyStamp ? GAP * 2 : GAP);
+  const sigColWidth = contentWidth * (isThreePart ? 0.19 : isSignatureStamp ? 0.24 : 0.4);
+  const middleColWidth = contentWidth * (isThreePart ? 0.4 : isSignatureStamp ? 0.52 : 0.6);
+  const stampColWidth = isThreePart ? contentWidth * 0.41 : isSignatureStamp ? contentWidth * 0.24 : 0;
+  const titleFont = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  const bodyFont = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+  const splitToFit = (text, font, size, maxWidth) => {
+    const result = [];
+    let line = '';
+    for (const word of String(text || '').split(/\s+/).filter(Boolean)) {
+      const parts = font.widthOfTextAtSize(word, size) <= maxWidth
+        ? [word]
+        : word.split('').reduce((chunks, character) => {
+            const last = chunks[chunks.length - 1] || '';
+            if (last && font.widthOfTextAtSize(last + character, size) > maxWidth) chunks.push(character);
+            else if (last) chunks[chunks.length - 1] += character;
+            else chunks.push(character);
+            return chunks;
+          }, []);
+      for (const part of parts) {
+        const candidate = line ? `${line} ${part}` : part;
+        if (line && font.widthOfTextAtSize(candidate, size) > maxWidth) {
+          result.push(line);
+          line = part;
+        } else {
+          line = candidate;
+        }
+      }
+    }
+    if (line) result.push(line);
+    return result.length ? result : [''];
+  };
+
+  const identity = buildSignatureIdentityMeta(stampProfile);
+  const companyName = stampProfile?.company_name || window.currentUserCompany || 'Company not specified';
+  const now = options.timestamp ? new Date(options.timestamp) : new Date();
+  const dateTimeLabel = now.toLocaleString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+  });
+  const textRows = [
+    { text: stampType === 'APPROVED' ? 'Digitally approved by' : 'Digitally signed by', font: bodyFont, size: 7.2, minSize: 5.6, color: PDFLib.rgb(0.34, 0.4, 0.44) },
+    { text: identity.signerName, font: titleFont, size: 10, minSize: 6.4, color: PDFLib.rgb(0.04, 0.37, 0.43) },
+    { text: identity.secondaryLine || 'Team Member', font: bodyFont, size: 7.4, minSize: 5.6, color: PDFLib.rgb(0.25, 0.31, 0.35) },
+    { text: `Company: ${companyName}`, font: bodyFont, size: 7.2, minSize: 5.4, color: PDFLib.rgb(0.25, 0.31, 0.35) },
+    { text: dateTimeLabel, font: bodyFont, size: 6.6, minSize: 5.2, color: PDFLib.rgb(0.34, 0.4, 0.44) },
+  ];
+  const headerHeight = 16;
+  const maxHeight = Math.max(72, Math.min(156, height * 0.32));
+  let textScale = 1;
+  let laidOutRows;
+  let rectHeight;
+  do {
+    laidOutRows = textRows.map((row) => {
+      const size = Math.max(row.minSize, row.size * textScale);
+      const lines = splitToFit(row.text, row.font, size, Math.max(20, middleColWidth));
+      return { ...row, size, lines, leading: size * 1.24, rowGap: 1.5 };
+    });
+    const textHeight = laidOutRows.reduce((total, row) => total + row.lines.length * row.leading + row.rowGap, 0);
+    rectHeight = Math.max(88, PAD + headerHeight + 5 + textHeight + PAD);
+    if (rectHeight <= maxHeight || textScale <= 0.65) break;
+    textScale -= 0.05;
+  } while (true);
+  rectHeight = Math.min(rectHeight, maxHeight);
+
+  const rectX = options.xRatio !== undefined
+    ? Math.min(Math.max(options.xRatio * width - rectWidth / 2, 10), Math.max(0, width - rectWidth - 10))
+    : options.x ?? Math.max(10, width - rectWidth - 18);
+  const rectY = options.yRatio !== undefined
+    ? Math.min(Math.max(height - options.yRatio * height - rectHeight / 2, 10), Math.max(0, height - rectHeight - 10))
+    : options.y ?? Math.max(10, height * 0.08);
+  const brand = PDFLib.rgb(0.02, 0.43, 0.49);
+  const divider = PDFLib.rgb(0.82, 0.86, 0.88);
+  const cornerRadius = 6;
+  const curve = cornerRadius * 0.55228475;
+  const roundedBorderPath = [
+    `M ${cornerRadius} 0`,
+    `L ${rectWidth - cornerRadius} 0`,
+    `C ${rectWidth - cornerRadius + curve} 0 ${rectWidth} ${cornerRadius - curve} ${rectWidth} ${cornerRadius}`,
+    `L ${rectWidth} ${rectHeight - cornerRadius}`,
+    `C ${rectWidth} ${rectHeight - cornerRadius + curve} ${rectWidth - cornerRadius + curve} ${rectHeight} ${rectWidth - cornerRadius} ${rectHeight}`,
+    `L ${cornerRadius} ${rectHeight}`,
+    `C ${cornerRadius - curve} ${rectHeight} 0 ${rectHeight - cornerRadius + curve} 0 ${rectHeight - cornerRadius}`,
+    `L 0 ${cornerRadius}`,
+    `C 0 ${cornerRadius - curve} ${cornerRadius - curve} 0 ${cornerRadius} 0`,
+    'Z',
+  ].join(' ');
+  page.drawSvgPath(roundedBorderPath, {
+    x: rectX, y: rectY + rectHeight,
+    color: PDFLib.rgb(1, 1, 1), opacity: 0.94,
+    borderColor: brand, borderWidth: 1.2,
+  });
+  page.drawRectangle({
+    x: rectX + 1, y: rectY + rectHeight - headerHeight - 1,
+    width: rectWidth - 2, height: headerHeight,
+    color: brand,
+  });
+  const headerLabel = stampType === 'APPROVED' ? 'APPROVED' : 'SIGNED';
+  const headerSize = 7.5;
+  const headerWidth = titleFont.widthOfTextAtSize(headerLabel, headerSize);
+  page.drawText(headerLabel, {
+    x: rectX + (rectWidth - headerWidth) / 2,
+    y: rectY + rectHeight - headerHeight + 4,
+    size: headerSize, font: titleFont, color: PDFLib.rgb(1, 1, 1),
+  });
+
+  const sigX = rectX + PAD;
+  const stampX = isSignatureStamp
+    ? sigX + sigColWidth + GAP
+    : rectX + rectWidth - PAD - stampColWidth;
+  const middleX = isSignatureStamp ? stampX + stampColWidth + GAP : sigX + sigColWidth + GAP;
+  const dividerBottom = rectY + 6;
+  const dividerTop = rectY + rectHeight - headerHeight - 3;
+  if (isSignatureStamp || isThreePart) {
+    page.drawLine({ start: { x: stampX - GAP / 2, y: dividerBottom }, end: { x: stampX - GAP / 2, y: dividerTop }, thickness: 0.65, color: divider });
+  }
+  page.drawLine({ start: { x: middleX - GAP / 2, y: dividerBottom }, end: { x: middleX - GAP / 2, y: dividerTop }, thickness: 0.65, color: divider });
+
+  if (stampProfile?.signature_image) {
+    try {
+      const signatureImg = await embedStampImage(pdfDoc, stampProfile.signature_image);
+      const maxW = sigColWidth;
+      const maxH = rectHeight - headerHeight - PAD * 2;
+      const ratio = Math.min(maxW / signatureImg.width, maxH / signatureImg.height, 1);
+      const imageWidth = signatureImg.width * ratio;
+      const imageHeight = signatureImg.height * ratio;
+      page.drawImage(signatureImg, {
+        x: sigX + (sigColWidth - imageWidth) / 2,
+        y: rectY + (rectHeight - headerHeight - imageHeight) / 2,
+        width: imageWidth, height: imageHeight,
+      });
+    } catch (err) {
+      console.warn('[STAMP] Could not embed signature image:', err);
+    }
+  }
+
+  if (hasCompanyStamp && stampProfile?.stamp_image_url) {
+    try {
+      const stampImg = await embedStampImage(pdfDoc, stampProfile.stamp_image_url);
+      const maxH = rectHeight - headerHeight - PAD * 2;
+      const ratio = Math.min(stampColWidth / stampImg.width, maxH / stampImg.height, 1);
+      const imageWidth = stampImg.width * ratio;
+      const imageHeight = stampImg.height * ratio;
+      page.drawImage(stampImg, {
+        x: stampX + (stampColWidth - imageWidth) / 2,
+        y: rectY + (rectHeight - headerHeight - imageHeight) / 2,
+        width: imageWidth, height: imageHeight,
+      });
+    } catch (err) {
+      console.warn('[STAMP] Could not embed company stamp image:', err);
+    }
+  }
+
+  let cursorY = rectY + rectHeight - headerHeight - 6;
+  for (const row of laidOutRows) {
+    for (const line of row.lines) {
+      cursorY -= row.leading;
+      if (cursorY < rectY + PAD) break;
+      page.drawText(line, { x: middleX, y: cursorY, size: row.size, font: row.font, color: row.color });
+    }
+    cursorY -= row.rowGap;
+    if (cursorY < rectY + PAD) break;
+  }
+
+  return { x: rectX, y: rectY, width: rectWidth, height: rectHeight };
+}
+
+async function createStampArtworkCanvas(stampProfile, stampType = 'APPROVED', targetWidth = 900) {
+  if (!window.pdfjsLib) throw new Error('PDF preview renderer is unavailable.');
+  const pdfDoc = await PDFLib.PDFDocument.create();
+  const page = pdfDoc.addPage([600, 360]);
+  const box = await drawStampOnPdfPage(page, pdfDoc, stampProfile, stampType, { x: 150, y: 100, timestamp: new Date() });
+  const bytes = await pdfDoc.save();
+  const renderedDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
+  const renderedPage = await renderedDoc.getPage(1);
+  const scale = Math.max(1, targetWidth / box.width);
+  const viewport = renderedPage.getViewport({ scale });
+  const fullCanvas = document.createElement('canvas');
+  fullCanvas.width = Math.ceil(viewport.width);
+  fullCanvas.height = Math.ceil(viewport.height);
+  await renderedPage.render({ canvasContext: fullCanvas.getContext('2d'), viewport }).promise;
+
+  const cropped = document.createElement('canvas');
+  cropped.width = Math.ceil(box.width * scale);
+  cropped.height = Math.ceil(box.height * scale);
+  const context = cropped.getContext('2d');
+  context.drawImage(
+    fullCanvas,
+    box.x * scale,
+    (360 - box.y - box.height) * scale,
+    box.width * scale,
+    box.height * scale,
+    0, 0, cropped.width, cropped.height,
+  );
+  return cropped;
 }
 
 async function createStampedFileBlob(file, placement, stampType, stampProfile) {
@@ -15346,151 +15523,10 @@ async function createStampedFileBlob(file, placement, stampType, stampProfile) {
     const pageIndex = Math.max(0, Math.min((placement.page || 1) - 1, pages.length - 1));
     page = pages[pageIndex];
   }
-  const { width, height } = page.getSize();
-
-  const isThreePart = stampProfile?.stamp_style === STAMP_STYLE_THREE_PART;
-  const isSignatureStamp = stampProfile?.stamp_style === STAMP_STYLE_SIGNATURE_STAMP;
-  const hasCompanyStamp = isThreePart || isSignatureStamp;
-  const PAD = 7;
-  const GAP = 8;
-  const rectWidth = Math.min(hasCompanyStamp ? 300 : 272, width * 0.52);
-  const rectHeight = Math.min(92, height * 0.16);
-  const contentWidth = rectWidth - PAD * 2 - (hasCompanyStamp ? GAP * 2 : GAP);
-  const SIG_COL_W = contentWidth * (isThreePart ? 0.19 : isSignatureStamp ? 0.24 : 0.4);
-  const MID_COL_W = contentWidth * (isThreePart ? 0.4 : isSignatureStamp ? 0.52 : 0.6);
-  const STAMP_COL_W = isThreePart ? contentWidth * 0.41 : isSignatureStamp ? contentWidth * 0.24 : 0;
-
-  const x = Math.min(Math.max((placement.x ?? 0.8) * width, 10), width - rectWidth - 10);
-  const y = Math.min(Math.max(height - ((placement.y ?? 0.08) * height) - rectHeight, 10), height - rectHeight - 10);
-
-  const titleFont = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
-  const bodyFont = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
-
-  const wrapTextToWidth = (text, font, size, maxWidth) => {
-    const words = String(text || '').split(/\s+/).filter(Boolean);
-    if (!words.length) return [''];
-    const lines = [];
-    let current = '';
-    words.forEach((word) => {
-      const candidate = current ? `${current} ${word}` : word;
-      if (!current || font.widthOfTextAtSize(candidate, size) <= maxWidth) {
-        current = candidate;
-      } else {
-        lines.push(current);
-        current = word;
-      }
-    });
-    if (current) lines.push(current);
-    return lines;
-  };
-
-  // Column boundaries
-  const sigColX = x + PAD;
-  const stampColX = isSignatureStamp
-    ? sigColX + SIG_COL_W + GAP
-    : x + rectWidth - PAD - STAMP_COL_W;
-  const midColX = isSignatureStamp
-    ? stampColX + STAMP_COL_W + GAP
-    : sigColX + SIG_COL_W + GAP;
-  const midColW = Math.max(60, MID_COL_W);
-
-  // Divider line between signature and details column
-  const dividerColor = PDFLib.rgb(0.82, 0.85, 0.88);
-  if (isSignatureStamp) {
-    page.drawLine({ start: { x: stampColX - GAP / 2, y: y + 8 }, end: { x: stampColX - GAP / 2, y: y + rectHeight - 8 }, thickness: 0.75, color: dividerColor });
-    page.drawLine({ start: { x: midColX - GAP / 2, y: y + 8 }, end: { x: midColX - GAP / 2, y: y + rectHeight - 8 }, thickness: 0.75, color: dividerColor });
-  } else {
-    page.drawLine({ start: { x: midColX - GAP / 2, y: y + 8 }, end: { x: midColX - GAP / 2, y: y + rectHeight - 8 }, thickness: 0.75, color: dividerColor });
-  }
-  if (isThreePart) {
-    page.drawLine({ start: { x: stampColX - GAP / 2, y: y + 8 }, end: { x: stampColX - GAP / 2, y: y + rectHeight - 8 }, thickness: 0.75, color: dividerColor });
-  }
-
-  // ── Middle column: signer name + position/side + date/time ──
-  const identityMeta = buildSignatureIdentityMeta(stampProfile);
-  const signerName = identityMeta.signerName;
-  const secondaryLine = identityMeta.secondaryLine || 'Team Member';
-  const signedLine1 = stampType === 'APPROVED' ? 'Digitally approved by' : 'Digitally signed by';
-  const signerLine = signerName;
-  const detailLine = secondaryLine;
-
-  let signedFontSize = 12;
-  const wrappedSignerLines = wrapTextToWidth(signerLine, titleFont, signedFontSize, midColW);
-  const wrappedDetailLines = wrapTextToWidth(detailLine, bodyFont, 9.5, midColW);
-  const now = new Date();
-  const dateTimeLabel = `${now.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}, ${now.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' })}`;
-
-  // ── Left column: signature ──
-  // stampProfile.signature_image is either a base64 data URI (signature was
-  // drawn on the canvas) or a plain Cloudinary URL (signature was uploaded as
-  // a file — see POST /api/my-stamp, which stores uploadRes.secure_url in
-  // that case). Both need to be handled here.
-  if (stampProfile.signature_image) {
-    try {
-      const sigSrc = String(stampProfile.signature_image);
-      const sigMatch = sigSrc.match(/^data:image\/(png|jpeg|jpg);base64,(.+)$/i);
-      let sigBuffer, sigIsPng;
-      if (sigMatch) {
-        sigIsPng = sigMatch[1].toLowerCase() === 'png';
-        sigBuffer = Uint8Array.from(atob(sigMatch[2]), c => c.charCodeAt(0));
-      } else {
-        const sigResp = await fetch(sigSrc);
-        sigBuffer = await sigResp.arrayBuffer();
-        const sigContentType = sigResp.headers.get('content-type') || '';
-        sigIsPng = sigContentType.includes('png') || sigSrc.toLowerCase().endsWith('.png');
-      }
-      const signatureImg = sigIsPng
-        ? await pdfDoc.embedPng(sigBuffer)
-        : await pdfDoc.embedJpg(sigBuffer);
-      const maxW = SIG_COL_W, maxAvailH = rectHeight - PAD * 2;
-      // Target box respects the same landscape ratio as the draw canvas —
-      // centered in the column rather than stretched to fill it.
-      const targetBoxH = Math.min(maxAvailH, maxW / SIGNATURE_RATIO);
-      const targetBoxW = Math.min(maxW, targetBoxH * SIGNATURE_RATIO);
-      const ratio = Math.min(targetBoxW / signatureImg.width, targetBoxH / signatureImg.height, 1);
-      const w = signatureImg.width * ratio, h = signatureImg.height * ratio;
-      page.drawImage(signatureImg, {
-        x: sigColX + (SIG_COL_W - w) / 2,
-        y: y + (rectHeight - h) / 2,
-        width: w, height: h,
-      });
-    } catch (err) {
-      console.warn('[STAMP] Could not embed signature image:', err);
-    }
-  }
-
-  if (hasCompanyStamp && stampProfile.stamp_image_url) {
-    try {
-      const stampResp = await fetch(String(stampProfile.stamp_image_url));
-      const stampBuffer = await stampResp.arrayBuffer();
-      const stampContentType = stampResp.headers.get('content-type') || '';
-      const stampIsPng = stampContentType.includes('png') || String(stampProfile.stamp_image_url).toLowerCase().endsWith('.png');
-      const stampImg = stampIsPng ? await pdfDoc.embedPng(stampBuffer) : await pdfDoc.embedJpg(stampBuffer);
-      const maxW = STAMP_COL_W, maxH = rectHeight - PAD * 2;
-      const ratio = Math.min(maxW / stampImg.width, maxH / stampImg.height, 1);
-      const stampW = stampImg.width * ratio, stampH = stampImg.height * ratio;
-      page.drawImage(stampImg, {
-        x: stampColX + (STAMP_COL_W - stampW) / 2,
-        y: y + (rectHeight - stampH) / 2,
-        width: stampW, height: stampH,
-      });
-    } catch (err) {
-      console.warn('[STAMP] Could not embed company stamp image:', err);
-    }
-  }
-
-  // ── Middle column text (drawn after the images so it remains readable and does not get covered) ──
-  page.drawText(signedLine1, { x: midColX, y: y + rectHeight - 20, size: 9.5, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
-  wrappedSignerLines.forEach((line, index) => {
-    const lineY = y + rectHeight - 34 - (index * 12);
-    page.drawText(line, { x: midColX, y: lineY, size: signedFontSize, font: titleFont, color: PDFLib.rgb(0.07, 0.44, 0.52) });
+  await drawStampOnPdfPage(page, pdfDoc, stampProfile, stampType, {
+    xRatio: placement.x ?? 0.8,
+    yRatio: placement.y ?? 0.08,
   });
-  wrappedDetailLines.forEach((line, index) => {
-    const lineY = y + rectHeight - 52 - ((wrappedSignerLines.length + index) * 10);
-    page.drawText(line, { x: midColX, y: lineY, size: 9.2, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
-  });
-  page.drawText(dateTimeLabel, { x: midColX, y: y + rectHeight - 62 - ((wrappedSignerLines.length + wrappedDetailLines.length) * 10), size: 8.5, font: bodyFont, color: PDFLib.rgb(0.44, 0.44, 0.44) });
-
   const pdfBytes = await pdfDoc.save();
   return new Blob([pdfBytes], { type: 'application/pdf' });
 }
