@@ -7673,6 +7673,11 @@ function renderSelectedMeetingParticipants() {
   if (count) count.textContent = `${people.length} selected`;
   const notice = document.getElementById('mNotifyCount');
   if (notice) notice.textContent = `${people.length} ${people.length === 1 ? 'participant' : 'participants'} selected · external attendees receive an email; in-app notices follow the project visibility setting`;
+  const suggestions = document.getElementById('mPersonSuggestions');
+  if (suggestions) {
+    const names = [...new Set(people.map(person => person.name).filter(Boolean))];
+    suggestions.innerHTML = names.map(name => `<option value="${escapeHtml(name)}"></option>`).join('');
+  }
 }
 
 async function loadMeetingProjectParticipants(projectId) {
@@ -7748,8 +7753,11 @@ function renderMeetingFormPreview() {
     ? new Intl.DateTimeFormat('en-GB', { month: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(2000, Number(dayMatch[1]) - 1, 1)))
     : '';
   const day = dayMatch ? dayMatch[2] : '—';
+  const safeVirtualLink = meetingHttpUrl(virtualLink);
   const locationValue = type === 'virtual' && virtualLink
-    ? `<a href="${escapeHtml(virtualLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(virtualLink)}</a>`
+    ? safeVirtualLink
+      ? `<a href="${escapeHtml(safeVirtualLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(virtualLink)}</a>`
+      : escapeHtml(virtualLink)
     : escapeHtml(location || '—');
 
   return `<article class="meeting-card open meeting-preview-card">
@@ -7854,13 +7862,14 @@ function renderPlanMeetingForm(context, scope, scopeValue, meeting = null) {
           <div class="form-group"><label for="mTitle">Subject / title <span class="meeting-required">*</span></label>
             <input type="text" id="mTitle" maxlength="200" value="${escapeHtml(meeting?.title === 'Untitled draft' ? '' : meeting?.title || '')}" placeholder="e.g. Weekly construction progress" required>
             <p class="meeting-counter" data-counter-for="mTitle">0 / 200</p><p class="meeting-field-error" id="mTitleError"></p></div>
-          <div class="form-group"><label for="mChairperson">Chairperson</label>
-            <input type="text" id="mChairperson" maxlength="160" value="${escapeHtml(meeting?.chairperson || '')}" placeholder="Meeting chair">
-            <p class="meeting-counter" data-counter-for="mChairperson">0 / 160</p></div>
-          <div class="form-group"><label for="mMinuteTaker">Minute-taker</label>
-            <input type="text" id="mMinuteTaker" maxlength="160" value="${escapeHtml(meeting?.minute_taker || '')}" placeholder="Person responsible for the minutes">
-            <p class="meeting-counter" data-counter-for="mMinuteTaker">0 / 160</p></div>
+          <div class="form-group"><label for="mChairperson">Chairperson <span class="meeting-required">*</span></label>
+            <input type="text" id="mChairperson" list="mPersonSuggestions" maxlength="160" value="${escapeHtml(meeting?.chairperson || '')}" placeholder="Meeting chair" required>
+            <p class="meeting-counter" data-counter-for="mChairperson">0 / 160</p><p class="meeting-field-error" id="mChairpersonError"></p></div>
+          <div class="form-group"><label for="mMinuteTaker">Minute-taker <span class="meeting-required">*</span></label>
+            <input type="text" id="mMinuteTaker" list="mPersonSuggestions" maxlength="160" value="${escapeHtml(meeting?.minute_taker || '')}" placeholder="Person responsible for the minutes" required>
+            <p class="meeting-counter" data-counter-for="mMinuteTaker">0 / 160</p><p class="meeting-field-error" id="mMinuteTakerError"></p></div>
         </div>
+        <datalist id="mPersonSuggestions"></datalist>
         <div class="form-group"><label>Purpose / description <span class="meeting-required">*</span></label>
           ${meetingEditorMarkup('mPurpose', 'Purpose or description', meeting?.purpose || '', 'What should this meeting achieve?', 5000)}
           <p class="meeting-field-error" id="mPurposeError"></p></div>
@@ -7987,7 +7996,11 @@ function renderPlanMeetingForm(context, scope, scopeValue, meeting = null) {
         document.getElementById('mParticipantsError').textContent = 'Enter the external participant’s name and a valid email address.';
         return;
       }
-      if (meetingParticipantDraft.manual.some(person => person.email.toLowerCase() === email)) return;
+      const duplicateEmail = getMeetingParticipants().some(person => String(person.email || '').toLowerCase() === email);
+      if (duplicateEmail) {
+        document.getElementById('mParticipantsError').textContent = 'This email address is already added as a participant.';
+        return;
+      }
       meetingParticipantDraft.manual.push({ name, email, attendance_type: 'required' });
       document.getElementById('mManualParticipant').value = '';
       document.getElementById('mManualEmail').value = '';
@@ -8102,6 +8115,15 @@ function meetingInputToInstant(value, timeZone) {
   } catch { return null; }
 }
 
+function meetingHttpUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
 async function savePlannedMeeting(context, scope, scopeValue, meeting = null, saveAsDraft = false, confirmConflicts = false) {
   const type = document.getElementById('mType').value;
   const title = document.getElementById('mTitle').value.trim();
@@ -8117,11 +8139,13 @@ async function savePlannedMeeting(context, scope, scopeValue, meeting = null, sa
   const files = document.getElementById('mAttachments').files;
   const dateInstant = meetingInputToInstant(dateTime, timeZone);
   const endInstant = meetingInputToInstant(endTime, timeZone);
-  ['mType','mTitle','mPurpose','mDateTime','mEndTime','mTimeZone','mLocation','mVirtualLink','mParticipants','mAgenda'].forEach(id => setMeetingFieldError(id, ''));
+  ['mType','mTitle','mPurpose','mDateTime','mEndTime','mTimeZone','mLocation','mVirtualLink','mParticipants','mAgenda','mChairperson','mMinuteTaker'].forEach(id => setMeetingFieldError(id, ''));
   if (!saveAsDraft) {
     if (!type) setMeetingFieldError('mType', 'Choose a meeting type.');
     if (!title) setMeetingFieldError('mTitle', 'Enter a meeting title.');
     if (!purposeText) setMeetingFieldError('mPurpose', 'Add a purpose or description.');
+    if (!document.getElementById('mChairperson').value.trim()) setMeetingFieldError('mChairperson', 'Enter the chairperson.');
+    if (!document.getElementById('mMinuteTaker').value.trim()) setMeetingFieldError('mMinuteTaker', 'Enter the minute-taker.');
     if (!dateTime || !dateInstant || dateInstant <= new Date()) setMeetingFieldError('mDateTime', 'Choose a future start time in the selected time zone.');
     if (!endTime || !endInstant || !dateInstant || endInstant <= dateInstant || endInstant - dateInstant > 12 * 60 * 60 * 1000) setMeetingFieldError('mEndTime', 'End time must be after the start and within 12 hours.');
     try { new Intl.DateTimeFormat('en', { timeZone }).format(); }
@@ -8266,13 +8290,18 @@ function renderMeetingCard(meeting, view) {
     } catch { /* Invalid historical time zones are handled by the displayed time string. */ }
   }
   const canCancel = MEETING_FEATURES.cancel && planner && status.key === 'upcoming';
+  const currentRole = normalizeRoleKey(window.currentUserRole);
   const currentRsvp = (meeting.rsvps || []).find(item => item.participant_source === 'project'
-    && item.participant_key === `project:${window.currentUserRole}:${window.currentUserId}`);
+    && normalizeRoleKey(item.participant_role) === currentRole
+    && String(item.participant_role_id) === String(window.currentUserId));
   const agenda = Array.isArray(meeting.agenda_items) && meeting.agenda_items.length
     ? `<ol>${meeting.agenda_items.map(item => `<li><strong>${escapeHtml(item.title)}</strong> — ${escapeHtml(String(item.duration_minutes || ''))} min${item.presenter ? ` · ${escapeHtml(item.presenter)}` : ''}${item.details ? `<div class="meeting-rich-display">${safeMeetingRichHtml(item.details)}</div>` : ''}</li>`).join('')}</ol>`
     : escapeHtml(meeting.agenda || '—');
+  const safeVirtualLink = meetingHttpUrl(meeting.virtual_link);
   const locationText = meeting.meeting_type === 'virtual'
-    ? `<a href="${escapeHtml(meeting.virtual_link || '')}" target="_blank" rel="noopener noreferrer">${escapeHtml(meeting.virtual_link || 'Virtual meeting')}</a>`
+    ? safeVirtualLink
+      ? `<a href="${escapeHtml(safeVirtualLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(meeting.virtual_link || 'Virtual meeting')}</a>`
+      : escapeHtml(meeting.virtual_link || 'Virtual meeting')
     : escapeHtml(meeting.location || '—');
 
   return `
@@ -8336,7 +8365,9 @@ async function cancelPlannedMeeting(meeting, view, context) {
       const errorData = await response.json().catch(() => ({}));
       throw new Error(errorData.error || `Could not cancel this meeting (HTTP ${response.status}).`);
     }
-    meetingToast('Meeting cancelled.');
+    const result = await response.json().catch(() => ({}));
+    const warnings = Array.isArray(result.notification_warnings) ? result.notification_warnings : [];
+    meetingToast(warnings.length ? `Meeting cancelled. ${warnings.join(' ')}` : 'Meeting cancelled.', warnings.length ? 'error' : 'info', 7000);
     renderMeetingContent(view, context);
   } catch (error) {
     console.error('Cancel meeting error:', error);
