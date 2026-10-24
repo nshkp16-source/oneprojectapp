@@ -8950,6 +8950,14 @@ function renderRecordsList(records, tabKey) {
     } else if (btnState === 'sign_review') {
       actionButtons = rcBtn('sign-review', 'Review and sign', 'check', 'approve');
 
+    } else if (btnState === 'sign_review_again') {
+      actionButtons = rcNote('You raised queries. The leader cannot approve until you clear them.', 'info') +
+        rcBtn('sign-review', 'Update my review', 'check', 'approve');
+
+    } else if (btnState === 'queries_open') {
+      actionButtons = rcNote(`Cannot approve yet: queries from <strong>${escapeHtml(doc.pending_role || 'a team member')}</strong> are open. They must clear them, or you can reject. If they left the project, replace them below.`, 'info') +
+        rcBtn('reject', 'Reject', 'x', 'reject');
+
     } else if (btnState === 'signed_waiting') {
       actionButtons = rcNote('You signed. The deciding leader signs next.', 'check', 'success');
 
@@ -9867,31 +9875,54 @@ function flowError(boxId, message) {
   el.style.display = message ? 'block' : 'none';
   if (message && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
-// Why this user cannot sign yet (null when ready). Decisions need signature + company stamp.
+// Why this user cannot sign yet (null when ready). A company stamp image is needed only for the
+// stamp styles that print one; the compact style needs just the signature.
 function flowSetupProblem(profile, needStamp) {
-  if (!profile || (!profile.signature_image && !(needStamp && profile.stamp_image_url))) {
+  if (!profile) {
     return needStamp
-      ? 'You have not set up your signature and company stamp for this project, so you cannot sign a decision yet.'
+      ? 'You have not set up your signature for this project, so you cannot sign a decision yet.'
       : 'You have not set up your signature for this project, so you cannot sign your review yet.';
   }
   if (!profile.signature_image) return 'Your signature image is missing for this project.';
-  if (needStamp && !profile.stamp_image_url) return 'Your company stamp is missing for this project. A decision must carry your signature and company stamp.';
+  const style = profile.stamp_style;
+  if (needStamp && (style === STAMP_STYLE_THREE_PART || style === STAMP_STYLE_SIGNATURE_STAMP) && !profile.stamp_image_url) {
+    return 'Your stamp style includes a company stamp, but no company stamp image is saved for this project. Upload it in your Signature & Stamp setup, or switch to the compact style.';
+  }
   return null;
 }
+// Dialog (not an inline panel) telling the user exactly what is missing.
 function flowShowSetupNeeded(message) {
-  expandGrayPart(`
-    <div class="fl-panel">
-      <div class="fl-head"><h3>Signature setup needed</h3></div>
-      <div class="fl-body">
-        <div class="fl-box" style="background:#fffbeb;border:1px solid #fcd34d;color:#92400e;">⚠️ ${escapeHtml(message)}<br>Add it in your Signature & Stamp setup, save, then come back to this record. Nothing has been signed.</div>
+  const old = document.getElementById('flowSetupDialog');
+  if (old) old.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'flowSetupDialog';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'flowSetupTitle');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:12px;max-width:440px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.3);overflow:hidden;">
+      <div style="padding:18px 20px 6px;display:flex;gap:10px;align-items:center;">
+        <div style="font-size:22px;">⚠️</div>
+        <h3 id="flowSetupTitle" style="margin:0;font-size:16px;color:#92400e;">Signature setup needed</h3>
       </div>
-      <div class="fl-foot">
-        <button type="button" class="fl-btn fl-btn--primary" id="flSetupNow">Set up now</button>
-        <button type="button" class="fl-btn" id="flSetupClose">Close</button>
+      <div style="padding:6px 20px 16px;font-size:14px;line-height:1.55;color:#334155;">
+        <p style="margin:8px 0;">${escapeHtml(message)}</p>
+        <p style="margin:8px 0;color:#64748b;font-size:13px;">Nothing has been signed. Save your setup, then open this record again.</p>
       </div>
-    </div>`);
-  document.getElementById('flSetupNow').addEventListener('click', () => { collapseGrayPart(); openStampSetup(); });
-  document.getElementById('flSetupClose').addEventListener('click', collapseGrayPart);
+      <div style="padding:12px 20px 18px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid #e5e7eb;">
+        <button type="button" id="flowSetupClose" style="padding:9px 16px;border:1px solid #cbd5e1;background:#fff;border-radius:6px;cursor:pointer;font-size:13px;">Close</button>
+        <button type="button" id="flowSetupNow" style="padding:9px 16px;border:0;background:#007B8A;color:#fff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">Set up now</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.getElementById('flowSetupClose').addEventListener('click', close);
+  document.getElementById('flowSetupNow').addEventListener('click', () => { close(); openStampSetup(); });
+  document.getElementById('flowSetupNow').focus();
 }
 function flowDaysAgo(v) { return Math.floor((Date.now() - new Date(v).getTime()) / 86400000); }
 
@@ -10342,7 +10373,7 @@ function renderSigningStages(doc) {
       return `<li class="fl-signer">
         <div class="fl-signer-who"><span class="fl-signer-pos">${escapeHtml(s.position)}</span><span class="fl-muted">${escapeHtml(flowCap(s.side))} side</span>
           ${s.is_decider ? '<span class="fl-tag">Decides</span>' : s.is_team_member ? '<span class="fl-tag">Team</span>' : ''}${s.is_me ? '<span class="fl-tag fl-tag--me">You</span>' : ''}</div>
-        <div class="fl-signer-state">${state}${s.can_replace ? `<button type="button" class="fl-link" data-action="replace-signer" data-signer-id="${s.id}">Replace</button>` : ''}</div>
+        <div class="fl-signer-state">${state}${s.open_queries && !s.left_project ? '<span class="fl-state" style="color:#b45309;">Queries open</span>' : ''}${s.left_project ? '<span class="fl-state" style="color:#b91c1c;">No longer on this project</span>' : ''}${s.can_replace ? `<button type="button" class="fl-link" data-action="replace-signer" data-signer-id="${s.id}">Replace</button>` : ''}</div>
       </li>`;
     }).join('');
     const days = opened ? flowDaysAgo(opened) : 0;
