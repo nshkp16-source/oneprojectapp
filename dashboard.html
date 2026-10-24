@@ -9865,6 +9865,33 @@ function flowError(boxId, message) {
   if (!el) return;
   el.textContent = message || '';
   el.style.display = message ? 'block' : 'none';
+  if (message && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+// Why this user cannot sign yet (null when ready). Decisions need signature + company stamp.
+function flowSetupProblem(profile, needStamp) {
+  if (!profile || (!profile.signature_image && !(needStamp && profile.stamp_image_url))) {
+    return needStamp
+      ? 'You have not set up your signature and company stamp for this project, so you cannot sign a decision yet.'
+      : 'You have not set up your signature for this project, so you cannot sign your review yet.';
+  }
+  if (!profile.signature_image) return 'Your signature image is missing for this project.';
+  if (needStamp && !profile.stamp_image_url) return 'Your company stamp is missing for this project. A decision must carry your signature and company stamp.';
+  return null;
+}
+function flowShowSetupNeeded(message) {
+  expandGrayPart(`
+    <div class="fl-panel">
+      <div class="fl-head"><h3>Signature setup needed</h3></div>
+      <div class="fl-body">
+        <div class="fl-box" style="background:#fffbeb;border:1px solid #fcd34d;color:#92400e;">⚠️ ${escapeHtml(message)}<br>Add it in your Signature & Stamp setup, save, then come back to this record. Nothing has been signed.</div>
+      </div>
+      <div class="fl-foot">
+        <button type="button" class="fl-btn fl-btn--primary" id="flSetupNow">Set up now</button>
+        <button type="button" class="fl-btn" id="flSetupClose">Close</button>
+      </div>
+    </div>`);
+  document.getElementById('flSetupNow').addEventListener('click', () => { collapseGrayPart(); openStampSetup(); });
+  document.getElementById('flSetupClose').addEventListener('click', collapseGrayPart);
 }
 function flowDaysAgo(v) { return Math.floor((Date.now() - new Date(v).getTime()) / 86400000); }
 
@@ -9983,7 +10010,8 @@ async function openDecisionPanel(recordId, tabKey, decision) {
   const doc = flowCached(recordId, tabKey);
   if (!doc) return;
   const profile = await loadStampProfile();
-  if (!profile) { alert('Set up your signature first (signature setup), then issue the decision. Your signature is added to the notice automatically.'); return; }
+  const setupMsg = flowSetupProblem(profile, true);
+  if (setupMsg) { flowShowSetupNeeded(setupMsg); return; }
 
   const isReject = decision === 'rejected';
   const verb = isReject ? 'Reject' : decision === 'accepted' ? 'Accept' : 'Approve';
@@ -10018,10 +10046,19 @@ async function openDecisionPanel(recordId, tabKey, decision) {
         </div>
         <div class="fl-field"><label class="fl-label" for="flTitle">Notice title *</label>
           <input class="fl-input" id="flTitle" value="${escapeHtml(`${noun} of ${doc.title}${rev}`)}"></div>
-        <div class="fl-field" id="flOwnWrap" style="display:none;"><label class="fl-label" for="flOwnPdf">Your notice (PDF) *</label>
-          <input type="file" id="flOwnPdf" accept="application/pdf,.pdf">
+        <div class="fl-field" id="flOwnWrap" style="display:none;">
+          <label class="fl-label">Official Notice PDF <span style="color:#dc2626;">*</span></label>
+          <div id="flOwnDrop" style="display:flex;align-items:center;gap:12px;padding:16px;border:2px dashed #ddd;border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
+            <div style="font-size:12px;font-weight:700;color:#007B8A;border:1px solid #b7dce1;border-radius:4px;padding:5px 7px;">PDF</div>
+            <div style="flex:1;">
+              <div style="font-weight:bold;color:#333;font-size:14px;">Click to upload or drag &amp; drop</div>
+              <div style="font-size:12px;color:#999;margin-top:4px;">PDF only (Max 10MB)</div>
+            </div>
+            <input type="file" id="flOwnPdf" style="display:none;" accept="application/pdf,.pdf">
+          </div>
+          <div id="flOwnName" style="margin-top:8px;font-size:12px;color:#28a745;font-weight:bold;display:none;"></div>
           <div class="fl-hint">The signature page${isReject ? ' and your query schedule are' : ' is'} added behind your PDF.</div></div>
-        <div class="fl-field"><label class="fl-label" for="flBody" id="flBodyLabel">Notice text *</label>
+        <div class="fl-field" id="flBodyWrap"><label class="fl-label" for="flBody" id="flBodyLabel">Notice text *</label>
           <textarea class="fl-input" id="flBody" rows="7" placeholder="${isReject ? 'Explain why the record is rejected. Each issue goes in the query schedule below.' : 'Explain the decision and any conditions.'}"></textarea></div>
         ${isReject ? `
         <div class="fl-field"><div class="fl-label">Query schedule *</div>
@@ -10029,9 +10066,10 @@ async function openDecisionPanel(recordId, tabKey, decision) {
           <div id="flQueries"></div></div>
         <div class="fl-field"><label class="fl-label" for="flRespondBy">Respond by (optional)</label>
           <input type="date" class="fl-input" id="flRespondBy" style="max-width:220px;"></div>` : ''}
-        <div class="fl-field"><label class="fl-label" for="flSupport">Supporting files (optional)</label>
-          <input type="file" id="flSupport" multiple accept=".xlsx,.xls,.doc,.docx,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv">
-          <div class="fl-hint">For example the marked-up BoQ. Up to 10 files, 10MB each.</div><div id="flSupportList" class="fl-files"></div></div>
+        <div class="fl-field"><label class="fl-label" for="flSupport">Supporting Files <span style="font-weight:normal;text-transform:none;letter-spacing:0;">(optional)</span></label>
+          <input type="file" id="flSupport" multiple accept=".xlsx,.xls,.doc,.docx,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv"
+            style="width:100%;padding:10px;border:1px solid #d7e7eb;border-radius:6px;background:#fff;">
+          <div class="fl-hint">Excel, Word, CAD, images, ZIP, or CSV. Up to 10 files, 10MB each.</div><div id="flSupportList" class="fl-files"></div></div>
         ${needsNext ? '<div class="fl-field" id="flNextSigners"></div>' : ''}
       </div>
       <div class="fl-err" id="flErr" role="alert"></div>
@@ -10049,8 +10087,34 @@ async function openDecisionPanel(recordId, tabKey, decision) {
   sourceBox.addEventListener('change', () => {
     source = sourceBox.querySelector('input:checked').value;
     sourceBox.querySelectorAll('label').forEach(l => l.classList.toggle('is-on', l.querySelector('input').checked));
-    document.getElementById('flOwnWrap').style.display = source === 'uploaded' ? 'block' : 'none';
-    document.getElementById('flBodyLabel').textContent = source === 'uploaded' ? 'Remarks (optional)' : 'Notice text *';
+    const own = source === 'uploaded';
+    document.getElementById('flOwnWrap').style.display = own ? 'block' : 'none';
+    // Your own PDF replaces the system letter: no notice text box, just the file (like adding a record)
+    document.getElementById('flBodyWrap').style.display = own ? 'none' : 'block';
+    flowError('flErr', '');
+  });
+  const ownInput = document.getElementById('flOwnPdf');
+  const ownDrop = document.getElementById('flOwnDrop');
+  const showOwn = () => {
+    const f = ownInput.files[0];
+    const el = document.getElementById('flOwnName');
+    if (!f) { el.style.display = 'none'; return; }
+    el.textContent = `${f.name} (${(f.size / 1048576).toFixed(2)} MB)`;
+    el.style.display = 'block';
+  };
+  ownDrop.addEventListener('click', () => ownInput.click());
+  ownDrop.addEventListener('dragover', (e) => { e.preventDefault(); ownDrop.style.borderColor = '#007B8A'; });
+  ownDrop.addEventListener('dragleave', () => { ownDrop.style.borderColor = '#ddd'; });
+  ownDrop.addEventListener('drop', (e) => {
+    e.preventDefault(); ownDrop.style.borderColor = '#ddd';
+    if (e.dataTransfer.files && e.dataTransfer.files.length) { ownInput.files = e.dataTransfer.files; showOwn(); }
+  });
+  ownInput.addEventListener('change', () => {
+    const f = ownInput.files[0];
+    if (f && !/\.pdf$/i.test(f.name)) { ownInput.value = ''; flowError('flErr', 'The notice must be a PDF file.'); }
+    else if (f && f.size > 10 * 1024 * 1024) { ownInput.value = ''; flowError('flErr', 'Your notice PDF must be 10 MB or smaller.'); }
+    else flowError('flErr', '');
+    showOwn();
   });
   const renderSupport = () => {
     document.getElementById('flSupportList').innerHTML = supporting.map((f, i) => `<div class="fl-file"><span>${escapeHtml(f.name)}</span>
@@ -10085,7 +10149,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
     fd.append('decision', decision);
     fd.append('noticeSource', source);
     fd.append('title', title);
-    fd.append('body', body);
+    fd.append('body', source === 'uploaded' ? '' : body);
     if (isReject) {
       const queries = readQueryEditor('flQueries');
       if (!queries.length) throw new Error('A rejection needs at least one query. Write what is wrong and the action required.');
@@ -10151,7 +10215,8 @@ async function openSignoffPanel(recordId, tabKey) {
   const doc = flowCached(recordId, tabKey);
   if (!doc) return;
   const profile = await loadStampProfile();
-  if (!profile) { alert('Set up your signature first, then sign your review.'); return; }
+  const setupMsg = flowSetupProblem(profile, false);
+  if (setupMsg) { flowShowSetupNeeded(setupMsg); return; }
   expandGrayPart(`
     <div class="fl-panel">
       <div class="fl-head"><h3>Review and sign</h3><div class="fl-sub">#${escapeHtml(doc.id)} ${escapeHtml(doc.title)}</div></div>
