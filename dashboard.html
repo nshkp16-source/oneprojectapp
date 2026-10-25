@@ -909,6 +909,20 @@
     .rc-muted { margin: 0; font-size: 12.5px; color: #94a3b8; }
 
     /* Sticky action bar */
+    .rc-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 18px;background:#f8fafc;border-bottom:1px solid #eef2f6}
+    .rc-banner .rc-actions{padding:0;border:0;background:none;margin:0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;width:100%}
+    .rc-desc{padding:14px 18px 6px;color:#334155;font-size:14px;line-height:1.55}
+    .rc-docrow{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid #e5eaf0;border-radius:10px;background:#fff}
+    .rc-docrow .rc-file-info{flex:1;min-width:0}
+    .rc-meta-ref{color:#94a3b8}
+    .rc-progress{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+    .rc-inline-more{margin-top:10px}
+    .rc-inline-more>summary{cursor:pointer;font-size:12px;font-weight:600;color:#475569;padding:4px 0}
+    .rc-more{border-bottom:1px solid #eef2f6;padding:0 18px}
+    .rc-more>summary{cursor:pointer;list-style:none;padding:14px 0;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#64748b;display:flex;align-items:center;gap:8px}
+    .rc-more>summary::-webkit-details-marker{display:none}
+    .rc-more[open]>summary{color:#0f172a}
+    .rc-more-body{padding-bottom:16px}
     .rc-actions {
       position: sticky; bottom: 0; z-index: 2;
       display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px;
@@ -8667,11 +8681,14 @@ function rcIcon(name) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${RC_ICONS[name] || ''}</svg>`;
 }
 
+let rcProjectTz = null;   // set from the server so the card and the PDFs show the same time
 function rcDate(value, withTime) {
   if (!value) return '—';
   const d = new Date(value);
   if (isNaN(d.getTime())) return '—';
-  return d.toLocaleString(undefined, withTime ? { dateStyle: 'medium', timeStyle: 'short' } : { dateStyle: 'medium' });
+  const opts = withTime ? { dateStyle: 'medium', timeStyle: 'short' } : { dateStyle: 'medium' };
+  if (rcProjectTz) { try { return d.toLocaleString('en-GB', { ...opts, timeZone: rcProjectTz }); } catch (_) { /* unknown zone: fall back */ } }
+  return d.toLocaleString(undefined, opts);
 }
 
 function rcKindLabel(kind) {
@@ -8878,6 +8895,8 @@ function renderRecordsList(records, tabKey) {
   }
   placeholderDiv.style.display = 'none';
 
+  const tzFromServer = displayRecords.find(r => r.time_zone)?.time_zone;
+  if (tzFromServer) rcProjectTz = tzFromServer;
   recordsList.innerHTML = displayRecords.map(doc => {
     const isUploader = doc.is_uploader === true;
     const isUnread   = !doc.is_viewed && !isUploader;
@@ -8964,6 +8983,10 @@ function renderRecordsList(records, tabKey) {
     } else if (btnState === 'not_named') {
       actionButtons = rcNote('The named signers handle this decision.', 'info');
 
+    } else if (btnState === 'not_named_comment') {
+      actionButtons = rcNote('The named signers handle this decision. You can add a comment.', 'info') +
+        rcBtn('comment', myReview.comment ? 'Edit comment' : 'Add comment', 'chat');
+
     } else if (btnState === 'can_approve') {
       const approveLabel  = doc.approve_label || 'Approve';
       const approveAction = approveLabel.toLowerCase().includes('accept') ? 'accepted' : 'approved';
@@ -8987,22 +9010,9 @@ function renderRecordsList(records, tabKey) {
       }
     }
 
-    // ── Section: record details ───────────────────────────────────
-    const detailsHtml = rcSection('info', 'Record details', `
-      <dl class="rc-grid">
-        <div class="rc-field"><dt>Reference</dt><dd>#${escapeHtml(doc.id)}</dd></div>
-        <div class="rc-field"><dt>Record type</dt><dd>${escapeHtml(rcKindLabel(doc.record_kind))}</dd></div>
-        ${doc.revision_no ? `<div class="rc-field"><dt>Revision</dt><dd>Rev ${doc.revision_no} of #${escapeHtml(doc.revision_of_id)}</dd></div>` : ''}
-        ${doc.is_notice_record && doc.respond_by ? `<div class="rc-field"><dt>Respond by</dt><dd>${escapeHtml(rcDate(doc.respond_by))}</dd></div>` : ''}
-        <div class="rc-field"><dt>Attachments</dt><dd>${attachCount ? `${attachCount} file${attachCount === 1 ? '' : 's'}` : 'None'}</dd></div>
-        <div class="rc-field"><dt>Record state</dt><dd>${doc.is_notice_record ? 'Issued and signed' : isLocked ? 'Locked, final' : 'Open for review'}</dd></div>
-      </dl>`);
-
     // ── Section: description ──────────────────────────────────────
-    const descriptionHtml = rcSection('list', 'Description',
-      rcExcerpt(doc.description, 1)
-        ? `<div class="rc-rich">${rcRichText(doc.description)}</div>`
-        : `<div class="rc-text rc-text--empty">No description provided.</div>`);
+    const descriptionHtml = rcExcerpt(doc.description, 1)
+      ? `<div class="rc-desc"><div class="rc-rich">${rcRichText(doc.description)}</div></div>` : '';
 
     // ── Section: embedded notices ─────────────────────────────────
     const noticesHtml = notices.length ? rcSection('notice', 'Notices', notices.map(n => {
@@ -9037,41 +9047,24 @@ function renderRecordsList(records, tabKey) {
     }).join(''), notices.length) : '';
     const queriesHtml = renderQueriesSection(doc);
 
-    // ── Section: attached document ────────────────────────────────
+    // ── Section: document (compact) ───────────────────────────────
     let documentHtml = '';
     if (fileName) {
-      const stampStatus = doc.stamp_status || 'none';
-      const stampLabel  = stampStatus === 'both'     ? 'Stamped by approver and recorder'
-                        : stampStatus === 'approver' ? 'Stamped by approver'
-                        : stampStatus === 'recorder' ? 'Stamped by recorder' : '';
-      const badges =
-        (doc.stamp_type && doc.signed_at
-          ? `<span class="rc-chip rc-chip--ok">${rcIcon('check')}Signed: ${escapeHtml(doc.stamp_type)}</span>` : '') +
-        (stampLabel
-          ? `<span class="rc-chip rc-chip--ok">${rcIcon('check')}${stampLabel}</span>`
-          : `<span class="rc-chip rc-chip--muted">Not stamped yet</span>`);
-      const ext = fileName.includes('.') ? fileName.split('.').pop().toUpperCase() : 'FILE';
       const previewAction = notices.length ? 'preview-combined' : 'preview';
       const previewLabel  = notices.length ? 'Preview with notice' : 'Preview';
       const fnAttr = `data-filename="${escapeHtml(fileName)}"`;
-      documentHtml = rcSection('file', 'Attached document', `
-        <div class="rc-file">
+      documentHtml = rcSection('file', 'Document', `
+        <div class="rc-docrow">
           <span class="rc-file-icon">${rcIcon('file')}</span>
-          <div class="rc-file-info">
-            <div class="rc-file-name" title="${escapeHtml(fileName)}">${escapeHtml(fileName)}</div>
-            <div class="rc-file-sub">${escapeHtml(ext)} file</div>
-          </div>
+          <div class="rc-file-info"><div class="rc-file-name" title="${escapeHtml(fileName)}">${escapeHtml(fileName)}</div></div>
           <div class="rc-file-actions">
             ${rcBtn(previewAction, previewLabel, null, '', fnAttr)}
             ${rcBtn('download', 'Download', 'download', '', fnAttr)}
           </div>
         </div>
-        <div class="rc-badges">${badges}</div>`);
+        ${supportingFiles.length ? `<details class="rc-inline-more"><summary>${supportingFiles.length} supporting ${supportingFiles.length === 1 ? 'file' : 'files'}</summary>${rcSupportList(supportingFiles)}</details>` : ''}`);
     }
-
-    // ── Section: supporting files ─────────────────────────────────
-    const supportingHtml = supportingFiles.length
-      ? rcSection('paperclip', 'Supporting files', rcSupportList(supportingFiles), supportingFiles.length) : '';
+    const supportingHtml = '';
 
     // ── Section: workflow (decision makers only) ──────────────────
     const workflowHtml = (doc.is_decision_maker === true || doc.is_uploader === true || (doc.signing_plan || []).length) ? renderWorkflowSteps(doc) : '';
@@ -9096,7 +9089,7 @@ function renderRecordsList(records, tabKey) {
         (dmRows ? `<ul class="rc-reviews">${dmRows}</ul>` : `<p class="rc-muted">No decisions recorded yet.</p>`) +
         (tmRows ? `<div class="rc-subtitle">Team members</div><ul class="rc-reviews">${tmRows}</ul>` : '');
     }
-    const reviewHtml = rcSection('history', 'Review history', reviewBody, allReviews.length || null);
+    const reviewHtml = allReviews.length ? `<details class="rc-more"><summary>Activity <span class="rc-section-count">${allReviews.length}</span></summary><div class="rc-more-body">${reviewBody}</div></details>` : '';
 
     return `
       <li class="doc-item record-card${isUnread ? ' record-unread' : ''}" data-id="${doc.id}" data-tab-key="${tabKey}">
@@ -9105,15 +9098,14 @@ function renderRecordsList(records, tabKey) {
             <div class="rc-title-row">
               ${isUnread ? `<span class="rc-unread-dot unread-dot-${doc.id}" title="Unread"></span>` : ''}
               <span class="rc-title" title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</span>
-              ${kindChip}${revChip}${supChip}${reviewChip}${lockChip}
+              ${kindChip}${revChip}
             </div>
-            ${rcExcerpt(doc.description, 1) ? `<div class="rc-excerpt">${escapeHtml(rcExcerpt(doc.description, 140))}</div>` : ''}
             <div class="rc-meta">
               <span class="rc-meta-item" title="Posted by">${rcIcon('user')}<span>${escapeHtml(doc.uploader_role || 'N/A')}</span></span>
               <span class="rc-meta-item" title="${escapeHtml(rcDate(doc.issued_date, true))}">${rcIcon('calendar')}<span>${rcDate(doc.issued_date)}</span></span>
-              ${attachCount ? `<span class="rc-meta-item">${rcIcon('paperclip')}<span>${attachCount} ${attachCount === 1 ? 'attachment' : 'attachments'}</span></span>` : ''}
-              ${notices.length ? `<span class="rc-meta-item">${rcIcon('notice')}<span>${notices.length} ${notices.length === 1 ? 'notice' : 'notices'}</span></span>` : ''}
+              <span class="rc-meta-item rc-meta-ref">${escapeHtml(doc.reference || ('#' + doc.id))}</span>
             </div>
+            ${(reviewChip || supChip || lockChip) ? `<div class="rc-progress">${reviewChip}${supChip}${lockChip}</div>` : ''}
           </div>
           <div class="rc-side">
             ${statusBadge(doc.status)}
@@ -9122,15 +9114,13 @@ function renderRecordsList(records, tabKey) {
         </div>
 
         <div class="doc-detail record-card-detail" id="detail-${doc.id}" style="display:none;">
-          ${detailsHtml}
+          ${actionButtons ? `<div class="rc-banner"><div class="rc-actions">${actionButtons}</div></div>` : ''}
           ${descriptionHtml}
+          ${documentHtml}
+          ${workflowHtml}
           ${noticesHtml}
           ${queriesHtml}
-          ${documentHtml}
-          ${supportingHtml}
-          ${workflowHtml}
           ${reviewHtml}
-          ${actionButtons ? `<div class="rc-actions">${actionButtons}</div>` : ''}
         </div>
       </li>`;
   }).join('');
@@ -9194,7 +9184,7 @@ function renderWorkflowSteps(doc) {
                 : decided === steps.length ? 'Fully approved'
                 : curStage ? `${curStage.signed_count} of ${curStage.total} signed`
                 : `${decided} of ${steps.length} decisions made`;
-  return rcSection('workflow', 'Approval workflow', `<ol class="rc-stepper">${html}</ol>${renderSigningStages(doc)}`, summary);
+  return rcSection('workflow', 'Progress', `<ol class="rc-stepper">${html}</ol>${renderSigningStages(doc)}`, summary);
 }
 
 // =======================================================================
@@ -9955,8 +9945,9 @@ function flowDaysAgo(v) { return Math.floor((Date.now() - new Date(v).getTime())
 
 // ── Query rows (reference, query, required action) ──────────────────────
 function flowQueryRowHtml(q = {}) {
-  return `<div class="fl-qrow">
+  return `<div class="fl-qrow" data-by="${escapeHtml(q.by || '')}">
     <div class="fl-qfields">
+      ${q.by ? `<div class="fl-hint" style="margin:0;">Raised by ${escapeHtml(q.by)}</div>` : ''}
       <input class="fl-input fl-q-ref" placeholder="Reference (item number, page)" value="${escapeHtml(q.ref || '')}">
       <textarea class="fl-input fl-q-text" rows="2" placeholder="Query: what is wrong or unclear">${escapeHtml(q.query || '')}</textarea>
       <textarea class="fl-input fl-q-action" rows="2" placeholder="Required action">${escapeHtml(q.required_action || '')}</textarea>
@@ -9990,6 +9981,7 @@ function readQueryEditor(boxId) {
     ref: row.querySelector('.fl-q-ref').value.trim(),
     query: row.querySelector('.fl-q-text').value.trim(),
     required_action: row.querySelector('.fl-q-action').value.trim(),
+    by: row.dataset.by || '',
   })).filter(q => q.query);
 }
 
@@ -10146,6 +10138,13 @@ async function openDecisionPanel(recordId, tabKey, decision) {
           <div id="flQueries"></div></div>
         <div class="fl-field"><label class="fl-label" for="flRespondBy">Respond by (optional)</label>
           <input type="date" class="fl-input" id="flRespondBy" style="max-width:220px;"></div>` : ''}
+        ${!isReject ? `<div class="fl-field" id="flStampWrap">
+          <label class="fl-label">Stamp on the record</label>
+          <div class="fl-hint" style="margin:0 0 8px;">Your signature and stamp are always added on the record's sign-off page.</div>
+          <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:6px;"><input type="radio" name="flStampWhere" value="signoff" checked> Sign-off page only (recommended)</label>
+          <label style="display:flex;gap:8px;align-items:center;font-size:13px;"><input type="radio" name="flStampWhere" value="place"> Also place it on a page of the record</label>
+          <div id="flStampPick" style="display:none;margin-top:8px;"><button type="button" class="fl-btn" id="flStampChoose">Choose position</button> <span id="flStampPicked" class="fl-hint" style="margin-left:8px;"></span></div>
+        </div>` : ''}
         <div class="fl-field"><label class="fl-label" for="flSupport">Supporting Files <span style="font-weight:normal;text-transform:none;letter-spacing:0;">(optional)</span></label>
           <input type="file" id="flSupport" multiple accept=".xlsx,.xls,.doc,.docx,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv"
             style="width:100%;padding:10px;border:1px solid #d7e7eb;border-radius:6px;background:#fff;">
@@ -10254,9 +10253,33 @@ async function openDecisionPanel(recordId, tabKey, decision) {
   });
   const letterText = () => editor.innerText.replace(/\u00a0/g, ' ').trim();
 
+  // ---- optional: place the decision stamp on a page of the record (never automatic) ----
+  let stampPlacement = null;
+  const stampPickBox = document.getElementById('flStampPick');
+  document.querySelectorAll('input[name="flStampWhere"]').forEach(r => r.addEventListener('change', () => {
+    const place = document.querySelector('input[name="flStampWhere"]:checked')?.value === 'place';
+    stampPickBox.style.display = place ? 'block' : 'none';
+    if (!place) { stampPlacement = null; document.getElementById('flStampPicked').textContent = ''; }
+  }));
+  document.getElementById('flStampChoose')?.addEventListener('click', async () => {
+    try {
+      const res = await authFetch(`${API}/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}&filename=record.pdf`, { method: 'GET' });
+      if (!res || !res.ok) throw new Error('The record could not be opened to choose a position.');
+      const blob = await res.blob();
+      const file = new File([blob], 'record.pdf', { type: blob.type || 'application/pdf' });
+      openStampPlacementModal(file, (st) => {
+        stampPlacement = { page: st.page, x: st.x, y: st.y };
+        document.getElementById('flStampPicked').textContent = `Page ${st.page} selected`;
+      }, () => {}, 'APPROVED');
+    } catch (err) { flowError('flErr', err.message); }
+  });
+
   const build = () => {
     const title = document.getElementById('flTitle').value.trim();
     syncBody();
+    if (!isReject && document.querySelector('input[name="flStampWhere"]:checked')?.value === 'place' && !stampPlacement) {
+      throw new Error('Choose the stamp position, or select "Sign-off page only".');
+    }
     const body = letterText() ? bodyField.value.trim() : '';
     const bodyLen = letterText().length;
     if (title.length < 3) throw new Error('Give the notice a title (at least 3 characters).');
@@ -10269,6 +10292,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
     fd.append('noticeSource', source);
     fd.append('title', title);
     fd.append('body', source === 'uploaded' ? '' : body);
+    if (!isReject && stampPlacement) fd.append('stampPlacement', JSON.stringify(stampPlacement));
     if (isReject) {
       const queries = readQueryEditor('flQueries');
       if (!queries.length) throw new Error('A rejection needs at least one query. Write what is wrong and the action required.');
@@ -10476,8 +10500,8 @@ function flowQueryChip(status) {
   return `<span class="rc-chip rc-chip--${m[1]}">${m[0]}</span>`;
 }
 function flowQueryTable(list, { withActions }) {
-  return `<div class="fl-qwrap"><table class="fl-qtable"><thead><tr><th>No.</th><th>Reference</th><th>Query</th><th>Required action</th><th>Status</th></tr></thead><tbody>
-    ${list.map(q => `<tr><td>${q.seq}</td><td>${escapeHtml(q.ref || '')}</td><td>${escapeHtml(q.query)}</td><td>${escapeHtml(q.required_action || '')}</td>
+  return `<div class="fl-qwrap"><table class="fl-qtable"><thead><tr><th>No.</th><th>Reference</th><th>Query</th><th>Required action</th><th>Raised by</th><th>Status</th></tr></thead><tbody>
+    ${list.map(q => `<tr><td>${q.seq}</td><td>${escapeHtml(q.ref || '')}</td><td>${escapeHtml(q.query)}</td><td>${escapeHtml(q.required_action || '')}</td><td>${escapeHtml(q.raised_by || '')}</td>
       <td>${flowQueryChip(q.status)}${q.response ? `<div class="fl-qresp">${escapeHtml(q.response)}</div>` : ''}
         ${withActions && q.can_review ? `<div class="fl-qact">${q.status === 'answered' ? `<button type="button" class="fl-link" data-action="query-resolve" data-query-id="${q.id}">Resolve</button>` : ''}<button type="button" class="fl-link" data-action="query-reopen" data-query-id="${q.id}">Reopen</button></div>` : ''}</td></tr>`).join('')}
   </tbody></table></div>`;
@@ -10508,7 +10532,6 @@ function renderNoticeFacts(n) {
   const chips = [];
   if (n.query_count) chips.push(`<span class="rc-chip rc-chip--reject">${n.query_count} ${n.query_count === 1 ? 'query' : 'queries'}</span>`);
   if (n.respond_by) chips.push(`<span class="rc-chip rc-chip--notice">Respond by ${escapeHtml(rcDate(n.respond_by))}</span>`);
-  if (n.notice_source) chips.push(`<span class="rc-chip rc-chip--muted">${n.notice_source === 'uploaded' ? 'Own PDF letter' : 'System letter'}</span>`);
   if (chips.length) bits.push(`<div class="fl-notice-facts">${chips.join('')}</div>`);
   return bits.join('');
 }
