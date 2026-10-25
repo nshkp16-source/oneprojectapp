@@ -9410,10 +9410,9 @@ async function handleDecisionMakerAction(recordId, tabKey, action) {
       if (stampChoice === 'cancel') return;
       if (stampChoice !== 'none') {
         const stampProfile = await loadStampProfile();
-        if (!stampProfile) {
-          alert('No stamp profile is available for this project yet.');
-          return;
-        }
+        const stampSetupMsg = await flowCheckSigningReady({ recordId, tabKey, mode: 'decision' });
+        if (stampSetupMsg) { flowShowSetupNeeded(stampSetupMsg); return; }
+        if (!stampProfile) { alert('Your stamp could not be loaded just now. Please try again.'); return; }
         const downloadRes = await authFetch(
           `${API}/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}&filename=${encodeURIComponent(cached?.title || 'document.pdf')}`,
           { method: 'GET' }
@@ -9495,10 +9494,9 @@ async function handleTeamMemberAction(recordId, tabKey, action) {
       if (stampChoice === 'cancel') return;
       if (stampChoice !== 'none') {
         const stampProfile = await loadStampProfile();
-        if (!stampProfile) {
-          alert('No signature profile is available for this project yet.');
-          return;
-        }
+        const sigSetupMsg = await flowCheckSigningReady({ recordId, tabKey, mode: 'review' });
+        if (sigSetupMsg) { flowShowSetupNeeded(sigSetupMsg); return; }
+        if (!stampProfile) { alert('Your signature could not be loaded just now. Please try again.'); return; }
         const downloadRes = await authFetch(
           `${API}/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}&filename=${encodeURIComponent(cached?.title || 'document.pdf')}`,
           { method: 'GET' }
@@ -9875,20 +9873,19 @@ function flowError(boxId, message) {
   el.style.display = message ? 'block' : 'none';
   if (message && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
-// Why this user cannot sign yet (null when ready). A company stamp image is needed only for the
-// stamp styles that print one; the compact style needs just the signature.
-function flowSetupProblem(profile, needStamp) {
-  if (!profile) {
-    return needStamp
-      ? 'You have not set up your signature for this project, so you cannot sign a decision yet.'
-      : 'You have not set up your signature for this project, so you cannot sign your review yet.';
-  }
-  if (!profile.signature_image) return 'Your signature image is missing for this project.';
-  const style = profile.stamp_style;
-  if (needStamp && (style === STAMP_STYLE_THREE_PART || style === STAMP_STYLE_SIGNATURE_STAMP) && !profile.stamp_image_url) {
-    return 'Your stamp style includes a company stamp, but no company stamp image is saved for this project. Upload it in your Signature & Stamp setup, or switch to the compact style.';
-  }
-  return null;
+// The server checks the database for this user's saved signature/stamp in the record's project.
+// Returns a message ONLY when the server says nothing is saved. If the check itself fails
+// (network, session), it returns null: the server re-checks when signing, so we never wrongly claim "no stamp".
+async function flowCheckSigningReady({ recordId, tabKey, mode } = {}) {
+  try {
+    const q = new URLSearchParams({ mode: mode || 'decision' });
+    if (recordId && tabKey) { q.set('recordId', recordId); q.set('recordType', tabToTable(tabKey)); }
+    else q.set('projectId', localStorage.getItem('activeProjectId') || '');
+    const res = await authFetch(`${API}/signing-readiness?${q.toString()}`);
+    if (!res || !res.ok) return null;
+    const d = await res.json();
+    return d.ready ? null : (d.message || 'You have not set up a signature or stamp for this project.');
+  } catch (_) { return null; }
 }
 // Dialog (not an inline panel) telling the user exactly what is missing.
 function flowShowSetupNeeded(message) {
@@ -10040,8 +10037,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
   if (projectLifecycleReadOnly) { showProjectLifecycleNotice(projectLifecycleReadOnlyReason); return; }
   const doc = flowCached(recordId, tabKey);
   if (!doc) return;
-  const profile = await loadStampProfile();
-  const setupMsg = flowSetupProblem(profile, true);
+  const setupMsg = await flowCheckSigningReady({ recordId, tabKey, mode: 'decision' });
   if (setupMsg) { flowShowSetupNeeded(setupMsg); return; }
 
   const isReject = decision === 'rejected';
@@ -10245,8 +10241,7 @@ async function openSignoffPanel(recordId, tabKey) {
   if (projectLifecycleReadOnly) { showProjectLifecycleNotice(projectLifecycleReadOnlyReason); return; }
   const doc = flowCached(recordId, tabKey);
   if (!doc) return;
-  const profile = await loadStampProfile();
-  const setupMsg = flowSetupProblem(profile, false);
+  const setupMsg = await flowCheckSigningReady({ recordId, tabKey, mode: 'review' });
   if (setupMsg) { flowShowSetupNeeded(setupMsg); return; }
   expandGrayPart(`
     <div class="fl-panel">
@@ -10880,7 +10875,9 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null, options = {}) {
         const placement = window.__stampPlacement || { page: 1, x: 0.8, y: 0.08 };
         const stampType = 'STAMPED';
         const stampProfile = await loadStampProfile();
-        if (!stampProfile) throw new Error('No stamp profile is available for stamping.');
+        const stampSetupMsg = await flowCheckSigningReady({ mode: 'decision' });
+        if (stampSetupMsg) { flowShowSetupNeeded(stampSetupMsg); const quiet = new Error(stampSetupMsg); quiet.quiet = true; throw quiet; }
+        if (!stampProfile) throw new Error('Your stamp could not be loaded just now. Please try again.');
         const ext = (attachmentFile.name || '').split('.').pop().toLowerCase();
         if (ext !== 'pdf') {
           throw new Error('The document must be converted to PDF before it can be stamped.');
@@ -10941,7 +10938,7 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null, options = {}) {
       } else throw new Error(data.message || 'Failed to save.');
     } catch (err) {
       console.error('Form submission error:', err);
-      showFormError(err.message);
+      if (!err.quiet) showFormError(err.message);   // the setup dialog already explained it
       const saveBtn = document.getElementById('saveRecordBtn');
       if (saveBtn) {
         saveBtn.disabled = false;
@@ -15267,11 +15264,7 @@ async function openStampSetup() {
           border:1px solid #6ee7b7;border-radius:8px;font-size:12px;color:#065f46;">
           ✅ Stamp saved for ${projectName} — last updated ${new Date(existing.updated_at).toLocaleDateString()}.
           Saving again will overwrite it.
-        </div>` : `<div style="margin-bottom:16px;padding:10px 12px;background:#fffbeb;
-          border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#92400e;">
-          ⚠️ No signature profile set up yet for ${projectName}. Add a signature and/or a company stamp image below —
-          at least one is required.
-        </div>`}
+        </div>` : ''}
 
         <!-- Signature -->
         <div style="margin-bottom:20px;">
@@ -16042,11 +16035,7 @@ async function renderStampStep(file, stampStepContainer) {
   const ext = (file.name || '').split('.').pop().toLowerCase();
   const canStamp = ext === 'pdf';
 
-  let hasStamp = false;
-  try {
-    const profile = await loadStampProfile();
-    hasStamp = !!profile;
-  } catch(_) {}
+  const hasStamp = true;   // setup is checked when the user chooses to stamp (dialog), not shown as inline text
 
   stampStepContainer.innerHTML = `
     <div style="padding:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;">
@@ -16077,7 +16066,6 @@ async function renderStampStep(file, stampStepContainer) {
         <button type="button" id="stampPlacementBtn" style="padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;">Choose page &amp; position</button>
         <div id="stampPlacementSummary" style="margin-top:6px;font-size:11px;color:#6b7280;">No placement chosen yet.</div>
       </div>
-      ${!hasStamp ? `<div style="margin-top:8px;padding:8px 10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;font-size:11px;color:#92400e;">⚠️ No stamp set up for this project yet. Add one in “My Stamp” first.</div>` : ''}
       ${!canStamp ? `<div style="margin-top:8px;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;font-size:11px;color:#b91c1c;">⚠️ Convert the document to PDF first to enable stamping.</div>` : ''}
     </div>`;
   stampStepContainer.style.display = 'block';
@@ -16090,8 +16078,13 @@ async function renderStampStep(file, stampStepContainer) {
   const placeModeAppend = document.getElementById('stampPlaceModeAppend');
   const placementBtn = document.getElementById('stampPlacementBtn');
 
-  const updateActionBlocks = () => {
-    const choice = document.querySelector('input[name="stampChoice"]:checked')?.value || 'save';
+  const updateActionBlocks = async () => {
+    let choice = document.querySelector('input[name="stampChoice"]:checked')?.value || 'save';
+    if (choice === 'stamp') {
+      // Fresh check each time, so a stamp saved a moment ago is recognised
+      const setupMsg = await flowCheckSigningReady({ mode: 'decision' });
+      if (setupMsg) { stampChoiceSave.checked = true; choice = 'save'; flowShowSetupNeeded(setupMsg); }
+    }
     stampPlacementBlock.style.display = choice === 'stamp' ? 'block' : 'none';
     if (choice !== 'stamp') window.__stampPlacement = null;
   };
