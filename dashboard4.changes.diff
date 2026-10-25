@@ -1,0 +1,426 @@
+--- /mnt/user-data/uploads/dashboard.html	2026-10-24 14:49:15.312763000 +0000
++++ dashboard.html	2026-10-25 04:53:20.054375173 +0000
+@@ -8950,6 +8950,14 @@
+     } else if (btnState === 'sign_review') {
+       actionButtons = rcBtn('sign-review', 'Review and sign', 'check', 'approve');
+ 
++    } else if (btnState === 'sign_review_again') {
++      actionButtons = rcNote('You raised queries. The leader cannot approve until you clear them.', 'info') +
++        rcBtn('sign-review', 'Update my review', 'check', 'approve');
++
++    } else if (btnState === 'queries_open') {
++      actionButtons = rcNote(`Cannot approve yet: queries from <strong>${escapeHtml(doc.pending_role || 'a team member')}</strong> are open. They must clear them, or you can reject. If they left the project, replace them below.`, 'info') +
++        rcBtn('reject', 'Reject', 'x', 'reject');
++
+     } else if (btnState === 'signed_waiting') {
+       actionButtons = rcNote('You signed. The deciding leader signs next.', 'check', 'success');
+ 
+@@ -9402,10 +9410,9 @@
+       if (stampChoice === 'cancel') return;
+       if (stampChoice !== 'none') {
+         const stampProfile = await loadStampProfile();
+-        if (!stampProfile) {
+-          alert('No stamp profile is available for this project yet.');
+-          return;
+-        }
++        const stampSetupMsg = await flowCheckSigningReady({ recordId, tabKey, mode: 'decision' });
++        if (stampSetupMsg) { flowShowSetupNeeded(stampSetupMsg); return; }
++        if (!stampProfile) { alert('Your stamp could not be loaded just now. Please try again.'); return; }
+         const downloadRes = await authFetch(
+           `${API}/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}&filename=${encodeURIComponent(cached?.title || 'document.pdf')}`,
+           { method: 'GET' }
+@@ -9487,10 +9494,9 @@
+       if (stampChoice === 'cancel') return;
+       if (stampChoice !== 'none') {
+         const stampProfile = await loadStampProfile();
+-        if (!stampProfile) {
+-          alert('No signature profile is available for this project yet.');
+-          return;
+-        }
++        const sigSetupMsg = await flowCheckSigningReady({ recordId, tabKey, mode: 'review' });
++        if (sigSetupMsg) { flowShowSetupNeeded(sigSetupMsg); return; }
++        if (!stampProfile) { alert('Your signature could not be loaded just now. Please try again.'); return; }
+         const downloadRes = await authFetch(
+           `${API}/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}&filename=${encodeURIComponent(cached?.title || 'document.pdf')}`,
+           { method: 'GET' }
+@@ -9612,6 +9618,7 @@
+ async function previewRecordFile(recordId, tabKey, fileName) {
+   const existing = document.getElementById('recordPreviewModal');
+   if (existing) existing.remove();
++  flowRecordView(recordId, tabKey);   // previewing the PDF counts as opening it (named signers only)
+   try {
+     const res = await authFetch(
+       `${API}/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}&disposition=inline${fileName ? `&filename=${encodeURIComponent(fileName)}` : ''}`,
+@@ -9864,6 +9871,85 @@
+   if (!el) return;
+   el.textContent = message || '';
+   el.style.display = message ? 'block' : 'none';
++  if (message && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
++}
++// The server checks the database for this user's saved signature/stamp in the record's project.
++// Returns a message ONLY when the server says nothing is saved. If the check itself fails
++// (network, session), it returns null: the server re-checks when signing, so we never wrongly claim "no stamp".
++async function flowCheckSigningReady({ recordId, tabKey, mode } = {}) {
++  try {
++    const q = new URLSearchParams({ mode: mode || 'decision' });
++    if (recordId && tabKey) { q.set('recordId', recordId); q.set('recordType', tabToTable(tabKey)); }
++    else q.set('projectId', localStorage.getItem('activeProjectId') || '');
++    const res = await authFetch(`${API}/signing-readiness?${q.toString()}`);
++    if (!res || !res.ok) return null;
++    const d = await res.json();
++    return d.ready ? null : (d.message || 'You have not set up a signature or stamp for this project.');
++  } catch (_) { return null; }
++}
++// Shows a PDF inside the page (dialog with the document, Download and Close), never in a new tab.
++function flowShowPdfDialog(blob, title) {
++  const old = document.getElementById('flowPdfDialog');
++  if (old) old.remove();
++  const url = URL.createObjectURL(blob);
++  const overlay = document.createElement('div');
++  overlay.id = 'flowPdfDialog';
++  overlay.setAttribute('role', 'dialog');
++  overlay.setAttribute('aria-modal', 'true');
++  overlay.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(15,23,42,.72);display:flex;align-items:center;justify-content:center;padding:20px;';
++  overlay.innerHTML = `
++    <div style="width:min(1000px,100%);height:min(92vh,900px);display:flex;flex-direction:column;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.3);">
++      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 16px;border-bottom:1px solid #e5e7eb;">
++        <strong style="font-size:14px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(title || 'Preview')}</strong>
++        <button type="button" id="flowPdfX" aria-label="Close preview" style="border:0;background:transparent;color:#64748b;font-size:24px;line-height:1;cursor:pointer;">&times;</button>
++      </div>
++      <iframe src="${url}" title="${escapeHtml(title || 'Preview')}" style="flex:1;width:100%;border:0;background:#e2e8f0;"></iframe>
++      <div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid #e5e7eb;">
++        <a id="flowPdfDownload" href="${url}" download="preview.pdf" style="padding:8px 12px;border:1px solid #bfdbfe;border-radius:6px;background:#eff6ff;color:#2563eb;font-weight:600;text-decoration:none;font-size:13px;">Download</a>
++        <button type="button" id="flowPdfClose" style="padding:8px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#334155;cursor:pointer;font-size:13px;">Close</button>
++      </div>
++    </div>`;
++  document.body.appendChild(overlay);
++  const close = () => { URL.revokeObjectURL(url); overlay.remove(); document.removeEventListener('keydown', onKey); };
++  const onKey = (e) => { if (e.key === 'Escape') close(); };
++  document.addEventListener('keydown', onKey);
++  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
++  document.getElementById('flowPdfX').addEventListener('click', close);
++  document.getElementById('flowPdfClose').addEventListener('click', close);
++}
++// Dialog (not an inline panel) telling the user exactly what is missing.
++function flowShowSetupNeeded(message) {
++  const old = document.getElementById('flowSetupDialog');
++  if (old) old.remove();
++  const overlay = document.createElement('div');
++  overlay.id = 'flowSetupDialog';
++  overlay.setAttribute('role', 'dialog');
++  overlay.setAttribute('aria-modal', 'true');
++  overlay.setAttribute('aria-labelledby', 'flowSetupTitle');
++  overlay.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px;';
++  overlay.innerHTML = `
++    <div style="background:#fff;border-radius:12px;max-width:440px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.3);overflow:hidden;">
++      <div style="padding:18px 20px 6px;display:flex;gap:10px;align-items:center;">
++        <div style="font-size:22px;">⚠️</div>
++        <h3 id="flowSetupTitle" style="margin:0;font-size:16px;color:#92400e;">Signature setup needed</h3>
++      </div>
++      <div style="padding:6px 20px 16px;font-size:14px;line-height:1.55;color:#334155;">
++        <p style="margin:8px 0;">${escapeHtml(message)}</p>
++        <p style="margin:8px 0;color:#64748b;font-size:13px;">Nothing has been signed. Save your setup, then open this record again.</p>
++      </div>
++      <div style="padding:12px 20px 18px;display:flex;gap:10px;justify-content:flex-end;border-top:1px solid #e5e7eb;">
++        <button type="button" id="flowSetupClose" style="padding:9px 16px;border:1px solid #cbd5e1;background:#fff;border-radius:6px;cursor:pointer;font-size:13px;">Close</button>
++        <button type="button" id="flowSetupNow" style="padding:9px 16px;border:0;background:#007B8A;color:#fff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">Set up now</button>
++      </div>
++    </div>`;
++  document.body.appendChild(overlay);
++  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
++  const onKey = (e) => { if (e.key === 'Escape') close(); };
++  document.addEventListener('keydown', onKey);
++  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
++  document.getElementById('flowSetupClose').addEventListener('click', close);
++  document.getElementById('flowSetupNow').addEventListener('click', () => { close(); openStampSetup(); });
++  document.getElementById('flowSetupNow').focus();
+ }
+ function flowDaysAgo(v) { return Math.floor((Date.now() - new Date(v).getTime()) / 86400000); }
+ 
+@@ -9981,8 +10067,8 @@
+   if (projectLifecycleReadOnly) { showProjectLifecycleNotice(projectLifecycleReadOnlyReason); return; }
+   const doc = flowCached(recordId, tabKey);
+   if (!doc) return;
+-  const profile = await loadStampProfile();
+-  if (!profile) { alert('Set up your signature first (signature setup), then issue the decision. Your signature is added to the notice automatically.'); return; }
++  const setupMsg = await flowCheckSigningReady({ recordId, tabKey, mode: 'decision' });
++  if (setupMsg) { flowShowSetupNeeded(setupMsg); return; }
+ 
+   const isReject = decision === 'rejected';
+   const verb = isReject ? 'Reject' : decision === 'accepted' ? 'Accept' : 'Approve';
+@@ -10017,20 +10103,53 @@
+         </div>
+         <div class="fl-field"><label class="fl-label" for="flTitle">Notice title *</label>
+           <input class="fl-input" id="flTitle" value="${escapeHtml(`${noun} of ${doc.title}${rev}`)}"></div>
+-        <div class="fl-field" id="flOwnWrap" style="display:none;"><label class="fl-label" for="flOwnPdf">Your notice (PDF) *</label>
+-          <input type="file" id="flOwnPdf" accept="application/pdf,.pdf">
++        <div class="fl-field" id="flOwnWrap" style="display:none;">
++          <label class="fl-label">Official Notice PDF <span style="color:#dc2626;">*</span></label>
++          <div id="flOwnDrop" style="display:flex;align-items:center;gap:12px;padding:16px;border:2px dashed #ddd;border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
++            <div style="font-size:12px;font-weight:700;color:#007B8A;border:1px solid #b7dce1;border-radius:4px;padding:5px 7px;">PDF</div>
++            <div style="flex:1;">
++              <div style="font-weight:bold;color:#333;font-size:14px;">Click to upload or drag &amp; drop</div>
++              <div style="font-size:12px;color:#999;margin-top:4px;">PDF only (Max 10MB)</div>
++            </div>
++            <input type="file" id="flOwnPdf" style="display:none;" accept="application/pdf,.pdf">
++          </div>
++          <div id="flOwnName" style="margin-top:8px;font-size:12px;color:#28a745;font-weight:bold;display:none;"></div>
+           <div class="fl-hint">The signature page${isReject ? ' and your query schedule are' : ' is'} added behind your PDF.</div></div>
+-        <div class="fl-field"><label class="fl-label" for="flBody" id="flBodyLabel">Notice text *</label>
+-          <textarea class="fl-input" id="flBody" rows="7" placeholder="${isReject ? 'Explain why the record is rejected. Each issue goes in the query schedule below.' : 'Explain the decision and any conditions.'}"></textarea></div>
++        <div class="fl-field" id="flBodyWrap"><label class="fl-label" id="flBodyLabel">Notice text *</label>
++          <div id="flRte" style="border:1px solid #d7e7eb;border-radius:8px;background:#fff;overflow:hidden;">
++            <div id="flRteBar" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:6px 8px;border-bottom:1px solid #e5edf0;background:#f8fbfc;">
++              <select id="flRteBlock" title="Text style" style="padding:4px 6px;border:1px solid #d7e7eb;border-radius:5px;background:#fff;font-size:12px;">
++                <option value="p">Normal</option><option value="h1">Heading</option><option value="h2">Subheading</option>
++              </select>
++              <button type="button" class="fl-rte-btn" data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
++              <button type="button" class="fl-rte-btn" data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
++              <button type="button" class="fl-rte-btn" data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
++              <span style="width:1px;height:18px;background:#d7e7eb;margin:0 2px;"></span>
++              <button type="button" class="fl-rte-btn" data-cmd="insertUnorderedList" title="Bulleted list">&bull; List</button>
++              <button type="button" class="fl-rte-btn" data-cmd="insertOrderedList" title="Numbered list">1. List</button>
++              <span style="width:1px;height:18px;background:#d7e7eb;margin:0 2px;"></span>
++              <button type="button" class="fl-rte-btn" data-cmd="justifyLeft" title="Align left">Left</button>
++              <button type="button" class="fl-rte-btn" data-cmd="justifyCenter" title="Center">Center</button>
++              <button type="button" class="fl-rte-btn" data-cmd="justifyRight" title="Align right">Right</button>
++              <span style="width:1px;height:18px;background:#d7e7eb;margin:0 2px;"></span>
++              <button type="button" class="fl-rte-btn" data-cmd="removeFormat" title="Clear formatting">Clear</button>
++            </div>
++            <div id="flBodyEditor" contenteditable="true" role="textbox" aria-multiline="true" aria-labelledby="flBodyLabel"
++              data-placeholder="${isReject ? 'Write the letter. Explain why the record is rejected. Each issue goes in the query schedule below.' : 'Write the letter. Explain the decision and any conditions.'}"
++              style="min-height:190px;max-height:380px;overflow-y:auto;padding:12px 14px;font-size:14px;line-height:1.6;outline:none;color:#1f2937;"></div>
++          </div>
++          <textarea id="flBody" style="display:none;"></textarea>
++          <div class="fl-hint">Format it like an email or letter: headings, bold, lists and alignment all appear in the notice PDF.</div></div>
+         ${isReject ? `
+         <div class="fl-field"><div class="fl-label">Query schedule *</div>
+           <div class="fl-hint" style="margin:0 0 8px;">List every query with its reference. The contractor has to answer each one when resubmitting.</div>
+           <div id="flQueries"></div></div>
+         <div class="fl-field"><label class="fl-label" for="flRespondBy">Respond by (optional)</label>
+           <input type="date" class="fl-input" id="flRespondBy" style="max-width:220px;"></div>` : ''}
+-        <div class="fl-field"><label class="fl-label" for="flSupport">Supporting files (optional)</label>
+-          <input type="file" id="flSupport" multiple accept=".xlsx,.xls,.doc,.docx,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv">
+-          <div class="fl-hint">For example the marked-up BoQ. Up to 10 files, 10MB each.</div><div id="flSupportList" class="fl-files"></div></div>
++        <div class="fl-field"><label class="fl-label" for="flSupport">Supporting Files <span style="font-weight:normal;text-transform:none;letter-spacing:0;">(optional)</span></label>
++          <input type="file" id="flSupport" multiple accept=".xlsx,.xls,.doc,.docx,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv"
++            style="width:100%;padding:10px;border:1px solid #d7e7eb;border-radius:6px;background:#fff;">
++          <div class="fl-hint">Excel, Word, CAD, images, ZIP, or CSV. Up to 10 files, 10MB each.</div><div id="flSupportList" class="fl-files"></div></div>
+         ${needsNext ? '<div class="fl-field" id="flNextSigners"></div>' : ''}
+       </div>
+       <div class="fl-err" id="flErr" role="alert"></div>
+@@ -10048,8 +10167,34 @@
+   sourceBox.addEventListener('change', () => {
+     source = sourceBox.querySelector('input:checked').value;
+     sourceBox.querySelectorAll('label').forEach(l => l.classList.toggle('is-on', l.querySelector('input').checked));
+-    document.getElementById('flOwnWrap').style.display = source === 'uploaded' ? 'block' : 'none';
+-    document.getElementById('flBodyLabel').textContent = source === 'uploaded' ? 'Remarks (optional)' : 'Notice text *';
++    const own = source === 'uploaded';
++    document.getElementById('flOwnWrap').style.display = own ? 'block' : 'none';
++    // Your own PDF replaces the system letter: no notice text box, just the file (like adding a record)
++    document.getElementById('flBodyWrap').style.display = own ? 'none' : 'block';
++    flowError('flErr', '');
++  });
++  const ownInput = document.getElementById('flOwnPdf');
++  const ownDrop = document.getElementById('flOwnDrop');
++  const showOwn = () => {
++    const f = ownInput.files[0];
++    const el = document.getElementById('flOwnName');
++    if (!f) { el.style.display = 'none'; return; }
++    el.textContent = `${f.name} (${(f.size / 1048576).toFixed(2)} MB)`;
++    el.style.display = 'block';
++  };
++  ownDrop.addEventListener('click', () => ownInput.click());
++  ownDrop.addEventListener('dragover', (e) => { e.preventDefault(); ownDrop.style.borderColor = '#007B8A'; });
++  ownDrop.addEventListener('dragleave', () => { ownDrop.style.borderColor = '#ddd'; });
++  ownDrop.addEventListener('drop', (e) => {
++    e.preventDefault(); ownDrop.style.borderColor = '#ddd';
++    if (e.dataTransfer.files && e.dataTransfer.files.length) { ownInput.files = e.dataTransfer.files; showOwn(); }
++  });
++  ownInput.addEventListener('change', () => {
++    const f = ownInput.files[0];
++    if (f && !/\.pdf$/i.test(f.name)) { ownInput.value = ''; flowError('flErr', 'The notice must be a PDF file.'); }
++    else if (f && f.size > 10 * 1024 * 1024) { ownInput.value = ''; flowError('flErr', 'Your notice PDF must be 10 MB or smaller.'); }
++    else flowError('flErr', '');
++    showOwn();
+   });
+   const renderSupport = () => {
+     document.getElementById('flSupportList').innerHTML = supporting.map((f, i) => `<div class="fl-file"><span>${escapeHtml(f.name)}</span>
+@@ -10072,11 +10217,50 @@
+     if (b) { supporting.splice(Number(b.getAttribute('data-rm')), 1); renderSupport(); }
+   });
+ 
++  // ---- letter editor (like an email compose box) ----
++  if (!document.getElementById('flRteStyle')) {
++    const st = document.createElement('style'); st.id = 'flRteStyle';
++    st.textContent = `.fl-rte-btn{padding:4px 9px;border:1px solid #d7e7eb;border-radius:5px;background:#fff;font-size:12px;cursor:pointer;color:#334155}
++      .fl-rte-btn:hover{background:#eef7f9}.fl-rte-btn.on{background:#007B8A;border-color:#007B8A;color:#fff}
++      #flBodyEditor:empty:before{content:attr(data-placeholder);color:#9ca3af;pointer-events:none}
++      #flBodyEditor h1{font-size:20px;margin:6px 0}#flBodyEditor h2{font-size:16px;margin:6px 0}#flBodyEditor p,#flBodyEditor div{margin:0 0 6px}
++      #flBodyEditor ul,#flBodyEditor ol{margin:4px 0 8px 22px}`;
++    document.head.appendChild(st);
++  }
++  const editor = document.getElementById('flBodyEditor');
++  const bodyField = document.getElementById('flBody');
++  try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch (_) {}
++  const syncBody = () => { bodyField.value = editor.innerHTML; };
++  const markActive = () => {
++    document.querySelectorAll('#flRteBar .fl-rte-btn[data-cmd]').forEach(btn => {
++      let on = false; try { on = document.queryCommandState(btn.dataset.cmd); } catch (_) {}
++      btn.classList.toggle('on', Boolean(on));
++    });
++  };
++  document.querySelectorAll('#flRteBar .fl-rte-btn').forEach(btn => {
++    btn.addEventListener('mousedown', (e) => e.preventDefault());   // keep the selection in the editor
++    btn.addEventListener('click', () => { editor.focus(); document.execCommand(btn.dataset.cmd, false, null); syncBody(); markActive(); });
++  });
++  document.getElementById('flRteBlock').addEventListener('change', (e) => {
++    editor.focus(); document.execCommand('formatBlock', false, e.target.value); syncBody();
++  });
++  editor.addEventListener('input', syncBody);
++  editor.addEventListener('keyup', markActive);
++  editor.addEventListener('mouseup', markActive);
++  editor.addEventListener('paste', (e) => {   // paste as plain text so no foreign formatting sneaks in
++    e.preventDefault();
++    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
++    document.execCommand('insertText', false, text);
++  });
++  const letterText = () => editor.innerText.replace(/\u00a0/g, ' ').trim();
++
+   const build = () => {
+     const title = document.getElementById('flTitle').value.trim();
+-    const body = document.getElementById('flBody').value.trim();
++    syncBody();
++    const body = letterText() ? bodyField.value.trim() : '';
++    const bodyLen = letterText().length;
+     if (title.length < 3) throw new Error('Give the notice a title (at least 3 characters).');
+-    if (source === 'generated' && body.length < 10) throw new Error('Write the notice text (at least 10 characters).');
++    if (source === 'generated' && bodyLen < 10) throw new Error('Write the notice text (at least 10 characters).');
+     const fd = new FormData();
+     fd.append('projectId', flowProjectId());
+     fd.append('recordId', doc.id);
+@@ -10084,7 +10268,7 @@
+     fd.append('decision', decision);
+     fd.append('noticeSource', source);
+     fd.append('title', title);
+-    fd.append('body', body);
++    fd.append('body', source === 'uploaded' ? '' : body);
+     if (isReject) {
+       const queries = readQueryEditor('flQueries');
+       if (!queries.length) throw new Error('A rejection needs at least one query. Write what is wrong and the action required.');
+@@ -10104,23 +10288,20 @@
+   };
+ 
+   document.getElementById('flCancel').addEventListener('click', () => {
+-    const dirty = document.getElementById('flBody').value.trim() || readQueryEditor('flQueries').length || supporting.length;
++    const dirty = letterText() || readQueryEditor('flQueries').length || supporting.length;
+     if (dirty && !confirm('Discard this decision? Nothing has been issued yet.')) return;
+     collapseGrayPart();
+   });
+   document.getElementById('flPreview').addEventListener('click', async () => {
+     flowError('flErr', '');
+     const btn = document.getElementById('flPreview');
+-    const win = window.open('', '_blank');
+     try {
+       const fd = build();
+       btn.disabled = true; btn.textContent = 'Building preview...';
+       const res = await flowFetch(`${API}/decision-preview`, { method: 'POST', body: fd });
+       if (!res || !res.ok) { const j = res ? await res.json().catch(() => ({})) : {}; throw new Error(j.message || 'The preview could not be built.'); }
+-      const url = URL.createObjectURL(await res.blob());
+-      if (win) win.location.href = url; else window.open(url, '_blank');
++      flowShowPdfDialog(await res.blob(), `${verb} preview: record and notice`);   // opens in this page, not a new tab
+     } catch (err) {
+-      if (win) win.close();
+       flowError('flErr', err.message);
+     } finally { btn.disabled = false; btn.textContent = 'Preview with the record'; }
+   });
+@@ -10149,8 +10330,8 @@
+   if (projectLifecycleReadOnly) { showProjectLifecycleNotice(projectLifecycleReadOnlyReason); return; }
+   const doc = flowCached(recordId, tabKey);
+   if (!doc) return;
+-  const profile = await loadStampProfile();
+-  if (!profile) { alert('Set up your signature first, then sign your review.'); return; }
++  const setupMsg = await flowCheckSigningReady({ recordId, tabKey, mode: 'review' });
++  if (setupMsg) { flowShowSetupNeeded(setupMsg); return; }
+   expandGrayPart(`
+     <div class="fl-panel">
+       <div class="fl-head"><h3>Review and sign</h3><div class="fl-sub">#${escapeHtml(doc.id)} ${escapeHtml(doc.title)}</div></div>
+@@ -10276,7 +10457,7 @@
+       return `<li class="fl-signer">
+         <div class="fl-signer-who"><span class="fl-signer-pos">${escapeHtml(s.position)}</span><span class="fl-muted">${escapeHtml(flowCap(s.side))} side</span>
+           ${s.is_decider ? '<span class="fl-tag">Decides</span>' : s.is_team_member ? '<span class="fl-tag">Team</span>' : ''}${s.is_me ? '<span class="fl-tag fl-tag--me">You</span>' : ''}</div>
+-        <div class="fl-signer-state">${state}${s.can_replace ? `<button type="button" class="fl-link" data-action="replace-signer" data-signer-id="${s.id}">Replace</button>` : ''}</div>
++        <div class="fl-signer-state">${state}${s.open_queries && !s.left_project ? '<span class="fl-state" style="color:#b45309;">Queries open</span>' : ''}${s.left_project ? '<span class="fl-state" style="color:#b91c1c;">No longer on this project</span>' : ''}${s.can_replace ? `<button type="button" class="fl-link" data-action="replace-signer" data-signer-id="${s.id}">Replace</button>` : ''}</div>
+       </li>`;
+     }).join('');
+     const days = opened ? flowDaysAgo(opened) : 0;
+@@ -10783,7 +10964,9 @@
+         const placement = window.__stampPlacement || { page: 1, x: 0.8, y: 0.08 };
+         const stampType = 'STAMPED';
+         const stampProfile = await loadStampProfile();
+-        if (!stampProfile) throw new Error('No stamp profile is available for stamping.');
++        const stampSetupMsg = await flowCheckSigningReady({ mode: 'decision' });
++        if (stampSetupMsg) { flowShowSetupNeeded(stampSetupMsg); const quiet = new Error(stampSetupMsg); quiet.quiet = true; throw quiet; }
++        if (!stampProfile) throw new Error('Your stamp could not be loaded just now. Please try again.');
+         const ext = (attachmentFile.name || '').split('.').pop().toLowerCase();
+         if (ext !== 'pdf') {
+           throw new Error('The document must be converted to PDF before it can be stamped.');
+@@ -10844,7 +11027,7 @@
+       } else throw new Error(data.message || 'Failed to save.');
+     } catch (err) {
+       console.error('Form submission error:', err);
+-      showFormError(err.message);
++      if (!err.quiet) showFormError(err.message);   // the setup dialog already explained it
+       const saveBtn = document.getElementById('saveRecordBtn');
+       if (saveBtn) {
+         saveBtn.disabled = false;
+@@ -15170,11 +15353,7 @@
+           border:1px solid #6ee7b7;border-radius:8px;font-size:12px;color:#065f46;">
+           ✅ Stamp saved for ${projectName} — last updated ${new Date(existing.updated_at).toLocaleDateString()}.
+           Saving again will overwrite it.
+-        </div>` : `<div style="margin-bottom:16px;padding:10px 12px;background:#fffbeb;
+-          border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#92400e;">
+-          ⚠️ No signature profile set up yet for ${projectName}. Add a signature and/or a company stamp image below —
+-          at least one is required.
+-        </div>`}
++        </div>` : ''}
+ 
+         <!-- Signature -->
+         <div style="margin-bottom:20px;">
+@@ -15945,11 +16124,7 @@
+   const ext = (file.name || '').split('.').pop().toLowerCase();
+   const canStamp = ext === 'pdf';
+ 
+-  let hasStamp = false;
+-  try {
+-    const profile = await loadStampProfile();
+-    hasStamp = !!profile;
+-  } catch(_) {}
++  const hasStamp = true;   // setup is checked when the user chooses to stamp (dialog), not shown as inline text
+ 
+   stampStepContainer.innerHTML = `
+     <div style="padding:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;">
+@@ -15980,7 +16155,6 @@
+         <button type="button" id="stampPlacementBtn" style="padding:8px 10px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;">Choose page &amp; position</button>
+         <div id="stampPlacementSummary" style="margin-top:6px;font-size:11px;color:#6b7280;">No placement chosen yet.</div>
+       </div>
+-      ${!hasStamp ? `<div style="margin-top:8px;padding:8px 10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;font-size:11px;color:#92400e;">⚠️ No stamp set up for this project yet. Add one in “My Stamp” first.</div>` : ''}
+       ${!canStamp ? `<div style="margin-top:8px;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;font-size:11px;color:#b91c1c;">⚠️ Convert the document to PDF first to enable stamping.</div>` : ''}
+     </div>`;
+   stampStepContainer.style.display = 'block';
+@@ -15993,8 +16167,13 @@
+   const placeModeAppend = document.getElementById('stampPlaceModeAppend');
+   const placementBtn = document.getElementById('stampPlacementBtn');
+ 
+-  const updateActionBlocks = () => {
+-    const choice = document.querySelector('input[name="stampChoice"]:checked')?.value || 'save';
++  const updateActionBlocks = async () => {
++    let choice = document.querySelector('input[name="stampChoice"]:checked')?.value || 'save';
++    if (choice === 'stamp') {
++      // Fresh check each time, so a stamp saved a moment ago is recognised
++      const setupMsg = await flowCheckSigningReady({ mode: 'decision' });
++      if (setupMsg) { stampChoiceSave.checked = true; choice = 'save'; flowShowSetupNeeded(setupMsg); }
++    }
+     stampPlacementBlock.style.display = choice === 'stamp' ? 'block' : 'none';
+     if (choice !== 'stamp') window.__stampPlacement = null;
+   };

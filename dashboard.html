@@ -9887,6 +9887,36 @@ async function flowCheckSigningReady({ recordId, tabKey, mode } = {}) {
     return d.ready ? null : (d.message || 'You have not set up a signature or stamp for this project.');
   } catch (_) { return null; }
 }
+// Shows a PDF inside the page (dialog with the document, Download and Close), never in a new tab.
+function flowShowPdfDialog(blob, title) {
+  const old = document.getElementById('flowPdfDialog');
+  if (old) old.remove();
+  const url = URL.createObjectURL(blob);
+  const overlay = document.createElement('div');
+  overlay.id = 'flowPdfDialog';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(15,23,42,.72);display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.innerHTML = `
+    <div style="width:min(1000px,100%);height:min(92vh,900px);display:flex;flex-direction:column;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.3);">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 16px;border-bottom:1px solid #e5e7eb;">
+        <strong style="font-size:14px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(title || 'Preview')}</strong>
+        <button type="button" id="flowPdfX" aria-label="Close preview" style="border:0;background:transparent;color:#64748b;font-size:24px;line-height:1;cursor:pointer;">&times;</button>
+      </div>
+      <iframe src="${url}" title="${escapeHtml(title || 'Preview')}" style="flex:1;width:100%;border:0;background:#e2e8f0;"></iframe>
+      <div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid #e5e7eb;">
+        <a id="flowPdfDownload" href="${url}" download="preview.pdf" style="padding:8px 12px;border:1px solid #bfdbfe;border-radius:6px;background:#eff6ff;color:#2563eb;font-weight:600;text-decoration:none;font-size:13px;">Download</a>
+        <button type="button" id="flowPdfClose" style="padding:8px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#334155;cursor:pointer;font-size:13px;">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => { URL.revokeObjectURL(url); overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.getElementById('flowPdfX').addEventListener('click', close);
+  document.getElementById('flowPdfClose').addEventListener('click', close);
+}
 // Dialog (not an inline panel) telling the user exactly what is missing.
 function flowShowSetupNeeded(message) {
   const old = document.getElementById('flowSetupDialog');
@@ -10085,8 +10115,31 @@ async function openDecisionPanel(recordId, tabKey, decision) {
           </div>
           <div id="flOwnName" style="margin-top:8px;font-size:12px;color:#28a745;font-weight:bold;display:none;"></div>
           <div class="fl-hint">The signature page${isReject ? ' and your query schedule are' : ' is'} added behind your PDF.</div></div>
-        <div class="fl-field" id="flBodyWrap"><label class="fl-label" for="flBody" id="flBodyLabel">Notice text *</label>
-          <textarea class="fl-input" id="flBody" rows="7" placeholder="${isReject ? 'Explain why the record is rejected. Each issue goes in the query schedule below.' : 'Explain the decision and any conditions.'}"></textarea></div>
+        <div class="fl-field" id="flBodyWrap"><label class="fl-label" id="flBodyLabel">Notice text *</label>
+          <div id="flRte" style="border:1px solid #d7e7eb;border-radius:8px;background:#fff;overflow:hidden;">
+            <div id="flRteBar" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:6px 8px;border-bottom:1px solid #e5edf0;background:#f8fbfc;">
+              <select id="flRteBlock" title="Text style" style="padding:4px 6px;border:1px solid #d7e7eb;border-radius:5px;background:#fff;font-size:12px;">
+                <option value="p">Normal</option><option value="h1">Heading</option><option value="h2">Subheading</option>
+              </select>
+              <button type="button" class="fl-rte-btn" data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+              <button type="button" class="fl-rte-btn" data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+              <button type="button" class="fl-rte-btn" data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+              <span style="width:1px;height:18px;background:#d7e7eb;margin:0 2px;"></span>
+              <button type="button" class="fl-rte-btn" data-cmd="insertUnorderedList" title="Bulleted list">&bull; List</button>
+              <button type="button" class="fl-rte-btn" data-cmd="insertOrderedList" title="Numbered list">1. List</button>
+              <span style="width:1px;height:18px;background:#d7e7eb;margin:0 2px;"></span>
+              <button type="button" class="fl-rte-btn" data-cmd="justifyLeft" title="Align left">Left</button>
+              <button type="button" class="fl-rte-btn" data-cmd="justifyCenter" title="Center">Center</button>
+              <button type="button" class="fl-rte-btn" data-cmd="justifyRight" title="Align right">Right</button>
+              <span style="width:1px;height:18px;background:#d7e7eb;margin:0 2px;"></span>
+              <button type="button" class="fl-rte-btn" data-cmd="removeFormat" title="Clear formatting">Clear</button>
+            </div>
+            <div id="flBodyEditor" contenteditable="true" role="textbox" aria-multiline="true" aria-labelledby="flBodyLabel"
+              data-placeholder="${isReject ? 'Write the letter. Explain why the record is rejected. Each issue goes in the query schedule below.' : 'Write the letter. Explain the decision and any conditions.'}"
+              style="min-height:190px;max-height:380px;overflow-y:auto;padding:12px 14px;font-size:14px;line-height:1.6;outline:none;color:#1f2937;"></div>
+          </div>
+          <textarea id="flBody" style="display:none;"></textarea>
+          <div class="fl-hint">Format it like an email or letter: headings, bold, lists and alignment all appear in the notice PDF.</div></div>
         ${isReject ? `
         <div class="fl-field"><div class="fl-label">Query schedule *</div>
           <div class="fl-hint" style="margin:0 0 8px;">List every query with its reference. The contractor has to answer each one when resubmitting.</div>
@@ -10164,11 +10217,50 @@ async function openDecisionPanel(recordId, tabKey, decision) {
     if (b) { supporting.splice(Number(b.getAttribute('data-rm')), 1); renderSupport(); }
   });
 
+  // ---- letter editor (like an email compose box) ----
+  if (!document.getElementById('flRteStyle')) {
+    const st = document.createElement('style'); st.id = 'flRteStyle';
+    st.textContent = `.fl-rte-btn{padding:4px 9px;border:1px solid #d7e7eb;border-radius:5px;background:#fff;font-size:12px;cursor:pointer;color:#334155}
+      .fl-rte-btn:hover{background:#eef7f9}.fl-rte-btn.on{background:#007B8A;border-color:#007B8A;color:#fff}
+      #flBodyEditor:empty:before{content:attr(data-placeholder);color:#9ca3af;pointer-events:none}
+      #flBodyEditor h1{font-size:20px;margin:6px 0}#flBodyEditor h2{font-size:16px;margin:6px 0}#flBodyEditor p,#flBodyEditor div{margin:0 0 6px}
+      #flBodyEditor ul,#flBodyEditor ol{margin:4px 0 8px 22px}`;
+    document.head.appendChild(st);
+  }
+  const editor = document.getElementById('flBodyEditor');
+  const bodyField = document.getElementById('flBody');
+  try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch (_) {}
+  const syncBody = () => { bodyField.value = editor.innerHTML; };
+  const markActive = () => {
+    document.querySelectorAll('#flRteBar .fl-rte-btn[data-cmd]').forEach(btn => {
+      let on = false; try { on = document.queryCommandState(btn.dataset.cmd); } catch (_) {}
+      btn.classList.toggle('on', Boolean(on));
+    });
+  };
+  document.querySelectorAll('#flRteBar .fl-rte-btn').forEach(btn => {
+    btn.addEventListener('mousedown', (e) => e.preventDefault());   // keep the selection in the editor
+    btn.addEventListener('click', () => { editor.focus(); document.execCommand(btn.dataset.cmd, false, null); syncBody(); markActive(); });
+  });
+  document.getElementById('flRteBlock').addEventListener('change', (e) => {
+    editor.focus(); document.execCommand('formatBlock', false, e.target.value); syncBody();
+  });
+  editor.addEventListener('input', syncBody);
+  editor.addEventListener('keyup', markActive);
+  editor.addEventListener('mouseup', markActive);
+  editor.addEventListener('paste', (e) => {   // paste as plain text so no foreign formatting sneaks in
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+    document.execCommand('insertText', false, text);
+  });
+  const letterText = () => editor.innerText.replace(/\u00a0/g, ' ').trim();
+
   const build = () => {
     const title = document.getElementById('flTitle').value.trim();
-    const body = document.getElementById('flBody').value.trim();
+    syncBody();
+    const body = letterText() ? bodyField.value.trim() : '';
+    const bodyLen = letterText().length;
     if (title.length < 3) throw new Error('Give the notice a title (at least 3 characters).');
-    if (source === 'generated' && body.length < 10) throw new Error('Write the notice text (at least 10 characters).');
+    if (source === 'generated' && bodyLen < 10) throw new Error('Write the notice text (at least 10 characters).');
     const fd = new FormData();
     fd.append('projectId', flowProjectId());
     fd.append('recordId', doc.id);
@@ -10196,23 +10288,20 @@ async function openDecisionPanel(recordId, tabKey, decision) {
   };
 
   document.getElementById('flCancel').addEventListener('click', () => {
-    const dirty = document.getElementById('flBody').value.trim() || readQueryEditor('flQueries').length || supporting.length;
+    const dirty = letterText() || readQueryEditor('flQueries').length || supporting.length;
     if (dirty && !confirm('Discard this decision? Nothing has been issued yet.')) return;
     collapseGrayPart();
   });
   document.getElementById('flPreview').addEventListener('click', async () => {
     flowError('flErr', '');
     const btn = document.getElementById('flPreview');
-    const win = window.open('', '_blank');
     try {
       const fd = build();
       btn.disabled = true; btn.textContent = 'Building preview...';
       const res = await flowFetch(`${API}/decision-preview`, { method: 'POST', body: fd });
       if (!res || !res.ok) { const j = res ? await res.json().catch(() => ({})) : {}; throw new Error(j.message || 'The preview could not be built.'); }
-      const url = URL.createObjectURL(await res.blob());
-      if (win) win.location.href = url; else window.open(url, '_blank');
+      flowShowPdfDialog(await res.blob(), `${verb} preview: record and notice`);   // opens in this page, not a new tab
     } catch (err) {
-      if (win) win.close();
       flowError('flErr', err.message);
     } finally { btn.disabled = false; btn.textContent = 'Preview with the record'; }
   });
