@@ -847,6 +847,17 @@
     .rc-cq-text { font-size: 13.5px; line-height: 1.55; color: #334155; white-space: pre-wrap; overflow-wrap: anywhere; }
     .rc-cq-act { margin-top: 4px; font-size: 13px; line-height: 1.5; color: #475569; white-space: pre-wrap; overflow-wrap: anywhere; }
     .rc-table-actions { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+
+    /* Named signers: one clear row per person */
+    .rc-table--signers { min-width: 640px; }
+    .rc-sig-name { font-weight: 600; color: #0f172a; }
+    .rc-table td .rc-tag--me { margin-left: 8px; vertical-align: 1px; }
+    .rc-sig-sub { margin-top: 4px; font-size: 12px; line-height: 1.45; color: #64748b; }
+    .rc-sig-sub--warn { color: #b45309; }
+    .rc-sig-sub--danger { color: #b91c1c; }
+    .rc-dash { color: #94a3b8; }
+    .rc-bar { height: 6px; margin: 8px 0 12px; border-radius: 999px; background: #e2e8f0; overflow: hidden; }
+    .rc-bar > span { display: block; height: 100%; border-radius: inherit; background: #16a34a; }
     .rc-table-actions .rc-btn { white-space: nowrap; }
 
     /* Progress: one vertical timeline, always left-aligned */
@@ -11014,34 +11025,36 @@ function renderSigningStages(doc) {
   if (!plan.length) return '';
   return plan.map(st => {
     const current = st.stage === doc.current_stage;
-    const opened = st.signers.map(s => s.first_viewed_at).filter(Boolean).sort()[0];
-    const pending = st.signers.filter(s => s.status === 'pending');
-    const rows = st.signers.map(s => {
-      const lines = [];
-      if (s.status === 'signed') {
-        let t = `Signed on ${rcDate(s.signed_at, true)}.`;
-        if (s.name) t += ` Signed by ${s.name}.`;
-        if (s.queries_raised) t += ` Raised ${rcPlural(s.queries_raised, 'query', 'queries')}.`;
-        lines.push(`<p class="rc-item-text">${escapeHtml(t)}</p>`);
-      } else if (s.first_viewed_at) {
-        lines.push(`<p class="rc-item-text">Opened the record on ${escapeHtml(rcDate(s.first_viewed_at, true))} and has not signed yet.</p>`);
+    const opened = st.signers.map(x => x.first_viewed_at).filter(Boolean).sort()[0];
+    const pending = st.signers.filter(x => x.status === 'pending');
+    const anyActions = st.signers.some(x => x.can_replace);
+    const anyHiddenName = st.signers.some(x => !x.name);
+
+    const rows = st.signers.map(x => {
+      const roleLabel = x.is_decider ? 'Final decision maker' : x.is_team_member ? 'Team member' : 'Leader';
+      let status;
+      if (x.status === 'signed') {
+        status = `<span class="rc-chip rc-chip--ok">${rcIcon('check')}Signed</span><div class="rc-sig-sub">${escapeHtml(rcDate(x.signed_at, true))}</div>`;
+      } else if (x.first_viewed_at) {
+        status = `<span class="rc-chip rc-chip--notice">Opened, not signed</span><div class="rc-sig-sub">Opened ${escapeHtml(rcDate(x.first_viewed_at, true))}</div>`;
       } else {
-        lines.push(`<p class="rc-item-text">Has not opened the record yet.</p>`);
+        status = `<span class="rc-chip rc-chip--muted">Not opened yet</span>`;
       }
-      if (s.open_queries && !s.left_project) lines.push(`<p class="rc-item-text rc-item-text--warn">Queries raised by this signer are still open.</p>`);
-      if (s.left_project) lines.push(`<p class="rc-item-text rc-item-text--danger">This person is no longer on the project.</p>`);
-      const role = s.is_decider ? 'Makes the final decision' : s.is_team_member ? 'Team member' : '';
-      return `<li class="rc-signer">
-        <div class="rc-signer-head">
-          <span class="rc-signer-name">${escapeHtml(s.position)}</span>
-          <span class="rc-tag">${escapeHtml(flowCap(s.side))} side</span>
-          ${role ? `<span class="rc-tag">${role}</span>` : ''}
-          ${s.is_me ? '<span class="rc-tag rc-tag--me">You</span>' : ''}
-        </div>
-        ${lines.join('')}
-        ${s.can_replace ? `<div class="rc-item-actions"><button type="button" class="rc-btn rc-btn--sm" data-action="replace-signer" data-signer-id="${s.id}">Replace this signer</button></div>` : ''}
-      </li>`;
+      if (x.queries_raised) {
+        const stillOpen = x.open_queries && !x.left_project;
+        status += `<div class="rc-sig-sub${stillOpen ? ' rc-sig-sub--warn' : ''}">Raised ${rcPlural(x.queries_raised, 'query', 'queries')}${stillOpen ? ', still open' : ''}</div>`;
+      }
+      if (x.left_project) status += `<div class="rc-sig-sub rc-sig-sub--danger">No longer on the project</div>`;
+      return `<tr>
+        <td>${x.name ? `<span class="rc-sig-name">${escapeHtml(x.name)}</span>` : '<span class="rc-dash" title="Names are shown to the signer\'s own side only">\u2014</span>'}${x.is_me ? '<span class="rc-tag rc-tag--me">You</span>' : ''}</td>
+        <td>${escapeHtml(x.position || '')}</td>
+        <td>${escapeHtml(flowCap(x.side))} side</td>
+        <td>${roleLabel}</td>
+        <td>${status}</td>
+        ${anyActions ? `<td>${x.can_replace ? `<button type="button" class="rc-btn rc-btn--sm" data-action="replace-signer" data-signer-id="${x.id}">Replace</button>` : ''}</td>` : ''}
+      </tr>`;
     }).join('');
+
     const days = opened ? flowDaysAgo(opened) : 0;
     const wait = current && opened && pending.length
       ? `<p class="rc-item-text rc-item-text--warn">${days >= 1 ? `Opened ${rcPlural(days, 'day', 'days')} ago and there is still no decision.` : 'Under review. There is no decision yet.'}</p>` : '';
@@ -11049,14 +11062,20 @@ function renderSigningStages(doc) {
       ? `<div class="rc-item-actions"><button type="button" class="rc-btn rc-btn--sm" data-action="remind">Send a reminder to the signers who have not signed</button></div>` : '';
     const replaced = st.replaced.length
       ? `<p class="rc-item-text">Replaced earlier: ${st.replaced.map(r => `${escapeHtml(r.position)} (${escapeHtml(rcDate(r.replaced_at))})`).join(', ')}.</p>` : '';
+    const pct = st.total ? Math.round((st.signed_count / st.total) * 100) : 0;
     return `<div class="rc-item${current ? ' is-current' : ''}">
       <div class="rc-item-head">
         <span class="rc-item-title">${escapeHtml(st.label || `Stage ${st.stage}`)}</span>
         ${current ? '<span class="rc-chip rc-chip--notice">In progress</span>' : ''}
       </div>
       <p class="rc-item-text">${st.signed_count} of ${st.total} named ${st.total === 1 ? 'signer has' : 'signers have'} signed for the ${escapeHtml(flowCap(st.side))} side.</p>
+      <div class="rc-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${st.total}" aria-valuenow="${st.signed_count}"><span style="width:${pct}%"></span></div>
       ${wait}
-      <ul class="rc-signers">${rows}</ul>
+      <div class="rc-table-wrap"><table class="rc-table rc-table--signers" aria-label="Named signers, ${escapeHtml(st.label || `stage ${st.stage}`)}">
+        <thead><tr><th scope="col">Name</th><th scope="col">Position</th><th scope="col">Side</th><th scope="col">Role</th><th scope="col">Status</th>${anyActions ? '<th scope="col"></th>' : ''}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${anyHiddenName ? '<p class="rc-muted" style="margin-top:8px;font-size:12.5px;">A name is shown only to people on the signer\'s own side. Everyone else sees the position and side.</p>' : ''}
       ${remind}${replaced}
     </div>`;
   }).join('');
