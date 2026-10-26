@@ -740,6 +740,19 @@
     .rc-fact dd.rc-fact-long { font-weight: 400; color: #334155; white-space: pre-wrap; }
     .rc-item .rc-facts { margin-top: 10px; }
 
+    /* Record summary: three labelled columns, separated by thin lines */
+    .rc-factgroups {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 1px;
+      background: #e2e8f0; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;
+    }
+    .rc-factgroup { min-width: 0; padding: 14px 16px 16px; background: #fff; }
+    .rc-factgroup-title { margin: 0 0 12px; padding-bottom: 8px; border-bottom: 1px solid #eef2f6; font-size: 13px; font-weight: 600; color: #334155; }
+    .rc-factlist { display: flex; flex-direction: column; gap: 12px; margin: 0; }
+    .rc-factlist .rc-fact dt { margin: 0 0 2px; font-size: 12px; font-weight: 500; color: #64748b; }
+    .rc-factlist .rc-fact dd { font-size: 14px; font-weight: 500; line-height: 1.5; color: #0f172a; }
+    .rc-factlist .rc-fact dd.rc-fact-late { color: #b91c1c; }
+    .rc-record-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.5; color: #0f172a; overflow-wrap: anywhere; }
+
     /* Rich-text description (HTML written in the Add Record editor) */
     .rc-rich { font-size: 13.5px; line-height: 1.7; color: #334155; overflow-wrap: anywhere; }
     .rc-rich > :first-child { margin-top: 0; }
@@ -1015,7 +1028,7 @@
     .rc-slide { display: none; padding: 20px 18px 18px; }
     .rc-slide.is-active { display: block; }
     .rc-slide-kicker { margin: 0 0 6px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #0f766e; }
-    .rc-slide-head { margin: 0 0 4px; font-size: 18px; font-weight: 700; line-height: 1.4; color: #0f172a; }
+    .rc-slide-head { margin: 0 0 4px; font-size: 16px; font-weight: 600; line-height: 1.45; color: #0f172a; }
     .rc-slide-sub { margin: 0 0 16px; font-size: 13.5px; line-height: 1.6; color: #475569; }
     .rc-slide-body { display: flex; flex-direction: column; gap: 12px; }
     .rc-slide-body > .rc-section { border: 0; border-top: 1px solid #eef2f6; border-radius: 0; padding: 14px 0 0; background: transparent; }
@@ -9302,28 +9315,34 @@ function rcActionParts(doc) {
 }
 
 function rcFacts(doc, tabKey) {
-  const f = [];
-  const add = (label, value, cls) => {
+  const groups = { Record: [], Submission: [], Approval: [] };
+  const add = (group, label, value, cls) => {
     if (value === null || value === undefined || value === '') return;
-    f.push(`<div class="rc-fact"><dt>${label}</dt><dd${cls ? ` class="${cls}"` : ''}>${value}</dd></div>`);
+    groups[group].push(`<div class="rc-fact"><dt>${label}</dt><dd${cls ? ` class="${cls}"` : ''}>${value}</dd></div>`);
   };
-  add('Reference', escapeHtml(doc.reference || ('#' + doc.id)));
-  add('Category', escapeHtml(RC_TAB_LABELS[tabKey] || ''));
-  add('Submitted by', escapeHtml(rcRoleLabel(doc.uploader_role) || 'Not recorded'));
-  add('Date submitted', escapeHtml(rcDate(doc.issued_date, true)));
-  add('Current status', statusBadge(doc.status));
-  add('Version', doc.revision_no > 0
-    ? `Revision ${doc.revision_no}${doc.revision_of_id ? `, replaces record #${escapeHtml(doc.revision_of_id)}` : ''}`
-    : 'First submission');
-  if (doc.superseded_by_id) add('Replaced by', `Record #${escapeHtml(doc.superseded_by_id)}`);
+  add('Record', 'Reference', escapeHtml(doc.reference || ('#' + doc.id)));
+  add('Record', 'Category', escapeHtml(RC_TAB_LABELS[tabKey] || ''));
+  add('Record', 'Version', doc.revision_no > 0 ? `Revision ${doc.revision_no}` : 'First submission');
+  if (doc.revision_no > 0 && doc.revision_of_id) add('Record', 'Replaces', `Record #${escapeHtml(doc.revision_of_id)}`);
+  if (doc.superseded_by_id) add('Record', 'Replaced by', `Record #${escapeHtml(doc.superseded_by_id)}`);
+
+  add('Submission', 'Submitted by', escapeHtml(rcRoleLabel(doc.uploader_role) || 'Not recorded'));
+  add('Submission', 'Date submitted', escapeHtml(rcDate(doc.issued_date, true)));
   if (doc.respond_by) {
     const late = !doc.is_locked && new Date(doc.respond_by).getTime() < Date.now();
-    add('Reply needed by', escapeHtml(rcDate(doc.respond_by)) + (late ? ' (this date has passed)' : ''));
+    add('Submission', 'Reply needed by', escapeHtml(rcDate(doc.respond_by)) + (late ? ' (this date has passed)' : ''), late ? 'rc-fact-late' : '');
   }
+
+  add('Approval', 'Current status', statusBadge(doc.status));
   const signer = doc.signed_by_display_name || rcRoleLabel(doc.signed_by_role);
-  if (doc.signed_at && signer) add('Signed by', `${escapeHtml(signer)} on ${escapeHtml(rcDate(doc.signed_at, true))}`);
-  if (doc.stamp_type === 'STAMPED') add('Document stamp', 'Stamped and signed');
-  return `<dl class="rc-facts">${f.join('')}</dl>`;
+  if (doc.signed_at && signer) {
+    add('Approval', 'Signed by', escapeHtml(signer));
+    add('Approval', 'Signed on', escapeHtml(rcDate(doc.signed_at, true)));
+  }
+  if (doc.stamp_type === 'STAMPED') add('Approval', 'Document stamp', 'Stamped and signed');
+
+  return `<div class="rc-factgroups">${Object.entries(groups).filter(([, list]) => list.length).map(([name, list]) =>
+    `<section class="rc-factgroup"><h4 class="rc-factgroup-title">${name}</h4><dl class="rc-factlist">${list.join('')}</dl></section>`).join('')}</div>`;
 }
 
 function rcDocumentsHtml(doc, notices) {
@@ -9494,7 +9513,7 @@ function renderRecordsList(records, tabKey) {
 
     // ── Section 3: description ────────────────────────────────────
     const titleHtml = rcSection('file', 'Title of this record',
-      doc.title ? `<p class="rc-text">${escapeHtml(doc.title)}</p>` : `<p class="rc-text rc-text--empty">This record has no title.</p>`);
+      doc.title ? `<p class="rc-record-title">${escapeHtml(doc.title)}</p>` : `<p class="rc-text rc-text--empty">This record has no title.</p>`);
     const descriptionHtml = rcSection('notice', 'Description of this record',
       rcExcerpt(doc.description, 1)
         ? `<div class="rc-rich">${rcRichText(doc.description)}</div>`
@@ -9561,8 +9580,8 @@ function renderRecordsList(records, tabKey) {
         : 'A notice appears here when a decision maker issues one.',
       html: noticesHtml });
     slides.push({ key: 'details', label: 'Details',
-      headline: `${escapeHtml(who)} submitted this record on ${escapeHtml(rcDate(doc.issued_date, true))}.`,
-      sub: 'Its title, facts and description are below.',
+      headline: `This is the summary of record ${escapeHtml(doc.reference || ('#' + doc.id))}.`,
+      sub: 'It shows the title, the key facts and the description.',
       html: titleHtml + aboutHtml + descriptionHtml });
     slides.push({ key: 'documents', label: 'Documents', count: filesCount || '',
       headline: filesCount ? `${rcPlural(filesCount, 'file is', 'files are')} attached to this record.` : 'No files are attached to this record.',
