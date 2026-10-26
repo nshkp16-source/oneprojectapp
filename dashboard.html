@@ -798,7 +798,7 @@
 
     /* Data table (queries) */
     .rc-table-wrap { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; }
-    .rc-table { width: 100%; min-width: 680px; border-collapse: collapse; font-size: 13.5px; }
+    .rc-table { width: 100%; min-width: 800px; border-collapse: collapse; font-size: 13.5px; }
     .rc-table th {
       padding: 10px 12px; text-align: left; white-space: nowrap;
       background: #f8fafc; border-bottom: 1px solid #e2e8f0;
@@ -810,8 +810,42 @@
     .rc-table td.rc-col-no { width: 44px; font-weight: 700; color: #0f172a; }
     .rc-table td.rc-col-long { min-width: 200px; white-space: pre-wrap; }
     .rc-table td.rc-col-status { white-space: nowrap; }
-    .rc-table tr.rc-table-resp td { padding: 0 12px 12px; border-top: 0; }
-    .rc-table tr.rc-table-resp .rc-quote { margin-top: 0; }
+    .rc-q-text { white-space: pre-wrap; color: #0f172a; }
+    .rc-q-action { margin-top: 6px; font-size: 12.5px; line-height: 1.5; color: #475569; white-space: pre-wrap; }
+    .rc-q-action strong { color: #334155; }
+    .rc-resp { white-space: pre-wrap; color: #0f172a; }
+    .rc-resp-meta { margin-top: 4px; font-size: 12px; color: #64748b; }
+    .rc-resp-none { color: #64748b; }
+    .rc-table-note { margin: 0 0 10px; font-size: 13px; line-height: 1.55; color: #475569; }
+
+    /* "Where this record stands": what happened, in order */
+    .rc-events { margin: 0; padding: 0; list-style: none; }
+    .rc-event { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 0 12px; padding-bottom: 14px; }
+    .rc-event:last-child { padding-bottom: 0; }
+    .rc-event::before { content: ""; position: absolute; left: 13px; top: 30px; bottom: 0; width: 2px; background: #e2e8f0; }
+    .rc-event:last-child::before { display: none; }
+    .rc-event.is-done::before, .rc-event.is-start::before { background: #bbf7d0; }
+    .rc-event-dot {
+      position: relative; z-index: 1; display: flex; align-items: center; justify-content: center;
+      width: 28px; height: 28px; border-radius: 50%; background: #fff; border: 2px solid #cbd5e1; color: #94a3b8;
+    }
+    .rc-event-dot svg { width: 14px; height: 14px; }
+    .rc-event.is-start .rc-event-dot { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .rc-event.is-done .rc-event-dot { background: #16a34a; border-color: #16a34a; color: #fff; }
+    .rc-event.is-rejected .rc-event-dot { background: #dc2626; border-color: #dc2626; color: #fff; }
+    .rc-event.is-pending .rc-event-dot { background: #fffbeb; border-color: #f59e0b; color: #b45309; box-shadow: 0 0 0 4px #fef3c7; }
+    .rc-event-body { min-width: 0; padding-top: 4px; }
+    .rc-event-text { margin: 0; font-size: 14px; line-height: 1.5; font-weight: 600; color: #0f172a; }
+    .rc-event-date { margin: 2px 0 0; font-size: 12.5px; line-height: 1.5; color: #64748b; }
+    .rc-events + .rc-note { margin-top: 16px; padding-top: 14px; border-top: 1px solid #eef2f6; }
+
+    /* A team member's comments, shown one entry per point */
+    .rc-cq { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+    .rc-cq li { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 0 10px; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }
+    .rc-cq-no { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: #1e293b; color: #fff; font-size: 11px; font-weight: 700; }
+    .rc-cq-ref { margin-bottom: 2px; font-size: 12px; font-weight: 700; color: #475569; overflow-wrap: anywhere; }
+    .rc-cq-text { font-size: 13.5px; line-height: 1.55; color: #334155; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .rc-cq-act { margin-top: 4px; font-size: 13px; line-height: 1.5; color: #475569; white-space: pre-wrap; overflow-wrap: anywhere; }
     .rc-table-actions { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
     .rc-table-actions .rc-btn { white-space: nowrap; }
 
@@ -9042,6 +9076,45 @@ function rcReviewSentence(r) {
   return `Last activity on ${when}.`;
 }
 
+// A team member's comments are saved as numbered entries (Query 1, Query 2 ...), each with an
+// optional reference, the comment itself and an optional action needed.
+function rcComposeCommentQueries(list) {
+  return list.map((q, i) => [
+    `Query ${i + 1}`,
+    q.ref ? `Reference: ${q.ref}` : null,
+    `Query: ${q.query}`,
+    q.required_action ? `Action needed: ${q.required_action}` : null,
+  ].filter(Boolean).join('\n')).join('\n\n');
+}
+function rcParseCommentQueries(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return [];
+  if (!/^Query\s+\d+\s*$/m.test(raw)) return [{ ref: '', query: raw, required_action: '' }];   // an older, plain comment
+  const out = []; let cur = null, field = null;
+  raw.split(/\r?\n/).forEach(line => {
+    if (/^Query\s+\d+\s*$/.test(line)) { cur = { ref: '', query: '', required_action: '' }; out.push(cur); field = null; return; }
+    if (!cur) return;
+    let m;
+    if ((m = line.match(/^Reference:\s?(.*)$/)))        { field = 'ref';             cur.ref = m[1]; }
+    else if ((m = line.match(/^Query:\s?(.*)$/)))       { field = 'query';           cur.query = m[1]; }
+    else if ((m = line.match(/^Action needed:\s?(.*)$/))) { field = 'required_action'; cur.required_action = m[1]; }
+    else if (field) cur[field] += '\n' + line;
+  });
+  return out.map(q => ({ ref: q.ref.trim(), query: q.query.trim(), required_action: q.required_action.trim() })).filter(q => q.query);
+}
+function rcCommentHtml(comment) {
+  const plain = `<div class="rc-quote"><strong>Comment:</strong>${escapeHtml(comment)}</div>`;
+  if (!/^Query\s+\d+\s*$/m.test(String(comment || ''))) return plain;
+  const items = rcParseCommentQueries(comment);
+  if (!items.length) return plain;
+  return `<ol class="rc-cq">${items.map((q, i) => `
+    <li><span class="rc-cq-no">${i + 1}</span><div>
+      ${q.ref ? `<div class="rc-cq-ref">${escapeHtml(q.ref)}</div>` : ''}
+      <div class="rc-cq-text">${escapeHtml(q.query)}</div>
+      ${q.required_action ? `<div class="rc-cq-act"><strong>Action needed:</strong> ${escapeHtml(q.required_action)}</div>` : ''}
+    </div></li>`).join('')}</ol>`;
+}
+
 function rcReviewRow(name, sub, r) {
   const d = rcDecision(r.action);
   return `
@@ -9052,11 +9125,52 @@ function rcReviewRow(name, sub, r) {
       </div>
       ${sub ? `<div class="rc-review-sub">${escapeHtml(sub)}</div>` : ''}
       <p class="rc-item-text">${escapeHtml(rcReviewSentence(r))}</p>
-      ${r.comment ? `<div class="rc-quote"><strong>Comment:</strong>${escapeHtml(r.comment)}</div>` : ''}
+      ${r.comment ? rcCommentHtml(r.comment) : ''}
     </li>`;
 }
 
-// What happened to the record so far, in plain sentences
+// What happened to the record so far: a short list of events in order, each with its date
+function rcStandingEventsHtml(doc) {
+  const who = rcRoleLabel(doc.uploader_role);
+  const subject = who ? `The ${who}` : 'A project member';
+  const ev = [];
+  if (doc.is_notice_record || doc.btn_state === 'notice_final') {
+    ev.push({ state: 'start', icon: 'file', text: `${subject} issued this notice.`, when: doc.issued_date });
+    if (doc.signed_at) ev.push({ state: 'done', icon: 'check', text: 'The notice was signed.', when: doc.signed_at });
+  } else {
+    ev.push({ state: 'start', icon: 'file', text: `${subject} submitted this record.`, when: doc.issued_date });
+    const steps = doc.workflow_steps || [];
+    steps.filter(x => x.status === 'done').forEach(x => {
+      const acc = /accept/i.test(x.label || '');
+      ev.push({ state: 'done', icon: 'check', text: `The ${rcRoleLabel(x.by) || rcSideWord(x.side)} ${acc ? 'accepted' : 'approved'} this record.`, when: x.at });
+    });
+    const rej = steps.find(x => x.status === 'rejected');
+    if (rej && rej.by) ev.push({ state: 'rejected', icon: 'x', text: `The ${rcRoleLabel(rej.by)} rejected this record.`, when: rej.at });
+    else if (doc.status === 'rejected') ev.push({ state: 'rejected', icon: 'x', text: 'This record was rejected.' });
+    else if (doc.status !== 'approved_record' && doc.is_locked !== true) {
+      const pend = steps.find(x => x.status === 'pending');
+      if (pend) {
+        const cur = (doc.signing_plan || []).find(x => x.stage === doc.current_stage);
+        ev.push({
+          state: 'pending', icon: 'clock',
+          text: `Waiting for the ${rcSideWord(pend.side)} to ${/accept/i.test(pend.label || '') ? 'accept' : 'approve'} this record.`,
+          sub: cur ? `${cur.signed_count} of ${rcPlural(cur.total, 'named signer has', 'named signers have')} signed for the ${rcSideWord(cur.side)} side.` : '',
+        });
+      }
+    }
+  }
+  return `<ol class="rc-events">${ev.map(e => `
+    <li class="rc-event is-${e.state}">
+      <span class="rc-event-dot">${rcIcon(e.icon)}</span>
+      <div class="rc-event-body">
+        <p class="rc-event-text">${escapeHtml(e.text)}</p>
+        ${e.when ? `<p class="rc-event-date">${escapeHtml(rcDate(e.when, true))}</p>` : ''}
+        ${e.sub ? `<p class="rc-event-date">${escapeHtml(e.sub)}</p>` : ''}
+      </div>
+    </li>`).join('')}</ol>`;
+}
+
+// (older sentence version, no longer used by the card)
 function rcStandingText(doc) {
   const who = rcRoleLabel(doc.uploader_role) || 'A project member';
   const when = rcDate(doc.issued_date, true);
@@ -9107,7 +9221,7 @@ function rcActionParts(doc) {
     } else note = 'This record was rejected.';
 
   } else if (doc.is_locked === true) {
-    note = 'This record is final. The last acceptance has been given.'; icon = 'lock'; tone = 'success';
+    note = 'All approvals are complete, so this record is final.'; icon = 'lock'; tone = 'success';
 
   } else if (st === 'uploader') {
     const underReview = reviews.some(r => ['approved', 'accepted', 'rejected'].includes(r.action));
@@ -9359,7 +9473,7 @@ function renderRecordsList(records, tabKey) {
     const dueLate = !!doc.respond_by && !isLocked && new Date(doc.respond_by).getTime() < Date.now();
 
     // ── Section 1: where the record stands, and what this person can do ──
-    const standing = rcStandingText(doc).map(t => `<p class="rc-lead">${escapeHtml(t)}</p>`).join('');
+    const standing = rcStandingEventsHtml(doc);
     const act = rcActionParts(doc);
     const standingHtml = rcSection('info', 'Where this record stands',
       standing + act.note + (act.buttons ? `<div class="rc-actionbar">${act.buttons}</div>` : ''));
@@ -9450,11 +9564,15 @@ function renderRecordsList(records, tabKey) {
         : `${decided} of ${steps.length} approval steps are finished.`,
       sub: nextStep ? `The ${escapeHtml(rcSideWord(nextStep.side))} is the next to decide.` : '',
       html: workflowHtml });
-    slides.push({ key: 'queries', label: 'Queries', count: own.length || '',
+    const teamPending = rcPendingTeamQueries(doc);
+    slides.push({ key: 'queries', label: 'Queries', count: (own.length + teamPending.length) || '',
       headline: own.length
         ? `${rcPlural(own.length, 'query has', 'queries have')} been raised on this record.`
-        : 'No queries have been raised on this record.',
-      sub: own.length ? (ownOpen ? `${rcPlural(ownOpen, 'query is', 'queries are')} still waiting for an answer.` : 'All of them have been answered or resolved.') : '',
+        : teamPending.length
+          ? `${rcPlural(teamPending.length, 'query has', 'queries have')} been raised by the review team so far.`
+          : 'No queries have been raised on this record.',
+      sub: own.length ? (ownOpen ? `${rcPlural(ownOpen, 'query is', 'queries are')} still waiting for an answer.` : 'All of them have been answered or resolved.')
+        : teamPending.length ? 'They have not been issued to the contractor yet.' : '',
       html: queriesHtml });
     slides.push({ key: 'reviews', label: 'Reviews', count: allReviews.length || '',
       headline: allReviews.length ? `${rcPlural(allReviews.length, 'person has', 'people have')} opened, commented on or decided on this record.` : 'Nobody has reviewed this record yet.',
@@ -9946,39 +10064,41 @@ async function handleTeamMemberAction(recordId, tabKey, action) {
 // =======================================================================
 function openTeamMemberComment(recordId, tabKey) {
   document.getElementById('commentModal')?.remove();
-  const cached          = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
-  const existingComment = cached?.my_review?.comment || '';
+  const cached   = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
+  const existing = rcParseCommentQueries(cached?.my_review?.comment || '');
 
   const modal = document.createElement('div');
   modal.id = 'commentModal';
-  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);padding:16px;';
   modal.innerHTML = `
-    <div style="background:#fff;border-radius:12px;padding:24px;width:min(420px,90vw);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <h3 style="margin:0;font-size:16px;color:#1f2937;">💬 Add Comment</h3>
-        <button id="closeCommentModal" style="background:none;border:none;font-size:20px;color:#9ca3af;cursor:pointer;">×</button>
+    <div style="background:#fff;border-radius:12px;width:min(580px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px 12px;border-bottom:1px solid #e2e8f0;">
+        <h3 style="margin:0;font-size:16px;color:#1f2937;">Your comments</h3>
+        <button type="button" id="closeCommentModal" aria-label="Close" style="background:none;border:none;font-size:22px;line-height:1;color:#9ca3af;cursor:pointer;">&times;</button>
       </div>
-      <p style="font-size:12px;color:#9ca3af;margin:0 0 12px;">
-        Your comment is stored alongside your review and does not affect record status.</p>
-      <textarea id="commentText" placeholder="Enter your comment…"
-        style="width:100%;min-height:100px;padding:10px 12px;border:1px solid #d1d5db;
-        border-radius:8px;font-size:13px;color:#374151;resize:vertical;box-sizing:border-box;">${existingComment}</textarea>
-      <div style="display:flex;gap:8px;margin-top:14px;">
-        <button id="submitCommentBtn" style="flex:1;padding:10px;font-size:13px;font-weight:600;
-          background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;">Submit Comment</button>
-        <button id="cancelCommentBtn" style="flex:1;padding:10px;font-size:13px;font-weight:600;
-          background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;">Cancel</button>
+      <div style="padding:16px 20px;overflow-y:auto;">
+        <p class="fl-hint" style="margin:0 0 12px;">Add one entry for each point you want to raise, as many as you need. They are saved with your review and do not change the record status. The deciding leader sees them, and if the record is rejected they are added to the query schedule.</p>
+        <div id="commentQueries"></div>
+        <div class="fl-err" id="commentErr" role="alert" style="margin-top:10px;border:1px solid #fecaca;border-radius:6px;"></div>
+      </div>
+      <div style="display:flex;gap:8px;padding:14px 20px;border-top:1px solid #e2e8f0;">
+        <button type="button" id="submitCommentBtn" class="fl-btn fl-btn--primary">Save comments</button>
+        <button type="button" id="cancelCommentBtn" class="fl-btn fl-btn--ghost">Cancel</button>
       </div>
     </div>`;
   document.body.appendChild(modal);
+  mountQueryEditor('commentQueries', existing);
 
   document.getElementById('closeCommentModal').addEventListener('click', () => modal.remove());
   document.getElementById('cancelCommentBtn').addEventListener('click',  () => modal.remove());
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 
   document.getElementById('submitCommentBtn').addEventListener('click', async () => {
-    const comment = document.getElementById('commentText').value.trim();
-    if (!comment) { alert('Please enter a comment.'); return; }
+    flowError('commentErr', '');
+    const entries = readQueryEditor('commentQueries');
+    if (!entries.length) { flowError('commentErr', 'Write at least one comment before saving.'); return; }
+    const btn = document.getElementById('submitCommentBtn');
+    btn.disabled = true; btn.textContent = 'Saving...';
     try {
       const res = await authFetch(
         `${API}/review-record`,
@@ -9990,20 +10110,21 @@ function openTeamMemberComment(recordId, tabKey) {
             recordId,
             recordType: tabToTable(tabKey),
             action:     'no_action',
-            comment,
+            comment:    rcComposeCommentQueries(entries),
             actorType:  'team_member'
           })
         }
       );
-      if (!res) return;
+      if (!res) { btn.disabled = false; btn.textContent = 'Save comments'; return; }
       const data = await res.json();
-      if (!res.ok) { alert(data.error || 'Failed to submit comment.'); return; }
+      if (!res.ok) { flowError('commentErr', data.error || 'Your comments could not be saved.'); btn.disabled = false; btn.textContent = 'Save comments'; return; }
       modal.remove();
       delete recordsCache[tabKey];
       loadTabRecords(tabKey);
     } catch (err) {
       console.error('Comment error:', err);
-      alert('Failed to submit comment.');
+      flowError('commentErr', 'Your comments could not be saved.');
+      btn.disabled = false; btn.textContent = 'Save comments';
     }
   });
 }
@@ -10355,9 +10476,9 @@ function flowQueryRowHtml(q = {}) {
   return `<div class="fl-qrow" data-by="${escapeHtml(q.by || '')}">
     <div class="fl-qfields">
       ${q.by ? `<div class="fl-hint" style="margin:0;">Raised by ${escapeHtml(q.by)}</div>` : ''}
-      <input class="fl-input fl-q-ref" placeholder="Reference (item number, page)" value="${escapeHtml(q.ref || '')}">
-      <textarea class="fl-input fl-q-text" rows="2" placeholder="Query: what is wrong or unclear">${escapeHtml(q.query || '')}</textarea>
-      <textarea class="fl-input fl-q-action" rows="2" placeholder="Required action">${escapeHtml(q.required_action || '')}</textarea>
+      <input class="fl-input fl-q-ref" maxlength="120" placeholder="Reference (item number, page)" value="${escapeHtml(q.ref || '')}">
+      <textarea class="fl-input fl-q-text" rows="2" maxlength="1500" placeholder="Query: what is wrong or unclear">${escapeHtml(q.query || '')}</textarea>
+      <textarea class="fl-input fl-q-action" rows="2" maxlength="1000" placeholder="Required action">${escapeHtml(q.required_action || '')}</textarea>
     </div>
     <button type="button" class="fl-x" data-q-remove title="Remove this query" aria-label="Remove this query">&times;</button>
   </div>`;
@@ -10367,7 +10488,7 @@ function mountQueryEditor(boxId, initial) {
   if (!box) return;
   const rows = (initial && initial.length) ? initial : [{}];
   box.innerHTML = `<div class="fl-qlist">${rows.map(flowQueryRowHtml).join('')}</div>
-    <button type="button" class="fl-btn fl-btn--ghost" data-q-add style="padding:8px 12px;font-size:13px;">Add a query</button>`;
+    <button type="button" class="fl-btn fl-btn--ghost" data-q-add style="padding:8px 12px;font-size:13px;">Add another query</button>`;
   box.onclick = (e) => {
     if (e.target.closest('[data-q-add]')) {
       box.querySelector('.fl-qlist').insertAdjacentHTML('beforeend', flowQueryRowHtml());
@@ -10475,6 +10596,22 @@ async function openDecisionPanel(recordId, tabKey, decision) {
   const stage = (doc.signing_plan || []).find(s => s.stage === doc.current_stage);
   const teamRows = stage ? stage.signers.filter(s => !s.is_decider && s.status === 'signed') : [];
   const teamQueries = teamRows.flatMap(s => (s.findings?.queries || []).map(q => ({ ...q })));
+  // Comments written by team members (not decision makers) join the schedule too, once each
+  const qKey = (t) => String(t || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const seenQueries = new Set(teamQueries.map(q => qKey(q.query)));
+  // The server writes its own one-line summary ("3 queries raised. ...") when a signer signs; that is not a comment to copy.
+  const autoSummary = /^\s*(Checked, no queries|\d+\s+quer(?:y|ies)\s+raised)/i;
+  const leaderSide = String(stage?.side || '').toLowerCase();
+  const commentQueries = (doc.reviews || [])
+    .filter(r => r.is_decision_maker !== true && r.comment && !autoSummary.test(r.comment) && ['no_action', 'rejected'].includes(r.action))
+    .filter(r => !leaderSide || !r.reviewer_assigned_part || String(r.reviewer_assigned_part).toLowerCase().includes(leaderSide))
+    .flatMap(r => {
+      const part = String(r.reviewer_assigned_part || '').trim();
+      const by = [r.reviewer_position || r.reviewer_email || 'Team member', part ? `${part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()} side` : ''].filter(Boolean).join(', ');
+      return rcParseCommentQueries(r.comment).map(q => ({ ...q, by }));
+    })
+    .filter(q => { const k = qKey(q.query); if (!k || seenQueries.has(k)) return false; seenQueries.add(k); return true; });
+  const scheduleQueries = [...teamQueries, ...commentQueries];
   const needsNext = decision === 'approved' && doc.current_stage === 1;
   const rev = doc.revision_no ? ` (Rev ${doc.revision_no})` : '';
   let source = 'generated';
@@ -10485,7 +10622,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
       ${teamRows.map(s => `<div class="fl-box"><strong>${escapeHtml(s.position)}</strong>${s.name ? ` <span class="fl-muted">${escapeHtml(s.name)}</span>` : ''}
         <div>${s.outcome === 'queries' ? `${s.queries_raised} ${s.queries_raised === 1 ? 'query' : 'queries'} raised` : 'No queries'}, signed ${escapeHtml(rcDate(s.signed_at, true))}</div>
         ${s.findings?.note ? `<div class="fl-muted">${escapeHtml(s.findings.note)}</div>` : ''}</div>`).join('')}
-      ${isReject && teamQueries.length ? '<div class="fl-hint">Their queries are already in the schedule below. Edit or remove any of them.</div>' : ''}
+      ${isReject && scheduleQueries.length ? '<div class="fl-hint">Their queries and comments are already in the schedule below. Edit or remove any of them.</div>' : ''}
     </div>` : '';
 
   expandGrayPart(`
@@ -10541,7 +10678,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
           <div class="fl-hint">Format it like an email or letter: headings, bold, lists and alignment all appear in the notice PDF.</div></div>
         ${isReject ? `
         <div class="fl-field"><div class="fl-label">Query schedule *</div>
-          <div class="fl-hint" style="margin:0 0 8px;">List every query with its reference. The contractor has to answer each one when resubmitting.</div>
+          <div class="fl-hint" style="margin:0 0 8px;">List every query with its reference. The contractor has to answer each one when resubmitting.${scheduleQueries.length ? ' Queries and comments from the team are already listed. Edit or remove any of them.' : ''}</div>
           <div id="flQueries"></div></div>
         <div class="fl-field"><label class="fl-label" for="flRespondBy">Respond by (optional)</label>
           <input type="date" class="fl-input" id="flRespondBy" style="max-width:220px;"></div>` : ''}
@@ -10566,7 +10703,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
       </div>
     </div>`);
 
-  if (isReject) mountQueryEditor('flQueries', teamQueries);
+  if (isReject) mountQueryEditor('flQueries', scheduleQueries);
   if (needsNext) mountSignerPicker('flNextSigners', { stage: 2, tabKey, recordId });
 
   const sourceBox = document.getElementById('flSource');
@@ -10772,7 +10909,7 @@ async function openSignoffPanel(recordId, tabKey) {
             <label class="is-on"><input type="radio" name="soOutcome" value="clear" checked>No queries<small>Everything checked is in order</small></label>
             <label><input type="radio" name="soOutcome" value="queries">Queries raised<small>The leader will see them when deciding</small></label>
           </div></div>
-        <div class="fl-field" id="soQueriesWrap" style="display:none;"><div class="fl-label">Your queries</div><div id="soQueries"></div></div>
+        <div class="fl-field" id="soQueriesWrap" style="display:none;"><div class="fl-label">Your queries</div><div class="fl-hint" style="margin:0 0 8px;">Add one entry for each point. You can add as many queries as you need.</div><div id="soQueries"></div></div>
         <div class="fl-field"><label class="fl-label" for="soNote">Note (optional)</label><textarea class="fl-input" id="soNote" rows="3"></textarea></div>
         <div class="fl-box">Your signature, name, position and the time are added automatically. The deciding leader signs after you.</div>
       </div>
@@ -10926,37 +11063,52 @@ function renderSigningStages(doc) {
 }
 
 function flowQueryChip(status) {
-  const m = { open: ['Waiting for an answer', 'reject'], reopened: ['Reopened', 'reject'], answered: ['Answered', 'notice'], resolved: ['Resolved', 'ok'] }[status] || [status, 'muted'];
+  const m = { open: ['Waiting for an answer', 'reject'], reopened: ['Reopened', 'reject'], answered: ['Answered', 'notice'], resolved: ['Resolved', 'ok'], draft: ['Not issued yet', 'muted'] }[status] || [status, 'muted'];
   return `<span class="rc-chip rc-chip--${m[1]}">${m[0]}</span>`;
 }
 
+// Queries raised by the signing team so far. They join the query schedule if the leader rejects the record.
+function rcPendingTeamQueries(doc) {
+  if (doc.status === 'rejected' || doc.status === 'approved_record' || doc.is_locked === true) return [];
+  const stage = (doc.signing_plan || []).find(x => x.stage === doc.current_stage);
+  if (!stage) return [];
+  let n = 0;
+  return stage.signers.filter(x => !x.is_decider && x.status === 'signed').flatMap(x =>
+    (x.findings?.queries || []).map(q => ({ ...q, seq: ++n, by: q.by || x.position || 'Team member', raised_by: q.by || x.position || 'Team member', required_action: q.required_action, status: 'draft' })));
+}
+
+// One row per query: what was raised, what is needed, and the response to that same query beside it
 function flowQueryTable(list, { withActions }) {
   const rows = [...list].sort((x, y) => (Number(x.seq) || 0) - (Number(y.seq) || 0));
   const showActions = withActions && rows.some(q => q.can_review);
-  const cols = showActions ? 7 : 6;
   const body = rows.map(q => {
     const act = withActions && q.can_review
       ? `<div class="rc-table-actions">${q.status === 'answered' ? `<button type="button" class="rc-btn rc-btn--sm" data-action="query-resolve" data-query-id="${q.id}">Mark as resolved</button>` : ''}<button type="button" class="rc-btn rc-btn--sm" data-action="query-reopen" data-query-id="${q.id}">Reopen</button></div>`
       : '';
-    return `<tr class="rc-table-main">
+    const respBy = q.responded_by || q.answered_by;
+    const respAt = q.responded_at || q.answered_at;
+    const response = q.response
+      ? `<div class="rc-resp">${escapeHtml(q.response)}</div>${(respBy || respAt) ? `<div class="rc-resp-meta">${respBy ? `Answered by ${escapeHtml(respBy)}` : 'Answered'}${respAt ? ` on ${escapeHtml(rcDate(respAt, true))}` : ''}</div>` : ''}`
+      : `<span class="rc-resp-none">${q.status === 'open' || q.status === 'reopened' ? 'No response yet.' : q.status === 'draft' ? 'Not issued to the contractor yet.' : '\u2014'}</span>`;
+    return `<tr>
         <td class="rc-col-no">${escapeHtml(String(q.seq))}</td>
         <td>${escapeHtml(q.ref || 'Not given')}</td>
-        <td>${escapeHtml(q.raised_by || 'Not recorded')}</td>
-        <td class="rc-col-long">${escapeHtml(q.query || '')}</td>
-        <td class="rc-col-long">${escapeHtml(q.required_action || 'Not given')}</td>
+        <td>${escapeHtml(q.raised_by || q.by || 'Not recorded')}</td>
+        <td class="rc-col-long"><div class="rc-q-text">${escapeHtml(q.query || '')}</div>${q.required_action ? `<div class="rc-q-action"><strong>Action needed:</strong> ${escapeHtml(q.required_action)}</div>` : ''}</td>
+        <td class="rc-col-long">${response}</td>
         <td class="rc-col-status">${flowQueryChip(q.status)}</td>
         ${showActions ? `<td>${act}</td>` : ''}
-      </tr>${q.response ? `
-      <tr class="rc-table-resp"><td colspan="${cols}"><div class="rc-quote"><strong>Response:</strong>${escapeHtml(q.response)}</div></td></tr>` : ''}`;
+      </tr>`;
   }).join('');
   return `<div class="rc-table-wrap"><table class="rc-table" aria-label="Queries">
-      <thead><tr><th scope="col">No.</th><th scope="col">Reference</th><th scope="col">Raised by</th><th scope="col">Query</th><th scope="col">Action needed</th><th scope="col">Status</th>${showActions ? '<th scope="col">Actions</th>' : ''}</tr></thead>
+      <thead><tr><th scope="col">No.</th><th scope="col">Reference</th><th scope="col">Raised by</th><th scope="col">Query</th><th scope="col">Response</th><th scope="col">Status</th>${showActions ? '<th scope="col">Actions</th>' : ''}</tr></thead>
       <tbody>${body}</tbody>
     </table></div>`;
 }
 function renderQueriesSection(doc) {
   const own = doc.queries || [];
   const prev = doc.revision_queries || [];
+  const pending = rcPendingTeamQueries(doc);
   let html = '';
   if (own.length) {
     const done = own.filter(q => q.status === 'resolved').length;
@@ -10964,8 +11116,14 @@ function renderQueriesSection(doc) {
       flowQueryTable(own, { withActions: false }) +
       (doc.superseded_by_id ? `<p class="rc-muted" style="margin-top:10px;">These queries were answered in the corrected record #${escapeHtml(doc.superseded_by_id)}.</p>` : ''),
       `${rcPlural(own.length, 'query', 'queries')}, ${done} resolved`);
-  } else {
+  } else if (!pending.length) {
     html += rcSection('list', 'Queries raised on this record', `<p class="rc-text rc-text--empty">No queries have been raised on this record.</p>`);
+  }
+  if (pending.length) {
+    html += rcSection('list', 'Queries raised by the review team so far',
+      `<p class="rc-table-note">These come from the signing team members. If the deciding leader rejects this record, they are added to the query schedule of the notice.</p>` +
+      flowQueryTable(pending, { withActions: false }),
+      rcPlural(pending.length, 'query', 'queries'));
   }
   if (prev.length) {
     const done = prev.filter(q => q.status === 'resolved').length;
