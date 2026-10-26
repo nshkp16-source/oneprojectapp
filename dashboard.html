@@ -796,6 +796,25 @@
     .rc-quote strong { margin-right: 4px; color: #1e293b; }
     .rc-item-sub { margin: 10px 0 6px; font-size: 12px; font-weight: 700; color: #475569; }
 
+    /* Data table (queries) */
+    .rc-table-wrap { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; }
+    .rc-table { width: 100%; min-width: 680px; border-collapse: collapse; font-size: 13.5px; }
+    .rc-table th {
+      padding: 10px 12px; text-align: left; white-space: nowrap;
+      background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+      font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #475569;
+    }
+    .rc-table td { padding: 12px; vertical-align: top; border-top: 1px solid #eef2f6; line-height: 1.55; color: #334155; overflow-wrap: anywhere; }
+    .rc-table tbody tr:first-child td { border-top: 0; }
+    .rc-table tr.rc-table-main:hover td { background: #fafcfd; }
+    .rc-table td.rc-col-no { width: 44px; font-weight: 700; color: #0f172a; }
+    .rc-table td.rc-col-long { min-width: 200px; white-space: pre-wrap; }
+    .rc-table td.rc-col-status { white-space: nowrap; }
+    .rc-table tr.rc-table-resp td { padding: 0 12px 12px; border-top: 0; }
+    .rc-table tr.rc-table-resp .rc-quote { margin-top: 0; }
+    .rc-table-actions { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+    .rc-table-actions .rc-btn { white-space: nowrap; }
+
     /* Progress: one vertical timeline, always left-aligned */
     .rc-timeline { margin: 0; padding: 0; list-style: none; }
     .rc-tl { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 0 12px; padding-bottom: 18px; }
@@ -10911,35 +10930,38 @@ function flowQueryChip(status) {
   return `<span class="rc-chip rc-chip--${m[1]}">${m[0]}</span>`;
 }
 
-function flowQueryList(list, { withActions }) {
-  return list.map(q => {
+function flowQueryTable(list, { withActions }) {
+  const rows = [...list].sort((x, y) => (Number(x.seq) || 0) - (Number(y.seq) || 0));
+  const showActions = withActions && rows.some(q => q.can_review);
+  const cols = showActions ? 7 : 6;
+  const body = rows.map(q => {
     const act = withActions && q.can_review
-      ? `<div class="rc-item-actions">${q.status === 'answered' ? `<button type="button" class="rc-btn rc-btn--sm" data-action="query-resolve" data-query-id="${q.id}">Mark as resolved</button>` : ''}<button type="button" class="rc-btn rc-btn--sm" data-action="query-reopen" data-query-id="${q.id}">Reopen this query</button></div>` : '';
-    return `<div class="rc-item">
-      <div class="rc-item-head"><span class="rc-item-title">Query ${q.seq}</span>${flowQueryChip(q.status)}</div>
-      <dl class="rc-facts">
-        <div class="rc-fact"><dt>Reference</dt><dd>${escapeHtml(q.ref || 'Not given')}</dd></div>
-        <div class="rc-fact"><dt>Raised by</dt><dd>${escapeHtml(q.raised_by || 'Not recorded')}</dd></div>
-        <div class="rc-fact rc-fact--wide"><dt>Query</dt><dd class="rc-fact-long">${escapeHtml(q.query || '')}</dd></div>
-        <div class="rc-fact rc-fact--wide"><dt>Action needed</dt><dd class="rc-fact-long">${escapeHtml(q.required_action || 'Not given')}</dd></div>
-      </dl>
-      ${q.response ? `<div class="rc-quote"><strong>Response:</strong>${escapeHtml(q.response)}</div>` : ''}
-      ${act}
-    </div>`;
+      ? `<div class="rc-table-actions">${q.status === 'answered' ? `<button type="button" class="rc-btn rc-btn--sm" data-action="query-resolve" data-query-id="${q.id}">Mark as resolved</button>` : ''}<button type="button" class="rc-btn rc-btn--sm" data-action="query-reopen" data-query-id="${q.id}">Reopen</button></div>`
+      : '';
+    return `<tr class="rc-table-main">
+        <td class="rc-col-no">${escapeHtml(String(q.seq))}</td>
+        <td>${escapeHtml(q.ref || 'Not given')}</td>
+        <td>${escapeHtml(q.raised_by || 'Not recorded')}</td>
+        <td class="rc-col-long">${escapeHtml(q.query || '')}</td>
+        <td class="rc-col-long">${escapeHtml(q.required_action || 'Not given')}</td>
+        <td class="rc-col-status">${flowQueryChip(q.status)}</td>
+        ${showActions ? `<td>${act}</td>` : ''}
+      </tr>${q.response ? `
+      <tr class="rc-table-resp"><td colspan="${cols}"><div class="rc-quote"><strong>Response:</strong>${escapeHtml(q.response)}</div></td></tr>` : ''}`;
   }).join('');
+  return `<div class="rc-table-wrap"><table class="rc-table" aria-label="Queries">
+      <thead><tr><th scope="col">No.</th><th scope="col">Reference</th><th scope="col">Raised by</th><th scope="col">Query</th><th scope="col">Action needed</th><th scope="col">Status</th>${showActions ? '<th scope="col">Actions</th>' : ''}</tr></thead>
+      <tbody>${body}</tbody>
+    </table></div>`;
 }
 function renderQueriesSection(doc) {
-  const own = rcNewestFirst(doc.queries || [], q => q.created_at || q.id || q.seq);
-  const prev = rcNewestFirst(doc.revision_queries || [], q => q.created_at || q.id || q.seq);
-  const toItems = (list, withActions) => list.map(q => ({
-    html: flowQueryList([q], { withActions }),
-    label: q.created_at ? `Earlier query, raised ${rcDate(q.created_at, true)}` : `Earlier query, number ${q.seq}`
-  }));
+  const own = doc.queries || [];
+  const prev = doc.revision_queries || [];
   let html = '';
   if (own.length) {
     const done = own.filter(q => q.status === 'resolved').length;
     html += rcSection('list', 'Queries raised on this record',
-      rcLatestAndEarlier(toItems(own, false), 'query', 'queries') +
+      flowQueryTable(own, { withActions: false }) +
       (doc.superseded_by_id ? `<p class="rc-muted" style="margin-top:10px;">These queries were answered in the corrected record #${escapeHtml(doc.superseded_by_id)}.</p>` : ''),
       `${rcPlural(own.length, 'query', 'queries')}, ${done} resolved`);
   } else {
@@ -10948,7 +10970,7 @@ function renderQueriesSection(doc) {
   if (prev.length) {
     const done = prev.filter(q => q.status === 'resolved').length;
     html += rcSection('list', `Queries from record #${escapeHtml(doc.revision_of_id)} answered here`,
-      rcLatestAndEarlier(toItems(prev, true), 'query', 'queries'),
+      flowQueryTable(prev, { withActions: true }),
       `${rcPlural(prev.length, 'query', 'queries')}, ${done} resolved`);
   }
   return html;
