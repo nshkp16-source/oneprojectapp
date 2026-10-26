@@ -923,7 +923,52 @@
     .rc-tl::before { left: 34px; right: 6px; top: 13px; bottom: auto; width: auto; height: 2px; }
     .rc-tl-body { padding-top: 10px; }
 
+    /* Slide-style walkthrough: one part of the record at a time */
+    .rc-deck { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
+    .rc-deck-nav { display: flex; gap: 6px; padding: 10px 12px; overflow-x: auto; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }
+    .rc-deck-tab { flex: none; display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: #475569; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+    .rc-deck-tab:hover { background: #eef2f6; }
+    .rc-deck-tab .rc-deck-num { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: #e2e8f0; color: #475569; font-size: 11px; }
+    .rc-deck-tab.is-active { background: #fff; border-color: #0f766e; color: #0f172a; }
+    .rc-deck-tab.is-active .rc-deck-num { background: #0f766e; color: #fff; }
+    .rc-deck-tab .rc-deck-count { color: #64748b; font-weight: 500; }
+    .rc-slide { display: none; padding: 20px 18px 8px; }
+    .rc-slide.is-active { display: block; }
+    .rc-slide-kicker { margin: 0 0 6px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #0f766e; }
+    .rc-slide-head { margin: 0 0 4px; font-size: 18px; font-weight: 700; line-height: 1.4; color: #0f172a; }
+    .rc-slide-sub { margin: 0 0 16px; font-size: 13.5px; line-height: 1.6; color: #475569; }
+    .rc-slide-body { display: flex; flex-direction: column; gap: 12px; }
+    .rc-slide-body > .rc-section { border: 0; border-top: 1px solid #eef2f6; border-radius: 0; padding: 14px 0 0; background: transparent; }
+    .rc-slide-body > .rc-section:first-child { border-top: 0; padding-top: 0; }
+    .rc-deck-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 18px 16px; }
+    .rc-deck-pos { font-size: 12.5px; color: #64748b; }
+    .rc-deck-foot .rc-btn[disabled] { opacity: .4; cursor: default; }
+
+    /* One common font and one size scale for the whole card */
+    #bottomContent .record-card, .rc-deck { font-family: 'Segoe UI', Arial, sans-serif; }
+    .rc-lead, .rc-text, .rc-item-text, .rc-tl-text, .rc-muted, .rc-note, .rc-fact dd, .rc-review .rc-item-text, .rc-slide-sub { font-size: 14px; line-height: 1.6; }
+    .rc-item-title, .rc-tl-title, .rc-signer-name, .rc-review-name { font-size: 14px; font-weight: 600; }
+    .rc-fact dt, .rc-tl-date, .rc-review-sub, .rc-item-sub, .rc-subtitle, .rc-tag, .rc-chip, .rc-deck-pos, .rc-earlier-label { font-size: 12px; }
+    .rc-section-title { font-size: 13px; }
+    .rc-btn, .rc-btn--sm { font-size: 13px; }
+
+    /* A calm colour for each part (muted blue, teal, violet, green, amber, rose) */
+    .rc-deck-tab[data-key="notices"],   .rc-slide[data-key="notices"]   { --accent: #1d4ed8; --accent-bg: #eff6ff; }
+    .rc-deck-tab[data-key="details"],   .rc-slide[data-key="details"]   { --accent: #0f766e; --accent-bg: #f0fdfa; }
+    .rc-deck-tab[data-key="documents"], .rc-slide[data-key="documents"] { --accent: #6d28d9; --accent-bg: #f5f3ff; }
+    .rc-deck-tab[data-key="progress"],  .rc-slide[data-key="progress"]  { --accent: #15803d; --accent-bg: #f0fdf4; }
+    .rc-deck-tab[data-key="queries"],   .rc-slide[data-key="queries"]   { --accent: #b45309; --accent-bg: #fffbeb; }
+    .rc-deck-tab[data-key="reviews"],   .rc-slide[data-key="reviews"]   { --accent: #be123c; --accent-bg: #fff1f2; }
+    .rc-deck-tab.is-active { border-color: var(--accent); background: var(--accent-bg); }
+    .rc-deck-tab.is-active .rc-deck-num { background: var(--accent); }
+    .rc-slide { border-top: 3px solid var(--accent); }
+    .rc-slide-kicker { color: var(--accent); }
+    .rc-slide-head { color: #0b2545; }
+    .rc-slide-body .rc-section-title svg, .rc-slide-body .rc-section-title .rc-icon { color: var(--accent); }
+
     @media (max-width: 560px) {
+      .rc-slide { padding: 16px 12px 6px; }
+      .rc-deck-foot { padding: 10px 12px 14px; }
       #bottomContent .doc-item.record-card > .record-card-header { flex-wrap: wrap; }
       .rc-side { width: 100%; justify-content: space-between; }
       #bottomContent .doc-item.record-card > .record-card-detail { padding: 12px !important; }
@@ -9103,6 +9148,38 @@ function rcNoticeItem(n, isLatest) {
 
 
 
+function rcNoticeLabel(n) {
+  const k = n.record_kind;
+  return k === 'rejection_notice' ? 'rejection notice' : k === 'acceptance_notice' ? 'notice of acceptance' : 'notice of determination';
+}
+
+// One slide: a short kicker, a plain sentence about what is going on, then the part itself.
+function rcDeckHtml(slides, startKey) {
+  let start = slides.findIndex(sl => sl.key === startKey);
+  if (start < 0) start = 0;
+  const tabs = slides.map((sl, i) => `
+    <button type="button" class="rc-deck-tab${i === start ? ' is-active' : ''}" data-key="${sl.key}" data-action="slide-go" data-index="${i}" aria-selected="${i === start}">
+      <span class="rc-deck-num">${i + 1}</span><span>${sl.label}</span>${sl.count ? `<span class="rc-deck-count">${sl.count}</span>` : ''}
+    </button>`).join('');
+  const body = slides.map((sl, i) => `
+    <div class="rc-slide${i === start ? ' is-active' : ''}" data-key="${sl.key}" data-index="${i}">
+      <p class="rc-slide-kicker">Part ${i + 1} of ${slides.length} · ${sl.label}</p>
+      <h3 class="rc-slide-head">${sl.headline}</h3>
+      ${sl.sub ? `<p class="rc-slide-sub">${sl.sub}</p>` : '<p class="rc-slide-sub"></p>'}
+      <div class="rc-slide-body">${sl.html}</div>
+    </div>`).join('');
+  return `
+    <div class="rc-deck" data-count="${slides.length}">
+      <div class="rc-deck-nav" role="tablist">${tabs}</div>
+      ${body}
+      <div class="rc-deck-foot">
+        ${rcBtn('slide-prev', 'Previous', null, 'sm', start === 0 ? 'disabled' : '')}
+        <span class="rc-deck-pos">${start + 1} of ${slides.length}</span>
+        ${rcBtn('slide-next', 'Next', null, 'sm', start === slides.length - 1 ? 'disabled' : '')}
+      </div>
+    </div>`;
+}
+
 // =======================================================================
 //  RENDER RECORDS LIST
 // =======================================================================
@@ -9213,6 +9290,54 @@ function renderRecordsList(records, tabKey) {
     const reviewHtml = rcSection('chat', 'Reviews and comments', reviewBody,
       allReviews.length ? rcPlural(allReviews.length, 'entry', 'entries') : '');
 
+    // ── Slides: one part at a time, each with a plain sentence about what is going on ──
+    const who   = rcRoleLabel(doc.uploader_role) || 'A project member';
+    const steps = doc.workflow_steps || [];
+    const decided = steps.filter(x => x.status === 'done').length;
+    const nextStep = steps.find(x => x.status === 'pending');
+    const own = doc.queries || [];
+    const ownOpen = own.filter(q => q.status === 'open' || q.status === 'reopened').length;
+    const filesCount = (doc.file_path ? 1 : 0) + (Array.isArray(doc.supporting_files) ? doc.supporting_files.length : 0);
+    const latestNotice = rcNewestFirst(notices, n => n.issued_date || n.signed_at)[0];
+    const approvedN = allReviews.filter(r => r.action === 'approved' || r.action === 'accepted').length;
+    const rejectedN = allReviews.filter(r => r.action === 'rejected').length;
+
+    const slides = [];
+    slides.push({ key: 'notices', label: 'Notices', count: notices.length || '',
+      headline: latestNotice
+        ? `${rcPlural(notices.length, 'notice has', 'notices have')} been issued on this record.`
+        : 'No notice has been issued on this record yet.',
+      sub: latestNotice
+        ? `The newest one is the ${rcNoticeLabel(latestNotice)} of ${escapeHtml(rcDate(latestNotice.issued_date, true))}. Earlier ones stay closed until you open them.`
+        : 'A notice appears here when a decision maker issues one.',
+      html: noticesHtml });
+    slides.push({ key: 'details', label: 'Details',
+      headline: `${escapeHtml(doc.title || 'This record')}`,
+      sub: `${escapeHtml(who)} submitted this record on ${escapeHtml(rcDate(doc.issued_date, true))}. Below are its title, facts and description.`,
+      html: titleHtml + aboutHtml + descriptionHtml });
+    slides.push({ key: 'documents', label: 'Documents', count: filesCount || '',
+      headline: filesCount ? `${rcPlural(filesCount, 'file is', 'files are')} attached to this record.` : 'No files are attached to this record.',
+      sub: notices.length ? 'A notice has been issued, so the original record is closed until you choose to open it.' : 'You can view or download each file.',
+      html: documentHtml });
+    slides.push({ key: 'progress', label: 'Progress',
+      headline: !steps.length ? 'No approval steps have been set for this record.'
+        : steps.some(x => x.status === 'rejected') ? 'This record was rejected.'
+        : decided === steps.length ? 'All approval steps are finished.'
+        : `${decided} of ${steps.length} approval steps are finished.`,
+      sub: nextStep ? `The ${escapeHtml(rcSideWord(nextStep.side))} is the next to decide.` : '',
+      html: workflowHtml });
+    slides.push({ key: 'queries', label: 'Queries', count: own.length || '',
+      headline: own.length
+        ? `${rcPlural(own.length, 'query has', 'queries have')} been raised on this record.`
+        : 'No queries have been raised on this record.',
+      sub: own.length ? (ownOpen ? `${rcPlural(ownOpen, 'query is', 'queries are')} still waiting for an answer.` : 'All of them have been answered or resolved.') : '',
+      html: queriesHtml });
+    slides.push({ key: 'reviews', label: 'Reviews', count: allReviews.length || '',
+      headline: allReviews.length ? `${rcPlural(allReviews.length, 'person has', 'people have')} opened, commented on or decided on this record.` : 'Nobody has reviewed this record yet.',
+      sub: allReviews.length ? `${approvedN} approved or accepted it and ${rejectedN} rejected it.` : '',
+      html: reviewHtml });
+    const deckHtml = rcDeckHtml(slides, notices.length ? 'notices' : 'details');
+
     return `
       <li class="doc-item record-card${isUnread ? ' record-unread' : ''}" data-id="${doc.id}" data-tab-key="${tabKey}">
         <div class="doc-item-header record-card-header" data-action="toggle" aria-expanded="false" role="button" tabindex="0">
@@ -9237,15 +9362,7 @@ function renderRecordsList(records, tabKey) {
 
         <div class="doc-detail record-card-detail" id="detail-${doc.id}" style="display:none;">
           ${standingHtml}
-          ${notices.length ? noticesHtml : ''}
-          ${titleHtml}
-          ${aboutHtml}
-          ${descriptionHtml}
-          ${documentHtml}
-          ${workflowHtml}
-          ${notices.length ? '' : noticesHtml}
-          ${queriesHtml}
-          ${reviewHtml}
+          ${deckHtml}
         </div>
       </li>`;
   }).join('');
@@ -9337,6 +9454,24 @@ bottomContent.addEventListener('click', (e) => {
   if (!actionEl) return;
   const action = actionEl.getAttribute('data-action');
   if (action === 'download') e.preventDefault();
+
+  if (action === 'slide-go' || action === 'slide-prev' || action === 'slide-next') {
+    const deck = actionEl.closest('.rc-deck');
+    if (deck) {
+      const slidesEls = Array.from(deck.querySelectorAll('.rc-slide'));
+      const cur = Math.max(0, slidesEls.findIndex(x => x.classList.contains('is-active')));
+      let idx = action === 'slide-go' ? Number(actionEl.getAttribute('data-index'))
+              : action === 'slide-next' ? cur + 1 : cur - 1;
+      idx = Math.min(Math.max(idx, 0), slidesEls.length - 1);
+      slidesEls.forEach((el, i) => el.classList.toggle('is-active', i === idx));
+      deck.querySelectorAll('.rc-deck-tab').forEach((el, i) => { el.classList.toggle('is-active', i === idx); el.setAttribute('aria-selected', String(i === idx)); });
+      const pos = deck.querySelector('.rc-deck-pos'); if (pos) pos.textContent = `${idx + 1} of ${slidesEls.length}`;
+      const prev = deck.querySelector('[data-action="slide-prev"]'); if (prev) prev.disabled = idx === 0;
+      const next = deck.querySelector('[data-action="slide-next"]'); if (next) next.disabled = idx === slidesEls.length - 1;
+      const tab = deck.querySelectorAll('.rc-deck-tab')[idx]; if (tab && tab.scrollIntoView) tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+    return;
+  }
 
   if (action === 'show-earlier') {
     const panel = actionEl.closest('.rc-earlier-bar')?.nextElementSibling;
@@ -10695,7 +10830,7 @@ function renderQueriesSection(doc) {
   const prev = rcNewestFirst(doc.revision_queries || [], q => q.created_at || q.id || q.seq);
   const toItems = (list, withActions) => list.map(q => ({
     html: flowQueryList([q], { withActions }),
-    label: `Earlier query, number ${q.seq}`
+    label: q.created_at ? `Earlier query, raised ${rcDate(q.created_at, true)}` : `Earlier query, number ${q.seq}`
   }));
   let html = '';
   if (own.length) {
