@@ -10726,13 +10726,13 @@ async function openDecisionPanel(recordId, tabKey, decision) {
           <div id="flQueries"></div></div>
         <div class="fl-field"><label class="fl-label" for="flRespondBy">Respond by (optional)</label>
           <input type="date" class="fl-input" id="flRespondBy" style="max-width:220px;"></div>` : ''}
-        ${!isReject ? `<div class="fl-field" id="flStampWrap">
-          <label class="fl-label">Stamp on the record</label>
-          <div class="fl-hint" style="margin:0 0 8px;">Your signature and stamp are always added on the record's sign-off page.</div>
-          <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:6px;"><input type="radio" name="flStampWhere" value="signoff" checked> Sign-off page only (recommended)</label>
-          <label style="display:flex;gap:8px;align-items:center;font-size:13px;"><input type="radio" name="flStampWhere" value="place"> Also place it on a page of the record</label>
+        ${`<div class="fl-field" id="flStampWrap">
+          <label class="fl-label">Stamp on the original record (optional)</label>
+          <div class="fl-hint" style="margin:0 0 8px;">Your signature and stamp are always added to the notice. You can also stamp the original record as RECEIVED, as a sign that you received it.</div>
+          <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:6px;"><input type="radio" name="flStampWhere" value="signoff" checked> No stamp on the record itself (recommended)</label>
+          <label style="display:flex;gap:8px;align-items:center;font-size:13px;"><input type="radio" name="flStampWhere" value="place"> Also stamp the record as RECEIVED</label>
           <div id="flStampPick" style="display:none;margin-top:8px;"><button type="button" class="fl-btn" id="flStampChoose">Choose position</button> <span id="flStampPicked" class="fl-hint" style="margin-left:8px;"></span></div>
-        </div>` : ''}
+        </div>`}
         <div class="fl-field"><label class="fl-label" for="flSupport">Supporting Files <span style="font-weight:normal;text-transform:none;letter-spacing:0;">(optional)</span></label>
           <input type="file" id="flSupport" multiple accept=".xlsx,.xls,.doc,.docx,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv"
             style="width:100%;padding:10px;border:1px solid #d7e7eb;border-radius:6px;background:#fff;">
@@ -10841,7 +10841,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
   });
   const letterText = () => editor.innerText.replace(/\u00a0/g, ' ').trim();
 
-  // ---- optional: place the decision stamp on a page of the record (never automatic) ----
+  // ---- optional: stamp the original record as RECEIVED (never automatic, works for approvals and rejections) ----
   let stampPlacement = null;
   const stampPickBox = document.getElementById('flStampPick');
   document.querySelectorAll('input[name="flStampWhere"]').forEach(r => r.addEventListener('change', () => {
@@ -10858,15 +10858,15 @@ async function openDecisionPanel(recordId, tabKey, decision) {
       openStampPlacementModal(file, (st) => {
         stampPlacement = { page: st.page, x: st.x, y: st.y, scale: st.scale || 1 };
         document.getElementById('flStampPicked').textContent = `Page ${st.page} selected`;
-      }, () => {}, 'APPROVED');
+      }, () => {}, 'RECEIVED');
     } catch (err) { flowError('flErr', err.message); }
   });
 
   const build = () => {
     const title = document.getElementById('flTitle').value.trim();
     syncBody();
-    if (!isReject && document.querySelector('input[name="flStampWhere"]:checked')?.value === 'place' && !stampPlacement) {
-      throw new Error('Choose the stamp position, or select "Sign-off page only".');
+    if (document.querySelector('input[name="flStampWhere"]:checked')?.value === 'place' && !stampPlacement) {
+      throw new Error('Choose where to place the RECEIVED stamp, or select "No stamp on the record itself".');
     }
     const body = letterText() ? bodyField.value.trim() : '';
     const bodyLen = letterText().length;
@@ -10880,7 +10880,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
     fd.append('noticeSource', source);
     fd.append('title', title);
     fd.append('body', source === 'uploaded' ? '' : body);
-    if (!isReject && stampPlacement) fd.append('stampPlacement', JSON.stringify(stampPlacement));
+    if (stampPlacement) fd.append('stampPlacement', JSON.stringify(stampPlacement));
     if (isReject) {
       const queries = readQueryEditor('flQueries');
       if (!queries.length) throw new Error('A rejection needs at least one query. Write what is wrong and the action required.');
@@ -16715,7 +16715,7 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
   if (!window.pdfjsLib) throw new Error('PDF preview renderer is unavailable.');
   const projectId = localStorage.getItem('activeProjectId');
   const fd = new FormData();
-  fd.append('label', stampType === 'APPROVED' ? 'APPROVED' : 'SIGNED');
+  fd.append('label', ['APPROVED', 'RECEIVED'].includes(stampType) ? stampType : 'SIGNED');
   if (draft && draft.markType) fd.append('markType', draft.markType);
   if (draft && draft.markFile) fd.append('markImage', draft.markFile, draft.markFile.name || 'mark.png');
   else if (draft && draft.markDataUrl) fd.append('markDataUrl', draft.markDataUrl);
