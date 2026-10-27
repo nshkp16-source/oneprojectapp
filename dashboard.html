@@ -9995,6 +9995,7 @@ async function handleDecisionMakerAction(recordId, tabKey, action) {
         body.append('stampPage', String(placement.page || 1));
         body.append('stampX', String(placement.x ?? 0.8));
         body.append('stampY', String(placement.y ?? 0.08));
+        body.append('stampScale', String(placement.scale || 1));
       }
     }
 
@@ -10082,6 +10083,7 @@ async function handleTeamMemberAction(recordId, tabKey, action) {
         body.append('stampPage', String(placement.page || 1));
         body.append('stampX', String(placement.x ?? 0.8));
         body.append('stampY', String(placement.y ?? 0.08));
+        body.append('stampScale', String(placement.scale || 1));
       }
     }
 
@@ -10854,7 +10856,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
       const blob = await res.blob();
       const file = new File([blob], 'record.pdf', { type: blob.type || 'application/pdf' });
       openStampPlacementModal(file, (st) => {
-        stampPlacement = { page: st.page, x: st.x, y: st.y };
+        stampPlacement = { page: st.page, x: st.x, y: st.y, scale: st.scale || 1 };
         document.getElementById('flStampPicked').textContent = `Page ${st.page} selected`;
       }, () => {}, 'APPROVED');
     } catch (err) { flowError('flErr', err.message); }
@@ -11672,6 +11674,7 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null, options = {}) {
         formData.append('stampPage', String(placement.page || 1));
         formData.append('stampX', String(placement.x ?? 0.8));
         formData.append('stampY', String(placement.y ?? 0.08));
+        formData.append('stampScale', String(placement.scale || 1));
       }
       formData.append('signers', JSON.stringify(signersList));
       if (revision) {
@@ -16247,6 +16250,12 @@ async function openStampPlacementModal(file, onApply, onCancel, stampType = 'APP
             <button type="button" data-stamp-corner="80,92" style="padding:7px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;cursor:pointer;font-size:12px;">Top right</button>
             <button type="button" data-stamp-corner="20,92" style="padding:7px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;cursor:pointer;font-size:12px;">Top left</button>
           </div>
+          <label style="font-size:12px;font-weight:700;color:#334155;">Stamp size</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">
+            <button type="button" data-stamp-size="0.8" style="padding:7px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;cursor:pointer;font-size:12px;">Small</button>
+            <button type="button" data-stamp-size="1" style="padding:7px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;cursor:pointer;font-size:12px;">Normal</button>
+            <button type="button" data-stamp-size="1.2" style="padding:7px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;cursor:pointer;font-size:12px;">Large</button>
+          </div>
           <input id="stampPlacementX" type="range" min="0" max="100" value="80" style="display:none;" />
                     <input id="stampPlacementY" type="range" min="0" max="100" value="8" style="display:none;" />
           <div id="stampPlacementModalSummary" style="padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#475569;line-height:1.5;">Page 1 • x 80% • y 8%</div>
@@ -16260,11 +16269,11 @@ async function openStampPlacementModal(file, onApply, onCancel, stampType = 'APP
     </div>`;
   document.body.appendChild(modal);
 
-  const state = { page: 1, x: 0.8, y: 0.08 };
+  const state = { page: 1, x: 0.8, y: 0.08, scale: 1 };
   const placementKey = `stampLastPlacement:${localStorage.getItem('activeProjectId') || ''}`;
   try {   // remember the last position used in this project
     const last = JSON.parse(localStorage.getItem(placementKey) || 'null');
-    if (last && last.x >= 0 && last.x <= 1 && last.y >= 0 && last.y <= 1) { state.x = last.x; state.y = last.y; }
+    if (last && last.x >= 0 && last.x <= 1 && last.y >= 0 && last.y <= 1) { state.x = last.x; state.y = last.y; if ([0.8, 1, 1.2].includes(last.scale)) state.scale = last.scale; }
   } catch (_) {}
   const previewContainer = modal.querySelector('#stampPlacementPreview');
   const summary = modal.querySelector('#stampPlacementModalSummary');
@@ -16374,7 +16383,7 @@ async function openStampPlacementModal(file, onApply, onCancel, stampType = 'APP
     if (marker.parentElement !== targetEl) targetEl.appendChild(marker);
     const maxStampWidth = 300;   // same width the server renderer uses
     const pdfWidth = Number(targetEl.dataset.pdfWidth) || targetEl.clientWidth;
-    const markerWidth = Math.min(maxStampWidth * targetEl.clientWidth / pdfWidth, targetEl.clientWidth * 0.52);
+    const markerWidth = Math.min(maxStampWidth * targetEl.clientWidth / pdfWidth, targetEl.clientWidth * 0.52) * state.scale;
     marker.style.width = `${markerWidth}px`;
     const markerHeight = markerWidth * markerArtwork.height / markerArtwork.width;
     const margin = 10 * targetEl.clientWidth / pdfWidth;
@@ -16478,8 +16487,20 @@ async function openStampPlacementModal(file, onApply, onCancel, stampType = 'APP
     xInput.value = String(cx); yInput.value = String(cy);
     updatePosition();
   }));
+  const paintSizeButtons = () => modal.querySelectorAll('[data-stamp-size]').forEach((btn) => {
+    const on = Number(btn.dataset.stampSize) === state.scale;
+    btn.style.background = on ? '#e2e8f0' : '#f8fafc';
+    btn.style.borderColor = on ? '#0f172a' : '#cbd5e1';
+    btn.style.fontWeight = on ? '700' : '400';
+  });
+  modal.querySelectorAll('[data-stamp-size]').forEach((btn) => btn.addEventListener('click', () => {
+    state.scale = Number(btn.dataset.stampSize);
+    paintSizeButtons();
+    placeMarkerOnPage(state.page);
+  }));
+  paintSizeButtons();
   modal.querySelector('#stampPlacementApply').addEventListener('click', () => {
-    try { localStorage.setItem(placementKey, JSON.stringify({ x: state.x, y: state.y })); } catch (_) {}
+    try { localStorage.setItem(placementKey, JSON.stringify({ x: state.x, y: state.y, scale: state.scale })); } catch (_) {}
     onApply(state);
     closeModal();
   });
