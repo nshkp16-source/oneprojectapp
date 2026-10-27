@@ -7536,7 +7536,7 @@ const WORKSPACE_TABS = {
     label: 'Control & Reports', i18n: 'tab-control-reports',
     open: () => { _crRenderShell(); _crLoadRecords(); },
     list: (records) => _crRenderList(records),
-    toggle: (id) => _wsToggleDetail(id, { detailPrefix: 'cr-detail-', chevronPrefix: 'chevron-cr-' }),
+    toggle: (id) => _wsToggleDetail(id, { detailPrefix: 'cr-detail-', chevronPrefix: 'chevron-cr-', onOpen: (rid) => _crLoadDetail(rid) }),
   },
   'communication-meetings': {
     label: 'Communication & Meetings', i18n: 'tab-communication-meetings',
@@ -14636,10 +14636,10 @@ const DA_DOC_TYPES = [
 function _daBadge(status) {
   const map = {
     draft:            { label: 'Draft',            color: '#6b7280' },
-    pending_approval: { label: 'Pending Approval',  color: '#f59e0b' },
-    approved:         { label: 'Approved',          color: '#10b981' },
-    rejected:         { label: 'Rejected',          color: '#ef4444' },
-    shared:           { label: 'Shared to C&R',     color: '#3b82f6' },
+    pending_approval: { label: 'Waiting for leader', color: '#f59e0b' },
+    approved:         { label: 'Signed',             color: '#10b981' },
+    rejected:         { label: 'Returned',           color: '#ef4444' },
+    shared:           { label: 'Shared',             color: '#3b82f6' },
   };
   const s = map[status] || { label: status || 'Unknown', color: '#6b7280' };
   return `<span style="background:${s.color}20;color:${s.color};border:1px solid ${s.color}60;
@@ -14758,7 +14758,7 @@ function _daRenderList(records) {
       </li>`;
 
     const cards = items.map(doc => {
-      const isCreator = String(doc.creator_id) === String(window.currentUserId);
+      const isCreator = _dcIsAuthor(doc);
       const isShared  = doc.status === 'shared';
       const postedAt  = doc.created_at
         ? new Date(doc.created_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
@@ -14785,7 +14785,7 @@ function _daRenderList(records) {
               </div>
               <div style="font-size:11px;color:#9ca3af;margin-top:3px;">
                 <strong style="color:#6b7280;">${escapeHtml(doc.doc_type || '—')}</strong>
-                &nbsp;•&nbsp; By <strong style="color:#6b7280;">${escapeHtml(doc.creator_role || 'N/A')}</strong>
+                &nbsp;•&nbsp; By <strong style="color:#6b7280;">${escapeHtml(doc.creator_name || doc.creator_role || 'N/A')}</strong>
                 &nbsp;•&nbsp; ${escapeHtml(postedAt)}
               </div>
             </div>
@@ -14823,249 +14823,153 @@ async function _daLoadDetail(recordId) {
 
   const userSide  = wcSide(window.currentUserRole);
   const leader    = userSide !== null && userSide.toLowerCase() === (doc.side || '').toLowerCase();
-  const isCreator = String(doc.creator_id) === String(window.currentUserId);
+  const isCreator = _dcIsAuthor(doc);
 
   container.innerHTML = _daDetailHtml(doc, leader, isCreator);
   _daWireDetailButtons(recordId, doc, leader, isCreator);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — Detail HTML
+//  DOCUMENT FLOW — shared card pieces (Document & Approval + Control & Reports)
+//  One look for both cards: every part has its own title, same spacing, same border.
 // ═══════════════════════════════════════════════════════════════════════
-function _daDetailHtml(doc, leader, isCreator) {
-  const isShared   = doc.status === 'shared';
-  const isApproved = doc.status === 'approved' || isShared;
-  const canAct     = leader && doc.status === 'pending_approval';
+function _dcSection(title, inner) {
+  return `<div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;margin-bottom:12px;">
+    <div style="font-size:11px;font-weight:700;color:#007B8A;text-transform:uppercase;letter-spacing:.6px;
+      padding-bottom:8px;margin-bottom:10px;border-bottom:1px solid #e5e7eb;">${title}</div>
+    <div style="font-size:13px;color:#374151;line-height:1.65;">${inner}</div>
+  </div>`;
+}
+function _dcDate(v) {
+  if (!v) return '—';
+  const d = new Date(v);
+  return isNaN(d) ? '—' : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+function _dcWho(name, role) {
+  const r = String(role || '').replace(/([a-z])([A-Z])/g, '$1 $2');
+  return name ? `<strong>${escapeHtml(name)}</strong>${r ? ` <span style="color:#6b7280;">(${escapeHtml(r)})</span>` : ''}` : `<strong>${escapeHtml(r || 'Unknown')}</strong>`;
+}
+function _dcIsLeaderOf(doc) {
+  const s = wcSide(window.currentUserRole);
+  return s !== null && String(s).toLowerCase() === String(doc.side || '').toLowerCase();
+}
+function _dcIsAuthor(doc) {
+  const norm = x => String(x || '').toLowerCase().replace(/[\s_-]+/g, '');
+  return String(doc.creator_id) === String(window.currentUserId) && norm(doc.creator_role) === norm(window.currentUserRole);
+}
+function _dcBtn(action, label, kind = 'primary') {
+  const k = { primary: 'background:#007B8A;color:#fff;border:none;', danger: 'background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;',
+              ok: 'background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;', warn: 'background:#d97706;color:#fff;border:none;' }[kind];
+  return `<button type="button" data-action="${action}" style="padding:10px 14px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;${k}">${label}</button>`;
+}
+function _dcStatusNote(bg, border, color, text) {
+  return `<div style="padding:10px 12px;background:${bg};border:1px solid ${border};border-radius:8px;color:${color};font-size:12px;font-weight:600;">${text}</div>`;
+}
+function _dcFileRow(prefix, doc) {
+  const fileName = doc.file_name || '';
+  if (!fileName) return '<span style="color:#9ca3af;">No file was attached.</span>';
+  return `<a data-action="${prefix}-download" data-doc-id="${escapeHtml(String(doc.id))}" data-filename="${escapeHtml(fileName)}"
+    style="display:inline-flex;align-items:center;gap:6px;background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none;">⬇️ ${escapeHtml(fileName)}</a>`;
+}
+// Parts shared by both cards: what the document is, who wrote it, who signed it.
+function _dcCommonSections(doc) {
+  const about = `<p style="margin:0 0 6px;"><strong>${escapeHtml(doc.title || 'Untitled')}</strong> is a ${escapeHtml((doc.doc_type || 'document').toLowerCase())} for this project.</p>
+    <p style="margin:0;color:#4b5563;">${escapeHtml(doc.description || 'No description was written.')}</p>`;
+  const authorStamped = doc.author_stamp_id ? ` The author signed it with a stamp (Stamp ID ${escapeHtml(doc.author_stamp_id)}).` : ' The author did not sign it with a stamp.';
+  const author = `<p style="margin:0;">Written by ${_dcWho(doc.creator_name, doc.creator_role)} on ${escapeHtml(_dcDate(doc.created_at))}.${authorStamped}</p>`;
+  return { about: _dcSection('About this document', about), author: _dcSection('Author', author) };
+}
+function _dcSignedText(doc) {
+  if (doc.status !== 'approved' && doc.status !== 'shared' && !(doc.cr_status)) return '';
+  if (!doc.reviewed_at && !doc.signed_by_name && !doc.approved_by_role) return '';
+  const stamp = doc.signer_stamp_id ? ` Their stamp is on the document (Stamp ID ${escapeHtml(doc.signer_stamp_id)}).` : '';
+  return `<p style="margin:0;">Signed by ${_dcWho(doc.signed_by_name, doc.approved_by_role)} on ${escapeHtml(_dcDate(doc.reviewed_at))}.${stamp}</p>`;
+}
 
-  let decisionBlock = '';
-  if (leader && doc.review_action) {
-    const ac = doc.review_action === 'approved' ? '#10b981' : '#ef4444';
-    const al = doc.review_action === 'approved' ? '✅ Approved' : '❌ Rejected';
-    decisionBlock = `
-      <div style="padding:12px 14px;background:${ac}10;border:1px solid ${ac}60;
-        border-radius:10px;margin-bottom:12px;">
-        <div style="font-size:12px;font-weight:700;color:${ac};margin-bottom:4px;">${al}</div>
-        ${doc.review_comment
-          ? `<div style="font-size:12px;color:#374151;margin-top:4px;">💬 <em>${escapeHtml(doc.review_comment)}</em></div>` : ''}
-        <div style="font-size:11px;color:#9ca3af;margin-top:4px;">
-          ${doc.reviewed_at
-            ? new Date(doc.reviewed_at).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' }) : ''}</div>
-      </div>`;
-  } else if (isCreator && doc.review_action && ['approved','rejected','shared'].includes(doc.status)) {
-    const ac = doc.review_action === 'approved' ? '#10b981' : '#ef4444';
-    const al = doc.review_action === 'approved' ? '✅ Approved' : '❌ Rejected';
-    decisionBlock = `
-      <div style="padding:12px 14px;background:${ac}10;border:1px solid ${ac}60;
-        border-radius:10px;margin-bottom:12px;">
-        <div style="font-size:12px;font-weight:700;color:${ac};margin-bottom:4px;">${al}</div>
-        ${doc.review_comment
-          ? `<div style="font-size:12px;color:#374151;margin-top:4px;">
-              <em>${escapeHtml(doc.review_comment)}</em></div>` : ''}
-        <div style="font-size:11px;color:#9ca3af;margin-top:4px;">
-          ${doc.reviewed_at
-            ? new Date(doc.reviewed_at).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' }) : ''}</div>
-      </div>`;
-  }
-
-  let actionArea = '';
-  // Leader reviewing someone else's pending doc
-  if (canAct && !isCreator) {
-    actionArea = `
-      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;
-        padding:14px;margin-top:14px;">
-        <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:10px;
-          text-transform:uppercase;letter-spacing:.5px;">📋 Review</div>
-        <div style="margin-bottom:10px;">
-          <label style="${_daLabelStyle()}">Comment
-            <span style="text-transform:none;font-weight:400;color:#9ca3af;">(optional)</span></label>
-          <textarea id="da-review-comment-${doc.id}"
-            placeholder="Add a note…"
-            style="${_daInputStyle()} min-height:80px;resize:vertical;"></textarea>
-        </div>
-        <div style="display:flex;gap:8px;">
-          <button data-action="da-approve"
-            style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;
-            background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:8px;cursor:pointer;">
-            ✅ Approve</button>
-          <button data-action="da-reject"
-            style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;
-            background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">
-            ❌ Reject</button>
-        </div>
-      </div>`;
-
-  // Creator-leader: show Delete + Approve buttons on any non-shared status
-  // (they can self-approve and share or delete)
-  } else if (isCreator && leader && !isShared && doc.status !== 'rejected') {
-    if (doc.status === 'pending_approval') {
-      // Pending: offer Approve/Reject + Delete
-      actionArea = `
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;
-          padding:14px;margin-top:14px;">
-          <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:10px;
-            text-transform:uppercase;letter-spacing:.5px;">📋 Self-Review</div>
-          <div style="margin-bottom:10px;">
-            <label style="${_daLabelStyle()}">Comment
-              <span style="text-transform:none;font-weight:400;color:#9ca3af;">(optional)</span></label>
-            <textarea id="da-review-comment-${doc.id}"
-              placeholder="Add a note…"
-              style="${_daInputStyle()} min-height:80px;resize:vertical;"></textarea>
-          </div>
-          <div style="display:flex;gap:8px;">
-            <button data-action="da-approve"
-              style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;
-              background:#d1fae5;color:#065f46;border:1px solid #6ee7b7;border-radius:8px;cursor:pointer;">
-              ✅ Approve</button>
-            <button data-action="da-reject"
-              style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;
-              background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">
-              ❌ Reject</button>
-            <button data-action="da-delete"
-              style="padding:10px 14px;font-size:13px;font-weight:600;
-              background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">
-              🗑️ Delete</button>
-          </div>
-        </div>`;
-    } else if (isApproved) {
-      // Approved: offer Share + Delete
-      actionArea = `
-        <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px;">
-          <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:14px;">
-            <button data-action="da-share"
-              style="width:100%;padding:10px 14px;font-size:13px;font-weight:600;
-              background:#d97706;color:#fff;border:none;border-radius:8px;cursor:pointer;">
-              📤 Share to Control &amp; Report</button>
-          </div>
-          <button data-action="da-delete"
-            style="width:100%;padding:10px 14px;font-size:13px;font-weight:600;
-            background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">
-            🗑️ Delete</button>
-        </div>`;
-    } else {
-      // Draft or other: offer Submit + Delete
-      actionArea = `
-        <div style="display:flex;gap:8px;margin-top:14px;">
-          <button data-action="da-submit"
-            style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;
-            background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
-            📤 Submit for Approval</button>
-          <button data-action="da-delete"
-            style="padding:10px 14px;font-size:13px;font-weight:600;
-            background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">
-            🗑️ Delete</button>
-        </div>`;
-    }
-
-  // Leader sharing someone else's approved doc
-  } else if (leader && isApproved && !isShared && !isCreator) {
-    actionArea = `
-      <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;
-        padding:14px;margin-top:14px;">
-        <button data-action="da-share"
-          style="width:100%;padding:10px 14px;font-size:13px;font-weight:600;
-          background:#d97706;color:#fff;border:none;border-radius:8px;cursor:pointer;">
-          📤 Share to Control &amp; Report</button>
-      </div>`;
-
-  } else if (isShared) {
-    actionArea = `
-      <div style="padding:10px 14px;background:#dbeafe;border:1px solid #93c5fd;
-        border-radius:10px;margin-top:14px;font-size:12px;color:#1d4ed8;font-weight:600;">
-        ✅ Shared to Control &amp; Report
-      </div>`;
-
-  } else if (isCreator && doc.status === 'pending_approval') {
-    actionArea = `
-      <div style="padding:10px 14px;background:#fef3c7;border:1px solid #fcd34d;
-        border-radius:10px;margin-top:14px;font-size:12px;color:#92400e;">
-        ⏳ Awaiting review.
-      </div>`;
-
-  } else if (isCreator && doc.status === 'rejected') {
-    actionArea = `
-      <div style="display:flex;gap:8px;margin-top:14px;">
-        <button data-action="da-resubmit"
-          style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;
-          background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
-          🔄 Resubmit</button>
-        <button data-action="da-delete"
-          style="padding:10px 14px;font-size:13px;font-weight:600;
-          background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">
-          🗑️ Delete</button>
-      </div>`;
-
-  } else if (isCreator && doc.status === 'draft') {
-    actionArea = `
-      <div style="display:flex;gap:8px;margin-top:14px;">
-        <button data-action="da-submit"
-          style="flex:1;padding:10px 14px;font-size:13px;font-weight:600;
-          background:#007B8A;color:#fff;border:none;border-radius:8px;cursor:pointer;">
-          📤 Submit for Approval</button>
-        <button data-action="da-delete"
-          style="padding:10px 14px;font-size:13px;font-weight:600;
-          background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">
-          🗑️ Delete</button>
-      </div>`;
-  }
-
-  const fileName = doc.file_name || (doc.file_path ? doc.file_path.split('/').pop() : null);
-
-  return `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
-        <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
-          padding-bottom:8px;border-bottom:2px solid #e5e7eb;">📄 Document Details</div>
-        <div style="font-size:12px;color:#374151;display:flex;flex-direction:column;gap:10px;">
-          <div>
-            <div style="${_daLabelStyle()}">Type</div>
-            <div style="font-size:13px;font-weight:600;">${escapeHtml(doc.doc_type || '—')}</div>
-          </div>
-          <div>
-            <div style="${_daLabelStyle()}">Title</div>
-            <div style="font-size:13px;font-weight:600;">${escapeHtml(doc.title || '—')}</div>
-          </div>
-          <div>
-            <div style="${_daLabelStyle()}">Description</div>
-            <div style="font-size:13px;line-height:1.7;">${escapeHtml(doc.description || '—')}</div>
-          </div>
-          <div>
-            <div style="${_daLabelStyle()}">Submitted By</div>
-            <div>${escapeHtml(doc.creator_role || '—')}
-              ${doc.creator_email
-                ? `<span style="color:#6b7280;font-size:11px;"> (${escapeHtml(doc.creator_email)})</span>` : ''}</div>
-          </div>
-          <div>
-            <div style="${_daLabelStyle()}">Status</div>
-            ${_daBadge(doc.status)}
-          </div>
-          ${fileName ? `
-            <div>
-              <div style="${_daLabelStyle()}">Attached File</div>
-              <a data-action="da-download"
-                data-doc-id="${escapeHtml(String(doc.id))}"
-                data-filename="${escapeHtml(fileName)}"
-                style="display:inline-flex;align-items:center;gap:6px;background:#eff6ff;
-                color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:6px 12px;
-                font-size:12px;font-weight:500;cursor:pointer;text-decoration:none;">
-                ⬇️ ${escapeHtml(fileName)}</a>
-            </div>` : ''}
-        </div>
-      </div>
-
-      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
-        <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
-          padding-bottom:8px;border-bottom:2px solid #e5e7eb;">
-          ${leader ? '🔍 Review' : '📊 Status'}
-        </div>
-        ${decisionBlock || `<p style="font-size:12px;color:#9ca3af;margin:0 0 10px;">No review action yet.</p>`}
-        ${actionArea}
-      </div>
-    </div>`;
+// Optional "sign with my stamp" control used by the forms and the leader's cards.
+function _dcSignOption(id, hint) {
+  return `<label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;color:#374151;cursor:pointer;">
+    <input type="checkbox" id="${id}" style="margin-top:3px;"/>
+    <span><strong>Sign with my stamp</strong> (optional)<br><span style="font-size:11px;color:#6b7280;">${hint || 'You will choose where it goes on the page. PDF files only.'}</span></span></label>`;
+}
+function _dcPickPlacement(file) {
+  return new Promise(resolve => openStampPlacementModal(file, p => resolve(p), () => resolve(null)));
+}
+function _dcAppendPlacement(form, p) {
+  form.append('applyStamp', 'true');
+  form.append('stampPage', String(p.page));
+  form.append('stampX', String(p.x));
+  form.append('stampY', String(p.y));
+  form.append('stampScale', String(p.scale || 1));
+}
+// Fetches the stored file through the server and lets the user choose the stamp position. Resolves null if cancelled.
+async function _dcPlacementForStoredDoc(docId) {
+  const projectId = localStorage.getItem('activeProjectId');
+  const res = await authFetch(`${API}/document-file/${docId}?projectId=${encodeURIComponent(projectId)}`, { method: 'GET' });
+  if (!res || !res.ok) { alert('The document could not be opened for stamping. It must be a PDF file.'); return null; }
+  const blob = await res.blob();
+  if (!blob.size) { alert('The document is empty, so it cannot be stamped.'); return null; }
+  return _dcPickPlacement(new File([blob], 'document.pdf', { type: 'application/pdf' }));
+}
+async function _dcPost(path, body, okMessage) {
+  const res = await _daAuthFetch(`${API}${path}`, { method: 'POST', body });
+  if (!res) return false;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { alert('Error: ' + (data.error || data.message || 'The action failed.')); return false; }
+  if (okMessage) alert(okMessage);
+  return true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — Wire buttons
+//  DOCUMENT & APPROVAL — Detail card
 // ═══════════════════════════════════════════════════════════════════════
+function _daDetailHtml(doc, leader, isCreator) {
+  const c = _dcCommonSections(doc);
+  const id = doc.id;
+  let review = '', actions = '';
+  const signed = _dcSignedText(doc);
+
+  if (doc.status === 'draft') {
+    review = `<p style="margin:0;color:#6b7280;">This document is still a draft. Nobody but its author${leader ? ' and you' : ''} can see it. Send it to the leader when it is ready.</p>`;
+  } else if (doc.status === 'pending_approval') {
+    review = `<p style="margin:0;">This document is waiting for the leader of the ${escapeHtml(doc.side || 'side')} to review it.</p>`;
+  } else if (doc.status === 'rejected') {
+    review = `<p style="margin:0 0 6px;"><strong style="color:#b91c1c;">Returned to the author.</strong> The leader asked for a correction:</p>
+      <div style="padding:8px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#7f1d1d;">${escapeHtml(doc.rejection_reason || 'No reason was written.')}</div>`;
+  } else if (doc.status === 'approved' || doc.status === 'shared') {
+    review = signed || '<p style="margin:0;">Signed by the leader.</p>';
+    if (doc.status === 'shared') review += `<p style="margin:8px 0 0;color:#1d4ed8;font-weight:600;">Shared to Control &amp; Reports on ${escapeHtml(_dcDate(doc.shared_at))}. Everyone on this side can now read it and comment.</p>`;
+    else review += `<p style="margin:8px 0 0;color:#6b7280;">It is signed but not shared yet. Real approval by all stakeholders happens later, in Records.</p>`;
+  }
+
+  if (leader && doc.status === 'pending_approval') {
+    actions = `
+      <label style="${_daLabelStyle()}">Reason <span style="text-transform:none;font-weight:400;color:#9ca3af;">(required only when you return the document)</span></label>
+      <textarea id="da-review-comment-${id}" placeholder="Say what must be corrected…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:10px;"></textarea>
+      <div style="margin-bottom:12px;">${_dcSignOption('da-sign-stamp-' + id, 'Puts your stamp on the PDF. You choose the position next.')}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">${_dcBtn('da-approve', '✍️ Sign document', 'ok')}${_dcBtn('da-reject', '↩️ Return to author', 'danger')}</div>`;
+  } else if (leader && doc.status === 'approved') {
+    actions = `<div style="display:flex;gap:8px;flex-wrap:wrap;">${_dcBtn('da-share', '📤 Share to Control &amp; Reports', 'warn')}${isCreator ? _dcBtn('da-delete', '🗑️ Delete', 'danger') : ''}</div>`;
+  } else if (isCreator && doc.status === 'draft') {
+    actions = `<div style="display:flex;gap:8px;flex-wrap:wrap;">${_dcBtn('da-submit', '📤 Send to leader', 'primary')}${_dcBtn('da-delete', '🗑️ Delete', 'danger')}</div>`;
+  } else if (isCreator && doc.status === 'rejected') {
+    actions = `<div style="display:flex;gap:8px;flex-wrap:wrap;">${_dcBtn('da-resubmit', '🔄 Resubmit corrected file', 'primary')}${_dcBtn('da-delete', '🗑️ Delete', 'danger')}</div>`;
+  } else if (doc.status === 'pending_approval') {
+    actions = _dcStatusNote('#fef3c7', '#fcd34d', '#92400e', '⏳ Waiting for the leader.');
+  } else if (doc.status === 'shared') {
+    actions = _dcStatusNote('#dbeafe', '#93c5fd', '#1d4ed8', '✅ Shared to Control &amp; Reports');
+  } else if (doc.status === 'approved') {
+    actions = _dcStatusNote('#ecfdf5', '#a7f3d0', '#065f46', '✍️ Signed. The leader will share it when ready.');
+  }
+
+  return `<div>
+    ${c.about}${c.author}
+    ${_dcSection('Review', review)}
+    ${_dcSection('File', _dcFileRow('da', doc))}
+    ${actions ? _dcSection('Actions', actions) : ''}
+  </div>`;
+}
+
 function _daWireDetailButtons(recordId, doc, leader, isCreator) {
   const container = document.getElementById(`da-detail-inner-${recordId}`);
   if (!container) return;
@@ -15081,60 +14985,29 @@ function _daWireDetailButtons(recordId, doc, leader, isCreator) {
   });
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — API: Review
-// ═══════════════════════════════════════════════════════════════════════
+// Leader: sign (optionally with a stamp) or return with a reason.
 async function _daReview(docId, action) {
   const projectId = localStorage.getItem('activeProjectId');
   if (!projectId) { alert('No project selected.'); return; }
-
   const comment = document.getElementById(`da-review-comment-${docId}`)?.value.trim() || '';
-  if (action === 'rejected' && !comment) {
-    if (!confirm('No rejection reason entered. Proceed without a comment?')) return;
+  const body = { projectId, action, comment };
+  if (action === 'rejected') {
+    if (comment.length < 3) { alert('Write the reason first, so the author knows what to correct.'); return; }
+  } else if (document.getElementById(`da-sign-stamp-${docId}`)?.checked) {
+    const p = await _dcPlacementForStoredDoc(docId);
+    if (!p) return;
+    Object.assign(body, { applyStamp: 'true', stampPage: String(p.page), stampX: String(p.x), stampY: String(p.y), stampScale: String(p.scale || 1) });
   }
-
-  try {
-    const res = await _daAuthFetch(`${API}/document-approval/${docId}/review`, {
-      method: 'POST',
-      body:   { projectId, action, comment },
-    });
-    if (!res) return;
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || 'Failed to submit review');
-    alert(action === 'approved' ? '✅ Document approved.' : '❌ Document rejected.');
-    delete recordsCache['document-approval'];
-    _daLoadRecords();
-  } catch (err) {
-    console.error('DA review error:', err);
-    alert('Error: ' + err.message);
-  }
+  const ok = await _dcPost(`/document-approval/${docId}/review`, body, action === 'approved' ? '✍️ Document signed.' : '↩️ Document returned to the author.');
+  if (ok) { delete recordsCache['document-approval']; _daLoadRecords(); }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — API: Share to C&R
-// ═══════════════════════════════════════════════════════════════════════
 async function _daShare(docId) {
   const projectId = localStorage.getItem('activeProjectId');
   if (!projectId) { alert('No project selected.'); return; }
-
-  if (!confirm('Share this approved document to the Control & Report board?')) return;
-
-  try {
-    const res = await _daAuthFetch(`${API}/document-approval/${docId}/share`, {
-      method: 'POST',
-      body:   { projectId },
-    });
-    if (!res) return;
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || 'Failed to share document');
-    alert('📤 Document shared to Control & Report.');
-    delete recordsCache['document-approval'];
-    delete recordsCache['control-reports'];
-    _daLoadRecords();
-  } catch (err) {
-    console.error('DA share error:', err);
-    alert('Error: ' + err.message);
-  }
+  if (!confirm('Share this signed document to Control & Reports? Everyone on your side will be able to read it and comment.')) return;
+  const ok = await _dcPost(`/document-approval/${docId}/share`, { projectId }, '📤 Document shared to Control & Reports.');
+  if (ok) { delete recordsCache['document-approval']; delete recordsCache['control-reports']; _daLoadRecords(); }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -15292,6 +15165,8 @@ function _daOpenCreateForm(existingDoc = null) {
 
       </div>
 
+      <div style="padding:0 20px 14px;">${_dcSignOption('da-sign-own')}</div>
+
       <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
         background:#fff;display:flex;gap:12px;">
         <button type="button" id="da-cr-save"
@@ -15348,6 +15223,13 @@ function _daOpenCreateForm(existingDoc = null) {
     form.append('description', desc);
     if (isEdit) form.append('docId', existingDoc.id);
     if (file)   form.append('file',  file);
+    if (document.getElementById('da-sign-own')?.checked) {
+      if (!file) return alert('Attach a PDF first, then choose where to sign it.');
+      if (!/\.pdf$/i.test(file.name)) return alert('Only PDF files can be signed with a stamp.');
+      const placed = await _dcPickPlacement(file);
+      if (!placed) return;
+      _dcAppendPlacement(form, placed);
+    }
 
     const btn = document.getElementById('da-cr-save');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
@@ -15445,142 +15327,202 @@ async function _crLoadRecords() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  CONTROL & REPORT — Render list
+//  CONTROL & REPORTS — badge, list, detail card, comments, correction flow
 // ═══════════════════════════════════════════════════════════════════════
+function _crBadge(cr) {
+  const map = {
+    shared:              { label: 'Shared',                      color: '#3b82f6' },
+    rejected:            { label: 'Rejected, waiting for a new file', color: '#ef4444' },
+    replacement_pending: { label: 'New file waiting for the leader',  color: '#f59e0b' },
+  };
+  const s = map[cr || 'shared'] || map.shared;
+  return `<span style="background:${s.color}20;color:${s.color};border:1px solid ${s.color}60;border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;white-space:nowrap;">${s.label}</span>`;
+}
+
 function _crRenderList(records) {
   const list        = document.getElementById('recordsList');
   const placeholder = document.querySelector('.no-data-placeholder');
   if (!list || !placeholder) return;
-
-  if (!records.length) {
-    list.innerHTML            = '';
-    placeholder.style.display = 'block';
-    return;
-  }
+  if (!records.length) { list.innerHTML = ''; placeholder.style.display = 'block'; return; }
   placeholder.style.display = 'none';
 
-  const bySide = {};
-  records.forEach(r => {
-    const side = r.side_label || r.creator_side || 'General';
-    if (!bySide[side]) bySide[side] = [];
-    bySide[side].push(r);
-  });
+  const byType = {};
+  records.forEach(r => { (byType[r.doc_type || 'Uncategorised'] ||= []).push(r); });
 
-  const sideColors = { Contractor: '#f59e0b', Consultant: '#3b82f6', Client: '#10b981' };
-
-  list.innerHTML = Object.entries(bySide).map(([side, items]) => {
-    const sc = sideColors[side] || '#6b7280';
-
-    const sideHeader = `
-      <li style="padding:6px 14px;background:${sc}15;border-left:4px solid ${sc};
-        border-radius:8px;margin-bottom:6px;font-size:12px;font-weight:700;color:${sc};">
-        🏢 ${escapeHtml(side)}
-      </li>`;
-
-    const cards = items.map(doc => {
-      const sharedAt = doc.shared_at
-        ? new Date(doc.shared_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-        : 'N/A';
-      const fileName = doc.file_name || (doc.file_path ? doc.file_path.split('/').pop() : null);
-
-      return `
-        <li class="doc-item"
-          data-id="${escapeHtml(String(doc.id))}"
-          data-tab-key="control-reports"
-          style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid ${sc};
-          border-radius:10px;margin-bottom:8px;
-          box-shadow:0 1px 4px rgba(0,0,0,.06);">
-
-          <div class="doc-item-header" data-action="toggle"
-            style="display:flex;flex-wrap:wrap;align-items:center;padding:12px 16px;cursor:pointer;gap:12px;">
-            <div style="flex:1;min-width:0;">
-              <div style="font-weight:600;font-size:14px;color:#1f2937;
-                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                📄 ${escapeHtml(doc.title)}
-              </div>
-              <div style="font-size:11px;color:#9ca3af;margin-top:3px;">
-                <strong style="color:#6b7280;">${escapeHtml(doc.doc_type || '—')}</strong>
-                &nbsp;•&nbsp; ${escapeHtml(doc.creator_role || 'N/A')}
-                &nbsp;•&nbsp; ${escapeHtml(sharedAt)}
-              </div>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-              <span style="background:#10b98120;color:#10b981;border:1px solid #10b98160;
-                border-radius:12px;padding:2px 10px;font-size:11px;font-weight:600;">✅ Approved</span>
-              <span style="color:#9ca3af;font-size:16px;" class="chevron-cr-${doc.id}">▾</span>
+  list.innerHTML = Object.entries(byType).map(([type, items]) => {
+    const typeHeader = `<li style="padding:5px 12px;background:#eff6ff;border-radius:8px;margin-bottom:6px;font-size:11px;font-weight:700;color:#1d4ed8;letter-spacing:.4px;text-transform:uppercase;">📁 ${escapeHtml(type)}</li>`;
+    const cards = items.map(doc => `
+      <li class="doc-item" data-id="${escapeHtml(String(doc.id))}" data-tab-key="control-reports"
+        style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #3b82f6;border-radius:10px;margin-bottom:8px;box-shadow:0 1px 4px rgba(0,0,0,.06);">
+        <div class="doc-item-header" data-action="toggle" style="display:flex;flex-wrap:wrap;align-items:center;padding:12px 16px;cursor:pointer;gap:12px;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:600;font-size:14px;color:#1f2937;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">📄 ${escapeHtml(doc.title)}</div>
+            <div style="font-size:11px;color:#9ca3af;margin-top:3px;">
+              <strong style="color:#6b7280;">${escapeHtml(doc.doc_type || '—')}</strong>
+              &nbsp;•&nbsp; ${escapeHtml(doc.creator_name || doc.creator_role || 'N/A')}
+              &nbsp;•&nbsp; ${escapeHtml(_dcDate(doc.shared_at))}
+              ${doc.comment_count ? `&nbsp;•&nbsp; 💬 ${doc.comment_count}` : ''}
             </div>
           </div>
-
-          <div class="doc-detail" id="cr-detail-${doc.id}"
-            style="display:none;border-top:1px solid #e5e7eb;">
-            <div style="padding:16px;background:#f8fafc;">
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-
-                <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px;">
-                  <div style="font-size:12px;font-weight:700;color:#007B8A;margin-bottom:10px;
-                    padding-bottom:6px;border-bottom:1px solid #e5e7eb;">📄 Document Info</div>
-                  <div style="font-size:12px;color:#374151;display:flex;flex-direction:column;gap:8px;">
-                    <div><div style="${_daLabelStyle()}">Type</div>
-                      <div style="font-weight:600;">${escapeHtml(doc.doc_type || '—')}</div></div>
-                    <div><div style="${_daLabelStyle()}">Title</div>
-                      <div style="font-weight:600;">${escapeHtml(doc.title || '—')}</div></div>
-                    <div><div style="${_daLabelStyle()}">Description</div>
-                      <div style="line-height:1.7;">${escapeHtml(doc.description || '—')}</div></div>
-                    <div><div style="${_daLabelStyle()}">Submitted By</div>
-                      <div>${escapeHtml(doc.creator_role || '—')}
-                        ${doc.creator_email
-                          ? `<span style="color:#6b7280;font-size:11px;">(${escapeHtml(doc.creator_email)})</span>` : ''}</div></div>
-                    ${fileName ? `
-                      <div>
-                        <div style="${_daLabelStyle()}">File</div>
-                        <a data-action="cr-download"
-                          data-doc-id="${escapeHtml(String(doc.id))}"
-                          data-filename="${escapeHtml(fileName)}"
-                          style="display:inline-flex;align-items:center;gap:6px;background:#eff6ff;
-                          color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:6px 12px;
-                          font-size:12px;font-weight:500;cursor:pointer;text-decoration:none;">
-                          ⬇️ ${escapeHtml(fileName)}</a>
-                      </div>` : ''}
-                  </div>
-                </div>
-
-                <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px;">
-                  <div style="font-size:12px;font-weight:700;color:#007B8A;margin-bottom:10px;
-                    padding-bottom:6px;border-bottom:1px solid #e5e7eb;">✅ Approval Trail</div>
-                  <div style="font-size:12px;color:#374151;display:flex;flex-direction:column;gap:8px;">
-                    <div><div style="${_daLabelStyle()}">Approved By</div>
-                      <div>${escapeHtml(doc.reviewer_role || '—')}
-                        ${doc.reviewer_email
-                          ? `<span style="color:#6b7280;font-size:11px;">(${escapeHtml(doc.reviewer_email)})</span>` : ''}</div></div>
-                    <div><div style="${_daLabelStyle()}">Approval Date</div>
-                      <div>${doc.reviewed_at
-                        ? new Date(doc.reviewed_at).toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' })
-                        : '—'}</div></div>
-                    <div><div style="${_daLabelStyle()}">Shared On</div>
-                      <div>${escapeHtml(sharedAt)}</div></div>
-                    ${doc.review_comment ? `
-                      <div><div style="${_daLabelStyle()}">Note</div>
-                        <div style="padding:6px 10px;background:#f9fafb;border:1px solid #e5e7eb;
-                          border-radius:6px;font-style:italic;color:#6b7280;">
-                          💬 ${escapeHtml(doc.review_comment)}</div></div>` : ''}
-                  </div>
-                </div>
-
-              </div>
-            </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+            ${_crBadge(doc.cr_status)}
+            <span style="color:#9ca3af;font-size:16px;" class="chevron-cr-${doc.id}">▾</span>
           </div>
-        </li>`;
-    }).join('');
-
-    return sideHeader + cards;
+        </div>
+        <div class="doc-detail" id="cr-detail-${doc.id}" style="display:none;border-top:1px solid #e5e7eb;">
+          <div id="cr-detail-inner-${doc.id}" style="padding:16px;background:#f8fafc;">
+            <p style="color:#9ca3af;font-size:13px;text-align:center;padding:24px 0;">⏳ Loading…</p>
+          </div>
+        </div>
+      </li>`).join('');
+    return typeHeader + cards;
   }).join('');
+}
 
-  list.querySelectorAll('[data-action="cr-download"]').forEach(btn => {
-    btn.addEventListener('click', e => {
-      const el = e.currentTarget;
-      _crDownload(el.dataset.docId, el.dataset.filename);
-    });
-  });
+function _crThreadHtml(comments) {
+  if (!comments.length) return '<p style="margin:0;color:#9ca3af;">Nobody has commented yet. If you see an error in this document, write it here so it can be corrected.</p>';
+  return comments.map(c => `
+    <div style="padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:8px;background:${c.kind === 'recommendation' ? '#fffbeb' : '#f9fafb'};">
+      <div style="font-size:11px;color:#6b7280;margin-bottom:4px;">
+        ${_dcWho(c.author_name, c.author_role)} · ${escapeHtml(_dcDate(c.created_at))}
+        ${c.kind === 'recommendation' ? '<span style="margin-left:6px;background:#fef3c7;color:#92400e;border-radius:6px;padding:1px 6px;font-weight:700;">Recommendation</span>' : ''}
+      </div>
+      <div style="font-size:13px;color:#1f2937;white-space:pre-wrap;">${escapeHtml(c.body)}</div>
+    </div>`).join('');
+}
+
+async function _crLoadDetail(recordId) {
+  const container = document.getElementById(`cr-detail-inner-${recordId}`);
+  if (!container) return;
+  const doc = (recordsCache['control-reports'] || []).find(r => String(r.id) === String(recordId));
+  if (!doc) { container.innerHTML = '<p style="color:#ef4444;text-align:center;">Document not found.</p>'; return; }
+  const projectId = localStorage.getItem('activeProjectId');
+  const leader = _dcIsLeaderOf(doc), author = _dcIsAuthor(doc);
+  const cr = doc.cr_status || 'shared';
+
+  let comments = [], versions = [];
+  try {
+    const r1 = await _daAuthFetch(`${API}/control-reports/${recordId}/comments/list`, { method: 'POST', body: { projectId } });
+    if (r1 && r1.ok) comments = (await r1.json()).comments || [];
+    if (leader || author) {
+      const r2 = await _daAuthFetch(`${API}/control-reports/${recordId}/versions`, { method: 'POST', body: { projectId } });
+      if (r2 && r2.ok) versions = (await r2.json()).versions || [];
+    }
+  } catch (e) { console.error('CR detail load error:', e); }
+
+  const c = _dcCommonSections(doc);
+  const signed = _dcSignedText(doc) || '<p style="margin:0;">Signed by the leader.</p>';
+
+  let correction = '';
+  if (cr === 'rejected') {
+    correction = `<p style="margin:0 0 6px;"><strong style="color:#b91c1c;">The leader rejected this document</strong> on ${escapeHtml(_dcDate(doc.cr_rejected_at))}. The reason:</p>
+      <div style="padding:8px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#7f1d1d;">${escapeHtml(doc.cr_reject_reason || 'No reason was written.')}</div>
+      <p style="margin:8px 0 0;color:#6b7280;">Only the author and the leader can see it until a corrected file is signed.</p>`;
+  } else if (cr === 'replacement_pending') {
+    correction = `<p style="margin:0;">The author uploaded a corrected file on ${escapeHtml(_dcDate(doc.replaced_at))}. It becomes visible to the side again once the leader signs it.</p>`;
+  }
+  if (versions.length) {
+    correction += `<div style="margin-top:10px;font-size:12px;color:#6b7280;"><strong>Earlier files that were rejected</strong>` +
+      versions.map(v => `<div style="margin-top:4px;">${escapeHtml(v.file_name || 'File')} — ${escapeHtml(_dcDate(v.created_at))}: ${escapeHtml(v.reason || '')}</div>`).join('') + `</div>`;
+  }
+
+  let actions = '';
+  if (leader && cr === 'shared') {
+    actions += `<label style="${_daLabelStyle()}">Reject this document</label>
+      <textarea id="cr-reject-reason-${recordId}" placeholder="Say what is wrong, based on the comments above…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:10px;"></textarea>
+      ${_dcBtn('cr-reject', '↩️ Reject with reason', 'danger')}`;
+  } else if (leader && cr === 'replacement_pending') {
+    actions += `<div style="margin-bottom:12px;">${_dcSignOption('cr-sign-stamp-' + recordId, 'Puts your stamp on the new PDF. You choose the position next.')}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">${_dcBtn('cr-accept', '✍️ Sign and accept new file', 'ok')}</div>
+      <label style="${_daLabelStyle()}">Or reject the new file</label>
+      <textarea id="cr-reject-reason-${recordId}" placeholder="Say what is still wrong…" style="${_daInputStyle()} min-height:60px;resize:vertical;margin-bottom:10px;"></textarea>
+      ${_dcBtn('cr-reject', '↩️ Reject with reason', 'danger')}`;
+  } else if (author && cr === 'rejected') {
+    actions += `<label style="${_daLabelStyle()}">Corrected file</label>
+      <input type="file" id="cr-replace-file-${recordId}" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png" style="margin-bottom:10px;"/>
+      <div style="margin-bottom:12px;">${_dcSignOption('cr-replace-sign-' + recordId)}</div>
+      ${_dcBtn('cr-replace', '🔄 Upload corrected file', 'primary')}`;
+  }
+
+  const canComment = cr === 'shared' || leader || author;
+  const commentBox = canComment ? `
+    <div style="margin-top:12px;border-top:1px solid #e5e7eb;padding-top:12px;">
+      <label style="${_daLabelStyle()}">Add to the discussion</label>
+      <select id="cr-comment-kind-${recordId}" style="${_daInputStyle()} margin-bottom:8px;"><option value="comment">Comment</option><option value="recommendation">Recommendation</option></select>
+      <textarea id="cr-comment-body-${recordId}" placeholder="Write what you noticed or what should change…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:10px;"></textarea>
+      ${_dcBtn('cr-comment', '💬 Post', 'primary')}
+    </div>` : '';
+
+  container.innerHTML = `<div>
+    ${c.about}${c.author}
+    ${_dcSection('Sign-off', signed + `<p style="margin:8px 0 0;color:#6b7280;">Shared on ${escapeHtml(_dcDate(doc.shared_at))}.</p>`)}
+    ${correction ? _dcSection('Correction', correction) : ''}
+    ${_dcSection('File', _dcFileRow('cr', doc))}
+    ${_dcSection('Comments and recommendations', `<div id="cr-thread-${recordId}">${_crThreadHtml(comments)}</div>${commentBox}`)}
+    ${actions ? _dcSection('Actions', actions) : ''}
+  </div>`;
+
+  const q = sel => container.querySelector(sel);
+  q('[data-action="cr-download"]')?.addEventListener('click', e => _crDownload(e.currentTarget.dataset.docId, e.currentTarget.dataset.filename));
+  q('[data-action="cr-comment"]')?.addEventListener('click', () => _crPostComment(recordId));
+  q('[data-action="cr-reject"]')?.addEventListener('click', () => _crReject(recordId));
+  q('[data-action="cr-replace"]')?.addEventListener('click', () => _crReplace(recordId));
+  q('[data-action="cr-accept"]')?.addEventListener('click', () => _crAccept(recordId));
+}
+
+async function _crAfterChange(recordId) {
+  delete recordsCache['control-reports'];
+  await _crLoadRecords();
+  const detail = document.getElementById(`cr-detail-${recordId}`);
+  if (detail) { detail.style.display = 'block'; const ch = document.querySelector(`.chevron-cr-${recordId}`); if (ch) ch.textContent = '▴'; _crLoadDetail(recordId); }
+}
+
+async function _crPostComment(recordId) {
+  const projectId = localStorage.getItem('activeProjectId');
+  const body = document.getElementById(`cr-comment-body-${recordId}`)?.value.trim() || '';
+  const kind = document.getElementById(`cr-comment-kind-${recordId}`)?.value || 'comment';
+  if (body.length < 2) { alert('Write your comment first.'); return; }
+  if (await _dcPost(`/control-reports/${recordId}/comments`, { projectId, body, kind })) _crAfterChange(recordId);
+}
+
+async function _crReject(recordId) {
+  const projectId = localStorage.getItem('activeProjectId');
+  const reason = document.getElementById(`cr-reject-reason-${recordId}`)?.value.trim() || '';
+  if (reason.length < 3) { alert('Write the reason first, so the author knows what to correct.'); return; }
+  if (!confirm('Reject this document? It will be hidden from the side until the author uploads a corrected file and you sign it.')) return;
+  if (await _dcPost(`/control-reports/${recordId}/reject`, { projectId, reason }, '↩️ Document rejected. The author can now replace the file.')) _crAfterChange(recordId);
+}
+
+async function _crReplace(recordId) {
+  const projectId = localStorage.getItem('activeProjectId');
+  const file = document.getElementById(`cr-replace-file-${recordId}`)?.files?.[0];
+  if (!file) { alert('Choose the corrected file first.'); return; }
+  if (file.size > 20 * 1024 * 1024) { alert('File size must not exceed 20 MB.'); return; }
+  const form = new FormData();
+  form.append('projectId', projectId);
+  form.append('file', file);
+  if (document.getElementById(`cr-replace-sign-${recordId}`)?.checked) {
+    if (!/\.pdf$/i.test(file.name)) { alert('Only PDF files can be signed with a stamp.'); return; }
+    const p = await _dcPickPlacement(file);
+    if (!p) return;
+    _dcAppendPlacement(form, p);
+  }
+  const res = await authFetch(`${API}/control-reports/${recordId}/replace`, { method: 'POST', body: form });
+  const data = res ? await res.json().catch(() => ({})) : {};
+  if (!res || !res.ok) { alert('Error: ' + (data.error || 'The file could not be replaced.')); return; }
+  alert('🔄 Corrected file uploaded. The leader must now sign it.');
+  _crAfterChange(recordId);
+}
+
+async function _crAccept(recordId) {
+  const projectId = localStorage.getItem('activeProjectId');
+  const body = { projectId };
+  if (document.getElementById(`cr-sign-stamp-${recordId}`)?.checked) {
+    const p = await _dcPlacementForStoredDoc(recordId);
+    if (!p) return;
+    Object.assign(body, { applyStamp: 'true', stampPage: String(p.page), stampX: String(p.x), stampY: String(p.y), stampScale: String(p.scale || 1) });
+  }
+  if (await _dcPost(`/control-reports/${recordId}/accept`, body, '✍️ New file signed. It is visible to the side again.')) _crAfterChange(recordId);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -15651,6 +15593,8 @@ function _crOpenCreateForm() {
 
       </div>
 
+      <div style="padding:0 20px 14px;">${_dcSignOption('cr-sign-own')}</div>
+
       <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
         background:#fff;display:flex;gap:12px;">
         <button type="button" id="cr-add-save"
@@ -15706,6 +15650,12 @@ function _crOpenCreateForm() {
     form.append('title',       title);
     form.append('description', desc);
     form.append('file',        file);
+    if (document.getElementById('cr-sign-own')?.checked) {
+      if (!/\.pdf$/i.test(file.name)) return alert('Only PDF files can be signed with a stamp.');
+      const placed = await _dcPickPlacement(file);
+      if (!placed) return;
+      _dcAppendPlacement(form, placed);
+    }
 
     const btn = document.getElementById('cr-add-save');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
