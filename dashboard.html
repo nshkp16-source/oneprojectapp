@@ -14667,7 +14667,10 @@ function _daInputStyle() {
 // ═══════════════════════════════════════════════════════════════════════
 //  DOCUMENT & APPROVAL — Shell
 // ═══════════════════════════════════════════════════════════════════════
+let _daFolder = null;   // key of the folder open in Document & Approval (null = folder screen)
+let _crFolder = null;   // same for Control & Reports
 function _daRenderShell() {
+  _daFolder = null;
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
       <button class="btn primary" id="daAddBtn">➕ Submit Document</button>
@@ -14736,36 +14739,114 @@ async function _daLoadRecords() {
 // ═══════════════════════════════════════════════════════════════════════
 //  DOCUMENT & APPROVAL — Render list
 // ═══════════════════════════════════════════════════════════════════════
+// ── Folders (a document type is a folder) ─────────────────────────────────
+const DC_DRAFT_KEY = '__draft__';
+function _dcEnsureFolderCss() {
+  if (document.getElementById('dc-folder-css')) return;
+  const st = document.createElement('style');
+  st.id = 'dc-folder-css';
+  st.textContent = `
+    .dc-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:2px 0 8px;list-style:none;margin:0;}
+    .dc-folder{position:relative;display:flex;flex-direction:column;gap:4px;padding:14px 12px;border:1px solid #e5e7eb;border-radius:10px;background:#fafafa;cursor:pointer;list-style:none;}
+    .dc-folder:hover,.dc-folder:focus{background:#f3f4f6;outline:none;border-color:#9ca3af;}
+    .dc-folder-icon{font-size:20px;line-height:1;color:#6b7280;}
+    .dc-folder-name{font-size:13px;font-weight:600;color:#374151;word-break:break-word;}
+    .dc-folder-count{font-size:11px;color:#6b7280;}
+    .dc-folder--unread{background:#fff;border-color:#6b7280;}
+    .dc-folder--unread .dc-folder-name{font-weight:800;color:#111827;}
+    .dc-folder-badge{position:absolute;top:8px;right:8px;min-width:18px;padding:1px 6px;border-radius:999px;background:#111827;color:#fff;font-size:11px;font-weight:700;text-align:center;}
+    .dc-folder-bar{display:flex;align-items:center;gap:10px;padding:2px 0 10px;list-style:none;}
+    .dc-folder-back{border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;}
+    .dc-folder-title{font-size:14px;font-weight:700;color:#374151;}
+    .dc-new-chip{display:inline-block;padding:1px 7px;border-radius:999px;background:#111827;color:#fff;font-size:10px;font-weight:700;letter-spacing:.3px;}
+  `;
+  document.head.appendChild(st);
+}
+// Groups records into folders. withDraft adds the private Draft folder (always shown).
+function _dcBuildFolders(records, withDraft) {
+  const map = new Map();
+  const add = (key, label, isDraft) => {
+    if (!map.has(key)) map.set(key, { key, label, isDraft, items: [], unread: 0 });
+    return map.get(key);
+  };
+  if (withDraft) add(DC_DRAFT_KEY, 'Draft', true);
+  records.forEach(r => {
+    let f;
+    if (withDraft && r.status === 'draft') f = map.get(DC_DRAFT_KEY);
+    else {
+      const label = String(r.doc_type || 'Uncategorised').trim() || 'Uncategorised';
+      f = add(label.toLowerCase(), label, false);
+    }
+    f.items.push(r);
+    if (r.unread) f.unread++;
+  });
+  const list = [...map.values()];
+  list.sort((x, y) => (y.isDraft - x.isDraft) || (y.unread - x.unread) || x.label.localeCompare(y.label));
+  return list;
+}
+function _dcFolderGridHtml(folders) {
+  return `<li style="list-style:none;"><ul class="dc-folder-grid">${folders.map(f => `
+    <li class="dc-folder ${f.unread ? 'dc-folder--unread' : ''}" data-folder="${escapeHtml(f.key)}" role="button" tabindex="0">
+      ${f.unread ? `<span class="dc-folder-badge" title="${f.unread} unread">${f.unread}</span>` : ''}
+      <span class="dc-folder-icon">${f.isDraft ? '🔒' : '📁'}</span>
+      <span class="dc-folder-name">${escapeHtml(f.label)}</span>
+      <span class="dc-folder-count">${f.isDraft ? 'Private to you · ' : ''}${f.items.length} ${f.items.length === 1 ? 'document' : 'documents'}${f.unread ? ` · ${f.unread} new` : ''}</span>
+    </li>`).join('')}</ul></li>`;
+}
+function _dcFolderBarHtml(folder) {
+  return `<li class="dc-folder-bar"><button type="button" class="dc-folder-back" data-folder-back="1">← Folders</button>
+    <span class="dc-folder-title">${folder.isDraft ? '🔒' : '📁'} ${escapeHtml(folder.label)}</span></li>`;
+}
+function _dcWireFolders(list, onOpen, onBack) {
+  list.querySelectorAll('.dc-folder[data-folder]').forEach(el => {
+    const go = () => onOpen(el.getAttribute('data-folder'));
+    el.addEventListener('click', go);
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+  });
+  list.querySelector('[data-folder-back]')?.addEventListener('click', onBack);
+}
+// Opening a card marks it read for this person and clears its marker.
+async function _dcMarkRead(recordId, tabKey) {
+  const rec = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
+  if (!rec || !rec.unread) return;
+  rec.unread = false;
+  document.querySelectorAll(`.doc-item[data-id="${recordId}"][data-tab-key="${tabKey}"] .dc-new-chip`).forEach(c => c.remove());
+  try {
+    const projectId = localStorage.getItem('activeProjectId');
+    await _daAuthFetch(`${API}/documents/${recordId}/read`, { method: 'POST', body: { projectId } });
+  } catch (e) { console.warn('mark read failed', e); }
+}
+function _dcNewChip(doc) { return doc.unread ? '<span class="dc-new-chip">NEW</span>' : ''; }
+
 function _daRenderList(records) {
   const list        = document.getElementById('recordsList');
   const placeholder = document.querySelector('.no-data-placeholder');
   if (!list || !placeholder) return;
+  _dcEnsureFolderCss();
 
-  if (!records.length) {
-    list.innerHTML            = '';
-    placeholder.style.display = 'block';
+  const folders = _dcBuildFolders(records, true);
+  const open = _daFolder ? folders.find(f => f.key === _daFolder) : null;
+  if (_daFolder && !open) _daFolder = null;
+
+  // Folder screen first
+  if (!open) {
+    placeholder.style.display = records.length ? 'none' : 'block';
+    list.innerHTML = _dcFolderGridHtml(folders);
+    _dcWireFolders(list, key => { _daFolder = key; _daRenderList(records); }, () => {});
     return;
   }
+
   placeholder.style.display = 'none';
-
-  const byType = {};
-  records.forEach(r => {
-    const key = r.doc_type || 'Uncategorised';
-    if (!byType[key]) byType[key] = [];
-    byType[key].push(r);
-  });
-
-  list.innerHTML = Object.entries(byType).map(([type, items]) => {
-    const typeHeader = `<li class="dc-group-title">${escapeHtml(type)}</li>`;
-    const cards = items.map(doc => {
-      const mine = _dcIsAuthor(doc);
-      return `
+  const cards = open.items.map(doc => {
+    const mine = _dcIsAuthor(doc);
+    return `
         <li class="doc-item record-card" data-id="${escapeHtml(String(doc.id))}" data-tab-key="document-approval">
           <div class="doc-item-header record-card-header" data-action="toggle" aria-expanded="false" role="button" tabindex="0">
             <div class="rc-main">
               <div class="rc-title-row">
                 <span class="rc-title" title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</span>
-                <span class="rc-chip rc-chip--muted">${escapeHtml(doc.doc_type || 'Document')}</span>
+                ${_dcNewChip(doc)}
+                <span class="rc-chip rc-chip--muted">${escapeHtml(open.isDraft ? 'Draft' : (doc.doc_type || 'Document'))}</span>
                 ${mine ? '<span class="rc-chip rc-chip--ok">Mine</span>' : ''}
               </div>
               <div class="rc-meta">
@@ -14784,9 +14865,9 @@ function _daRenderList(records) {
             </div>
           </div>
         </li>`;
-    }).join('');
-    return typeHeader + cards;
   }).join('');
+  list.innerHTML = _dcFolderBarHtml(open) + (cards || `<li style="list-style:none;padding:14px 4px;color:#6b7280;font-size:13px;">${open.isDraft ? 'Your Draft folder is empty. Choose Draft when you submit a document to keep it here.' : 'This folder is empty.'}</li>`);
+  _dcWireFolders(list, () => {}, () => { _daFolder = null; _daRenderList(recordsCache['document-approval'] || records); });
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -14795,6 +14876,7 @@ function _daRenderList(records) {
 async function _daLoadDetail(recordId) {
   const container = document.getElementById(`da-detail-inner-${recordId}`);
   if (!container) return;
+  _dcMarkRead(recordId, 'document-approval');
 
   const doc = (recordsCache['document-approval'] || []).find(r => String(r.id) === String(recordId));
   if (!doc) {
@@ -14804,7 +14886,7 @@ async function _daLoadDetail(recordId) {
 
   const userSide  = wcSide(window.currentUserRole);
   const leader    = typeof doc.can_review === 'boolean'
-    ? doc.can_review                       // the server decides: leader of this side, or the leader who assigned the author
+    ? doc.can_review                       // the server decides: leader of this side, or the leader who assigned the submitter
     : (userSide !== null && userSide.toLowerCase() === (doc.side || '').toLowerCase());
   const isCreator = _dcIsAuthor(doc);
 
@@ -14951,20 +15033,20 @@ function _dcStory(doc, inControl) {
   const signer = _dcPerson(doc.signed_by_name, doc.approved_by_role);
   const stampSub = id => id ? `Stamp ID ${id}` : '';
   ev.push({ state: 'start', icon: 'file', text: `${author} wrote this document.`, when: doc.created_at,
-            sub: doc.author_stamp_id ? `The author signed it with a stamp. ${stampSub(doc.author_stamp_id)}` : '' });
+            sub: doc.author_stamp_id ? `The submitter signed it with a stamp. ${stampSub(doc.author_stamp_id)}` : '' });
   const signedOff = doc.status === 'approved' || doc.status === 'shared' || inControl;
   if (signedOff) ev.push({ state: 'done', icon: 'check', text: `${signer} signed this document.`, when: doc.reviewed_at, sub: doc.signer_stamp_id ? `Stamp on the document. ${stampSub(doc.signer_stamp_id)}` : 'Signed without a stamp.' });
   if (!inControl) {
     if (doc.status === 'draft') ev.push({ state: 'pending', icon: 'clock', text: 'This document has not been sent to the leader yet.' });
     else if (doc.status === 'pending_approval') ev.push({ state: 'pending', icon: 'clock', text: `Waiting for the leader of the ${rcSideWord(doc.side)} side to review it.` });
-    else if (doc.status === 'rejected') ev.push({ state: 'rejected', icon: 'x', text: 'The leader returned this document to the author.' });
+    else if (doc.status === 'rejected') ev.push({ state: 'rejected', icon: 'x', text: 'The leader returned this document to the submitter.' });
     else if (doc.status === 'approved') ev.push({ state: 'pending', icon: 'clock', text: 'Signed. The leader has not shared it to Control & Reports yet.' });
     else if (doc.status === 'shared') ev.push({ state: 'done', icon: 'check', text: 'Shared to Control & Reports. The whole side can now read it and comment.', when: doc.shared_at });
   } else {
     const cr = doc.cr_status || 'shared';
     ev.push({ state: 'done', icon: 'check', text: 'Shared to Control & Reports. The whole side can read it and comment.', when: doc.shared_at });
     if (cr === 'rejected') ev.push({ state: 'rejected', icon: 'x', text: `The ${rcRoleLabel(doc.cr_rejected_by_role) || 'leader'} rejected this document.`, when: doc.cr_rejected_at });
-    if (cr === 'replacement_pending') ev.push({ state: 'pending', icon: 'clock', text: 'The author uploaded a corrected file. Waiting for the leader to sign it.', when: doc.replaced_at });
+    if (cr === 'replacement_pending') ev.push({ state: 'pending', icon: 'clock', text: 'The submitter uploaded a corrected file. Waiting for the leader to sign it.', when: doc.replaced_at });
   }
   return ev;
 }
@@ -14972,11 +15054,11 @@ function _dcProgress(doc, inControl) {
   const signedOff = doc.status === 'approved' || doc.status === 'shared' || inControl;
   const shared = doc.status === 'shared' || inControl;
   const steps = [
-    { title: 'Written by the author', status: 'done', text: `${_dcPerson(doc.creator_name, doc.creator_role)} wrote this document.`, when: doc.created_at },
+    { title: 'Written by the submitter', status: 'done', text: `${_dcPerson(doc.creator_name, doc.creator_role)} wrote this document.`, when: doc.created_at },
     doc.status === 'rejected' && !inControl
-      ? { title: 'Review by the leader', status: 'rejected', text: 'The leader returned it. The author can correct it and send it again.' }
+      ? { title: 'Review by the leader', status: 'rejected', text: 'The leader returned it. The submitter can correct it and send it again.' }
       : { title: 'Signed by the leader', status: signedOff ? 'done' : (doc.status === 'pending_approval' ? 'pending' : 'waiting'),
-          text: signedOff ? `${_dcPerson(doc.signed_by_name, doc.approved_by_role)} signed it.` : doc.status === 'pending_approval' ? 'Waiting for the leader to sign it or return it.' : 'Starts after the author sends it to the leader.',
+          text: signedOff ? `${_dcPerson(doc.signed_by_name, doc.approved_by_role)} signed it.` : doc.status === 'pending_approval' ? 'Waiting for the leader to sign it or return it.' : 'Starts after the submitter sends it to the leader.',
           when: signedOff ? doc.reviewed_at : null },
     { title: 'Shared to Control & Reports', status: shared ? 'done' : (signedOff ? 'pending' : 'waiting'),
       text: shared ? 'Everyone on this side can read it and comment.' : signedOff ? 'Waiting for the leader to share it.' : 'Starts after the leader signs it.', when: shared ? doc.shared_at : null },
@@ -14985,14 +15067,14 @@ function _dcProgress(doc, inControl) {
     const cr = doc.cr_status || 'shared';
     if (cr === 'rejected' || cr === 'replacement_pending' || doc.replaced_at) {
       steps.push({ title: 'Rejected by the leader', status: 'rejected', text: doc.cr_reject_reason ? `Reason: ${doc.cr_reject_reason}` : 'The leader rejected this document.', when: doc.cr_rejected_at });
-      steps.push({ title: 'Corrected file from the author', status: cr === 'rejected' ? 'pending' : 'done', text: cr === 'rejected' ? 'Waiting for the author to upload a corrected file.' : 'The author uploaded a corrected file.', when: doc.replaced_at });
+      steps.push({ title: 'Corrected file from the submitter', status: cr === 'rejected' ? 'pending' : 'done', text: cr === 'rejected' ? 'Waiting for the submitter to upload a corrected file.' : 'The submitter uploaded a corrected file.', when: doc.replaced_at });
       steps.push({ title: 'Corrected file signed by the leader', status: cr === 'replacement_pending' ? 'pending' : (cr === 'shared' && doc.replaced_at ? 'done' : 'waiting'),
                   text: cr === 'replacement_pending' ? 'Waiting for the leader to sign the corrected file.' : (cr === 'shared' && doc.replaced_at ? 'The corrected file is signed and visible to the side again.' : 'Starts after the corrected file is uploaded.') });
     }
   }
   const done = steps.filter(s => s.status === 'done').length;
   const rejected = steps.some(s => s.status === 'rejected' && s === steps[steps.length - 1]);
-  const headline = doc.status === 'rejected' && !inControl ? 'This document was returned to the author.'
+  const headline = doc.status === 'rejected' && !inControl ? 'This document was returned to the submitter.'
     : (inControl && (doc.cr_status === 'rejected' || doc.cr_status === 'replacement_pending')) ? 'This document is being corrected.'
     : done === steps.length ? 'Every step is finished.' : `${done} of ${steps.length} steps are finished.`;
   return { steps, done, headline };
@@ -15004,7 +15086,7 @@ function _dcDetailsHtml(doc, inControl) {
     Document: [['Reference', escapeHtml('#' + doc.id)], ['Type', escapeHtml(doc.doc_type || 'Not given')],
                ['Version', doc.replaced_at ? 'Corrected file' : 'First file']],
     Submission: [['Written by', escapeHtml(_dcPerson(doc.creator_name, doc.creator_role))], ['Date written', escapeHtml(rcDate(doc.created_at, true))],
-                 ['Author\'s stamp', doc.author_stamp_id ? `Stamped and signed (${escapeHtml(doc.author_stamp_id)})` : 'Not stamped']],
+                 ['Submitter\'s stamp', doc.author_stamp_id ? `Stamped and signed (${escapeHtml(doc.author_stamp_id)})` : 'Not stamped']],
     'Sign-off': [['Current status', status],
                  ['Signed by', doc.reviewed_at && (doc.signed_by_name || doc.approved_by_role) ? escapeHtml(_dcPerson(doc.signed_by_name, doc.approved_by_role)) : ''],
                  ['Signed on', doc.reviewed_at && (doc.signed_by_name || doc.approved_by_role) ? escapeHtml(rcDate(doc.reviewed_at, true)) : ''],
@@ -15027,18 +15109,25 @@ function _daDetailHtml(doc, leader, isCreator) {
   }
   if (leader && doc.status === 'pending_approval') {
     before = `
-      <label style="${_daLabelStyle()}">Reason <span style="text-transform:none;font-weight:400;color:#94a3b8;">(only needed when you return the document)</span></label>
-      <textarea id="da-review-comment-${id}" placeholder="Say what must be corrected…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:10px;"></textarea>
-      <div style="margin-bottom:4px;">${_dcSignOption('da-sign-stamp-' + id, 'Puts your stamp on the PDF. You choose the position next.')}</div>`;
-    bar = _dcBtn('da-approve', 'Sign document', 'ok', 'check') + _dcBtn('da-reject', 'Return to author', 'danger', 'x');
+      <div id="da-reason-box-${id}" style="display:none;">
+        <label style="${_daLabelStyle()}">Reason for returning *</label>
+        <textarea id="da-review-comment-${id}" placeholder="Say what must be corrected…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:6px;"></textarea>
+        <div style="font-size:11px;color:#6b7280;margin-bottom:10px;">Press <strong>Send back to submitter</strong> to return it, or <a href="#" data-action-link="da-reason-cancel" style="color:#374151;">cancel</a>.</div>
+      </div>
+      <div id="da-sign-box-${id}" style="margin-bottom:4px;">${_dcSignOption('da-sign-stamp-' + id, 'Puts your stamp on the PDF. You choose the position next.')}</div>`;
+    bar = _dcBtn('da-approve', 'Sign document', 'ok', 'check') + _dcBtn('da-reject', 'Return to submitter', 'danger', 'x');
   } else if (leader && doc.status === 'approved') {
     bar = _dcBtn('da-share', 'Share to Control &amp; Reports', 'warn', 'inbox') + (isCreator ? _dcBtn('da-delete', 'Delete', 'danger', 'trash') : '');
   } else if (isCreator && doc.status === 'draft') {
-    bar = _dcBtn('da-submit', 'Send to leader', 'warn', 'inbox') + _dcBtn('da-delete', 'Delete', 'danger', 'trash');
+    before = `<label style="${_daLabelStyle()}">Choose a folder to send it</label>
+      <select id="da-send-type-${id}" style="${_daInputStyle()} cursor:pointer;"><option value="">— Select folder —</option>${DA_DOC_TYPES.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}</select>
+      ${_dcTypeInputHtml('da-send-type-' + id, '')}
+      <div style="font-size:11px;color:#6b7280;margin:6px 0 4px;">Choosing a folder makes the document readable by your leader. Until then it stays private in your Draft folder.</div>`;
+    bar = _dcBtn('da-send', 'Send to folder', 'warn', 'inbox') + _dcBtn('da-delete', 'Delete', 'danger', 'trash');
   } else if (isCreator && doc.status === 'rejected') {
     bar = _dcBtn('da-resubmit', 'Resubmit corrected file', 'warn', 'history') + _dcBtn('da-delete', 'Delete', 'danger', 'trash');
   } else if (doc.status === 'pending_approval') {
-    note = rcNote('Only the author and the leader can see this document until it is shared.', 'lock');
+    note = rcNote('Only the submitter and the leader can see this document until the leader shares it.', 'lock');
   } else if (doc.status === 'shared') {
     note = rcNote('This document is now in Control &amp; Reports, where everyone on this side can read it and comment.', 'check', 'success');
   }
@@ -15060,12 +15149,12 @@ function _daDetailHtml(doc, leader, isCreator) {
 
 // ── Control & Reports ─────────────────────────────────────────────────────
 function _crThreadHtml(comments) {
-  if (!comments.length) return `<p class="rc-text rc-text--empty">Nobody has commented yet. If you see an error in this document, write it here so it can be corrected.</p>`;
+  if (!comments.length) return `<p class="rc-text rc-text--empty">Nobody has raised a query yet. If a detail is missing or unclear in this document, ask it here.</p>`;
   return `<ul class="rc-reviews">${comments.map(c => `
     <li class="rc-review">
       <div class="rc-review-head">
         <span class="rc-review-name">${escapeHtml(c.author_name || rcRoleLabel(c.author_role) || 'A project member')}</span>
-        <span class="rc-status rc-status--${c.kind === 'recommendation' ? 'pending' : 'info'}">${c.kind === 'recommendation' ? 'Recommendation' : 'Comment'}</span>
+        <span class="rc-status rc-status--${c.kind === 'recommendation' ? 'pending' : 'info'}">${c.kind === 'recommendation' ? 'Recommendation' : (c.kind === 'query' ? 'Query' : 'Comment')}</span>
       </div>
       <div class="rc-review-sub">${escapeHtml([c.author_name ? rcRoleLabel(c.author_role) : '', rcDate(c.created_at, true)].filter(Boolean).join(' · '))}</div>
       <p class="rc-text">${escapeHtml(c.body)}</p>
@@ -15077,9 +15166,9 @@ function _crDetailHtml(doc, ctx) {
   const id = doc.id, cr = doc.cr_status || 'shared';
   let note = '', before = '', bar = '';
   if (cr === 'rejected') {
-    note = rcNote(`The leader rejected this document. Reason: <strong>${escapeHtml(doc.cr_reject_reason || 'No reason was written.')}</strong> Only the author and the leader can see it until a corrected file is signed.`, 'x', 'danger');
+    note = rcNote(`The leader rejected this document. Reason: <strong>${escapeHtml(doc.cr_reject_reason || 'No reason was written.')}</strong> Only the submitter and the leader can see it until a corrected file is signed.`, 'x', 'danger');
   } else if (cr === 'replacement_pending') {
-    note = rcNote('The author uploaded a corrected file. The side will see it again once the leader signs it.', 'clock');
+    note = rcNote('The submitter uploaded a corrected file. The side will see it again once the leader signs it.', 'clock');
   }
   if (leader && cr === 'shared') {
     before = `<label style="${_daLabelStyle()}">Reject this document</label>
@@ -15093,13 +15182,17 @@ function _crDetailHtml(doc, ctx) {
   } else if (author && cr === 'rejected') {
     before = `<label style="${_daLabelStyle()}">Corrected file</label>
       <input type="file" id="cr-replace-file-${id}" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png" style="margin-bottom:10px;"/>
+      <div style="margin-bottom:10px;font-size:13px;color:#374151;">
+        <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;cursor:pointer;"><input type="radio" name="cr-replace-mode-${id}" value="revision" checked style="margin-top:3px;"/><span><strong>Keep as a revision</strong><br><span style="font-size:11px;color:#6b7280;">Same card. The earlier file stays in the history.</span></span></label>
+        <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;"><input type="radio" name="cr-replace-mode-${id}" value="replace" style="margin-top:3px;"/><span><strong>Replace the first file completely</strong><br><span style="font-size:11px;color:#6b7280;">The earlier file is removed from the history.</span></span></label>
+      </div>
       <div style="margin-bottom:4px;">${_dcSignOption('cr-replace-sign-' + id)}</div>`;
     bar = _dcBtn('cr-replace', 'Upload corrected file', 'warn', 'history');
   }
   const standing = rcSection('info', 'Where this document stands',
     _dcEvents(_dcStory(doc, true)) + note + before + (bar ? `<div class="rc-actionbar">${bar}</div>` : ''));
 
-  const earlier = versions.length ? `<div class="rc-earlier-bar" style="margin-top:12px;"><p class="rc-text">Earlier files that were rejected</p></div>` + versions.map(v => `
+  const earlier = versions.length ? `<div class="rc-earlier-bar" style="margin-top:12px;"><p class="rc-text">Earlier revisions (rejected)</p></div>` + versions.map(v => `
       <div class="rc-item rc-item--file"><span class="rc-file-icon">${rcIcon('paperclip')}</span><div class="rc-item-body">
         <div class="rc-item-head"><span class="rc-item-title">${escapeHtml(v.file_name || 'File')}</span><span class="rc-tag">Rejected</span></div>
         <p class="rc-item-text">Rejected on ${escapeHtml(rcDate(v.created_at, true))}. Reason: ${escapeHtml(v.reason || 'Not written')}</p></div></div>`).join('') : '';
@@ -15107,9 +15200,9 @@ function _crDetailHtml(doc, ctx) {
   const canComment = cr === 'shared' || leader || author;
   const box = canComment ? `
     <div class="rc-actionbar" style="display:block;">
-      <label style="${_daLabelStyle()}">Add to the discussion</label>
-      <select id="cr-comment-kind-${id}" style="${_daInputStyle()} margin-bottom:8px;"><option value="comment">Comment</option><option value="recommendation">Recommendation</option></select>
-      <textarea id="cr-comment-body-${id}" placeholder="Write what you noticed or what should change…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:10px;"></textarea>
+      <label style="${_daLabelStyle()}">Raise a query</label>
+      <select id="cr-comment-kind-${id}" style="${_daInputStyle()} margin-bottom:8px;"><option value="query">Query (ask about something missing or unclear)</option><option value="recommendation">Recommendation</option></select>
+      <textarea id="cr-comment-body-${id}" placeholder="e.g. The beam detail is missing on this drawing…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:10px;"></textarea>
       ${_dcBtn('cr-comment', 'Post', 'warn', 'chat')}
     </div>` : '';
   const recs = comments.filter(c => c.kind === 'recommendation').length;
@@ -15119,13 +15212,13 @@ function _crDetailHtml(doc, ctx) {
     { key: 'documents', label: 'Document', count: (doc.file_name ? 1 : 0) + versions.length || '',
       headline: doc.file_name ? 'The current file is attached to this document.' : 'No file is attached to this document.',
       sub: versions.length ? `${rcPlural(versions.length, 'earlier file was', 'earlier files were')} rejected.` : 'You can download the file.',
-      html: rcSection('paperclip', 'File attached to this document', _dcFileItem('cr', doc, cr === 'shared' ? 'Current file' : 'Under correction', `Shared on ${rcDate(doc.shared_at, true)}.`) + earlier) },
+      html: rcSection('paperclip', 'File attached to this document', _dcFileItem('cr', doc, cr === 'shared' ? (versions.length ? `Current file (revision ${versions.length + 1})` : 'Current file') : 'Under correction', `Shared on ${rcDate(doc.shared_at, true)}.`) + earlier) },
     { key: 'progress', label: 'Progress', headline: prog.headline, sub: '',
       html: rcSection('workflow', 'Progress of this document', _dcTimeline(prog.steps), `${prog.done} of ${prog.steps.length} steps`) },
-    { key: 'comments', label: 'Comments', count: comments.length || '',
-      headline: comments.length ? `${rcPlural(comments.length, 'comment has', 'comments have')} been written on this document.` : 'Nobody has commented on this document yet.',
-      sub: comments.length ? `${rcPlural(recs, 'recommendation', 'recommendations')} so far. Everyone on this side can read and answer.` : 'Everyone on this side can write here.',
-      html: rcSection('chat', 'Comments and recommendations', `<div id="cr-thread-${id}">${_crThreadHtml(comments)}</div>${box}`, comments.length ? rcPlural(comments.length, 'entry', 'entries') : '') },
+    { key: 'comments', label: 'Queries', count: comments.length || '',
+      headline: comments.length ? `${rcPlural(comments.length, 'entry has', 'entries have')} been written on this document.` : 'Nobody has raised a query on this document yet.',
+      sub: comments.length ? `${rcPlural(recs, 'recommendation', 'recommendations')} so far. Colleagues on this side only ask queries, there is no approval between them.` : 'Everyone on this side can raise a query here.',
+      html: rcSection('chat', 'Queries and recommendations', `<div id="cr-thread-${id}">${_crThreadHtml(comments)}</div>${box}`, comments.length ? rcPlural(comments.length, 'entry', 'entries') : '') },
   ];
   return standing + rcDeckHtml(slides, comments.length && cr === 'shared' ? 'comments' : 'details');
 }
@@ -15133,6 +15226,7 @@ function _crDetailHtml(doc, ctx) {
 async function _crLoadDetail(recordId) {
   const container = document.getElementById(`cr-detail-inner-${recordId}`);
   if (!container) return;
+  _dcMarkRead(recordId, 'control-reports');
   const doc = (recordsCache['control-reports'] || []).find(r => String(r.id) === String(recordId));
   if (!doc) { container.innerHTML = '<p class="dc-loading" style="color:#b91c1c;">Document not found.</p>'; return; }
   const projectId = localStorage.getItem('activeProjectId');
@@ -15161,9 +15255,26 @@ function _daWireDetailButtons(recordId, doc, leader, isCreator) {
   const container = document.getElementById(`da-detail-inner-${recordId}`);
   if (!container) return;
   container.querySelector('[data-action="da-approve"]')  ?.addEventListener('click', () => _daReview(recordId, 'approved'));
-  container.querySelector('[data-action="da-reject"]')   ?.addEventListener('click', () => _daReview(recordId, 'rejected'));
+  const _reasonBox = container.querySelector(`#da-reason-box-${recordId}`);
+  const _rejectBtn = container.querySelector('[data-action="da-reject"]');
+  const _setRejectLabel = txt => { if (_rejectBtn) { const kids = _rejectBtn.children; if (kids.length) kids[kids.length - 1].textContent = txt; } };
+  _rejectBtn?.addEventListener('click', () => {
+    if (_reasonBox && _reasonBox.style.display === 'none') {   // first press only opens the reason box
+      _reasonBox.style.display = 'block';
+      container.querySelector(`#da-review-comment-${recordId}`)?.focus();
+      _setRejectLabel('Send back to submitter');
+      return;
+    }
+    _daReview(recordId, 'rejected');
+  });
+  container.querySelector('[data-action-link="da-reason-cancel"]')?.addEventListener('click', e => {
+    e.preventDefault();
+    if (_reasonBox) _reasonBox.style.display = 'none';
+    _setRejectLabel('Return to submitter');
+  });
+  _dcWireTypeField(`da-send-type-${recordId}`);
+  container.querySelector('[data-action="da-send"]')?.addEventListener('click', () => _daSendDraft(recordId));
   container.querySelector('[data-action="da-share"]')    ?.addEventListener('click', () => _daShare(recordId));
-  container.querySelector('[data-action="da-submit"]')   ?.addEventListener('click', () => _daSubmitForApproval(recordId));
   container.querySelector('[data-action="da-resubmit"]') ?.addEventListener('click', () => _daOpenCreateForm(doc));
   container.querySelector('[data-action="da-delete"]')   ?.addEventListener('click', () => _daDelete(recordId));
   container.querySelector('[data-action="da-download"]') ?.addEventListener('click', e => {
@@ -15179,13 +15290,23 @@ async function _daReview(docId, action) {
   const comment = document.getElementById(`da-review-comment-${docId}`)?.value.trim() || '';
   const body = { projectId, action, comment };
   if (action === 'rejected') {
-    if (comment.length < 3) { alert('Write the reason first, so the author knows what to correct.'); return; }
+    if (comment.length < 3) { alert('Write the reason first, so the submitter knows what to correct.'); return; }
   } else if (document.getElementById(`da-sign-stamp-${docId}`)?.checked) {
     const p = await _dcPlacementForStoredDoc(docId);
     if (!p) return;
     Object.assign(body, { applyStamp: 'true', stampPage: String(p.page), stampX: String(p.x), stampY: String(p.y), stampScale: String(p.scale || 1) });
   }
-  const ok = await _dcPost(`/document-approval/${docId}/review`, body, action === 'approved' ? '✍️ Document signed.' : '↩️ Document returned to the author.');
+  const ok = await _dcPost(`/document-approval/${docId}/review`, body, action === 'approved' ? '✍️ Document signed.' : '↩️ Document returned to the submitter.');
+  if (ok) { delete recordsCache['document-approval']; _daLoadRecords(); }
+}
+
+// Draft -> folder: the document becomes readable by the submitter's leader.
+async function _daSendDraft(docId) {
+  const projectId = localStorage.getItem('activeProjectId');
+  if (!projectId) { alert('No project selected.'); return; }
+  const type = _dcReadType(`da-send-type-${docId}`);
+  if (!type) { alert(_dcTypeMissingMsg(`da-send-type-${docId}`)); return; }
+  const ok = await _dcPost(`/document-approval/${docId}/submit`, { projectId, doc_type: type }, `📤 Sent to the "${type}" folder.`);
   if (ok) { delete recordsCache['document-approval']; _daLoadRecords(); }
 }
 
@@ -15292,9 +15413,14 @@ function _daOpenCreateForm(existingDoc = null) {
   if (existingDoc && (typeof Event !== 'undefined') && existingDoc instanceof Event) existingDoc = null;
   const isEdit      = existingDoc !== null && typeof existingDoc === 'object';
   const v           = f => escapeHtml(String(existingDoc?.[f] ?? ''));
-  const knownType   = DA_DOC_TYPES.includes(existingDoc?.doc_type);
+  // Opened from inside a folder: start with that folder chosen (the Draft folder starts on Draft).
+  const inDraftFolder = !isEdit && _daFolder === DC_DRAFT_KEY;
+  const openLabel = (!isEdit && _daFolder && _daFolder !== DC_DRAFT_KEY)
+    ? ((_dcBuildFolders(recordsCache['document-approval'] || [], true).find(f => f.key === _daFolder) || {}).label || null) : null;
+  const curType     = existingDoc?.doc_type ?? openLabel;
+  const knownType   = DA_DOC_TYPES.includes(curType);
   const typeOptions = DA_DOC_TYPES.map(t =>
-    `<option value="${t}" ${(existingDoc?.doc_type === t || (!knownType && existingDoc?.doc_type && t === 'Other')) ? 'selected' : ''}>${escapeHtml(t)}</option>`
+    `<option value="${t}" ${(curType === t || (!knownType && curType && t === 'Other')) ? 'selected' : ''}>${escapeHtml(t)}</option>`
   ).join('');
 
   expandGrayPart(`
@@ -15308,12 +15434,14 @@ function _daOpenCreateForm(existingDoc = null) {
       <div style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
 
         <div>
-          <label style="${_daLabelStyle()}">Document Type *</label>
+          <label style="${_daLabelStyle()}">${isEdit ? 'Folder (document type) *' : 'Submit as *'}</label>
           <select id="da-cr-type" style="${_daInputStyle()} cursor:pointer;">
-            <option value="">— Select type —</option>
+            <option value="">— Select —</option>
+            ${isEdit ? '' : `<option value="${DC_DRAFT_KEY}" ${inDraftFolder ? 'selected' : ''}>🔒 Draft (keep private in my Draft folder)</option>`}
             ${typeOptions}
           </select>
-          ${_dcTypeInputHtml('da-cr-type', existingDoc?.doc_type)}
+          ${_dcTypeInputHtml('da-cr-type', curType)}
+          ${isEdit ? '' : `<div style="font-size:11px;color:#6b7280;margin-top:6px;">Draft keeps it private. Any folder shares it with your leader. Choose <strong>Other</strong> to type a new folder name.</div>`}
         </div>
 
         <div>
@@ -15361,7 +15489,7 @@ function _daOpenCreateForm(existingDoc = null) {
         <button type="button" id="da-cr-save"
           style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#007B8A;
           color:#fff;border:none;border-radius:8px;cursor:pointer;">
-          💾 ${isEdit ? 'Resubmit' : 'Save Draft'}</button>
+          <span id="da-cr-save-label">${isEdit ? '💾 Resubmit' : (inDraftFolder ? '💾 Save to Draft' : '📤 Submit')}</span></button>
         <button type="button" onclick="collapseGrayPart()"
           style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#f5f5f5;
           color:#333;border:1px solid #ddd;border-radius:8px;cursor:pointer;">
@@ -15394,21 +15522,27 @@ function _daOpenCreateForm(existingDoc = null) {
   fileInput.addEventListener('change', _updateFileDisplay);
 
   _dcWireTypeField('da-cr-type');
+  document.getElementById('da-cr-type')?.addEventListener('change', e => {
+    const lab = document.getElementById('da-cr-save-label');
+    if (lab && !isEdit) lab.textContent = e.target.value === DC_DRAFT_KEY ? '💾 Save to Draft' : '📤 Submit';
+  });
   document.getElementById('da-cr-save')?.addEventListener('click', async () => {
-    const type  = _dcReadType('da-cr-type');
+    const toDraft = !isEdit && document.getElementById('da-cr-type')?.value === DC_DRAFT_KEY;
+    const type  = toDraft ? '' : _dcReadType('da-cr-type');
     const title = document.getElementById('da-cr-title')?.value.trim();
     const desc  = document.getElementById('da-cr-desc')?.value.trim();
     const file  = fileInput.files?.[0];
 
-    if (!type)                            return alert(_dcTypeMissingMsg('da-cr-type'));
+    if (!toDraft && !type)                return alert(document.getElementById('da-cr-type')?.value ? _dcTypeMissingMsg('da-cr-type') : 'Choose Draft or a folder first.');
     if (!title)                           return alert('Title is required.');
-    if (!desc)                            return alert('Description is required.');
+    if (!toDraft && !desc)                return alert('Description is required.');
     if (!isEdit && !file)                 return alert('Please attach a file.');
     if (file && file.size > 20*1024*1024) return alert('File size must not exceed 20 MB.');
 
     const form = new FormData();
     form.append('projectId',   projectId);
-    form.append('doc_type',    type);
+    if (type) form.append('doc_type', type);
+    if (toDraft) form.append('submit_to', 'draft');
     form.append('title',       title);
     form.append('description', desc);
     if (isEdit) form.append('docId', existingDoc.id);
@@ -15433,14 +15567,18 @@ function _daOpenCreateForm(existingDoc = null) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || 'Failed to save document');
 
-      alert(isEdit ? '✓ Document resubmitted.' : '✓ Draft saved.');
+      const _leaderSelf = typeof wcSide === 'function' && wcSide(window.currentUserRole) !== null;
+      alert(isEdit ? '✓ Document resubmitted.'
+        : toDraft ? '✓ Saved in your Draft folder. Only you can see it.'
+        : _leaderSelf ? `✓ Signed and filed in the "${type}" folder. Share it to Control & Reports when you are ready.`
+        : `✓ Sent to your leader in the "${type}" folder.`);
       delete recordsCache['document-approval'];
       collapseGrayPart();
       _daLoadRecords();
     } catch (err) {
       console.error('DA save error:', err);
       alert('Error: ' + err.message);
-      if (btn) { btn.disabled = false; btn.textContent = isEdit ? 'Resubmit' : 'Save Draft'; }
+      if (btn) { btn.disabled = false; btn.innerHTML = '<span id="da-cr-save-label">' + (isEdit ? '💾 Resubmit' : (toDraft ? '💾 Save to Draft' : '📤 Submit')) + '</span>'; }
     }
   });
 }
@@ -15449,6 +15587,7 @@ function _daOpenCreateForm(existingDoc = null) {
 //  CONTROL & REPORT — Shell
 // ═══════════════════════════════════════════════════════════════════════
 function _crRenderShell() {
+  _crFolder = null;
   const leader = isWCLeader(window.currentUserRole);
 
   bottomContent.innerHTML = `
@@ -15533,22 +15672,29 @@ function _crRenderList(records) {
   const list        = document.getElementById('recordsList');
   const placeholder = document.querySelector('.no-data-placeholder');
   if (!list || !placeholder) return;
-  if (!records.length) { list.innerHTML = ''; placeholder.style.display = 'block'; return; }
+  _dcEnsureFolderCss();
+
+  const folders = _dcBuildFolders(records, false);
+  const open = _crFolder ? folders.find(f => f.key === _crFolder) : null;
+  if (_crFolder && !open) _crFolder = null;
+
+  if (!open) {
+    placeholder.style.display = records.length ? 'none' : 'block';
+    list.innerHTML = records.length ? _dcFolderGridHtml(folders) : '';
+    _dcWireFolders(list, key => { _crFolder = key; _crRenderList(records); }, () => {});
+    return;
+  }
+
   placeholder.style.display = 'none';
-
-  const byType = {};
-  records.forEach(r => { (byType[r.doc_type || 'Uncategorised'] ||= []).push(r); });
-
-  list.innerHTML = Object.entries(byType).map(([type, items]) => {
-    const typeHeader = `<li class="dc-group-title">${escapeHtml(type)}</li>`;
-    const cards = items.map(doc => `
+  const cards = open.items.map(doc => `
       <li class="doc-item record-card" data-id="${escapeHtml(String(doc.id))}" data-tab-key="control-reports">
         <div class="doc-item-header record-card-header" data-action="toggle" aria-expanded="false" role="button" tabindex="0">
           <div class="rc-main">
             <div class="rc-title-row">
               <span class="rc-title" title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</span>
+              ${_dcNewChip(doc)}
               <span class="rc-chip rc-chip--muted">${escapeHtml(doc.doc_type || 'Document')}</span>
-              ${doc.comment_count ? `<span class="rc-chip rc-chip--notice">${doc.comment_count} ${doc.comment_count === 1 ? 'comment' : 'comments'}</span>` : ''}
+              ${doc.comment_count ? `<span class="rc-chip rc-chip--notice">${doc.comment_count} ${doc.comment_count === 1 ? 'query' : 'queries'}</span>` : ''}
             </div>
             <div class="rc-meta">
               <span class="rc-meta-item">${rcIcon('user')}<span>Submitted by ${escapeHtml(doc.creator_name || rcRoleLabel(doc.creator_role) || 'a project member')}</span></span>
@@ -15566,8 +15712,8 @@ function _crRenderList(records) {
           </div>
         </div>
       </li>`).join('');
-    return typeHeader + cards;
-  }).join('');
+  list.innerHTML = _dcFolderBarHtml(open) + cards;
+  _dcWireFolders(list, () => {}, () => { _crFolder = null; _crRenderList(recordsCache['control-reports'] || records); });
 }
 
 async function _crAfterChange(recordId) {
@@ -15588,9 +15734,9 @@ async function _crPostComment(recordId) {
 async function _crReject(recordId) {
   const projectId = localStorage.getItem('activeProjectId');
   const reason = document.getElementById(`cr-reject-reason-${recordId}`)?.value.trim() || '';
-  if (reason.length < 3) { alert('Write the reason first, so the author knows what to correct.'); return; }
-  if (!confirm('Reject this document? It will be hidden from the side until the author uploads a corrected file and you sign it.')) return;
-  if (await _dcPost(`/control-reports/${recordId}/reject`, { projectId, reason }, '↩️ Document rejected. The author can now replace the file.')) _crAfterChange(recordId);
+  if (reason.length < 3) { alert('Write the reason first, so the submitter knows what to correct.'); return; }
+  if (!confirm('Reject this document? It will be hidden from the side until the submitter uploads a corrected file and you sign it.')) return;
+  if (await _dcPost(`/control-reports/${recordId}/reject`, { projectId, reason }, '↩️ Document rejected. The submitter can now upload a corrected file.')) _crAfterChange(recordId);
 }
 
 async function _crReplace(recordId) {
@@ -15601,6 +15747,7 @@ async function _crReplace(recordId) {
   const form = new FormData();
   form.append('projectId', projectId);
   form.append('file', file);
+  form.append('mode', document.querySelector(`input[name="cr-replace-mode-${recordId}"]:checked`)?.value === 'replace' ? 'replace' : 'revision');
   if (document.getElementById(`cr-replace-sign-${recordId}`)?.checked) {
     if (!/\.pdf$/i.test(file.name)) { alert('Only PDF files can be signed with a stamp.'); return; }
     const p = await _dcPickPlacement(file);
