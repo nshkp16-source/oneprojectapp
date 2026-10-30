@@ -3556,7 +3556,9 @@ sidebarItems.forEach(item => {
 // =========================
 // Search
 // =========================
+document.getElementById('searchBox').addEventListener('input', () => _dcRefreshForSearch());
 document.getElementById('searchBox').addEventListener('keyup', (e) => {
+  if (document.getElementById('recordsList')?.dataset.dcTab) return;   // folders handle their own search
   const term = e.target.value.toLowerCase();
   document.querySelectorAll('#bottomContent .doc-item').forEach(item => {
     item.style.display = item.textContent.toLowerCase().includes(term) ? '' : 'none';
@@ -14671,6 +14673,7 @@ let _daFolder = null;   // key of the folder open in Document & Approval (null =
 let _crFolder = null;   // same for Control & Reports
 function _daRenderShell() {
   _daFolder = null;
+  { const sb = document.getElementById('searchBox'); if (sb) sb.value = ''; }
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
       <button class="btn primary" id="daAddBtn">➕ Submit Document</button>
@@ -14784,13 +14787,36 @@ function _dcBuildFolders(records, withDraft) {
   list.sort((x, y) => (y.isDraft - x.isDraft) || (y.unread - x.unread) || x.label.localeCompare(y.label));
   return list;
 }
+// ── Search (the "Search..." box at the top left) ──────────────────────────
+function _dcSearchTerm() { return (document.getElementById('searchBox')?.value || '').trim().toLowerCase(); }
+function _dcDocMatches(d, term) {
+  return [d.title, d.description, d.doc_type, d.creator_name, d.file_name, d.signed_by_name]
+    .some(x => String(x || '').toLowerCase().includes(term));
+}
+// Keeps a folder when its name matches or any document inside matches.
+function _dcFilterFolders(folders, term) {
+  if (!term) return folders.map(f => ({ ...f, term: '', hits: f.items.length, nameHit: true }));
+  return folders
+    .map(f => ({ ...f, term, nameHit: f.label.toLowerCase().includes(term), hits: f.items.filter(d => _dcDocMatches(d, term)).length }))
+    .filter(f => f.nameHit || f.hits > 0);
+}
+function _dcNoMatchHtml(term, what) {
+  return `<li style="list-style:none;padding:14px 4px;color:#6b7280;font-size:13px;">No ${what} match “${escapeHtml(term)}”.</li>`;
+}
+// Re-draws the open Document & Approval / Control & Reports list while the person types.
+function _dcRefreshForSearch() {
+  const tab = document.getElementById('recordsList')?.dataset.dcTab;
+  if (tab === 'document-approval' && recordsCache['document-approval']) _daRenderList(recordsCache['document-approval']);
+  else if (tab === 'control-reports' && recordsCache['control-reports']) _crRenderList(recordsCache['control-reports']);
+}
+
 function _dcFolderGridHtml(folders) {
   return `<li style="list-style:none;"><ul class="dc-folder-grid">${folders.map(f => `
     <li class="dc-folder ${f.unread ? 'dc-folder--unread' : ''}" data-folder="${escapeHtml(f.key)}" role="button" tabindex="0">
       ${f.unread ? `<span class="dc-folder-badge" title="${f.unread} unread">${f.unread}</span>` : ''}
       <span class="dc-folder-icon">${f.isDraft ? '🔒' : '📁'}</span>
       <span class="dc-folder-name">${escapeHtml(f.label)}</span>
-      <span class="dc-folder-count">${f.isDraft ? 'Private to you · ' : ''}${f.items.length} ${f.items.length === 1 ? 'document' : 'documents'}${f.unread ? ` · ${f.unread} new` : ''}</span>
+      <span class="dc-folder-count">${f.isDraft ? 'Private to you · ' : ''}${f.term && !f.nameHit ? `${f.hits} of ${f.items.length} match` : `${f.items.length} ${f.items.length === 1 ? 'document' : 'documents'}`}${f.unread ? ` · ${f.unread} new` : ''}</span>
     </li>`).join('')}</ul></li>`;
 }
 function _dcFolderBarHtml(folder) {
@@ -14824,20 +14850,24 @@ function _daRenderList(records) {
   if (!list || !placeholder) return;
   _dcEnsureFolderCss();
 
-  const folders = _dcBuildFolders(records, true);
-  const open = _daFolder ? folders.find(f => f.key === _daFolder) : null;
+  const term = _dcSearchTerm();
+  list.dataset.dcTab = 'document-approval';
+  const allFolders = _dcBuildFolders(records, true);
+  const folders = _dcFilterFolders(allFolders, term);
+  const open = _daFolder ? allFolders.find(f => f.key === _daFolder) : null;
   if (_daFolder && !open) _daFolder = null;
 
   // Folder screen first
   if (!open) {
     placeholder.style.display = records.length ? 'none' : 'block';
-    list.innerHTML = _dcFolderGridHtml(folders);
+    list.innerHTML = folders.length ? _dcFolderGridHtml(folders) : _dcNoMatchHtml(term, 'folders');
     _dcWireFolders(list, key => { _daFolder = key; _daRenderList(records); }, () => {});
     return;
   }
 
   placeholder.style.display = 'none';
-  const cards = open.items.map(doc => {
+  const shown = term && !open.label.toLowerCase().includes(term) ? open.items.filter(d => _dcDocMatches(d, term)) : open.items;
+  const cards = shown.map(doc => {
     const mine = _dcIsAuthor(doc);
     return `
         <li class="doc-item record-card" data-id="${escapeHtml(String(doc.id))}" data-tab-key="document-approval">
@@ -14866,7 +14896,7 @@ function _daRenderList(records) {
           </div>
         </li>`;
   }).join('');
-  list.innerHTML = _dcFolderBarHtml(open) + (cards || `<li style="list-style:none;padding:14px 4px;color:#6b7280;font-size:13px;">${open.isDraft ? 'Your Draft folder is empty. Choose Draft when you submit a document to keep it here.' : 'This folder is empty.'}</li>`);
+  list.innerHTML = _dcFolderBarHtml(open) + (cards || (term ? _dcNoMatchHtml(term, 'documents') : `<li style="list-style:none;padding:14px 4px;color:#6b7280;font-size:13px;">${open.isDraft ? 'Your Draft folder is empty. Choose Draft when you submit a document to keep it here.' : 'This folder is empty.'}</li>`));
   _dcWireFolders(list, () => {}, () => { _daFolder = null; _daRenderList(recordsCache['document-approval'] || records); });
 }
 
@@ -15588,6 +15618,7 @@ function _daOpenCreateForm(existingDoc = null) {
 // ═══════════════════════════════════════════════════════════════════════
 function _crRenderShell() {
   _crFolder = null;
+  { const sb = document.getElementById('searchBox'); if (sb) sb.value = ''; }
   const leader = isWCLeader(window.currentUserRole);
 
   bottomContent.innerHTML = `
@@ -15674,19 +15705,23 @@ function _crRenderList(records) {
   if (!list || !placeholder) return;
   _dcEnsureFolderCss();
 
-  const folders = _dcBuildFolders(records, false);
-  const open = _crFolder ? folders.find(f => f.key === _crFolder) : null;
+  const term = _dcSearchTerm();
+  list.dataset.dcTab = 'control-reports';
+  const allFolders = _dcBuildFolders(records, false);
+  const folders = _dcFilterFolders(allFolders, term);
+  const open = _crFolder ? allFolders.find(f => f.key === _crFolder) : null;
   if (_crFolder && !open) _crFolder = null;
 
   if (!open) {
     placeholder.style.display = records.length ? 'none' : 'block';
-    list.innerHTML = records.length ? _dcFolderGridHtml(folders) : '';
+    list.innerHTML = !records.length ? '' : (folders.length ? _dcFolderGridHtml(folders) : _dcNoMatchHtml(term, 'folders'));
     _dcWireFolders(list, key => { _crFolder = key; _crRenderList(records); }, () => {});
     return;
   }
 
   placeholder.style.display = 'none';
-  const cards = open.items.map(doc => `
+  const shown = term && !open.label.toLowerCase().includes(term) ? open.items.filter(d => _dcDocMatches(d, term)) : open.items;
+  const cards = shown.map(doc => `
       <li class="doc-item record-card" data-id="${escapeHtml(String(doc.id))}" data-tab-key="control-reports">
         <div class="doc-item-header record-card-header" data-action="toggle" aria-expanded="false" role="button" tabindex="0">
           <div class="rc-main">
@@ -15712,7 +15747,7 @@ function _crRenderList(records) {
           </div>
         </div>
       </li>`).join('');
-  list.innerHTML = _dcFolderBarHtml(open) + cards;
+  list.innerHTML = _dcFolderBarHtml(open) + (cards || (term ? _dcNoMatchHtml(term, 'documents') : ''));
   _dcWireFolders(list, () => {}, () => { _crFolder = null; _crRenderList(recordsCache['control-reports'] || records); });
 }
 
