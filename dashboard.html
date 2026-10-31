@@ -11869,7 +11869,7 @@ function renderNotificationPanel(notifications) {
           <div style="font-weight:${isUnread ? '700' : '600'};font-size:13px;color:#1f2937;
             margin-bottom:4px;display:flex;align-items:center;gap:6px;">
             ${isUnread ? '<span style="display:inline-block;width:7px;height:7px;background:#3b82f6;border-radius:50%;"></span>' : ''}
-            ${typeLabel} Record
+            ${_dcNotifLabel(n.entity_type, typeLabel)}
           </div>
           <div style="font-size:12px;color:#6b7280;line-height:1.5;">${n.message || ''}</div>
           <div style="font-size:11px;color:#9ca3af;margin-top:6px;">
@@ -11897,6 +11897,7 @@ function renderNotificationPanel(notifications) {
 }
 
 async function handleNotificationClick(entityType, entityId) {
+  if (entityType === 'document_approval' || entityType === 'control_reports') return _dcOpenFromNotification(entityType, entityId);
   const TABLE_TAB_MAP = {
     contractual_records:    'contractual',
     administrative_records: 'administrative',
@@ -14672,13 +14673,14 @@ function _daInputStyle() {
 let _daFolder = null;   // key of the folder open in Document & Approval (null = folder screen)
 let _crFolder = null;   // same for Control & Reports
 function _daRenderShell() {
-  _daFolder = null;
+  _daFolder = null; DC_VIEW['document-approval'] = null;
   { const sb = document.getElementById('searchBox'); if (sb) sb.value = ''; }
   bottomContent.innerHTML = `
     <div class="bottom-fixed-header">
       <button class="btn primary" id="daAddBtn">➕ Submit Document</button>
     </div>
     <div class="bottom-scroll-area">
+      <div id="dcSummary"></div>
       <ul class="doc-list" id="recordsList" style="padding:0;margin:0;list-style:none;"></ul>
       <div class="no-data-placeholder">
         <p>No documents yet. Click ➕ Submit Document to get started.</p>
@@ -14727,6 +14729,7 @@ async function _daLoadRecords() {
 
     const data    = await res.json();
     const records = (data.documents || []).map(r => ({ ...r, _tabKey: 'document-approval' }));
+    _dcTruncated['document-approval'] = !!data.truncated;
     recordsCache['document-approval'] = records;
     _daRenderList(records);
 
@@ -14742,8 +14745,21 @@ async function _daLoadRecords() {
 // ═══════════════════════════════════════════════════════════════════════
 //  DOCUMENT & APPROVAL — Render list
 // ═══════════════════════════════════════════════════════════════════════
-// ── Folders (a document type is a folder) ─────────────────────────────────
+// ── Folders, filters, summary, exports (Document & Approval + Control & Reports) ──
 const DC_DRAFT_KEY = '__draft__';
+const DC_VIEW = {};
+function _dcView(tab) {
+  if (!DC_VIEW[tab]) DC_VIEW[tab] = { quick: '', status: '', person: '', sort: 'new', bulk: false, selected: new Set() };
+  return DC_VIEW[tab];
+}
+const _dcTruncated = {};
+const _dcGetF = tab => (tab === 'document-approval' ? _daFolder : _crFolder);
+const _dcSetF = (tab, k) => { if (tab === 'document-approval') _daFolder = k; else _crFolder = k; };
+function _dcRerender(tab) {
+  if (tab === 'document-approval') _daRenderList(recordsCache[tab] || []); else _crRenderList(recordsCache[tab] || []);
+}
+function _dcReloadBoth() { delete recordsCache['document-approval']; delete recordsCache['control-reports']; }
+
 function _dcEnsureFolderCss() {
   if (document.getElementById('dc-folder-css')) return;
   const st = document.createElement('style');
@@ -14758,14 +14774,110 @@ function _dcEnsureFolderCss() {
     .dc-folder--unread{background:#fff;border-color:#6b7280;}
     .dc-folder--unread .dc-folder-name{font-weight:800;color:#111827;}
     .dc-folder-badge{position:absolute;top:8px;right:8px;min-width:18px;padding:1px 6px;border-radius:999px;background:#111827;color:#fff;font-size:11px;font-weight:700;text-align:center;}
-    .dc-folder-bar{display:flex;align-items:center;gap:10px;padding:2px 0 10px;list-style:none;}
-    .dc-folder-back{border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;}
+    .dc-folder-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:2px 0 10px;list-style:none;}
+    .dc-folder-back,.dc-tool{border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;}
+    .dc-folder-back:hover,.dc-tool:hover{background:#f3f4f6;}
     .dc-folder-title{font-size:14px;font-weight:700;color:#374151;}
+    .dc-bar-tools{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto;align-items:center;}
+    .dc-sel{border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;padding:6px 8px;font-size:12px;}
     .dc-new-chip{display:inline-block;padding:1px 7px;border-radius:999px;background:#111827;color:#fff;font-size:10px;font-weight:700;letter-spacing:.3px;}
+    .dc-chip{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid #d1d5db;background:#fff;color:#374151;font-size:11px;font-weight:600;white-space:nowrap;}
+    .dc-chip--ref{background:#f3f4f6;font-variant-numeric:tabular-nums;}
+    .dc-chip--late{background:#374151;border-color:#374151;color:#fff;}
+    #dcSummary{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:0 0 10px;}
+    .dc-sum{display:flex;align-items:baseline;gap:6px;border:1px solid #e5e7eb;background:#fafafa;border-radius:10px;padding:6px 12px;cursor:pointer;font-size:12px;color:#374151;}
+    .dc-sum b{font-size:16px;color:#111827;}
+    .dc-sum:hover{background:#f3f4f6;} .dc-sum.is-on{background:#111827;border-color:#111827;color:#e5e7eb;} .dc-sum.is-on b{color:#fff;}
+    .dc-sum-right{margin-left:auto;display:flex;gap:8px;align-items:center;}
+    .dc-note{font-size:11px;color:#6b7280;}
+    .dc-bulk{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 10px;margin-bottom:10px;border:1px solid #d1d5db;border-radius:10px;background:#f9fafb;list-style:none;font-size:12px;color:#374151;}
+    .dc-pick{margin:2px 10px 0 0;width:16px;height:16px;flex:none;}
+    .dc-modal-overlay{position:fixed;inset:0;background:rgba(17,24,39,.55);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px;}
+    .dc-modal{background:#fff;border-radius:12px;width:min(560px,100%);max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,.25);}
+    .dc-modal--wide{width:min(980px,100%);height:88vh;}
+    .dc-modal-head{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #e5e7eb;}
+    .dc-modal-head h3{margin:0;font-size:15px;color:#111827;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .dc-modal-x{border:0;background:transparent;font-size:20px;cursor:pointer;color:#6b7280;}
+    .dc-modal-body{padding:14px 18px;overflow:auto;flex:1;min-height:0;}
+    .dc-modal-foot{display:flex;gap:8px;justify-content:flex-end;padding:12px 18px;border-top:1px solid #e5e7eb;}
+    .dc-btn{border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;}
+    .dc-btn--dark{background:#111827;border-color:#111827;color:#fff;} .dc-btn:disabled{opacity:.5;cursor:default;}
+    .dc-pick-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0 4px;}
+    .dc-pick-btn{border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:600;cursor:pointer;}
+    .dc-pick-btn:hover{background:#f3f4f6;} .dc-pick-note{font-size:11px;color:#374151;}
+    .dc-src-group{margin:10px 0 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#6b7280;}
+    .dc-src-row{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px;cursor:pointer;font-size:13px;color:#374151;}
+    .dc-src-row:hover{background:#f9fafb;} .dc-src-row small{display:block;color:#6b7280;font-size:11px;}
+    .dc-q{border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;margin-bottom:10px;list-style:none;}
+    .dc-q-head{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;margin-bottom:4px;}
+    .dc-q-ans{margin:8px 0 0;padding:8px 10px;background:#f9fafb;border-left:3px solid #9ca3af;border-radius:4px;font-size:13px;color:#374151;}
+    .dc-q-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+    .dc-q textarea{width:100%;min-height:54px;margin-top:8px;border:1px solid #d1d5db;border-radius:8px;padding:8px;font-size:13px;box-sizing:border-box;}
   `;
   document.head.appendChild(st);
 }
-// Groups records into folders. withDraft adds the private Draft folder (always shown).
+
+// dates
+function _dcDaysLate(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr || ''));
+  if (!m) return null;
+  const t = new Date();
+  const diff = Math.round((Date.UTC(t.getFullYear(), t.getMonth(), t.getDate()) - Date.UTC(+m[1], +m[2] - 1, +m[3])) / 86400000);
+  return diff > 0 ? diff : null;
+}
+function _dcDay(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr || ''));
+  if (!m) return '';
+  return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+function _dcRevLetter(n) {
+  let x = Math.max(0, Math.floor(Number(n) || 0)), out = '';
+  do { out = String.fromCharCode(65 + (x % 26)) + out; x = Math.floor(x / 26) - 1; } while (x >= 0);
+  return out;
+}
+function _dcRef(doc) { return doc.doc_number ? `${doc.doc_number} · Rev ${_dcRevLetter(doc.revision_no)}` : ''; }
+function _dcRefChip(doc) { return doc.doc_number ? `<span class="dc-chip dc-chip--ref" title="Document number and revision">${escapeHtml(_dcRef(doc))}</span>` : ''; }
+function _dcStatusOf(doc, tab) { return tab === 'document-approval' ? doc.status : (doc.cr_status || 'shared'); }
+function _dcPersonOf(doc) { return doc.creator_name || rcRoleLabel(doc.creator_role) || ''; }
+function _dcDueChip(doc, tab) {
+  if (tab === 'document-approval') {
+    if (!doc.deadline || !['pending_approval', 'rejected'].includes(doc.status)) return '';
+    const late = _dcDaysLate(doc.deadline);
+    return late ? `<span class="dc-chip dc-chip--late">Overdue ${late}d</span>` : `<span class="dc-chip">Review by ${escapeHtml(_dcDay(doc.deadline))}</span>`;
+  }
+  const open = doc.open_query_count || 0, late = doc.overdue_query_count || 0;
+  if (!open) return '';
+  return `<span class="dc-chip ${late ? 'dc-chip--late' : ''}">${open} open ${open === 1 ? 'query' : 'queries'}${late ? `, ${late} overdue` : ''}</span>`;
+}
+
+// quick filters (summary strip), status, person
+function _dcQuickPass(doc, tab, q) {
+  const mine = _dcIsAuthor(doc);
+  switch (q) {
+    case 'waiting': return tab === 'document-approval'
+      ? ((doc.can_review && doc.status === 'pending_approval') || (mine && doc.status === 'rejected'))
+      : ((_dcIsLeaderOf(doc) && doc.cr_status === 'replacement_pending') || (mine && doc.cr_status === 'rejected'));
+    case 'overdue': return tab === 'document-approval'
+      ? (['pending_approval', 'rejected'].includes(doc.status) && _dcDaysLate(doc.deadline) !== null)
+      : (doc.overdue_query_count > 0);
+    case 'queries': return doc.open_query_count > 0;
+    case 'unread': return !!doc.unread;
+    case 'week': return Date.now() - new Date(doc.created_at).getTime() < 7 * 86400000;
+    default: return true;
+  }
+}
+function _dcSearchTerm() { return (document.getElementById('searchBox')?.value || '').trim().toLowerCase(); }
+function _dcDocMatches(d, term) {
+  return [d.title, d.description, d.doc_type, d.creator_name, d.file_name, d.signed_by_name, d.doc_number]
+    .some(x => String(x || '').toLowerCase().includes(term));
+}
+function _dcItemPass(doc, tab, v, term, nameHit) {
+  if (v.quick && !_dcQuickPass(doc, tab, v.quick)) return false;
+  if (v.status && _dcStatusOf(doc, tab) !== v.status) return false;
+  if (v.person && _dcPersonOf(doc) !== v.person) return false;
+  if (term && !nameHit && !_dcDocMatches(doc, term)) return false;
+  return true;
+}
 function _dcBuildFolders(records, withDraft) {
   const map = new Map();
   const add = (key, label, isDraft) => {
@@ -14787,41 +14899,57 @@ function _dcBuildFolders(records, withDraft) {
   list.sort((x, y) => (y.isDraft - x.isDraft) || (y.unread - x.unread) || x.label.localeCompare(y.label));
   return list;
 }
-// ── Search (the "Search..." box at the top left) ──────────────────────────
-function _dcSearchTerm() { return (document.getElementById('searchBox')?.value || '').trim().toLowerCase(); }
-function _dcDocMatches(d, term) {
-  return [d.title, d.description, d.doc_type, d.creator_name, d.file_name, d.signed_by_name]
-    .some(x => String(x || '').toLowerCase().includes(term));
+// Folders that still have something to show after search + summary chip + status + person filters.
+function _dcFilterFolders(folders, tab) {
+  const v = _dcView(tab), term = _dcSearchTerm();
+  const itemFilter = !!(v.quick || v.status || v.person);
+  return folders.map(f => {
+    const nameHit = !!term && f.label.toLowerCase().includes(term);
+    const shown = f.items.filter(d => _dcItemPass(d, tab, v, term, nameHit));
+    return { ...f, term, nameHit, shown, hits: shown.length, filtered: itemFilter || !!term };
+  }).filter(f => !f.filtered || f.hits > 0 || (f.nameHit && !itemFilter));
 }
-// Keeps a folder when its name matches or any document inside matches.
-function _dcFilterFolders(folders, term) {
-  if (!term) return folders.map(f => ({ ...f, term: '', hits: f.items.length, nameHit: true }));
-  return folders
-    .map(f => ({ ...f, term, nameHit: f.label.toLowerCase().includes(term), hits: f.items.filter(d => _dcDocMatches(d, term)).length }))
-    .filter(f => f.nameHit || f.hits > 0);
-}
-function _dcNoMatchHtml(term, what) {
-  return `<li style="list-style:none;padding:14px 4px;color:#6b7280;font-size:13px;">No ${what} match “${escapeHtml(term)}”.</li>`;
-}
-// Re-draws the open Document & Approval / Control & Reports list while the person types.
-function _dcRefreshForSearch() {
-  const tab = document.getElementById('recordsList')?.dataset.dcTab;
-  if (tab === 'document-approval' && recordsCache['document-approval']) _daRenderList(recordsCache['document-approval']);
-  else if (tab === 'control-reports' && recordsCache['control-reports']) _crRenderList(recordsCache['control-reports']);
+function _dcSortItems(items, tab, mode) {
+  const t = d => new Date((tab === 'control-reports' ? (d.shared_at || d.created_at) : d.created_at) || 0).getTime();
+  const cmp = {
+    new: (a, b) => t(b) - t(a),
+    old: (a, b) => t(a) - t(b),
+    due: (a, b) => String(a.deadline || '9999').localeCompare(String(b.deadline || '9999')) || t(b) - t(a),
+    title: (a, b) => String(a.title || '').localeCompare(String(b.title || '')),
+    unread: (a, b) => (Number(!!b.unread) - Number(!!a.unread)) || t(b) - t(a),
+  }[mode] || ((a, b) => t(b) - t(a));
+  return [...items].sort(cmp);
 }
 
+// folder tiles and bar
 function _dcFolderGridHtml(folders) {
   return `<li style="list-style:none;"><ul class="dc-folder-grid">${folders.map(f => `
     <li class="dc-folder ${f.unread ? 'dc-folder--unread' : ''}" data-folder="${escapeHtml(f.key)}" role="button" tabindex="0">
       ${f.unread ? `<span class="dc-folder-badge" title="${f.unread} unread">${f.unread}</span>` : ''}
       <span class="dc-folder-icon">${f.isDraft ? '🔒' : '📁'}</span>
       <span class="dc-folder-name">${escapeHtml(f.label)}</span>
-      <span class="dc-folder-count">${f.isDraft ? 'Private to you · ' : ''}${f.term && !f.nameHit ? `${f.hits} of ${f.items.length} match` : `${f.items.length} ${f.items.length === 1 ? 'document' : 'documents'}`}${f.unread ? ` · ${f.unread} new` : ''}</span>
+      <span class="dc-folder-count">${f.isDraft ? 'Private to you · ' : ''}${f.filtered && !f.nameHit ? `${f.hits} of ${f.items.length} match` : `${f.items.length} ${f.items.length === 1 ? 'document' : 'documents'}`}${f.unread ? ` · ${f.unread} new` : ''}</span>
     </li>`).join('')}</ul></li>`;
 }
-function _dcFolderBarHtml(folder) {
-  return `<li class="dc-folder-bar"><button type="button" class="dc-folder-back" data-folder-back="1">← Folders</button>
-    <span class="dc-folder-title">${folder.isDraft ? '🔒' : '📁'} ${escapeHtml(folder.label)}</span></li>`;
+function _dcEmptyHtml(msg) { return `<li style="list-style:none;padding:14px 4px;color:#6b7280;font-size:13px;">${msg}</li>`; }
+function _dcBarHtml(tab, f, v) {
+  const people = [...new Set(f.items.map(_dcPersonOf).filter(Boolean))].sort();
+  const statuses = tab === 'document-approval'
+    ? [['pending_approval', 'Waiting for leader'], ['approved', 'Signed'], ['rejected', 'Returned'], ['shared', 'Shared']]
+    : [['shared', 'Shared'], ['rejected', 'Rejected'], ['replacement_pending', 'Corrected file waiting']];
+  const sel = (act, opts, cur) => `<select class="dc-sel" data-dc-act="${act}">${opts.map(([val, lab]) => `<option value="${escapeHtml(val)}" ${val === cur ? 'selected' : ''}>${escapeHtml(lab)}</option>`).join('')}</select>`;
+  const leader = isWCLeader(window.currentUserRole);
+  return `<li class="dc-folder-bar">
+    <button type="button" class="dc-folder-back" data-folder-back="1">← Folders</button>
+    <span class="dc-folder-title">${f.isDraft ? '🔒' : '📁'} ${escapeHtml(f.label)}</span>
+    <span class="dc-bar-tools">
+      ${sel('sort', [['new', 'Newest first'], ['old', 'Oldest first'], ['due', 'Review-by date'], ['title', 'Title A-Z'], ['unread', 'Unread first']], v.sort)}
+      ${sel('status', [['', 'All statuses'], ...statuses], v.status)}
+      ${people.length > 1 ? sel('person', [['', 'Everyone'], ...people.map(p => [p, p])], v.person) : ''}
+      ${tab === 'document-approval' && leader && !f.isDraft ? `<button type="button" class="dc-tool" data-dc-act="bulk">${v.bulk ? 'Cancel selection' : 'Select several'}</button>` : ''}
+      <button type="button" class="dc-tool" data-dc-act="zip" title="Download every file in this folder as one ZIP">⬇ ZIP</button>
+      ${leader && !f.isDraft ? `<button type="button" class="dc-tool" data-dc-act="rename" title="Rename this folder, or merge it into another one">Rename / merge</button>` : ''}
+    </span></li>`;
 }
 function _dcWireFolders(list, onOpen, onBack) {
   list.querySelectorAll('.dc-folder[data-folder]').forEach(el => {
@@ -14831,7 +14959,36 @@ function _dcWireFolders(list, onOpen, onBack) {
   });
   list.querySelector('[data-folder-back]')?.addEventListener('click', onBack);
 }
-// Opening a card marks it read for this person and clears its marker.
+
+// summary strip
+function _dcRenderSummary(tab, records) {
+  const box = document.getElementById('dcSummary');
+  if (!box) return;
+  const v = _dcView(tab);
+  const base = records.filter(d => d.status !== 'draft');
+  const n = q => base.filter(d => _dcQuickPass(d, tab, q)).length;
+  const chips = [['waiting', 'Waiting for you'], ['overdue', 'Overdue'], ['queries', 'Open queries'], ['unread', 'Unread'], ['week', 'New this week']]
+    .filter(([q]) => !(q === 'queries' && tab === 'document-approval'))
+    .map(([q, lab]) => `<button type="button" class="dc-sum ${v.quick === q ? 'is-on' : ''}" data-dc-quick="${q}"><b>${n(q)}</b> ${lab}</button>`).join('');
+  box.innerHTML = chips + `<span class="dc-sum-right">${_dcTruncated[tab] ? '<span class="dc-note">Showing the newest 1000 documents. Use search to narrow.</span>' : ''}
+    <button type="button" class="dc-tool" data-dc-register="1" title="Download the document register as a spreadsheet file (CSV)">⬇ Export register</button></span>`;
+  box.querySelectorAll('[data-dc-quick]').forEach(b => b.addEventListener('click', () => { v.quick = v.quick === b.dataset.dcQuick ? '' : b.dataset.dcQuick; _dcRerender(tab); }));
+  box.querySelector('[data-dc-register]')?.addEventListener('click', () => _dcExportRegister(tab));
+}
+
+// "Other" suggestions: the folder names that already exist
+function _dcUpdateFolderDatalist() {
+  const names = new Map();
+  DA_DOC_TYPES.filter(t => t !== 'Other').forEach(t => names.set(t.toLowerCase(), t));
+  ['document-approval', 'control-reports'].forEach(t => (recordsCache[t] || []).forEach(d => {
+    if (d.status !== 'draft' && d.doc_type) names.set(String(d.doc_type).toLowerCase(), d.doc_type);
+  }));
+  let dl = document.getElementById('dc-folder-list');
+  if (!dl) { dl = document.createElement('datalist'); dl.id = 'dc-folder-list'; document.body.appendChild(dl); }
+  dl.innerHTML = [...names.values()].sort().map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
+}
+
+// read / unread
 async function _dcMarkRead(recordId, tabKey) {
   const rec = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
   if (!rec || !rec.unread) return;
@@ -14844,43 +15001,26 @@ async function _dcMarkRead(recordId, tabKey) {
 }
 function _dcNewChip(doc) { return doc.unread ? '<span class="dc-new-chip">NEW</span>' : ''; }
 
-function _daRenderList(records) {
-  const list        = document.getElementById('recordsList');
-  const placeholder = document.querySelector('.no-data-placeholder');
-  if (!list || !placeholder) return;
-  _dcEnsureFolderCss();
-
-  const term = _dcSearchTerm();
-  list.dataset.dcTab = 'document-approval';
-  const allFolders = _dcBuildFolders(records, true);
-  const folders = _dcFilterFolders(allFolders, term);
-  const open = _daFolder ? allFolders.find(f => f.key === _daFolder) : null;
-  if (_daFolder && !open) _daFolder = null;
-
-  // Folder screen first
-  if (!open) {
-    placeholder.style.display = records.length ? 'none' : 'block';
-    list.innerHTML = folders.length ? _dcFolderGridHtml(folders) : _dcNoMatchHtml(term, 'folders');
-    _dcWireFolders(list, key => { _daFolder = key; _daRenderList(records); }, () => {});
-    return;
-  }
-
-  placeholder.style.display = 'none';
-  const shown = term && !open.label.toLowerCase().includes(term) ? open.items.filter(d => _dcDocMatches(d, term)) : open.items;
-  const cards = shown.map(doc => {
-    const mine = _dcIsAuthor(doc);
-    return `
+// cards
+const mineCard = doc => _dcIsAuthor(doc);
+function _daCardHtml(doc, open, v) {
+  const mine = _dcIsAuthor(doc);
+  const pickable = v.bulk && doc.can_review && ['pending_approval', 'approved'].includes(doc.status);
+  return `
         <li class="doc-item record-card" data-id="${escapeHtml(String(doc.id))}" data-tab-key="document-approval">
           <div class="doc-item-header record-card-header" data-action="toggle" aria-expanded="false" role="button" tabindex="0">
+            ${pickable ? `<input type="checkbox" class="dc-pick" data-id="${escapeHtml(String(doc.id))}" ${v.selected.has(String(doc.id)) ? 'checked' : ''} title="Select">` : ''}
             <div class="rc-main">
               <div class="rc-title-row">
                 <span class="rc-title" title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</span>
                 ${_dcNewChip(doc)}
+                ${_dcRefChip(doc)}
                 <span class="rc-chip rc-chip--muted">${escapeHtml(open.isDraft ? 'Draft' : (doc.doc_type || 'Document'))}</span>
                 ${mine ? '<span class="rc-chip rc-chip--ok">Mine</span>' : ''}
+                ${_dcDueChip(doc, 'document-approval')}
               </div>
               <div class="rc-meta">
-                <span class="rc-meta-item">${rcIcon('user')}<span>Submitted by ${escapeHtml(doc.creator_name || rcRoleLabel(doc.creator_role) || 'a project member')}</span></span>
+                <span class="rc-meta-item">${rcIcon('user')}<span>Submitted by ${mineCard(doc) ? 'you' : escapeHtml(doc.creator_name || rcRoleLabel(doc.creator_role) || 'a project member')}</span></span>
                 <span class="rc-meta-item">${rcIcon('calendar')}<span>${escapeHtml(_dcDate(doc.created_at))}</span></span>
               </div>
             </div>
@@ -14895,9 +15035,402 @@ function _daRenderList(records) {
             </div>
           </div>
         </li>`;
-  }).join('');
-  list.innerHTML = _dcFolderBarHtml(open) + (cards || (term ? _dcNoMatchHtml(term, 'documents') : `<li style="list-style:none;padding:14px 4px;color:#6b7280;font-size:13px;">${open.isDraft ? 'Your Draft folder is empty. Choose Draft when you submit a document to keep it here.' : 'This folder is empty.'}</li>`));
-  _dcWireFolders(list, () => {}, () => { _daFolder = null; _daRenderList(recordsCache['document-approval'] || records); });
+}
+function _crCardHtml(doc) {
+  return `
+      <li class="doc-item record-card" data-id="${escapeHtml(String(doc.id))}" data-tab-key="control-reports">
+        <div class="doc-item-header record-card-header" data-action="toggle" aria-expanded="false" role="button" tabindex="0">
+          <div class="rc-main">
+            <div class="rc-title-row">
+              <span class="rc-title" title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</span>
+              ${_dcNewChip(doc)}
+              ${_dcRefChip(doc)}
+              <span class="rc-chip rc-chip--muted">${escapeHtml(doc.doc_type || 'Document')}</span>
+              ${_dcDueChip(doc, 'control-reports')}
+            </div>
+            <div class="rc-meta">
+              <span class="rc-meta-item">${rcIcon('user')}<span>Submitted by ${mineCard(doc) ? 'you' : escapeHtml(doc.creator_name || rcRoleLabel(doc.creator_role) || 'a project member')}</span></span>
+              <span class="rc-meta-item">${rcIcon('calendar')}<span>Shared ${escapeHtml(_dcDate(doc.shared_at))}</span></span>
+            </div>
+          </div>
+          <div class="rc-side">
+            ${_crBadge(doc.cr_status)}
+            <span class="rc-chevron chevron-cr-${doc.id}">▾</span>
+          </div>
+        </div>
+        <div class="doc-detail record-card-detail" id="cr-detail-${doc.id}" style="display:none;">
+          <div id="cr-detail-inner-${doc.id}" class="dc-inner">
+            <p class="dc-loading">Loading…</p>
+          </div>
+        </div>
+      </li>`;
+}
+
+// the one renderer both tabs use
+function _dcRenderTab(tab, records) {
+  const list = document.getElementById('recordsList');
+  const placeholder = document.querySelector('.no-data-placeholder');
+  if (!list || !placeholder) return;
+  _dcEnsureFolderCss();
+  _dcUpdateFolderDatalist();
+  list.dataset.dcTab = tab;
+  const withDraft = tab === 'document-approval';
+  const v = _dcView(tab);
+  const all = _dcBuildFolders(records, withDraft);
+  const folders = _dcFilterFolders(all, tab);
+  let key = _dcGetF(tab);
+  const open = key ? all.find(f => f.key === key) : null;
+  if (key && !open) { _dcSetF(tab, null); key = null; }
+  _dcRenderSummary(tab, records);
+  const anyFilter = !!(v.quick || v.status || v.person || _dcSearchTerm());
+
+  if (!open) {
+    placeholder.style.display = records.length ? 'none' : 'block';
+    list.innerHTML = (!records.length && !withDraft) ? '' : (folders.length ? _dcFolderGridHtml(folders) : _dcEmptyHtml('Nothing matches the search or filters. Clear them to see every folder.'));
+    _dcWireFolders(list, k => { _dcSetF(tab, k); v.selected.clear(); v.bulk = false; _dcRerender(tab); }, () => {});
+    return;
+  }
+  placeholder.style.display = 'none';
+  const f = folders.find(x => x.key === open.key) || { ...open, shown: [], hits: 0 };
+  const items = _dcSortItems(f.shown, tab, v.sort);
+  const cards = items.map(d => tab === 'document-approval' ? _daCardHtml(d, open, v) : _crCardHtml(d)).join('');
+  const bulk = v.bulk ? `<li class="dc-bulk"><span id="dc-bulk-count">${v.selected.size} selected</span>
+      <button type="button" class="dc-tool" data-dc-act="bulk-share">Share selected</button>
+      <button type="button" class="dc-tool" data-dc-act="bulk-sign">Sign selected (no stamp)</button>
+      <span class="dc-note">To put your stamp on a document, open it and sign it there.</span></li>` : '';
+  const empty = anyFilter ? 'No documents in this folder match the search or filters.'
+    : (open.isDraft ? 'Your Draft folder is empty. Choose Draft when you submit a document to keep it here.' : 'This folder is empty.');
+  list.innerHTML = _dcBarHtml(tab, open, v) + bulk + (cards || _dcEmptyHtml(empty));
+  _dcWireFolders(list, () => {}, () => { _dcSetF(tab, null); v.selected.clear(); v.bulk = false; _dcRerender(tab); });
+  list.querySelectorAll('select[data-dc-act]').forEach(s => s.addEventListener('change', () => { v[s.dataset.dcAct] = s.value; _dcRerender(tab); }));
+  list.querySelectorAll('button[data-dc-act]').forEach(b => b.addEventListener('click', () => _dcBarAction(tab, open, f, b.dataset.dcAct)));
+  list.querySelectorAll('.dc-pick').forEach(c => {
+    c.addEventListener('click', e => e.stopPropagation());
+    c.addEventListener('change', () => { if (c.checked) v.selected.add(c.dataset.id); else v.selected.delete(c.dataset.id); const n = document.getElementById('dc-bulk-count'); if (n) n.textContent = `${v.selected.size} selected`; });
+  });
+}
+function _daRenderList(records) { _dcRenderTab('document-approval', records); }
+function _crRenderList(records) { _dcRenderTab('control-reports', records); }
+
+async function _dcBarAction(tab, open, f, act) {
+  const v = _dcView(tab);
+  if (act === 'bulk') { v.bulk = !v.bulk; v.selected.clear(); _dcRerender(tab); }
+  else if (act === 'zip') _dcDownloadFolderZip(open, f.shown);
+  else if (act === 'rename') _dcRenameFolder(tab, open);
+  else if (act === 'bulk-share' || act === 'bulk-sign') _dcBulkRun(act, v);
+}
+
+// bulk share / sign (leaders). Stamps need a position per document, so bulk signing is without a stamp.
+async function _dcBulkRun(act, v) {
+  const projectId = localStorage.getItem('activeProjectId');
+  const recs = recordsCache['document-approval'] || [];
+  const chosen = [...v.selected].map(id => recs.find(r => String(r.id) === id)).filter(Boolean);
+  const share = act === 'bulk-share';
+  const eligible = chosen.filter(d => d.can_review && d.status === (share ? 'approved' : 'pending_approval'));
+  if (!eligible.length) { alert(share ? 'Select signed documents to share.' : 'Select documents that are waiting for your signature.'); return; }
+  const skipped = chosen.length - eligible.length;
+  if (!confirm(share ? `Share ${eligible.length} document(s) to Control & Reports?` : `Sign ${eligible.length} document(s) without a stamp?`) ) return;
+  let ok = 0; const errors = [];
+  for (const d of eligible) {
+    const res = await _daAuthFetch(`${API}/document-approval/${d.id}/${share ? 'share' : 'review'}`, { method: 'POST', body: share ? { projectId } : { projectId, action: 'approved', comment: '' } });
+    if (res && res.ok) ok++; else { const j = res ? await res.json().catch(() => ({})) : {}; errors.push(`${d.title}: ${j.error || 'failed'}`); }
+  }
+  alert(`${ok} done${errors.length ? `, ${errors.length} failed:\n${errors.slice(0, 5).join('\n')}` : ''}${skipped ? `\n${skipped} skipped (not in the right state).` : ''}`);
+  v.bulk = false; v.selected.clear(); _dcReloadBoth(); _daLoadRecords();
+}
+
+async function _dcRenameFolder(tab, open) {
+  const to = prompt(`New name for the folder "${open.label}".\nType the name of an existing folder to merge into it.`, open.label);
+  if (!to || !to.trim() || to.trim() === open.label) return;
+  const projectId = localStorage.getItem('activeProjectId');
+  const res = await _daAuthFetch(`${API}/document-folders/rename`, { method: 'POST', body: { projectId, from: open.label, to: to.trim() } });
+  const j = res ? await res.json().catch(() => ({})) : {};
+  if (!res || !res.ok) { alert('Error: ' + (j.error || 'Could not rename the folder.')); return; }
+  alert(`${j.moved} document(s) are now in the "${j.folder}" folder.`);
+  _dcSetF(tab, String(j.folder).toLowerCase()); _dcReloadBoth();
+  if (tab === 'document-approval') _daLoadRecords(); else _crLoadRecords();
+}
+
+// ── register export (CSV opens in Excel) ──
+function _dcCsvCell(x) {
+  let t = String(x ?? '');
+  if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;          // stops spreadsheet formulas from running
+  return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+}
+function _dcStatusLabel(doc, tab) {
+  const s = _dcStatusOf(doc, tab);
+  return ({ draft: 'Draft', pending_approval: 'Waiting for leader', approved: 'Signed', rejected: tab === 'document-approval' ? 'Returned' : 'Rejected', shared: 'Shared', replacement_pending: 'Corrected file waiting' })[s] || s;
+}
+function _dcExportRegister(tab) {
+  const recs = (recordsCache[tab] || []).filter(d => d.status !== 'draft');
+  if (!recs.length) { alert('There are no documents to export yet.'); return; }
+  const head = ['Number', 'Revision', 'Folder', 'Title', 'Description', 'Submitted by', 'Status', 'Date submitted', 'Review by', 'Signed by', 'Signed on', 'Shared on', 'Open queries', 'Overdue queries', 'File', 'Supporting files'];
+  const day = v => (v ? new Date(v).toISOString().slice(0, 10) : '');
+  const rows = [..._dcSortItems(recs, tab, 'old')].map(d => [
+    d.doc_number || '', d.doc_number ? _dcRevLetter(d.revision_no) : '', d.doc_type || '', d.title, d.description || '', _dcPersonOf(d),
+    _dcStatusLabel(d, tab), day(d.created_at), d.deadline || '', d.signed_by_name || '', d.reviewed_at ? day(d.reviewed_at) : '', d.shared_at ? day(d.shared_at) : '',
+    d.open_query_count || 0, d.overdue_query_count || 0, d.file_name || '', (d.supporting_files || []).map(s => s.name).join('; '),
+  ]);
+  const csv = '\ufeff' + [head, ...rows].map(r => r.map(_dcCsvCell).join(',')).join('\r\n');
+  _dcSaveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `document-register-${tab === 'document-approval' ? 'approval' : 'control-reports'}-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+// ── ZIP of a folder (no extra library: files are stored, not compressed) ──
+const _crcTable = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function _crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = _crcTable[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function _dcMakeZip(files) {
+  const enc = new TextEncoder(), chunks = [], central = [];
+  let offset = 0;
+  const d = new Date();
+  const dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const dosDate = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  for (const f of files) {
+    const name = enc.encode(f.name), crc = _crc32(f.data), size = f.data.length;
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true);
+    lh.setUint16(10, dosTime, true); lh.setUint16(12, dosDate, true); lh.setUint32(14, crc, true); lh.setUint32(18, size, true); lh.setUint32(22, size, true);
+    lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
+    chunks.push(new Uint8Array(lh.buffer), name, f.data);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true); ch.setUint16(10, 0, true);
+    ch.setUint16(12, dosTime, true); ch.setUint16(14, dosDate, true); ch.setUint32(16, crc, true); ch.setUint32(20, size, true); ch.setUint32(24, size, true);
+    ch.setUint16(28, name.length, true); ch.setUint32(42, offset, true);
+    central.push(new Uint8Array(ch.buffer), name);
+    offset += 30 + name.length + size;
+  }
+  const centralSize = central.reduce((a, c) => a + c.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true); end.setUint32(12, centralSize, true); end.setUint32(16, offset, true);
+  return new Blob([...chunks, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
+}
+async function _dcDownloadFolderZip(open, items) {
+  const targets = (items || []).filter(d => d.file_name || (d.supporting_files || []).length);
+  if (!targets.length) { alert('There are no files in this folder yet.'); return; }
+  if (targets.length > 60 && !confirm(`This folder has ${targets.length} documents. The ZIP may take a while. Continue?`)) return;
+  const safe = s => String(s).replace(/[\\/:*?"<>|]+/g, '_');
+  const files = [], used = new Set();
+  const uniq = n => { let x = n, i = 2; while (used.has(x)) x = n.replace(/(\.[^.]*)?$/, ` (${i++})$1`); used.add(x); return x; };
+  const m = _dcModal(`Preparing ${safe(open.label)}.zip`, `<p class="dc-loading" id="dc-zip-progress">Starting…</p>`, {});
+  let done = 0, failed = 0;
+  try {
+    for (const d of targets) {
+      const prefix = d.doc_number ? `${d.doc_number}_` : `doc-${d.id}_`;
+      const jobs = [];
+      if (d.file_name) jobs.push([`/document-file/${d.id}`, prefix + d.file_name]);
+      (d.supporting_files || []).forEach((s, i) => jobs.push([`/document-approval/${d.id}/supporting/${i}`, `${prefix}support_${s.name}`]));
+      for (const [path, name] of jobs) {
+        try { const blob = await _dcFetchBlob(path); files.push({ name: uniq(safe(name)), data: new Uint8Array(await blob.arrayBuffer()) }); }
+        catch { failed++; }
+        done++; const el = document.getElementById('dc-zip-progress'); if (el) el.textContent = `Fetched ${done} file(s)…`;
+      }
+    }
+    if (!files.length) { m.close(); alert('No file could be downloaded.'); return; }
+    _dcSaveBlob(_dcMakeZip(files), `${safe(open.label)}.zip`);
+    m.close();
+    if (failed) alert(`${files.length} file(s) were added. ${failed} could not be fetched.`);
+  } catch (e) { m.close(); alert('Could not build the ZIP: ' + e.message); }
+}
+
+// ── modal, blobs, preview ──
+function _dcModal(title, bodyHtml, { wide = false, foot = '', onClose = null } = {}) {
+  _dcEnsureFolderCss();
+  const root = document.createElement('div');
+  root.className = 'dc-modal-overlay';
+  root.innerHTML = `<div class="dc-modal ${wide ? 'dc-modal--wide' : ''}" role="dialog" aria-modal="true">
+    <div class="dc-modal-head"><h3>${escapeHtml(title)}</h3><button type="button" class="dc-modal-x" aria-label="Close">×</button></div>
+    <div class="dc-modal-body">${bodyHtml}</div>${foot ? `<div class="dc-modal-foot">${foot}</div>` : ''}</div>`;
+  document.body.appendChild(root);
+  const close = () => { document.removeEventListener('keydown', esc); root.remove(); if (onClose) onClose(); };
+  const esc = e => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', esc);
+  root.querySelector('.dc-modal-x').addEventListener('click', close);
+  root.addEventListener('mousedown', e => { if (e.target === root) close(); });
+  return { root, body: root.querySelector('.dc-modal-body'), foot: root.querySelector('.dc-modal-foot'), close };
+}
+async function _dcFetchBlob(path) {
+  const projectId = localStorage.getItem('activeProjectId');
+  const res = await _daAuthFetch(`${API}${path}${path.includes('?') ? '&' : '?'}projectId=${encodeURIComponent(projectId)}`);
+  if (!res || !res.ok) throw new Error('The file could not be loaded.');
+  return await res.blob();
+}
+function _dcSaveBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+async function _dcPreview(path, name) {
+  let url = null, blob = null;
+  const m = _dcModal(name, '<p class="dc-loading">Loading…</p>', { wide: true, foot: '<button type="button" class="dc-btn" id="dc-pv-dl" disabled>Download</button><button type="button" class="dc-btn dc-btn--dark" id="dc-pv-x">Close</button>', onClose: () => { if (url) URL.revokeObjectURL(url); } });
+  m.foot.querySelector('#dc-pv-x').addEventListener('click', m.close);
+  try {
+    blob = await _dcFetchBlob(path);
+    url = URL.createObjectURL(blob);
+    const ext = String(name).toLowerCase().split('.').pop();
+    const isPdf = blob.type === 'application/pdf' || ext === 'pdf';
+    const isImg = /^image\//.test(blob.type) || ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext);
+    m.body.style.padding = isPdf || isImg ? '0' : '';
+    m.body.innerHTML = isPdf ? `<iframe src="${url}" title="${escapeHtml(name)}" style="width:100%;height:100%;min-height:60vh;border:0;"></iframe>`
+      : isImg ? `<div style="display:flex;justify-content:center;padding:12px;"><img src="${url}" alt="${escapeHtml(name)}" style="max-width:100%;max-height:70vh;"></div>`
+      : `<p class="rc-text">This file type cannot be previewed in the browser. Use Download to open it.</p>`;
+    const dl = m.foot.querySelector('#dc-pv-dl'); dl.disabled = false; dl.addEventListener('click', () => _dcSaveBlob(blob, name));
+  } catch (e) { m.body.innerHTML = `<p class="rc-text" style="color:#b91c1c;">${escapeHtml(e.message)}</p>`; }
+}
+async function _dcDownloadPath(path, name) {
+  try { _dcSaveBlob(await _dcFetchBlob(path), name); } catch (e) { alert(e.message); }
+}
+
+// ── "Choose from Control & Reports" for any file field ──
+function _dcAcceptOk(fileName, accept) {
+  const a = String(accept || '').trim();
+  if (!a || a === '*/*') return true;
+  const ext = '.' + String(fileName).toLowerCase().split('.').pop();
+  const mimeGuess = ({ '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' })[ext] || '';
+  return a.split(',').map(t => t.trim().toLowerCase()).filter(Boolean).some(t =>
+    t.startsWith('.') ? t === ext : (t.endsWith('/*') ? mimeGuess.startsWith(t.slice(0, -1)) : t === mimeGuess));
+}
+async function _dcLoadSharedDocs() {
+  if (recordsCache['control-reports']) return recordsCache['control-reports'];
+  const projectId = localStorage.getItem('activeProjectId');
+  const res = await _daAuthFetch(`${API}/control-reports`, { method: 'POST', body: { projectId } });
+  if (!res || !res.ok) throw new Error('Control & Reports could not be loaded.');
+  return ((await res.json()).documents || []).map(r => ({ ...r, _tabKey: 'control-reports' }));
+}
+// Resolves to { files: File[], picks: [{docId}] } or null when cancelled.
+function _dcPickFromControl({ accept = '', multiple = false } = {}) {
+  return new Promise(async resolve => {
+    let docs, settled = false;
+    const settle = v => { if (!settled) { settled = true; resolve(v); } };
+    const m = _dcModal('Choose from Control & Reports', '<p class="dc-loading">Loading your side\'s shared documents…</p>', {
+      foot: '<button type="button" class="dc-btn" id="dc-src-cancel">Cancel</button><button type="button" class="dc-btn dc-btn--dark" id="dc-src-use" disabled>Use selected</button>',
+      onClose: () => settle(null),
+    });
+    const finish = v => { settle(v); m.close(); };
+    m.foot.querySelector('#dc-src-cancel').addEventListener('click', () => m.close());
+    try { docs = await _dcLoadSharedDocs(); } catch (e) { m.body.innerHTML = `<p class="rc-text" style="color:#b91c1c;">${escapeHtml(e.message)}</p>`; return; }
+    const rows = [];
+    docs.filter(d => (d.cr_status || 'shared') === 'shared').forEach(d => {
+      const base = { docId: d.id, title: d.title, ref: d.doc_number ? `${d.doc_number} · Rev ${_dcRevLetter(d.revision_no)}` : '', folder: d.doc_type || 'Uncategorised' };
+      if (d.file_name && _dcAcceptOk(d.file_name, accept)) rows.push({ ...base, name: d.file_name, path: `/document-file/${d.id}`, kind: 'Main file' });
+      (d.supporting_files || []).forEach((s, i) => { if (_dcAcceptOk(s.name, accept)) rows.push({ ...base, name: s.name, path: `/document-approval/${d.id}/supporting/${i}`, kind: 'Supporting file' }); });
+    });
+    const folders = [...new Set(rows.map(r => r.folder))].sort();
+    m.body.innerHTML = `<div style="display:flex;gap:8px;margin-bottom:8px;">
+        <input type="search" id="dc-src-q" placeholder="Search by title, number or file name" style="flex:1;border:1px solid #d1d5db;border-radius:8px;padding:8px 10px;font-size:13px;">
+        <select id="dc-src-f" class="dc-sel"><option value="">All folders</option>${folders.map(f => `<option>${escapeHtml(f)}</option>`).join('')}</select></div>
+      <div class="dc-note" style="margin-bottom:6px;">${accept && accept !== '*/*' ? 'Only files this form accepts are listed.' : ''}</div><div id="dc-src-list"></div>`;
+    const picked = new Set();
+    const useBtn = m.foot.querySelector('#dc-src-use');
+    const draw = () => {
+      const q = m.body.querySelector('#dc-src-q').value.trim().toLowerCase(), fl = m.body.querySelector('#dc-src-f').value;
+      const vis = rows.map((r, i) => ({ r, i })).filter(({ r }) => (!fl || r.folder === fl) && (!q || [r.title, r.name, r.ref].some(x => String(x).toLowerCase().includes(q))));
+      const groups = {};
+      vis.forEach(x => (groups[x.r.folder] ||= []).push(x));
+      m.body.querySelector('#dc-src-list').innerHTML = vis.length ? Object.keys(groups).sort().map(g => `<div class="dc-src-group">📁 ${escapeHtml(g)}</div>${groups[g].map(({ r, i }) => `
+        <label class="dc-src-row"><input type="${multiple ? 'checkbox' : 'radio'}" name="dc-src" value="${i}" ${picked.has(i) ? 'checked' : ''}>
+          <span><strong>${escapeHtml(r.title)}</strong> ${r.ref ? `<span class="dc-chip dc-chip--ref">${escapeHtml(r.ref)}</span>` : ''}<small>${escapeHtml(r.name)} · ${r.kind}</small></span></label>`).join('')}`).join('')
+        : `<p class="rc-text rc-text--empty">${rows.length ? 'Nothing matches your search.' : 'No shared files match what this form accepts yet.'}</p>`;
+      m.body.querySelectorAll('input[name="dc-src"]').forEach(inp => inp.addEventListener('change', () => {
+        const i = Number(inp.value);
+        if (!multiple) picked.clear();
+        if (inp.checked) picked.add(i); else picked.delete(i);
+        useBtn.disabled = !picked.size;
+      }));
+    };
+    draw();
+    m.body.querySelector('#dc-src-q').addEventListener('input', draw);
+    m.body.querySelector('#dc-src-f').addEventListener('change', draw);
+    useBtn.addEventListener('click', async () => {
+      useBtn.disabled = true; useBtn.textContent = 'Fetching…';
+      try {
+        const files = [], docIds = new Set();
+        for (const i of picked) {
+          const r = rows[i], blob = await _dcFetchBlob(r.path);
+          files.push(new File([blob], r.name, { type: blob.type || '' })); docIds.add(r.docId);
+        }
+        finish({ files, picks: [...docIds].map(docId => ({ docId })) });
+      } catch (e) { alert(e.message); useBtn.disabled = false; useBtn.textContent = 'Use selected'; }
+    });
+  });
+}
+const DC_PICK_TARGETS = [
+  { sel: '#recordAttachment',        label: 'Add Record (official PDF)',        after: () => document.getElementById('attachmentName') },
+  { sel: '#supportingFiles',         label: 'Add Record (supporting files)',    after: i => i },
+  { sel: '#flOwnPdf',                label: 'Notice (official PDF)',            after: () => document.getElementById('flOwnName') },
+  { sel: '#flSupport',               label: 'Notice (supporting files)',        after: i => i },
+  { sel: '#mAttachments',            label: 'Meeting attachment',               after: i => i },
+  { sel: 'input[id^="minuteReport_"]', label: 'Meeting report',                 after: i => i },
+  { sel: '#sfMsFile',                label: 'Schedule attachment',              after: i => i.closest('label') || i },
+  { sel: '#extFile',                 label: 'Schedule extension attachment',    after: i => i.closest('label') || i },
+  { sel: '#extensionEditFile',       label: 'Schedule extension attachment',    after: i => i },
+];
+function _dcEnhanceInput(input, target) {
+  if (input.dataset.dcPick) return;
+  const anchor = target.after(input);
+  if (!anchor || !anchor.insertAdjacentElement) return;
+  input.dataset.dcPick = '1';
+  _dcEnsureFolderCss();
+  const row = document.createElement('div');
+  row.className = 'dc-pick-row';
+  row.innerHTML = '<button type="button" class="dc-pick-btn">📂 Choose from Control & Reports</button><span class="dc-pick-note"></span>';
+  anchor.insertAdjacentElement('afterend', row);
+  const note = row.querySelector('.dc-pick-note');
+  input.addEventListener('change', () => { if (!input._dcSynthetic) note.textContent = ''; input._dcSynthetic = false; });
+  row.querySelector('button').addEventListener('click', async () => {
+    const got = await _dcPickFromControl({ accept: input.getAttribute('accept') || '', multiple: input.multiple });
+    if (!got || !got.files.length) return;
+    const dt = new DataTransfer();
+    if (input.multiple) Array.from(input.files || []).forEach(f => dt.items.add(f));
+    (input.multiple ? got.files : got.files.slice(0, 1)).forEach(f => dt.items.add(f));
+    input.files = dt.files;
+    input._dcSynthetic = true;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    note.textContent = `Using ${got.files.map(f => `“${f.name}”`).join(', ')} from Control & Reports`;
+    const projectId = localStorage.getItem('activeProjectId');
+    got.picks.forEach(p => _daAuthFetch(`${API}/documents/${p.docId}/used`, { method: 'POST', body: { projectId, target: target.label } }).catch(() => {}));
+  });
+}
+function _dcScanForPickTargets(root) {
+  if (!root || root.nodeType !== 1) return;
+  DC_PICK_TARGETS.forEach(t => {
+    if (root.matches && root.matches(t.sel)) _dcEnhanceInput(root, t);
+    root.querySelectorAll && root.querySelectorAll(t.sel).forEach(i => _dcEnhanceInput(i, t));
+  });
+}
+new MutationObserver(muts => muts.forEach(m => m.addedNodes.forEach(_dcScanForPickTargets))).observe(document.body, { childList: true, subtree: true });
+_dcScanForPickTargets(document.body);
+
+// notifications: open the document from its alert
+function _dcNotifLabel(entityType, fallback) {
+  if (entityType === 'document_approval') return 'Document & Approval';
+  if (entityType === 'control_reports') return 'Control & Reports';
+  return `${fallback} Record`;
+}
+async function _dcOpenFromNotification(entityType, entityId) {
+  const tab = entityType === 'control_reports' ? 'control-reports' : 'document-approval';
+  collapseGrayPart();
+  document.querySelector(`#navTabs li[data-tab="${tab}"]`)?.click();
+  const found = await new Promise(res => {
+    const t0 = Date.now();
+    (function chk() {
+      const c = recordsCache[tab];
+      if (c && c.some(r => String(r.id) === String(entityId))) return res(true);
+      if (Date.now() - t0 > 6000) return res(false);
+      setTimeout(chk, 120);
+    })();
+  });
+  if (!found) return;
+  const doc = recordsCache[tab].find(r => String(r.id) === String(entityId));
+  _dcSetF(tab, tab === 'document-approval' && doc.status === 'draft' ? DC_DRAFT_KEY : (String(doc.doc_type || 'Uncategorised').trim() || 'Uncategorised').toLowerCase());
+  _dcRerender(tab);
+  const head = document.querySelector(`.doc-item[data-id="${entityId}"][data-tab-key="${tab}"] .doc-item-header`);
+  if (head) { head.scrollIntoView({ behavior: 'smooth', block: 'center' }); head.click(); }
+}
+
+// typing in the top-left search box re-draws the open folder list (Document & Approval / Control & Reports)
+function _dcRefreshForSearch() {
+  const tab = document.getElementById('recordsList')?.dataset.dcTab;
+  if (tab) _dcRerender(tab);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -14920,7 +15453,9 @@ async function _daLoadDetail(recordId) {
     : (userSide !== null && userSide.toLowerCase() === (doc.side || '').toLowerCase());
   const isCreator = _dcIsAuthor(doc);
 
-  container.innerHTML = _daDetailHtml(doc, leader, isCreator);
+  const events = await _dcLoadEvents(recordId);
+  container.innerHTML = _daDetailHtml(doc, leader, isCreator, events);
+  _dcWireFileButtons(container, doc);
   _daWireDetailButtons(recordId, doc, leader, isCreator);
 }
 
@@ -14931,7 +15466,7 @@ async function _daLoadDetail(recordId) {
 function _dcTypeInputHtml(selectId, current) {
   const known = DA_DOC_TYPES.includes(current);
   const typed = current && !known ? current : '';
-  return `<input id="${selectId}-other" type="text" maxlength="60" value="${escapeHtml(typed)}" placeholder="Type the document type, e.g. Variation Order"
+  return `<input id="${selectId}-other" type="text" maxlength="60" list="dc-folder-list" autocomplete="off" value="${escapeHtml(typed)}" placeholder="Type the folder name, e.g. Variation Order"
     style="${_daInputStyle()} margin-top:8px;display:${typed ? 'block' : 'none'};"/>`;
 }
 function _dcWireTypeField(selectId) {
@@ -14961,6 +15496,11 @@ function _dcWho(name, role) {
 function _dcIsLeaderOf(doc) {
   const s = wcSide(window.currentUserRole);
   return s !== null && String(s).toLowerCase() === String(doc.side || '').toLowerCase();
+}
+// Is this person (id + role) the one using the app? Used to say "You" instead of a name.
+function _dcIsMe(id, role) {
+  const norm = x => String(x || '').toLowerCase().replace(/[\s_-]+/g, '');
+  return id !== null && id !== undefined && id !== '' && String(id) === String(window.currentUserId) && norm(role) === norm(window.currentUserRole);
 }
 function _dcIsAuthor(doc) {
   const norm = x => String(x || '').toLowerCase().replace(/[\s_-]+/g, '');
@@ -15031,9 +15571,67 @@ function _dcFileItem(prefix, doc, tag, text) {
       <div class="rc-item-body">
         <div class="rc-item-head"><span class="rc-item-title" title="${escapeHtml(doc.file_name)}">${escapeHtml(doc.file_name)}</span>${tag ? `<span class="rc-tag">${escapeHtml(tag)}</span>` : ''}</div>
         ${text ? `<p class="rc-item-text">${escapeHtml(text)}</p>` : ''}
-        <div class="rc-item-actions">${rcBtn(`${prefix}-download`, 'Download', 'download', 'sm', `data-doc-id="${escapeHtml(String(doc.id))}" data-filename="${escapeHtml(doc.file_name)}"`)}</div>
+        <div class="rc-item-actions">${rcBtn(`${prefix}-preview`, 'Preview', 'file', 'sm', `data-doc-id="${escapeHtml(String(doc.id))}" data-filename="${escapeHtml(doc.file_name)}"`)}${rcBtn(`${prefix}-download`, 'Download', 'download', 'sm', `data-doc-id="${escapeHtml(String(doc.id))}" data-filename="${escapeHtml(doc.file_name)}"`)}</div>
       </div>
     </div>`;
+}
+function _dcSupportingHtml(doc) {
+  const list = doc.supporting_files || [];
+  if (!list.length) return '';
+  return `<div class="rc-earlier-bar" style="margin-top:12px;"><p class="rc-text">Supporting files (${list.length})</p></div>` + list.map((f, i) => `
+    <div class="rc-item rc-item--file"><span class="rc-file-icon">${rcIcon('paperclip')}</span><div class="rc-item-body">
+      <div class="rc-item-head"><span class="rc-item-title" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span><span class="rc-tag">Supporting</span></div>
+      <div class="rc-item-actions">${rcBtn('sup-preview', 'Preview', 'file', 'sm', `data-sup-act="preview" data-idx="${i}" data-name="${escapeHtml(f.name)}"`)}${rcBtn('sup-download', 'Download', 'download', 'sm', `data-sup-act="download" data-idx="${i}" data-name="${escapeHtml(f.name)}"`)}</div>
+    </div></div>`).join('');
+}
+const DC_EVENT_TEXT = {
+  draft_saved: ['file', 'saved a draft'], submitted: ['inbox', 'sent the document to its folder'], created_signed: ['check', 'filed and signed the document'],
+  created_shared: ['inbox', 'added the document to Control & Reports'], resubmitted: ['history', 'sent the corrected file again'], signed: ['check', 'signed the document'],
+  returned: ['x', 'returned the document'], shared: ['inbox', 'shared the document to Control & Reports'], rejected: ['x', 'rejected the document'],
+  file_replaced: ['history', 'uploaded a corrected file'], accepted: ['check', 'signed and accepted the corrected file'], viewed: ['info', 'opened the document'],
+  query_raised: ['chat', 'raised a query'], recommendation: ['chat', 'wrote a recommendation'], query_answered: ['chat', 'answered a query'],
+  query_closed: ['check', 'closed a query'], query_reopened: ['history', 'reopened a query'], folder_renamed: ['list', 'moved the document by renaming its folder'],
+  used_as_attachment: ['paperclip', 'used the file as an attachment'],
+};
+function _dcHistoryHtml(events) {
+  if (!events.length) return '<p class="rc-text rc-text--empty">Nothing has been recorded for this document yet.</p>';
+  return _dcEvents([...events].reverse().map(e => {
+    const [icon, verb] = DC_EVENT_TEXT[e.action] || ['info', e.action];
+    return { state: 'done', icon, text: `${_dcIsMe(e.actor_id, e.actor_role) ? 'You' : (e.actor_name || rcRoleLabel(e.actor_role) || 'Someone')} ${verb}.`, when: e.created_at, sub: e.detail || '' };
+  }));
+}
+function _dcHistorySlide(events) {
+  return { key: 'history', label: 'History', count: events.length || '',
+    headline: events.length ? 'Everything that happened to this document, newest first.' : 'Nothing has been recorded for this document yet.', sub: 'Who did what, and when.',
+    html: rcSection('history', 'History of this document', _dcHistoryHtml(events), events.length ? rcPlural(events.length, 'entry', 'entries') : '') };
+}
+async function _dcLoadEvents(recordId) {
+  try {
+    const r = await _daAuthFetch(`${API}/documents/${recordId}/events`, { method: 'POST', body: { projectId: localStorage.getItem('activeProjectId') } });
+    if (r && r.ok) return (await r.json()).events || [];
+  } catch (e) { console.warn('events load failed', e); }
+  return [];
+}
+// Preview / download buttons for the main file, supporting files and query attachments.
+function _dcWireFileButtons(container, doc) {
+  container.querySelectorAll('[data-action$="-preview"]:not([data-sup-act])').forEach(b =>
+    b.addEventListener('click', () => _dcPreview(`/document-file/${b.dataset.docId}`, b.dataset.filename)));
+  container.querySelectorAll('[data-sup-act]').forEach(b => b.addEventListener('click', () => {
+    const path = `/document-approval/${doc.id}/supporting/${b.dataset.idx}`;
+    if (b.dataset.supAct === 'preview') _dcPreview(path, b.dataset.name); else _dcDownloadPath(path, b.dataset.name);
+  }));
+  container.querySelectorAll('[data-q-file]').forEach(b => b.addEventListener('click', () => {
+    const path = `/control-reports/${doc.id}/comments/${b.dataset.qFile}/file`;
+    if (b.dataset.qAct === 'preview') _dcPreview(path, b.dataset.name); else _dcDownloadPath(path, b.dataset.name);
+  }));
+}
+async function _dcPostForm(path, form, okMessage) {
+  const res = await _daAuthFetch(`${API}${path}`, { method: 'POST', body: form });
+  if (!res) return false;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { alert('Error: ' + (data.error || data.message || 'The action failed.')); return false; }
+  if (okMessage) alert(okMessage);
+  return true;
 }
 function _dcEvents(list) {
   return `<ol class="rc-events">${list.map(e => `
@@ -15058,9 +15656,9 @@ function _dcTimeline(steps) {
 
 // What happened to the document so far, in order. Works for both cards.
 function _dcStory(doc, inControl) {
-  const author = _dcPerson(doc.creator_name, doc.creator_role);
+  const author = _dcIsAuthor(doc) ? 'You' : _dcPerson(doc.creator_name, doc.creator_role);
   const ev = [];
-  const signer = _dcPerson(doc.signed_by_name, doc.approved_by_role);
+  const signer = _dcIsMe(doc.approved_by_id, doc.approved_by_role) ? 'You' : _dcPerson(doc.signed_by_name, doc.approved_by_role);
   const stampSub = id => id ? `Stamp ID ${id}` : '';
   ev.push({ state: 'start', icon: 'file', text: `${author} wrote this document.`, when: doc.created_at,
             sub: doc.author_stamp_id ? `The submitter signed it with a stamp. ${stampSub(doc.author_stamp_id)}` : '' });
@@ -15113,12 +15711,14 @@ function _dcProgress(doc, inControl) {
 function _dcDetailsHtml(doc, inControl) {
   const status = inControl ? _crBadge(doc.cr_status) : _daBadge(doc.status);
   const groups = {
-    Document: [['Reference', escapeHtml('#' + doc.id)], ['Type', escapeHtml(doc.doc_type || 'Not given')],
+    Document: [['Reference', escapeHtml(doc.doc_number || ('#' + doc.id))], ['Revision', doc.doc_number ? `Rev ${_dcRevLetter(doc.revision_no)}` : ''],
+               ['Type', escapeHtml(doc.doc_type || 'Not given')],
+               ['Review by', doc.deadline ? escapeHtml(_dcDay(doc.deadline)) : ''],
                ['Version', doc.replaced_at ? 'Corrected file' : 'First file']],
-    Submission: [['Written by', escapeHtml(_dcPerson(doc.creator_name, doc.creator_role))], ['Date written', escapeHtml(rcDate(doc.created_at, true))],
+    Submission: [['Written by', _dcIsAuthor(doc) ? 'You' : escapeHtml(_dcPerson(doc.creator_name, doc.creator_role))], ['Date written', escapeHtml(rcDate(doc.created_at, true))],
                  ['Submitter\'s stamp', doc.author_stamp_id ? `Stamped and signed (${escapeHtml(doc.author_stamp_id)})` : 'Not stamped']],
     'Sign-off': [['Current status', status],
-                 ['Signed by', doc.reviewed_at && (doc.signed_by_name || doc.approved_by_role) ? escapeHtml(_dcPerson(doc.signed_by_name, doc.approved_by_role)) : ''],
+                 ['Signed by', doc.reviewed_at && (doc.signed_by_name || doc.approved_by_role) ? (_dcIsMe(doc.approved_by_id, doc.approved_by_role) ? 'You' : escapeHtml(_dcPerson(doc.signed_by_name, doc.approved_by_role))) : ''],
                  ['Signed on', doc.reviewed_at && (doc.signed_by_name || doc.approved_by_role) ? escapeHtml(rcDate(doc.reviewed_at, true)) : ''],
                  ['Leader\'s stamp', doc.reviewed_at && (doc.signed_by_name || doc.approved_by_role) ? (doc.signer_stamp_id ? `Stamped and signed (${escapeHtml(doc.signer_stamp_id)})` : 'Not stamped') : ''],
                  ['Shared on', doc.shared_at ? escapeHtml(rcDate(doc.shared_at, true)) : '']],
@@ -15131,7 +15731,7 @@ function _dcDetailsHtml(doc, inControl) {
 }
 
 // ── Document & Approval ───────────────────────────────────────────────────
-function _daDetailHtml(doc, leader, isCreator) {
+function _daDetailHtml(doc, leader, isCreator, events = []) {
   const id = doc.id;
   let note = '', bar = '', before = '';
   if (doc.status === 'rejected') {
@@ -15152,7 +15752,9 @@ function _daDetailHtml(doc, leader, isCreator) {
     before = `<label style="${_daLabelStyle()}">Choose a folder to send it</label>
       <select id="da-send-type-${id}" style="${_daInputStyle()} cursor:pointer;"><option value="">— Select folder —</option>${DA_DOC_TYPES.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}</select>
       ${_dcTypeInputHtml('da-send-type-' + id, '')}
-      <div style="font-size:11px;color:#6b7280;margin:6px 0 4px;">Choosing a folder makes the document readable by your leader. Until then it stays private in your Draft folder.</div>`;
+      <div style="font-size:11px;color:#6b7280;margin:6px 0 4px;">Choosing a folder makes the document readable by your leader. Until then it stays private in your Draft folder.</div>
+      <label style="${_daLabelStyle()}">Review by (optional)</label>
+      <input type="date" id="da-send-deadline-${id}" style="${_daInputStyle()} width:auto;"/>`;
     bar = _dcBtn('da-send', 'Send to folder', 'warn', 'inbox') + _dcBtn('da-delete', 'Delete', 'danger', 'trash');
   } else if (isCreator && doc.status === 'rejected') {
     bar = _dcBtn('da-resubmit', 'Resubmit corrected file', 'warn', 'history') + _dcBtn('da-delete', 'Delete', 'danger', 'trash');
@@ -15166,33 +15768,51 @@ function _daDetailHtml(doc, leader, isCreator) {
 
   const prog = _dcProgress(doc, false);
   const slides = [
-    { key: 'details', label: 'Details', headline: `This is the summary of document #${escapeHtml(String(id))}.`, sub: '', html: _dcDetailsHtml(doc, false) },
-    { key: 'documents', label: 'Document', count: doc.file_name ? 1 : '',
-      headline: doc.file_name ? 'One file is attached to this document.' : 'No file is attached to this document.',
-      sub: 'You can download the file.',
-      html: rcSection('paperclip', 'File attached to this document', _dcFileItem('da', doc, 'Document', `Written by ${_dcPerson(doc.creator_name, doc.creator_role)} on ${rcDate(doc.created_at, true)}.`), doc.file_name ? '1 file' : '') },
+    { key: 'details', label: 'Details', headline: `This is the summary of document ${escapeHtml(doc.doc_number || ('#' + id))}.`, sub: '', html: _dcDetailsHtml(doc, false) },
+    { key: 'documents', label: 'Document', count: ((doc.file_name ? 1 : 0) + (doc.supporting_files || []).length) || '',
+      headline: doc.file_name ? ((doc.supporting_files || []).length ? 'The main file and its supporting files are attached.' : 'One file is attached to this document.') : 'No file is attached to this document.',
+      sub: 'You can preview or download each file.',
+      html: rcSection('paperclip', 'File attached to this document', _dcFileItem('da', doc, 'Document', `Written by ${_dcIsAuthor(doc) ? 'you' : _dcPerson(doc.creator_name, doc.creator_role)} on ${rcDate(doc.created_at, true)}.`) + _dcSupportingHtml(doc), doc.file_name ? '1 file' : '') },
     { key: 'progress', label: 'Progress', headline: prog.headline, sub: '',
       html: rcSection('workflow', 'Progress of this document', _dcTimeline(prog.steps), `${prog.done} of ${prog.steps.length} steps`) },
+    _dcHistorySlide(events),
   ];
   return standing + rcDeckHtml(slides, 'details');
 }
 
 // ── Control & Reports ─────────────────────────────────────────────────────
-function _crThreadHtml(comments) {
+function _crThreadHtml(comments, doc, leader) {
   if (!comments.length) return `<p class="rc-text rc-text--empty">Nobody has raised a query yet. If a detail is missing or unclear in this document, ask it here.</p>`;
-  return `<ul class="rc-reviews">${comments.map(c => `
-    <li class="rc-review">
-      <div class="rc-review-head">
-        <span class="rc-review-name">${escapeHtml(c.author_name || rcRoleLabel(c.author_role) || 'A project member')}</span>
-        <span class="rc-status rc-status--${c.kind === 'recommendation' ? 'pending' : 'info'}">${c.kind === 'recommendation' ? 'Recommendation' : (c.kind === 'query' ? 'Query' : 'Comment')}</span>
+  const norm = x => String(x || '').toLowerCase().replace(/[\s_-]+/g, '');
+  const canAct = (doc.cr_status || 'shared') === 'shared';
+  return `<ul class="rc-reviews" style="padding:0;">${comments.map(c => {
+    const isQuery = c.kind === 'query';
+    const mine = String(c.author_id) === String(window.currentUserId) && norm(c.author_role) === norm(window.currentUserRole);
+    const late = isQuery && c.status === 'open' ? _dcDaysLate(c.respond_by) : null;
+    const stateChip = !isQuery ? '' : (c.status === 'closed' ? '<span class="dc-chip">Closed</span>' : c.status === 'answered' ? '<span class="dc-chip">Answered</span>' : `<span class="dc-chip ${late ? 'dc-chip--late' : ''}">Open</span>`);
+    const byChip = isQuery && c.respond_by && c.status !== 'closed' ? `<span class="dc-chip ${late ? 'dc-chip--late' : ''}">${late ? `Reply was due ${escapeHtml(_dcDay(c.respond_by))}` : `Reply by ${escapeHtml(_dcDay(c.respond_by))}`}</span>` : '';
+    const att = c.attachment_name ? `<div class="rc-item-actions" style="margin-top:6px;">${rcBtn('q-preview', 'Preview', 'file', 'sm', `data-q-file="${c.id}" data-q-act="preview" data-name="${escapeHtml(c.attachment_name)}"`)}${rcBtn('q-download', 'Download ' + escapeHtml(c.attachment_name), 'download', 'sm', `data-q-file="${c.id}" data-q-act="download" data-name="${escapeHtml(c.attachment_name)}"`)}</div>` : '';
+    const ans = isQuery && c.answer ? `<div class="dc-q-ans"><strong>${_dcIsMe(c.answered_by_id, c.answered_by_role) ? 'You' : escapeHtml(c.answered_by_name || rcRoleLabel(c.answered_by_role) || 'A colleague')}</strong> answered ${escapeHtml(rcDate(c.answered_at, true))}:<br>${escapeHtml(c.answer)}</div>` : '';
+    const acts = [];
+    if (isQuery && canAct && c.status === 'open') acts.push(`<textarea id="dc-ans-${c.id}" placeholder="Write your answer…"></textarea>`, `<button type="button" class="dc-tool" data-q-do="answer" data-q-id="${c.id}">Send answer</button>`);
+    if (isQuery && canAct && c.status !== 'closed' && (mine || leader)) acts.push(`<button type="button" class="dc-tool" data-q-do="close" data-q-id="${c.id}">Close query</button>`);
+    if (isQuery && canAct && c.status === 'closed' && (mine || leader)) acts.push(`<button type="button" class="dc-tool" data-q-do="reopen" data-q-id="${c.id}">Reopen</button>`);
+    return `
+    <li class="rc-review dc-q">
+      <div class="dc-q-head">
+        <span class="rc-review-name">${mine ? 'You' : escapeHtml(c.author_name || rcRoleLabel(c.author_role) || 'A project member')}</span>
+        <span class="rc-status rc-status--${c.kind === 'recommendation' ? 'pending' : 'info'}">${c.kind === 'recommendation' ? 'Recommendation' : (isQuery ? 'Query' : 'Comment')}</span>
+        ${stateChip}${byChip}
       </div>
-      <div class="rc-review-sub">${escapeHtml([c.author_name ? rcRoleLabel(c.author_role) : '', rcDate(c.created_at, true)].filter(Boolean).join(' · '))}</div>
-      <p class="rc-text">${escapeHtml(c.body)}</p>
-    </li>`).join('')}</ul>`;
+      <div class="rc-review-sub">${escapeHtml([c.author_name && !mine ? rcRoleLabel(c.author_role) : '', rcDate(c.created_at, true)].filter(Boolean).join(' · '))}${c.closed_at ? ` · closed ${escapeHtml(rcDate(c.closed_at, true))}${_dcIsMe(c.closed_by_id, c.closed_by_role) ? ' by you' : (c.closed_by_name ? ' by ' + escapeHtml(c.closed_by_name) : '')}` : ''}</div>
+      <p class="rc-text">${escapeHtml(c.body)}</p>${att}${ans}
+      ${acts.length ? `<div class="dc-q-acts" style="flex-direction:column;align-items:stretch;">${acts.join('')}</div>` : ''}
+    </li>`;
+  }).join('')}</ul>`;
 }
 
 function _crDetailHtml(doc, ctx) {
-  const { leader, author, comments, versions } = ctx;
+  const { leader, author, comments, versions, events = [] } = ctx;
   const id = doc.id, cr = doc.cr_status || 'shared';
   let note = '', before = '', bar = '';
   if (cr === 'rejected') {
@@ -15222,9 +15842,9 @@ function _crDetailHtml(doc, ctx) {
   const standing = rcSection('info', 'Where this document stands',
     _dcEvents(_dcStory(doc, true)) + note + before + (bar ? `<div class="rc-actionbar">${bar}</div>` : ''));
 
-  const earlier = versions.length ? `<div class="rc-earlier-bar" style="margin-top:12px;"><p class="rc-text">Earlier revisions (rejected)</p></div>` + versions.map(v => `
+  const earlier = versions.length ? `<div class="rc-earlier-bar" style="margin-top:12px;"><p class="rc-text">Earlier revisions (rejected)</p></div>` + versions.map((v, vi) => `
       <div class="rc-item rc-item--file"><span class="rc-file-icon">${rcIcon('paperclip')}</span><div class="rc-item-body">
-        <div class="rc-item-head"><span class="rc-item-title">${escapeHtml(v.file_name || 'File')}</span><span class="rc-tag">Rejected</span></div>
+        <div class="rc-item-head"><span class="rc-item-title">${escapeHtml(v.file_name || 'File')}</span><span class="rc-tag">Rev ${_dcRevLetter(Math.max(0, (doc.revision_no || 0) - (cr === 'rejected' ? 0 : 1) - vi))} · Rejected</span></div>
         <p class="rc-item-text">Rejected on ${escapeHtml(rcDate(v.created_at, true))}. Reason: ${escapeHtml(v.reason || 'Not written')}</p></div></div>`).join('') : '';
 
   const canComment = cr === 'shared' || leader || author;
@@ -15232,23 +15852,28 @@ function _crDetailHtml(doc, ctx) {
     <div class="rc-actionbar" style="display:block;">
       <label style="${_daLabelStyle()}">Raise a query</label>
       <select id="cr-comment-kind-${id}" style="${_daInputStyle()} margin-bottom:8px;"><option value="query">Query (ask about something missing or unclear)</option><option value="recommendation">Recommendation</option></select>
-      <textarea id="cr-comment-body-${id}" placeholder="e.g. The beam detail is missing on this drawing…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:10px;"></textarea>
+      <textarea id="cr-comment-body-${id}" placeholder="e.g. The beam detail is missing on this drawing…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:8px;"></textarea>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:10px;">
+        <label style="font-size:12px;color:#374151;">Reply needed by (optional)<br><input type="date" id="cr-comment-by-${id}" style="${_daInputStyle()} width:auto;margin-top:4px;"></label>
+        <label style="font-size:12px;color:#374151;">Attach a photo or marked-up drawing (optional)<br><input type="file" id="cr-comment-file-${id}" accept=".pdf,.png,.jpg,.jpeg,.webp" style="margin-top:6px;"></label>
+      </div>
       ${_dcBtn('cr-comment', 'Post', 'warn', 'chat')}
     </div>` : '';
   const recs = comments.filter(c => c.kind === 'recommendation').length;
   const prog = _dcProgress(doc, true);
   const slides = [
-    { key: 'details', label: 'Details', headline: `This is the summary of document #${escapeHtml(String(id))}.`, sub: '', html: _dcDetailsHtml(doc, true) },
+    { key: 'details', label: 'Details', headline: `This is the summary of document ${escapeHtml(doc.doc_number || ('#' + id))}.`, sub: '', html: _dcDetailsHtml(doc, true) },
     { key: 'documents', label: 'Document', count: (doc.file_name ? 1 : 0) + versions.length || '',
       headline: doc.file_name ? 'The current file is attached to this document.' : 'No file is attached to this document.',
       sub: versions.length ? `${rcPlural(versions.length, 'earlier file was', 'earlier files were')} rejected.` : 'You can download the file.',
-      html: rcSection('paperclip', 'File attached to this document', _dcFileItem('cr', doc, cr === 'shared' ? (versions.length ? `Current file (revision ${versions.length + 1})` : 'Current file') : 'Under correction', `Shared on ${rcDate(doc.shared_at, true)}.`) + earlier) },
+      html: rcSection('paperclip', 'File attached to this document', _dcFileItem('cr', doc, cr === 'shared' ? `Current file (Rev ${_dcRevLetter(doc.revision_no)})` : 'Under correction', `Shared on ${rcDate(doc.shared_at, true)}.`) + _dcSupportingHtml(doc) + earlier) },
     { key: 'progress', label: 'Progress', headline: prog.headline, sub: '',
       html: rcSection('workflow', 'Progress of this document', _dcTimeline(prog.steps), `${prog.done} of ${prog.steps.length} steps`) },
     { key: 'comments', label: 'Queries', count: comments.length || '',
       headline: comments.length ? `${rcPlural(comments.length, 'entry has', 'entries have')} been written on this document.` : 'Nobody has raised a query on this document yet.',
       sub: comments.length ? `${rcPlural(recs, 'recommendation', 'recommendations')} so far. Colleagues on this side only ask queries, there is no approval between them.` : 'Everyone on this side can raise a query here.',
-      html: rcSection('chat', 'Queries and recommendations', `<div id="cr-thread-${id}">${_crThreadHtml(comments)}</div>${box}`, comments.length ? rcPlural(comments.length, 'entry', 'entries') : '') },
+      html: rcSection('chat', 'Queries and recommendations', `<div id="cr-thread-${id}">${_crThreadHtml(comments, doc, leader)}</div>${box}`, comments.length ? rcPlural(comments.length, 'entry', 'entries') : '') },
+    _dcHistorySlide(events),
   ];
   return standing + rcDeckHtml(slides, comments.length && cr === 'shared' ? 'comments' : 'details');
 }
@@ -15261,8 +15886,9 @@ async function _crLoadDetail(recordId) {
   if (!doc) { container.innerHTML = '<p class="dc-loading" style="color:#b91c1c;">Document not found.</p>'; return; }
   const projectId = localStorage.getItem('activeProjectId');
   const leader = _dcIsLeaderOf(doc), author = _dcIsAuthor(doc);
-  let comments = [], versions = [];
+  let comments = [], versions = [], events = [];
   try {
+    events = await _dcLoadEvents(recordId);
     const r1 = await _daAuthFetch(`${API}/control-reports/${recordId}/comments/list`, { method: 'POST', body: { projectId } });
     if (r1 && r1.ok) comments = (await r1.json()).comments || [];
     if (leader || author) {
@@ -15271,7 +15897,9 @@ async function _crLoadDetail(recordId) {
     }
   } catch (e) { console.error('CR detail load error:', e); }
 
-  container.innerHTML = _crDetailHtml(doc, { leader, author, comments, versions });
+  container.innerHTML = _crDetailHtml(doc, { leader, author, comments, versions, events });
+  _dcWireFileButtons(container, doc);
+  container.querySelectorAll('[data-q-do]').forEach(b => b.addEventListener('click', () => _crQueryAction(recordId, b.dataset.qId, b.dataset.qDo)));
 
   const q = sel => container.querySelector(sel);
   q('[data-action="cr-download"]')?.addEventListener('click', e => { const b = e.currentTarget; _crDownload(b.dataset.docId, b.dataset.filename); });
@@ -15336,7 +15964,8 @@ async function _daSendDraft(docId) {
   if (!projectId) { alert('No project selected.'); return; }
   const type = _dcReadType(`da-send-type-${docId}`);
   if (!type) { alert(_dcTypeMissingMsg(`da-send-type-${docId}`)); return; }
-  const ok = await _dcPost(`/document-approval/${docId}/submit`, { projectId, doc_type: type }, `📤 Sent to the "${type}" folder.`);
+  const deadline = document.getElementById(`da-send-deadline-${docId}`)?.value || undefined;
+  const ok = await _dcPost(`/document-approval/${docId}/submit`, { projectId, doc_type: type, deadline }, `📤 Sent to the "${type}" folder.`);
   if (ok) { delete recordsCache['document-approval']; _daLoadRecords(); }
 }
 
@@ -15510,6 +16139,17 @@ function _daOpenCreateForm(existingDoc = null) {
                 Current: <strong>${escapeHtml(existingDoc.file_name)}</strong></div>` : ''}
         </div>
 
+        ${isEdit ? '' : `
+        <div>
+          <label style="${_daLabelStyle()}">Supporting files <span style="font-weight:400;text-transform:none;">(optional, up to 5)</span></label>
+          <input type="file" id="da-cr-support" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv" style="width:100%;"/>
+        </div>
+        <div>
+          <label style="${_daLabelStyle()}">Review by <span style="font-weight:400;text-transform:none;">(optional)</span></label>
+          <input type="date" id="da-cr-deadline" style="${_daInputStyle()} width:auto;"/>
+          <div style="font-size:11px;color:#6b7280;margin-top:4px;">Your leader sees this date and is reminded when it passes.</div>
+        </div>`}
+
       </div>
 
       <div style="padding:0 20px 14px;">${_dcSignOption('da-sign-own')}</div>
@@ -15577,6 +16217,13 @@ function _daOpenCreateForm(existingDoc = null) {
     form.append('description', desc);
     if (isEdit) form.append('docId', existingDoc.id);
     if (file)   form.append('file',  file);
+    if (!isEdit) {
+      const dl = document.getElementById('da-cr-deadline')?.value; if (dl) form.append('deadline', dl);
+      const sup = Array.from(document.getElementById('da-cr-support')?.files || []);
+      if (sup.length > 5) return alert('Attach at most 5 supporting files.');
+      if (sup.some(f => f.size > 20 * 1024 * 1024)) return alert('Each supporting file must not exceed 20 MB.');
+      sup.forEach(f => form.append('supporting', f));
+    }
     if (document.getElementById('da-sign-own')?.checked) {
       if (!file) return alert('Attach a PDF first, then choose where to sign it.');
       if (!/\.pdf$/i.test(file.name)) return alert('Only PDF files can be signed with a stamp.');
@@ -15617,7 +16264,7 @@ function _daOpenCreateForm(existingDoc = null) {
 //  CONTROL & REPORT — Shell
 // ═══════════════════════════════════════════════════════════════════════
 function _crRenderShell() {
-  _crFolder = null;
+  _crFolder = null; DC_VIEW['control-reports'] = null;
   { const sb = document.getElementById('searchBox'); if (sb) sb.value = ''; }
   const leader = isWCLeader(window.currentUserRole);
 
@@ -15626,6 +16273,7 @@ function _crRenderShell() {
       ${leader ? `<button class="btn primary" id="crAddBtn">➕ Add Record</button>` : ''}
     </div>
     <div class="bottom-scroll-area">
+      <div id="dcSummary"></div>
       <ul class="doc-list" id="recordsList" style="padding:0;margin:0;list-style:none;"></ul>
       <div class="no-data-placeholder">
         <p>No shared documents yet.</p>
@@ -15674,6 +16322,7 @@ async function _crLoadRecords() {
 
     const data    = await res.json();
     const records = (data.documents || []).map(r => ({ ...r, _tabKey: 'control-reports' }));
+    _dcTruncated['control-reports'] = !!data.truncated;
     recordsCache['control-reports'] = records;
     _crRenderList(records);
 
@@ -15699,58 +16348,6 @@ function _crBadge(cr) {
   return `<span class="rc-status rc-status--${cls}">${escapeHtml(label)}</span>`;
 }
 
-function _crRenderList(records) {
-  const list        = document.getElementById('recordsList');
-  const placeholder = document.querySelector('.no-data-placeholder');
-  if (!list || !placeholder) return;
-  _dcEnsureFolderCss();
-
-  const term = _dcSearchTerm();
-  list.dataset.dcTab = 'control-reports';
-  const allFolders = _dcBuildFolders(records, false);
-  const folders = _dcFilterFolders(allFolders, term);
-  const open = _crFolder ? allFolders.find(f => f.key === _crFolder) : null;
-  if (_crFolder && !open) _crFolder = null;
-
-  if (!open) {
-    placeholder.style.display = records.length ? 'none' : 'block';
-    list.innerHTML = !records.length ? '' : (folders.length ? _dcFolderGridHtml(folders) : _dcNoMatchHtml(term, 'folders'));
-    _dcWireFolders(list, key => { _crFolder = key; _crRenderList(records); }, () => {});
-    return;
-  }
-
-  placeholder.style.display = 'none';
-  const shown = term && !open.label.toLowerCase().includes(term) ? open.items.filter(d => _dcDocMatches(d, term)) : open.items;
-  const cards = shown.map(doc => `
-      <li class="doc-item record-card" data-id="${escapeHtml(String(doc.id))}" data-tab-key="control-reports">
-        <div class="doc-item-header record-card-header" data-action="toggle" aria-expanded="false" role="button" tabindex="0">
-          <div class="rc-main">
-            <div class="rc-title-row">
-              <span class="rc-title" title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</span>
-              ${_dcNewChip(doc)}
-              <span class="rc-chip rc-chip--muted">${escapeHtml(doc.doc_type || 'Document')}</span>
-              ${doc.comment_count ? `<span class="rc-chip rc-chip--notice">${doc.comment_count} ${doc.comment_count === 1 ? 'query' : 'queries'}</span>` : ''}
-            </div>
-            <div class="rc-meta">
-              <span class="rc-meta-item">${rcIcon('user')}<span>Submitted by ${escapeHtml(doc.creator_name || rcRoleLabel(doc.creator_role) || 'a project member')}</span></span>
-              <span class="rc-meta-item">${rcIcon('calendar')}<span>Shared ${escapeHtml(_dcDate(doc.shared_at))}</span></span>
-            </div>
-          </div>
-          <div class="rc-side">
-            ${_crBadge(doc.cr_status)}
-            <span class="rc-chevron chevron-cr-${doc.id}">▾</span>
-          </div>
-        </div>
-        <div class="doc-detail record-card-detail" id="cr-detail-${doc.id}" style="display:none;">
-          <div id="cr-detail-inner-${doc.id}" class="dc-inner">
-            <p class="dc-loading">Loading…</p>
-          </div>
-        </div>
-      </li>`).join('');
-  list.innerHTML = _dcFolderBarHtml(open) + (cards || (term ? _dcNoMatchHtml(term, 'documents') : ''));
-  _dcWireFolders(list, () => {}, () => { _crFolder = null; _crRenderList(recordsCache['control-reports'] || records); });
-}
-
 async function _crAfterChange(recordId) {
   delete recordsCache['control-reports'];
   await _crLoadRecords();
@@ -15761,9 +16358,26 @@ async function _crAfterChange(recordId) {
 async function _crPostComment(recordId) {
   const projectId = localStorage.getItem('activeProjectId');
   const body = document.getElementById(`cr-comment-body-${recordId}`)?.value.trim() || '';
-  const kind = document.getElementById(`cr-comment-kind-${recordId}`)?.value || 'comment';
-  if (body.length < 2) { alert('Write your comment first.'); return; }
-  if (await _dcPost(`/control-reports/${recordId}/comments`, { projectId, body, kind })) _crAfterChange(recordId);
+  const kind = document.getElementById(`cr-comment-kind-${recordId}`)?.value || 'query';
+  if (body.length < 2) { alert('Write your query first.'); return; }
+  const form = new FormData();
+  form.append('projectId', projectId); form.append('body', body); form.append('kind', kind);
+  const by = document.getElementById(`cr-comment-by-${recordId}`)?.value;
+  if (by && kind === 'query') form.append('respond_by', by);
+  const f = document.getElementById(`cr-comment-file-${recordId}`)?.files?.[0];
+  if (f) { if (f.size > 20 * 1024 * 1024) { alert('The attachment must not exceed 20 MB.'); return; } form.append('file', f); }
+  if (await _dcPostForm(`/control-reports/${recordId}/comments`, form)) _crAfterChange(recordId);
+}
+async function _crQueryAction(recordId, qid, what) {
+  const projectId = localStorage.getItem('activeProjectId');
+  if (what === 'answer') {
+    const text = document.getElementById(`dc-ans-${qid}`)?.value.trim() || '';
+    if (text.length < 2) { alert('Write your answer first.'); return; }
+    if (await _dcPost(`/control-reports/${recordId}/comments/${qid}/answer`, { projectId, text })) _crAfterChange(recordId);
+  } else {
+    if (what === 'close' && !confirm('Close this query? It will stop counting as open.')) return;
+    if (await _dcPost(`/control-reports/${recordId}/comments/${qid}/status`, { projectId, status: what === 'close' ? 'closed' : 'open' })) _crAfterChange(recordId);
+  }
 }
 
 async function _crReject(recordId) {
@@ -15874,6 +16488,15 @@ function _crOpenCreateForm() {
           <div id="cr-file-display" style="display:none;margin-top:6px;font-size:12px;color:#10b981;font-weight:600;"></div>
         </div>
 
+        <div>
+          <label style="${_daLabelStyle()}">Supporting files <span style="font-weight:400;text-transform:none;">(optional, up to 5)</span></label>
+          <input type="file" id="cr-add-support" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv" style="width:100%;"/>
+        </div>
+        <div>
+          <label style="${_daLabelStyle()}">Review by <span style="font-weight:400;text-transform:none;">(optional)</span></label>
+          <input type="date" id="cr-add-deadline" style="${_daInputStyle()} width:auto;"/>
+        </div>
+
       </div>
 
       <div style="padding:0 20px 14px;">${_dcSignOption('cr-sign-own')}</div>
@@ -15934,6 +16557,10 @@ function _crOpenCreateForm() {
     form.append('title',       title);
     form.append('description', desc);
     form.append('file',        file);
+    { const dl = document.getElementById('cr-add-deadline')?.value; if (dl) form.append('deadline', dl);
+      const sup = Array.from(document.getElementById('cr-add-support')?.files || []);
+      if (sup.length > 5) return alert('Attach at most 5 supporting files.');
+      sup.forEach(f => form.append('supporting', f)); }
     if (document.getElementById('cr-sign-own')?.checked) {
       if (!/\.pdf$/i.test(file.name)) return alert('Only PDF files can be signed with a stamp.');
       const placed = await _dcPickPlacement(file);
