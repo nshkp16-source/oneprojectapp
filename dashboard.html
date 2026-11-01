@@ -2877,6 +2877,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   _restoreDashboardView();
   initializeSummaryPanel();
   loadSummaryPanelData();
+  await _resumePendingNotification();
   updateNotificationBadge();
   updateChatUnreadBadge();
   updateArretBar();
@@ -6190,7 +6191,7 @@ function openExtensionDetailsModal(extensions, milestones) {
           const related = groupedMilestones(extension.id);
           const fileName = extension.supporting_file_name || extension.supportingFileName;
           const fileUrl = extension.supporting_file_url || extension.supportingFileUrl;
-          return `<article style="border:1px solid #f1c98d;border-left:4px solid var(--c-ext);border-radius:10px;background:#fffaf3;padding:14px 16px;">
+          return `<article data-extension-id="${escapeHtml(String(extension.id))}" style="border:1px solid #f1c98d;border-left:4px solid var(--c-ext);border-radius:10px;background:#fffaf3;padding:14px 16px;">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
               <div><div style="font-size:13px;font-weight:700;color:var(--c-text);">Extension ${index + 1} · ${typeLabel(extension.extension_type || extension.extensionType)}</div><div style="font-size:11px;color:var(--c-muted);font-family:var(--font-mono);margin-top:4px;">${date(extension.new_planned_start)} → ${date(extension.new_planned_finish)} · +${Number(extension.extension_days || extension.extensionDays || 0)} days</div></div>
               <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
@@ -7466,7 +7467,6 @@ async function bootstrapUser() {
     }
 
     initStampNav();
-    _restoreDashboardView();
     updateNotificationBadge();
     updateChatUnreadBadge();
     setInterval(() => {
@@ -11956,8 +11956,9 @@ function renderNotificationPanel(notifications) {
       const isUnread  = !n.is_read;
       const typeLabel = (n.entity_type || '').replace('_records','').replace(/_/g,'-');
       html += `
-        <li data-notif-entity-type="${n.entity_type}"
-            data-notif-entity-id="${n.entity_id}"
+        <li data-notif-entity-type="${escapeHtml(n.entity_type)}"
+            data-notif-entity-id="${escapeHtml(String(n.entity_id))}"
+            data-notif-message="${escapeHtml(n.message || '')}"
             data-action="notif-click"
             style="padding:14px 16px;border-radius:8px;margin-bottom:8px;cursor:pointer;
             background:${isUnread ? '#eff6ff' : '#fff'};
@@ -11988,36 +11989,238 @@ function renderNotificationPanel(notifications) {
     document.getElementById('grayContent')?.addEventListener('click', (e) => {
       const li = e.target.closest('[data-action="notif-click"]');
       if (!li) return;
-      handleNotificationClick(li.getAttribute('data-notif-entity-type'), li.getAttribute('data-notif-entity-id'));
+      handleNotificationClick(
+        li.getAttribute('data-notif-entity-type'),
+        li.getAttribute('data-notif-entity-id'),
+        li.getAttribute('data-notif-message')
+      );
     });
   }, 50);
 }
 
-async function handleNotificationClick(entityType, entityId) {
-  if (entityType === 'document_approval' || entityType === 'control_reports') return _dcOpenFromNotification(entityType, entityId);
-  const TABLE_TAB_MAP = {
-    contractual_records:    'contractual',
-    administrative_records: 'administrative',
-    safety_records:         'safety',
-    operational_records:    'operational',
-    financial_records:      'financial',
+const PENDING_NOTIFICATION_KEY = 'dashboard-pending-notification';
+
+async function handleNotificationClick(entityType, entityId, message = '') {
+  const target = {
+    entityType: String(entityType || ''),
+    entityId: String(entityId || ''),
+    message: String(message || ''),
+    projectId: String(localStorage.getItem('activeProjectId') || ''),
+    createdAt: Date.now(),
   };
-  const tabKey = TABLE_TAB_MAP[entityType];
-  if (!tabKey) return;
-  collapseGrayPart();
-  const recordsNav = document.querySelector('.nav-item[data-nav="Project-Records"]');
-  if (recordsNav && !recordsNav.classList.contains('active')) recordsNav.click();
-  const tabEl = document.querySelector(`#navTabs li[data-tab="${tabKey}"]`);
-  if (tabEl) tabEl.click();
-  const found = await _waitForCachedRecord(tabKey, entityId);
-  if (!found) return;
-  const el = Array.from(document.querySelectorAll(`.doc-item[data-tab-key="${tabKey}"]`))
-    .find(item => String(item.getAttribute('data-id')) === String(entityId));
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    const detail = document.getElementById(`detail-${entityId}`);
-    if (detail && detail.style.display === 'none') toggleRecordDetail(entityId, tabKey);
+  try {
+    sessionStorage.setItem(PENDING_NOTIFICATION_KEY, JSON.stringify(target));
+  } catch (err) {
+    console.error('Could not retain the notification destination:', err);
   }
+  await _openNotificationTarget(target);
+}
+
+async function _resumePendingNotification() {
+  let target;
+  try {
+    const saved = sessionStorage.getItem(PENDING_NOTIFICATION_KEY);
+    if (!saved) return;
+    target = JSON.parse(saved);
+  } catch (err) {
+    console.error('Could not read the pending notification destination:', err);
+    sessionStorage.removeItem(PENDING_NOTIFICATION_KEY);
+    return;
+  }
+  const projectId = String(localStorage.getItem('activeProjectId') || '');
+  if (!target || target.projectId !== projectId || Date.now() - Number(target.createdAt || 0) > 10 * 60 * 1000) {
+    sessionStorage.removeItem(PENDING_NOTIFICATION_KEY);
+    return;
+  }
+  await _openNotificationTarget(target);
+}
+
+async function _openNotificationTarget(target) {
+  const { entityType, entityId, message = '' } = target || {};
+  if (!entityType || !entityId) return false;
+  collapseGrayPart();
+
+  let opened = false;
+  try {
+    if (entityType === 'document_approval' || entityType === 'control_reports') {
+      opened = await _dcOpenFromNotification(entityType, entityId);
+    } else if ([
+      'contractual_records', 'administrative_records', 'safety_records',
+      'operational_records', 'financial_records', 'workspace_work_center',
+      'planning_execution',
+    ].includes(entityType)) {
+      opened = await _openRecordNotification(entityType, entityId);
+    } else if (entityType === 'milestones' || entityType === 'additional_milestones') {
+      opened = await _openMilestoneNotification(entityType, entityId);
+    } else if (entityType === 'meetings' || entityType === 'meeting_minutes') {
+      opened = await _openMeetingNotification(entityType, entityId);
+    } else if (entityType === 'arrets') {
+      const arrets = await fetchArrets();
+      if (arrets.some(arret => String(arret.id) === String(entityId))) {
+        await handleArretView(entityId);
+        opened = true;
+      }
+    } else if (entityType === 'project_schedules') {
+      await openSchedulePanel();
+      opened = true;
+    } else if (entityType === 'schedule_extensions') {
+      opened = await _openScheduleExtensionNotification(entityId);
+    } else {
+      expandGrayPart(`<div style="padding:20px;">
+        <h3 style="margin-top:0;">${escapeHtml(_dcNotifLabel(entityType, entityType.replace(/_/g, ' ')))}</h3>
+        <p>${escapeHtml(message || 'The notification is no longer linked to an available record.')}</p>
+        <p style="font-size:12px;color:#6b7280;">Record reference: ${escapeHtml(entityType)} · ${escapeHtml(entityId)}</p>
+        <button class="btn" type="button" onclick="collapseGrayPart()">Close</button>
+      </div>`);
+      opened = true;
+    }
+  } catch (err) {
+    console.error(`Could not open ${entityType} notification:`, err);
+  }
+
+  if (opened) sessionStorage.removeItem(PENDING_NOTIFICATION_KEY);
+  else {
+    sessionStorage.removeItem(PENDING_NOTIFICATION_KEY);
+    _showNotificationOpenError();
+  }
+  return opened;
+}
+
+function _showNotificationOpenError() {
+  const container = document.getElementById('globalToast');
+  if (!container) return;
+  const notice = document.createElement('div');
+  notice.className = 'toast-item';
+  notice.setAttribute('role', 'status');
+  notice.textContent = 'Could not open the notified item. It may have been removed or is no longer available in this project.';
+  container.appendChild(notice);
+  setTimeout(() => notice.remove(), 6000);
+}
+
+function _selectNotificationTab(section, tabKey) {
+  const nav = document.querySelector(`.nav-item[data-nav="${section}"]`);
+  if (nav && !nav.classList.contains('active')) nav.click();
+  const tab = document.querySelector(`#navTabs li[data-tab="${tabKey}"]`);
+  if (tab && !tab.classList.contains('active')) tab.click();
+}
+
+async function _openRecordNotification(entityType, entityId) {
+  const tableTabs = {
+    contractual_records: 'contractual',
+    administrative_records: 'administrative',
+    safety_records: 'safety',
+    operational_records: 'operational',
+    financial_records: 'financial',
+    workspace_work_center: 'work-center',
+    planning_execution: 'planning-execution',
+  };
+  const tabKey = tableTabs[entityType];
+  if (!tabKey) return false;
+  const section = WORKSPACE_TABS[tabKey] ? 'workspace' : 'Project-Records';
+  _selectNotificationTab(section, tabKey);
+  if (!await _waitForCachedRecord(tabKey, entityId)) return false;
+
+  const card = Array.from(document.querySelectorAll(`.doc-item[data-tab-key="${tabKey}"]`))
+    .find(item => String(item.getAttribute('data-id')) === String(entityId));
+  if (!card) return false;
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const detailId = tabKey === 'planning-execution' ? `pe-detail-${entityId}` : `detail-${entityId}`;
+  const detail = document.getElementById(detailId);
+  if (detail && detail.style.display === 'none') toggleRecordDetail(entityId, tabKey);
+  return true;
+}
+
+async function _openMeetingNotification(entityType, entityId) {
+  const projectId = localStorage.getItem('activeProjectId');
+  if (!projectId) return false;
+  let match = null;
+  for (const scope of ['global', 'side']) {
+    for (const view of ['scheduled', 'minutes']) {
+      const params = new URLSearchParams({ view, scope, project_id: projectId });
+      try {
+        const response = await authFetch(`${API}/meetings?${params}`);
+        if (!response || !response.ok) continue;
+        const meetings = await response.json();
+        const meeting = meetings.find(item => entityType === 'meeting_minutes'
+          ? String(item.minute?.id) === String(entityId)
+          : String(item.id) === String(entityId));
+        if (meeting) { match = { scope, view, meetingId: meeting.id }; break; }
+      } catch (err) {
+        console.warn('Could not resolve notification to a meeting:', err);
+      }
+    }
+    if (match) break;
+  }
+  if (!match) return false;
+
+  const section = match.scope === 'side' ? 'workspace' : 'Project-Records';
+  const tabKey = match.scope === 'side' ? 'communication-meetings' : 'meeting';
+  _selectNotificationTab(section, tabKey);
+  renderMeetingContent(match.view, match.scope);
+  const card = await _waitForElement(`.meeting-card[data-id="${CSS.escape(String(match.meetingId))}"]`);
+  if (!card) return false;
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const header = card.querySelector('.meeting-card-header');
+  if (header?.getAttribute('aria-expanded') !== 'true') header?.click();
+  return true;
+}
+
+async function _openMilestoneNotification(entityType, entityId) {
+  const projectId = localStorage.getItem('activeProjectId');
+  const response = await authFetch(`${API}/get-schedule?projectId=${encodeURIComponent(projectId || '')}`);
+  if (!response || !response.ok) return false;
+  const data = await response.json();
+  const schedule = data.schedule;
+  const milestones = [
+    ...(schedule?.milestones || []),
+    ...(schedule?.extension_milestones || []),
+  ];
+  const isAdditional = entityType === 'additional_milestones';
+  const milestone = milestones.find(item => String(item.id) === String(entityId)
+    && Boolean(item.isExtension) === isAdditional);
+  if (!schedule || !milestone) return false;
+
+  await openSchedulePanel();
+  const row = await _waitForElement(`.p3ms[data-id="${CSS.escape(String(entityId))}"]`);
+  if (!row) return false;
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  row.click();
+  return true;
+}
+
+async function _openScheduleExtensionNotification(extensionId) {
+  const projectId = localStorage.getItem('activeProjectId');
+  const response = await authFetch(`${API}/get-schedule?projectId=${encodeURIComponent(projectId || '')}`);
+  if (!response || !response.ok) return false;
+  const data = await response.json();
+  const schedule = data.schedule;
+  const extension = schedule?.extensions?.find(item => String(item.id) === String(extensionId));
+  if (!schedule || !extension) return false;
+  await openSchedulePanel();
+  openExtensionDetailsModal(
+    schedule.extensions,
+    [...(schedule.milestones || []), ...(schedule.extension_milestones || [])]
+  );
+  const article = await _waitForElement(`#extensionDetailsOverlay [data-extension-id="${CSS.escape(String(extensionId))}"]`);
+  if (!article) return false;
+  article.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  return true;
+}
+
+function _waitForElement(selector, timeoutMs = 8000) {
+  return new Promise(resolve => {
+    const find = () => document.querySelector(selector);
+    const initial = find();
+    if (initial) { resolve(initial); return; }
+    const startedAt = Date.now();
+    const interval = setInterval(() => {
+      const element = find();
+      if (element || Date.now() - startedAt >= timeoutMs) {
+        clearInterval(interval);
+        resolve(element || null);
+      }
+    }, 100);
+  });
 }
 
 function _waitForCachedRecord(tabKey, entityId, timeoutMs = 6000) {
@@ -15529,16 +15732,17 @@ function _dcNotifLabel(entityType, fallback) {
 async function _dcOpenFromNotification(entityType, entityId) {
   const tab = entityType === 'control_reports' ? 'control-reports' : 'document-approval';
   collapseGrayPart();
-  const workspaceNav = document.querySelector('.nav-item[data-nav="workspace"]');
-  if (workspaceNav && !workspaceNav.classList.contains('active')) workspaceNav.click();
-  document.querySelector(`#navTabs li[data-tab="${tab}"]`)?.click();
-  const found = await _waitForCachedRecord(tab, entityId);
-  if (!found) return;
+  _selectNotificationTab('workspace', tab);
+  if (!await _waitForCachedRecord(tab, entityId)) return false;
   const doc = recordsCache[tab].find(r => String(r.id) === String(entityId));
+  if (!doc) return false;
   _dcSetF(tab, tab === 'document-approval' && doc.status === 'draft' ? DC_DRAFT_KEY : (String(doc.doc_type || 'Uncategorised').trim() || 'Uncategorised').toLowerCase());
   _dcRerender(tab);
   const head = document.querySelector(`.doc-item[data-id="${entityId}"][data-tab-key="${tab}"] .doc-item-header`);
-  if (head) { head.scrollIntoView({ behavior: 'smooth', block: 'center' }); head.click(); }
+  if (!head) return false;
+  head.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (head.getAttribute('aria-expanded') !== 'true') head.click();
+  return true;
 }
 
 // typing in the top-left search box re-draws the open folder list (Document & Approval / Control & Reports)
