@@ -6776,6 +6776,12 @@ function openActualProgressPage(savedSchedule) {
   }
 
   function progressEntryHTML(ms, planned, exec, completed, accentColor) {
+    if (ms.progress_source === 'activities') {
+      return `<div class="sc-card" style="order:4;"><div style="padding:20px;text-align:center;color:var(--c-muted);">
+        <strong style="color:var(--c-text);">Progress is driven by linked activities.</strong>
+        <div style="margin-top:6px;">Typed milestone entries are disabled. The value shown here follows consultant-certified activity progress.</div>
+      </div></div>`;
+    }
     if (AppState.canWrite && !completed) {
       return `
     <div class="sc-card" id="p3DailyCard" style="order:4;">
@@ -6842,6 +6848,131 @@ function openActualProgressPage(savedSchedule) {
         </div>
         <div style="display:grid;grid-template-columns:repeat(7,13px);gap:2px;justify-content:center;font-size:8px;text-align:center;">${cells.join('')}</div>
       </div>`;
+  }
+
+  async function loadActivityMilestoneDetail(ms, token, isExtMs) {
+    const panel = _el('p3ActivityMilestonePanel');
+    if (!panel) return;
+    const kind = isExtMs ? 'additional' : 'baseline';
+    const role = AppState.user?.role || window.currentUserRole;
+    const canManage = AppState.canWrite && wcSide(role) === 'Consultant' && isWCLeader(role);
+    try {
+      const response = await fetch(
+        `${BACKEND}/api/milestones/${kind}/${encodeURIComponent(ms.id)}/progress-detail`,
+        { headers: _authHeaders() },
+      );
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      if (token !== _renderToken) return;
+
+      ms.progress_source = result.progress_source;
+      ms.progress_pct = Number(result.progress_pct) || 0;
+      ms.derived_progress_pct = Number(result.derived_progress_pct) || 0;
+      ms.override_pct = result.temporary_value?.value ?? null;
+      ms.override_reason = result.temporary_value?.reason ?? null;
+      const current = msList.find((item) =>
+        String(item.id) === String(ms.id) && item._sourceTable === ms._sourceTable);
+      if (current) Object.assign(current, ms);
+      renderList();
+      updateSummary(ms);
+
+      const clientView = wcSide(role) === 'Client';
+      const activities = (result.activities || []).map((activity) => `
+        <div style="padding:9px 0;border-top:1px solid var(--c-border);">
+          <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+            <strong>${escapeHtml(activity.title || 'Activity')}</strong>
+            <span>${Number(activity.weight_pct) || 0}% of milestone</span>
+          </div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:4px;">
+            ${clientView
+              ? `${Number(activity.certified) || 0}% certified`
+              : `${Number(activity.claimed) || 0}% claimed · ${Number(activity.certified) || 0}% certified`}
+            ${activity.verificationPending ? ' · Verification pending' : ''}
+          </div>
+        </div>`).join('') || '<p>No contractor activities are linked yet.</p>';
+      const completion = result.can_complete || { ok: false, reasons: [] };
+      panel.innerHTML = `<div class="sc-card-hdr"><span class="sc-card-label">Activity-driven milestone</span></div>
+        <div style="padding:14px 20px;">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;">
+            <div><small>Derived progress</small><div style="font-size:20px;font-weight:700;">${ms.derived_progress_pct}%</div></div>
+            <div><small>Shown progress</small><div style="font-size:20px;font-weight:700;">${ms.progress_pct}%</div></div>
+            <div><small>Activity coverage</small><div style="font-size:20px;font-weight:700;">${Number(result.coverage_pct) || 0}%</div></div>
+          </div>
+          ${result.breakdown_request ? `<p><strong>Breakdown requested:</strong> ${escapeHtml(result.breakdown_request.note || '')}</p>` : ''}
+          ${result.temporary_value ? `<p><strong>Temporary consultant value:</strong> ${Number(result.temporary_value.value)}% — ${escapeHtml(result.temporary_value.reason || '')}</p>` : ''}
+          <div style="margin-top:8px;"><strong>Linked contractor activities</strong>${activities}</div>
+          <div style="margin-top:10px;font-size:12px;color:${completion.ok ? '#047857' : 'var(--c-muted)'};">
+            ${completion.ok ? 'Ready for milestone completion.' : (completion.reasons || []).map(escapeHtml).join(' ')}
+          </div>
+          ${canManage ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+            ${result.breakdown_request
+              ? '<button type="button" data-p3-withdraw-breakdown>Withdraw breakdown request</button>'
+              : '<button type="button" data-p3-request-breakdown>Request activity breakdown</button>'}
+            ${result.temporary_value
+              ? '<button type="button" data-p3-withdraw-override>Withdraw temporary value</button>'
+              : '<button type="button" data-p3-set-override>Set temporary value</button>'}
+          </div>` : ''}
+          ${AppState.canWrite && completion.ok && ms.activity_status !== 'completed'
+            ? '<button type="button" data-p3-complete-activity-milestone style="margin-top:10px;">Complete milestone</button>' : ''}
+        </div>`;
+
+      const send = async (action, method, body = {}) => {
+        const res = await fetch(`${BACKEND}/api/milestones/${kind}/${encodeURIComponent(ms.id)}/${action}`, {
+          method, headers: _authHeaders(true), body: JSON.stringify({ projectId: AppState.projectId, ...body }),
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+        await loadActivityMilestoneDetail(ms, token, isExtMs);
+      };
+      panel.querySelector('[data-p3-request-breakdown]')?.addEventListener('click', async () => {
+        const note = (prompt('Describe the activity breakdown required:') || '').trim();
+        if (!note) return;
+        try { await send('breakdown-request', 'POST', { note }); }
+        catch (error) { alert(`Unable to request a breakdown: ${error.message}`); }
+      });
+      panel.querySelector('[data-p3-withdraw-breakdown]')?.addEventListener('click', async () => {
+        if (!confirm('Withdraw this milestone breakdown request?')) return;
+        try { await send('breakdown-request/withdraw', 'PUT'); }
+        catch (error) { alert(`Unable to withdraw the breakdown request: ${error.message}`); }
+      });
+      panel.querySelector('[data-p3-set-override]')?.addEventListener('click', async () => {
+        const value = Number(prompt(`Enter a temporary value from 0 to ${ms.derived_progress_pct}%.`));
+        if (!Number.isFinite(value)) return;
+        const reason = (prompt('Reason for the temporary value:') || '').trim();
+        if (!reason) return alert('A reason is required.');
+        try { await send('override', 'POST', { value, reason }); }
+        catch (error) { alert(`Unable to set the temporary value: ${error.message}`); }
+      });
+      panel.querySelector('[data-p3-withdraw-override]')?.addEventListener('click', async () => {
+        if (!confirm('Withdraw the temporary consultant value?')) return;
+        try { await send('override/withdraw', 'PUT'); }
+        catch (error) { alert(`Unable to withdraw the temporary value: ${error.message}`); }
+      });
+      panel.querySelector('[data-p3-complete-activity-milestone]')?.addEventListener('click', async (event) => {
+        if (!confirm('Complete this milestone? All linked contractor activities are certified and closed.')) return;
+        const button = event.currentTarget;
+        button.disabled = true;
+        try {
+          const response = await fetch(`${BACKEND}/api/complete-milestone`, {
+            method: 'POST',
+            headers: _authHeaders(true),
+            body: JSON.stringify({
+              projectId: AppState.projectId,
+              milestoneId: ms.id,
+              isExtensionMilestone: isExtMs,
+            }),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+          await openSchedulePanel();
+        } catch (error) {
+          button.disabled = false;
+          alert(`Unable to complete the milestone: ${error.message}`);
+        }
+      });
+    } catch (error) {
+      if (token === _renderToken) panel.innerHTML = `<div class="sc-card-hdr"><span class="sc-card-label">Activity-driven milestone</span></div><p style="padding:14px 20px;color:#b91c1c;">Could not load certified activity progress: ${escapeHtml(error.message)}</p>`;
+    }
   }
 
   function renderDetail(ms, targetEl) {
@@ -6934,6 +7065,11 @@ function openActualProgressPage(savedSchedule) {
       </div>
     </div>
 
+    ${ms.progress_source === 'activities' ? `<div class="sc-card" id="p3ActivityMilestonePanel" style="order:2;">
+      <div class="sc-card-hdr"><span class="sc-card-label">Activity-driven milestone</span></div>
+      <div style="padding:14px 20px;color:var(--c-muted);font-size:12px;">Loading certified activity breakdown…</div>
+    </div>` : ''}
+
     <!-- PHOTOS -->
     <div class="sc-card" id="p3PhotosCard" style="order:3;">
       <div class="sc-card-hdr" style="cursor:pointer;" id="p3PhotosToggleHdr">
@@ -6971,6 +7107,8 @@ function openActualProgressPage(savedSchedule) {
 
     <!-- PROGRESS ENTRY: kept last so the current milestone and history are visible first -->
     ${progressEntryHTML(ms, planned, exec, completed, accentColor)}`;
+
+    if (ms.progress_source === 'activities') loadActivityMilestoneDetail(ms, token, isExtMs);
 
     if (AppState.canWrite && !completed) {
       _el('p3UpdateBtn')?.addEventListener('click', () => {
@@ -18529,5 +18667,6 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
 }
 
 </script>
+<script src="./backend/workflow-dashboard.js"></script>
 </body>
 </html>

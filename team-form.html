@@ -192,14 +192,19 @@ input:disabled,select:disabled{background:#f1f4f8;color:#8a97a6}
     }
   });
 
-  function addMember(e) {
+  async function addMember(e) {
     e.preventDefault();
     if (!projectWriteAllowed) return;
 
-    let assignedPart;
+    let assignedPart = null;
     if (role.startsWith("Client"))     assignedPart = "Client";
     else if (role.startsWith("Contractor")) assignedPart = "Contractor";
     else if (role.startsWith("Consultant")) assignedPart = "Consultant";
+    if (!assignedPart) {
+      document.getElementById("memberMessage").style.color = "#cc0000";
+      document.getElementById("memberMessage").textContent = "Your role cannot assign team members.";
+      return;
+    }
 
     const memberData = {
       assigned_part: assignedPart,
@@ -210,30 +215,42 @@ input:disabled,select:disabled{background:#f1f4f8;color:#8a97a6}
       telephone:     document.getElementById("memberTelephone").value.trim()
     };
 
-    const li = document.createElement("li");
-    li.innerHTML = `
-      <div class="member-info">
-        <strong>${memberData.name}</strong>
-        ${memberData.email} &nbsp;·&nbsp; ${memberData.assigned_part}
-      </div>
-    `;
-    const removeBtn = document.createElement("button");
-    removeBtn.textContent = "Remove";
-    removeBtn.className = "remove-btn";
-    removeBtn.type = "button";
-    removeBtn.onclick = () => li.remove();
-    li.appendChild(removeBtn);
-    document.getElementById("memberList").appendChild(li);
+    const addButton = document.getElementById("addMemberBtn");
+    const message = document.getElementById("memberMessage");
+    addButton.disabled = true;
+    message.style.color = "#5b6b7c";
+    message.textContent = "Saving team member...";
+    try {
+      await saveAssignment("Team Member", memberData);
 
-    document.getElementById("memberMessage").style.color = "#155724";
-    document.getElementById("memberMessage").textContent = `${memberData.name} added.`;
+      const li = document.createElement("li");
+      const info = document.createElement("div");
+      info.className = "member-info";
+      const name = document.createElement("strong");
+      name.textContent = memberData.name;
+      info.appendChild(name);
+      info.append(`${memberData.email} · ${memberData.assigned_part}`);
+      li.appendChild(info);
 
-    document.getElementById("memberName").value = "";
-    document.getElementById("memberEmail").value = "";
-    document.getElementById("memberPosition").value = "";
-    document.getElementById("memberTelephone").value = "";
+      const removeBtn = document.createElement("button");
+      removeBtn.textContent = "Remove";
+      removeBtn.className = "remove-btn";
+      removeBtn.type = "button";
+      removeBtn.onclick = () => li.remove();
+      li.appendChild(removeBtn);
+      document.getElementById("memberList").appendChild(li);
 
-    saveAssignment("Team Member", memberData);
+      message.style.color = "#155724";
+      message.textContent = `${memberData.name} saved to the project.`;
+      document.getElementById("teamForm").reset();
+    } catch (error) {
+      message.style.color = "#cc0000";
+      message.textContent = error instanceof TypeError
+        ? "Unable to contact the server. Check your connection and try again."
+        : error.message || "Failed to save team member.";
+    } finally {
+      addButton.disabled = false;
+    }
   }
 
   async function saveAssignment(assignRole, data) {
@@ -242,14 +259,12 @@ input:disabled,select:disabled{background:#f1f4f8;color:#8a97a6}
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
       body: JSON.stringify({ projectId, assignment: { role: assignRole, ...data } })
-    }).then(res => res.json());
-
-    if (response.success) {
-      sessionStorage.setItem("redirectSource", "dashboard");
-    } else {
-      document.getElementById("memberMessage").style.color = "#cc0000";
-      document.getElementById("memberMessage").textContent = response.error || "Failed to assign member.";
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || "Unable to save the team member. Please try again.");
     }
+    sessionStorage.setItem("redirectSource", "dashboard");
   }
 
   document.getElementById("saveBtn").addEventListener("click", () => {
