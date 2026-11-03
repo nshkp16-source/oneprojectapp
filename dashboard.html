@@ -13099,7 +13099,11 @@ function _renderWCList(records) {
         padding:3px 10px;font-size:11px;color:#166534;max-width:100%;">
         📊 <strong>${escapeHtml(task.activity_title)}</strong>
         ${_wcActivityStatusBadge(task.activity_status, task.activity_progress)}
-      </div>` : '';
+      </div>` : `
+      <div style="margin-top:5px;font-size:11px;color:#4b5563;">
+        Standalone task · ${escapeHtml(task.activity_type || 'percentage')}
+        ${task.target_quantity != null ? ` · Plan: ${escapeHtml(String(task.target_quantity))} ${escapeHtml(task.activity_unit || '')}` : ''}
+      </div>`;
 
     return `
       <li class="doc-item" data-id="${escapeHtml(String(task.id))}" data-tab-key="work-center"
@@ -13980,48 +13984,85 @@ async function _wcOpenCreateForm() {
     if (res && res.ok) { const d = await res.json(); peActivities = d.records || d.activities || []; }
   } catch (e) { /* non-fatal */ }
 
+  let selectedActivity = null;
+  let activityTasks = [];
+  let activityTasksLoaded = false;
+  const isClientSide = wcSide(window.currentUserRole) === 'Client';
+  let taskStages = [{ title: '', weight_pct: 100, is_hold_point: false }];
+  let sharePreviewRequest = 0;
+  async function refreshSharePreview() {
+    const preview = document.getElementById('wc-cr-target-preview');
+    if (!preview || !selectedActivity) return;
+    if (isClientSide) {
+      preview.textContent = 'Task shares are balanced automatically. Individual task details are not shown for this side.';
+      return;
+    }
+    const request = ++sharePreviewRequest;
+    const share = activityTasks.length ? Number(document.getElementById('wc-cr-share')?.value) : 100;
+    const title = document.getElementById('wc-cr-title')?.value.trim() || 'New task';
+    const planned = Number(selectedActivity.planned_quantity) || 0;
+    const target = planned > 0
+      ? ` Calculated target: ${Math.round((planned * share / 100 + Number.EPSILON) * 1000) / 1000} ${selectedActivity.unit || ''}.`
+      : '';
+    if (!activityTasks.length) {
+      preview.textContent = `This will be the first task and will carry 100% of the activity.${planned > 0 ? ` Calculated target: ${planned} ${selectedActivity.unit || ''}.` : ''}`;
+      return;
+    }
+    preview.textContent = 'Loading task-share preview…';
+    try {
+      const response = await _wcFetch(`${API}/planning-execution/${encodeURIComponent(selectedActivity.id)}/tasks`, {
+        method: 'POST',
+        body: JSON.stringify({ task: { title }, new_task_weight_pct: share, preview: true }),
+      });
+      if (!response) throw new Error('Task-share preview is unavailable.');
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Task-share preview is unavailable.');
+      if (request !== sharePreviewRequest || !selectedActivity) return;
+      preview.style.color = '#4b5563';
+      preview.textContent = `${result.weights.map((row) => `${row.title}: ${row.after}%`).join('; ')}.${target}`;
+    } catch (error) {
+      if (request === sharePreviewRequest) {
+        preview.textContent = error.message;
+        preview.style.color = '#b91c1c';
+      }
+    }
+  }
   const activityRows = peActivities.map(a => {
-    const aBadge = _wcActivityStatusBadge(a.status, a.avg_progress);
     return `
       <div onclick="_wcSelectActivity('${escapeHtml(String(a.id))}','${escapeHtml(a.title)}')"
-        style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #f3f4f6;"
+        style="padding:8px 0;cursor:pointer;border-bottom:1px solid #e5e7eb;"
         onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background='#fff'">
         <div style="font-size:13px;font-weight:600;color:#1f2937;margin-bottom:3px;">
           ${escapeHtml(a.title)}</div>
-        <div style="font-size:11px;color:#6b7280;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-          📅 ${_wcFmtDate(a.start_date)} → ${_wcFmtDate(a.end_date)} ${aBadge}
+        <div style="font-size:11px;color:#6b7280;">
+          ${_wcFmtDate(a.start_date)} to ${_wcFmtDate(a.end_date)}
         </div>
       </div>`;
   }).join('');
 
   expandGrayPart(`
     <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
-      <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
-        <h3 style="margin:0;color:#1f2937;font-size:18px;font-weight:700;">🗂️ Create Work Center Task</h3>
+      <div style="padding:16px 20px 12px;border-bottom:1px solid #d1d5db;flex-shrink:0;background:#fff;">
+        <h3 style="margin:0;color:#1f2937;font-size:18px;font-weight:700;">Create Task</h3>
         <p style="margin:4px 0 0;font-size:12px;color:#6b7280;">
-          Tasks are visible only to members on your side.
-          Status is derived automatically from dates.</p>
+          Assign a task to your team. Linked tasks use the activity’s measure and dates; standalone tasks have their own measure.</p>
       </div>
       <div style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
 
         <div>
-          <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;
-            text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">
-            Link to P&amp;E Activity <span style="font-weight:400;text-transform:none;color:#9ca3af;">(optional)</span>
-          </label>
-          <div style="display:flex;gap:6px;margin-bottom:8px;">
+          <h4 style="margin:0 0 8px;font-size:14px;color:#1f2937;">1. Choose an activity</h4>
+          <p style="font-size:12px;color:#6b7280;margin:0 0 8px;">Choose an activity or create a standalone task without an activity link.</p>
+          <div style="display:flex;gap:12px;margin-bottom:8px;">
             <button type="button" id="wc-act-tab-pick"
               onclick="_wcActTabSwitch('pick')"
-              style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:6px;
-              background:#007B8A;color:#fff;border:none;cursor:pointer;">Choose from list</button>
+              style="padding:5px 0;font-size:12px;font-weight:600;background:none;color:#007B8A;border:0;border-bottom:2px solid #007B8A;cursor:pointer;">Choose an activity</button>
             <button type="button" onclick="_wcActTabSwitch('none')"
-              style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:6px;
-              background:#f3f4f6;color:#374151;border:1px solid #d1d5db;cursor:pointer;">
-              Standalone (no link)</button>
+              style="padding:5px 0;font-size:12px;font-weight:600;background:none;color:#374151;border:0;border-bottom:2px solid transparent;cursor:pointer;">
+              No activity (standalone)</button>
           </div>
           <div id="wc-act-panel-pick">
             <div id="wc-activity-display"
-              style="padding:9px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;
+              style="padding:9px 0;border:0;border-bottom:1px solid #9ca3af;border-radius:0;font-size:13px;
               background:#fff;cursor:pointer;display:flex;justify-content:space-between;align-items:center;color:#374151;"
               onclick="_wcActivityPicker()">
               <span id="wc-activity-label">Click to choose an activity…</span>
@@ -14038,77 +14079,74 @@ async function _wcOpenCreateForm() {
             </div>
           </div>
           <div id="wc-act-panel-none" style="display:none;">
-            <div style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;
-              border-radius:8px;font-size:12px;color:#6b7280;">
-              This task will not be linked to any P&amp;E activity.</div>
+            <p style="font-size:12px;color:#6b7280;margin:6px 0;">This task will have its own progress measure, plan and dates.</p>
           </div>
+          <div id="wc-cr-activity-summary" style="display:none;margin-top:8px;padding:8px 0;border-top:1px solid #e5e7eb;font-size:12px;color:#4b5563;"></div>
         </div>
 
+        <div id="wc-cr-measure">
+          <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Progress measure for standalone task *</label>
+          <select id="wc-cr-type" style="width:100%;padding:9px 0;border:0;border-bottom:1px solid #9ca3af;border-radius:0;font-size:13px;background:#fff;">
+            <option value="quantity">Quantity</option><option value="count">Count</option><option value="stages">Stages</option><option value="percentage">Percentage</option>
+          </select>
+          <p id="wc-cr-type-hint" style="font-size:11px;color:#6b7280;margin:4px 0 8px;"></p>
+          <div id="wc-cr-target-fields" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div><label style="display:block;font-size:11px;color:#6b7280;margin-bottom:4px;">Planned amount *</label><input id="wc-cr-target" type="number" min="0.01" step="any" style="width:100%;padding:9px 0;border:0;border-bottom:1px solid #9ca3af;font-size:13px;"/></div>
+            <div><label id="wc-cr-unit-label" style="display:block;font-size:11px;color:#6b7280;margin-bottom:4px;">Unit *</label><input id="wc-cr-unit" type="text" placeholder="e.g. m3" style="width:100%;padding:9px 0;border:0;border-bottom:1px solid #9ca3af;font-size:13px;"/></div>
+          </div>
+          <div id="wc-cr-stages" style="display:none;margin-top:10px;"></div>
+        </div>
         <div>
+          <h4 style="margin:0 0 8px;font-size:14px;color:#1f2937;">2. Task sheet</h4>
           <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Title *</label>
-          <input type="text" id="wc-cr-title" placeholder="e.g. Foundation excavation — Zone B"
-            style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box;"/>
+          <input type="text" id="wc-cr-title" placeholder="e.g. Excavate foundation, Zone B"
+            style="width:100%;padding:9px 0;border:0;border-bottom:1px solid #9ca3af;border-radius:0;font-size:14px;box-sizing:border-box;"/>
+        </div>
+        <div id="wc-cr-share-wrap">
+          <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Share of activity (%)</label>
+          <input type="number" id="wc-cr-share" min="0.01" max="100" step="0.01" value="50"
+            style="width:120px;padding:9px 0;border:0;border-bottom:1px solid #9ca3af;border-radius:0;font-size:14px;box-sizing:border-box;"/>
+          <p id="wc-cr-share-note" style="font-size:11px;color:#6b7280;margin:4px 0 0;">The activity’s task shares will be rebalanced to total 100%.</p>
         </div>
         <div>
-          <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Description</label>
-          <textarea id="wc-cr-desc" placeholder="Describe the task scope and objectives…"
-            style="width:100%;min-height:80px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box;"></textarea>
+          <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">
+            Assign team members *
+          </label>
+          <div id="wc-cr-members"
+            style="padding:4px 0;max-height:180px;overflow-y:auto;">
+            <p style="font-size:12px;color:#9ca3af;text-align:center;padding:12px 0;">Loading team members.</p>
+          </div>
         </div>
-        <div>
-          <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Work Package</label>
-          <input type="text" id="wc-cr-pkg" placeholder="e.g. WP-03 Civil Works"
-            style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;box-sizing:border-box;"/>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
           <div>
             <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Start Date *</label>
             <input type="date" id="wc-cr-start"
-              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;box-sizing:border-box;"/>
+              style="width:100%;padding:9px 0;border:0;border-bottom:1px solid #9ca3af;border-radius:0;font-size:13px;box-sizing:border-box;"/>
           </div>
           <div>
             <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">End Date *</label>
             <input type="date" id="wc-cr-end"
-              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;box-sizing:border-box;"/>
-          </div>
-          <div>
-            <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Priority</label>
-            <select id="wc-cr-priority"
-              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;">
-              <option value="low">Low</option>
-              <option value="normal" selected>Normal</option>
-              <option value="high">High</option>
-            </select>
+              style="width:100%;padding:9px 0;border:0;border-bottom:1px solid #9ca3af;border-radius:0;font-size:13px;box-sizing:border-box;"/>
           </div>
         </div>
 
-        <div style="padding:10px 14px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;font-size:12px;color:#0369a1;">
-          ℹ️ <strong>Status is automatic:</strong> Not Yet Started → Ongoing (on start date) → Completed (on 100% progress) → Closed (manually marked).
+        <div>
+          <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Instructions for the team (optional)</label>
+          <textarea id="wc-cr-desc" placeholder="What should the team know?"
+            style="width:100%;min-height:54px;padding:9px 0;border:0;border-bottom:1px solid #9ca3af;border-radius:0;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
         </div>
+        <div id="wc-cr-target-preview" style="font-size:12px;color:#4b5563;"></div>
 
-        <div>
-          <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">
-            Assign Team Members *
-            <span style="font-weight:400;text-transform:none;color:#9ca3af;">(your side only)</span>
-          </label>
-          <div id="wc-cr-members"
-            style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;background:#f9fafb;max-height:220px;overflow-y:auto;">
-            <p style="font-size:12px;color:#9ca3af;text-align:center;padding:12px 0;">⏳ Loading team members…</p>
-          </div>
-        </div>
-        <div>
-          <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Linked File</label>
-          <input type="file" id="wc-cr-file" style="font-size:13px;color:#374151;"/>
-        </div>
       </div>
       <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;background:#fff;display:flex;gap:12px;">
         <button type="button" id="wc-cr-save" disabled
           style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#007B8A;
           color:#fff;border:none;border-radius:8px;cursor:pointer;opacity:.6;">
-          ✓ Create Task</button>
+          Create Task</button>
         <button type="button" onclick="collapseGrayPart()"
           style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#f5f5f5;
           color:#333;border:1px solid #ddd;border-radius:8px;cursor:pointer;">
-          ✕ Cancel</button>
+          Cancel</button>
       </div>
     </div>`);
 
@@ -14123,6 +14161,67 @@ async function _wcOpenCreateForm() {
     if (hidden)  hidden.value = id;
     if (display) display.textContent = label;
     if (dd)      dd.style.display = 'none';
+    selectedActivity = peActivities.find((a) => String(a.id) === String(id)) || null;
+    activityTasks = [];
+    activityTasksLoaded = false;
+    taskStages = [{ title: '', weight_pct: 100, is_hold_point: false }];
+    if (!selectedActivity) return;
+    const type = selectedActivity.activity_type || 'percentage';
+    const planned = Number(selectedActivity.planned_quantity) || null;
+    const unit = selectedActivity.unit || '';
+    const start = String(selectedActivity.start_date || '').slice(0, 10);
+    const end = String(selectedActivity.end_date || '').slice(0, 10);
+    const summary = document.getElementById('wc-cr-activity-summary');
+    if (summary) {
+      summary.style.display = 'block';
+      summary.textContent = `Measure: ${type}. ${planned ? `Planned: ${planned} ${unit}. ` : ''}Activity dates: ${_wcFmtDate(start)} to ${_wcFmtDate(end)}. Task dates must stay inside this period.`;
+    }
+    const measure = document.getElementById('wc-cr-measure');
+    const typeInput = document.getElementById('wc-cr-type');
+    if (typeInput) { typeInput.value = type; typeInput.disabled = true; }
+    if (measure) measure.dataset.linked = 'true';
+    const saveButton = document.getElementById('wc-cr-save');
+    if (saveButton) { saveButton.disabled = true; saveButton.textContent = 'Loading activity…'; }
+    const startInput = document.getElementById('wc-cr-start');
+    const endInput = document.getElementById('wc-cr-end');
+    if (startInput) { startInput.min = start; startInput.max = end; if (!startInput.value || startInput.value < start) startInput.value = start; }
+    if (endInput) {
+      endInput.min = startInput?.value || start;
+      endInput.max = end;
+      if (!endInput.value || endInput.value < endInput.min) endInput.value = endInput.min;
+      if (endInput.value > end) endInput.value = end;
+    }
+    const target = document.getElementById('wc-cr-target');
+    const unitInput = document.getElementById('wc-cr-unit');
+    if (target) { target.value = planned || ''; target.readOnly = true; }
+    if (unitInput) { unitInput.value = unit; unitInput.readOnly = true; }
+    if (selectedActivity.activity_type === 'stages') _wcRenderCreateStages();
+    _wcUpdateCreateMeasure();
+    const selectedActivityId = String(selectedActivity.id);
+    const share = document.getElementById('wc-cr-share');
+    if (share) share.value = activityTasks.length
+      ? Math.round((100 / (activityTasks.length + 1)) * 100) / 100
+      : 100;
+    refreshSharePreview();
+    _wcFetch(`${API}/planning-execution/${encodeURIComponent(selectedActivityId)}/activity-card?projectId=${encodeURIComponent(projectId)}`)
+      .then(async (response) => {
+        if (String(selectedActivity?.id || '') !== selectedActivityId) return;
+        if (!response) throw new Error('Could not load this activity.');
+        if (!response.ok) throw new Error('Could not load this activity’s task breakdown.');
+        const card = await response.json();
+        activityTasks = Array.isArray(card.tasks) ? card.tasks : [];
+        activityTasksLoaded = true;
+        if (share && activityTasks.length) share.value = Math.round((100 / (activityTasks.length + 1)) * 100) / 100;
+        else if (share) share.value = 100;
+        if (saveButton) { saveButton.disabled = false; saveButton.textContent = 'Create Task'; }
+        refreshSharePreview();
+      })
+      .catch((err) => {
+        if (String(selectedActivity?.id || '') !== selectedActivityId) return;
+        console.error('Could not load activity task shares:', err);
+        const summary = document.getElementById('wc-cr-activity-summary');
+        if (summary) summary.textContent += ' Could not load the task breakdown. Close and reopen the form to try again.';
+      });
   };
   const _ddClose = e => {
     const dd = document.getElementById('wc-activity-dropdown');
@@ -14139,11 +14238,129 @@ async function _wcOpenCreateForm() {
     const pickBtn   = document.getElementById('wc-act-tab-pick');
     if (pickPanel) pickPanel.style.display = tab==='pick' ? 'block' : 'none';
     if (nonePanel) nonePanel.style.display = tab==='none' ? 'block' : 'none';
-    if (pickBtn)   Object.assign(pickBtn.style,
-      tab==='pick'
-        ? { background:'#007B8A', color:'#fff', border:'none' }
-        : { background:'#f3f4f6', color:'#374151', border:'1px solid #d1d5db' });
+    const noneBtn = pickBtn?.parentElement?.querySelector('button:nth-child(2)');
+    if (pickBtn) Object.assign(pickBtn.style, tab === 'pick'
+      ? { color:'#007B8A', borderBottom:'2px solid #007B8A' }
+      : { color:'#374151', borderBottom:'2px solid transparent' });
+    if (noneBtn) Object.assign(noneBtn.style, tab === 'none'
+      ? { color:'#007B8A', borderBottom:'2px solid #007B8A' }
+      : { color:'#374151', borderBottom:'2px solid transparent' });
+    if (tab === 'none') {
+      selectedActivity = null;
+      activityTasks = [];
+      activityTasksLoaded = true;
+      taskStages = [{ title: '', weight_pct: 100, is_hold_point: false }];
+      const saveButton = document.getElementById('wc-cr-save');
+      if (saveButton) { saveButton.disabled = false; saveButton.textContent = 'Create Task'; }
+      const hidden = document.getElementById('wc-cr-activity');
+      if (hidden) hidden.value = '';
+      sharePreviewRequest++;
+      const summary = document.getElementById('wc-cr-activity-summary');
+      if (summary) summary.style.display = 'none';
+      const measure = document.getElementById('wc-cr-measure');
+      if (measure) delete measure.dataset.linked;
+      const type = document.getElementById('wc-cr-type');
+      if (type) type.disabled = false;
+      const start = document.getElementById('wc-cr-start');
+      const end = document.getElementById('wc-cr-end');
+      if (start) { start.min = ''; start.max = ''; }
+      if (end) { end.min = start?.value || ''; end.max = ''; }
+      const target = document.getElementById('wc-cr-target');
+      const unit = document.getElementById('wc-cr-unit');
+      if (target) { target.value = ''; target.readOnly = false; }
+      if (unit) { unit.value = ''; unit.readOnly = false; }
+      _wcUpdateCreateMeasure();
+    }
   };
+
+  function _wcUpdateCreateMeasure() {
+    const type = document.getElementById('wc-cr-type')?.value || 'quantity';
+    const isMeasured = type === 'quantity' || type === 'count';
+    const fields = document.getElementById('wc-cr-target-fields');
+    const stages = document.getElementById('wc-cr-stages');
+    const shareWrap = document.getElementById('wc-cr-share-wrap');
+    const hint = document.getElementById('wc-cr-type-hint');
+    const unitLabel = document.getElementById('wc-cr-unit-label');
+    if (shareWrap) shareWrap.style.display = selectedActivity && !isClientSide ? 'block' : 'none';
+    if (fields) fields.style.display = isMeasured ? 'grid' : 'none';
+    if (stages) stages.style.display = type === 'stages' ? 'block' : 'none';
+    if (hint) hint.textContent = type === 'quantity'
+      ? 'Quantity: measured work, such as 200 m3 excavated.'
+      : type === 'count'
+        ? 'Count: items that pass, such as 12 inspected units.'
+        : type === 'stages'
+          ? 'Stages: weighted steps completed in order.'
+          : 'Percentage: cumulative progress for work without a quantity or stage measure.';
+    if (unitLabel) unitLabel.textContent = type === 'count' ? 'What is counted *' : 'Unit *';
+    if (type === 'stages') _wcRenderCreateStages();
+  }
+
+  function _wcRenderCreateStages() {
+    const box = document.getElementById('wc-cr-stages');
+    if (!box) return;
+    box.innerHTML = `<label style="display:block;font-size:11px;font-weight:600;color:#6b7280;margin-bottom:6px;">Stages (shares total 100%)</label>
+      ${taskStages.map((stage, index) => `<div style="display:grid;grid-template-columns:minmax(0,1fr) 70px auto auto;gap:6px;align-items:center;margin-bottom:6px;">
+        <input data-wc-stage-title="${index}" value="${escapeHtml(stage.title)}" placeholder="Stage ${index + 1}" style="padding:8px 0;border:0;border-bottom:1px solid #9ca3af;min-width:0;"/>
+        <input data-wc-stage-weight="${index}" type="number" min="0.01" max="100" step="0.01" value="${stage.weight_pct}" style="padding:8px 0;border:0;border-bottom:1px solid #9ca3af;"/>
+        ${selectedActivity ? `<label style="font-size:11px;white-space:nowrap;"><input data-wc-stage-hold="${index}" type="checkbox" ${stage.is_hold_point ? 'checked' : ''}/> Hold point</label>` : '<span></span>'}
+        <button type="button" data-wc-stage-remove="${index}" ${taskStages.length < 2 ? 'disabled' : ''} style="border:0;background:none;color:#374151;cursor:pointer;">Remove</button>
+      </div>`).join('')}
+      <button type="button" id="wc-cr-stage-add" style="border:0;background:none;padding:4px 0;color:#007B8A;cursor:pointer;">Add stage</button>
+      <div id="wc-cr-stage-total" style="font-size:11px;color:#6b7280;"></div>`;
+    const total = taskStages.reduce((sum, stage) => sum + Math.round((Number(stage.weight_pct) || 0) * 100), 0);
+    const totalLabel = document.getElementById('wc-cr-stage-total');
+    if (totalLabel) {
+      totalLabel.textContent = `Stage shares total ${total / 100}%${total === 10000 ? '' : ' (must be 100%)'}`;
+      totalLabel.style.color = total === 10000 ? '#374151' : '#b91c1c';
+    }
+    box.querySelector('#wc-cr-stage-add')?.addEventListener('click', () => {
+      const next = Math.round(10000 / (taskStages.length + 1)) / 100;
+      taskStages.forEach((stage) => { stage.weight_pct = next; });
+      taskStages.push({ title: '', weight_pct: 100 - next * taskStages.length, is_hold_point: false });
+      _wcRenderCreateStages();
+    });
+    box.querySelectorAll('[data-wc-stage-title]').forEach((input) => input.addEventListener('input', () => {
+      taskStages[Number(input.dataset.wcStageTitle)].title = input.value;
+    }));
+    box.querySelectorAll('[data-wc-stage-weight]').forEach((input) => input.addEventListener('input', () => {
+      taskStages[Number(input.dataset.wcStageWeight)].weight_pct = Number(input.value) || 0;
+      const currentTotal = taskStages.reduce((sum, stage) => sum + Math.round((Number(stage.weight_pct) || 0) * 100), 0);
+      const label = document.getElementById('wc-cr-stage-total');
+      if (label) {
+        label.textContent = `Stage shares total ${currentTotal / 100}%${currentTotal === 10000 ? '' : ' (must be 100%)'}`;
+        label.style.color = currentTotal === 10000 ? '#374151' : '#b91c1c';
+      }
+    }));
+    box.querySelectorAll('[data-wc-stage-hold]').forEach((input) => input.addEventListener('change', () => {
+      taskStages[Number(input.dataset.wcStageHold)].is_hold_point = input.checked;
+    }));
+    box.querySelectorAll('[data-wc-stage-remove]').forEach((button) => button.addEventListener('click', () => {
+      taskStages.splice(Number(button.dataset.wcStageRemove), 1);
+      if (taskStages.length) {
+        const base = Math.floor(10000 / taskStages.length);
+        taskStages.forEach((stage, index) => { stage.weight_pct = (index === taskStages.length - 1
+          ? 10000 - base * (taskStages.length - 1) : base) / 100; });
+      }
+      _wcRenderCreateStages();
+    }));
+  }
+
+  document.getElementById('wc-cr-type')?.addEventListener('change', _wcUpdateCreateMeasure);
+  document.getElementById('wc-cr-share')?.addEventListener('change', () => {
+    refreshSharePreview();
+  });
+  document.getElementById('wc-cr-title')?.addEventListener('change', refreshSharePreview);
+  document.getElementById('wc-cr-start')?.addEventListener('change', (event) => {
+    const end = document.getElementById('wc-cr-end');
+    if (!end) return;
+    end.min = event.target.value;
+    if (end.value && end.value < event.target.value) end.value = event.target.value;
+  });
+  document.getElementById('wc-cr-end')?.addEventListener('change', (event) => {
+    const start = document.getElementById('wc-cr-start');
+    if (start) start.max = event.target.value;
+  });
+  _wcUpdateCreateMeasure();
 
   try {
     const res     = await _wcFetch(`${API}/work-center/team-members?projectId=${encodeURIComponent(projectId)}`);
@@ -14152,9 +14369,8 @@ async function _wcOpenCreateForm() {
     if (mc) {
       mc.innerHTML = members.length
         ? members.map(m => `
-            <label style="display:flex;align-items:center;gap:10px;padding:8px;
-              border:1px solid #e5e7eb;background:#fff;border-radius:8px;cursor:pointer;
-              margin-bottom:6px;transition:all .2s;">
+            <label style="display:flex;align-items:center;gap:10px;padding:7px 0;
+              border-bottom:1px solid #e5e7eb;cursor:pointer;margin-bottom:0;">
               <input type="checkbox" data-member-id="${escapeHtml(String(m.id))}"
                 data-member-email="${escapeHtml(m.email)}"
                 data-member-position="${escapeHtml(m.position||'')}"
@@ -14179,20 +14395,42 @@ async function _wcOpenCreateForm() {
   saveBtn?.addEventListener('click', async () => {
     try {
       const pickPanel   = document.getElementById('wc-act-panel-pick');
+      const nonePanel   = document.getElementById('wc-act-panel-none');
       const usePickMode = pickPanel && pickPanel.style.display !== 'none';
       const activityId  = usePickMode ? (document.getElementById('wc-cr-activity')?.value || '') : '';
+      const standaloneMode = nonePanel && nonePanel.style.display !== 'none';
 
       const title     = document.getElementById('wc-cr-title')?.value.trim();
       const desc      = document.getElementById('wc-cr-desc')?.value.trim();
-      const pkg       = document.getElementById('wc-cr-pkg')?.value.trim();
       const startDate = document.getElementById('wc-cr-start')?.value;
       const endDate   = document.getElementById('wc-cr-end')?.value;
-      const priority  = document.getElementById('wc-cr-priority')?.value;
-      const fileInput = document.getElementById('wc-cr-file');
+      const type = document.getElementById('wc-cr-type')?.value || '';
+      const planned = document.getElementById('wc-cr-target')?.value || '';
+      const unit = document.getElementById('wc-cr-unit')?.value.trim() || '';
+      const share = Number(document.getElementById('wc-cr-share')?.value);
 
       if (!title)                 throw new Error('Title is required.');
+      if (usePickMode && !activityId) throw new Error('Choose an activity or select “No activity (standalone)”.');
+      if (!activityId && !standaloneMode) throw new Error('Choose an activity or select “No activity (standalone)”.');
+      if (activityId && !activityTasksLoaded) throw new Error('Wait for the activity task breakdown to load.');
       if (!startDate || !endDate) throw new Error('Start and end dates are required.');
-      if (new Date(endDate) <= new Date(startDate)) throw new Error('End date must be after start date.');
+      if (endDate < startDate) throw new Error('The task end date cannot be before its start date.');
+      if (selectedActivity) {
+        if (startDate < String(selectedActivity.start_date).slice(0, 10) ||
+            endDate > String(selectedActivity.end_date).slice(0, 10))
+          throw new Error('Task dates must stay inside the activity dates.');
+      } else {
+        if (!['quantity', 'count', 'stages', 'percentage'].includes(type)) throw new Error('Choose a progress measure.');
+        if (['quantity', 'count'].includes(type) && !(Number(planned) > 0)) throw new Error('Planned amount must be above 0.');
+        if (['quantity', 'count'].includes(type) && !unit) throw new Error(type === 'count' ? 'Say what is counted.' : 'Enter a unit.');
+        if (type === 'count' && !Number.isInteger(Number(planned))) throw new Error('The planned count must be a whole number.');
+      }
+      if (selectedActivity && (!Number.isFinite(share) || share <= 0 || share >= 100) && activityTasks.length)
+        throw new Error('The new task share must be above 0 and below 100%.');
+      const stageTotal = taskStages.reduce((sum, stage) => sum + Math.round((Number(stage.weight_pct) || 0) * 100), 0);
+      if ((selectedActivity?.activity_type || type) === 'stages' &&
+          (!taskStages.length || taskStages.some((stage) => !stage.title.trim()) || stageTotal !== 10000))
+        throw new Error('Add titled stages with weights that total 100%.');
 
       const assignedMembers = [];
       document.getElementById('wc-cr-members')
@@ -14204,33 +14442,67 @@ async function _wcOpenCreateForm() {
         }));
       if (!assignedMembers.length) throw new Error('Please assign at least one team member.');
 
-      const form = new FormData();
-      form.append('projectId',        localStorage.getItem('activeProjectId'));
-      form.append('title',            title);
-      form.append('description',      desc || '');
-      form.append('work_package',     pkg || '');
-      form.append('start_date',       startDate);
-      form.append('end_date',         endDate);
-      form.append('priority',         priority);
-      form.append('assigned_members', JSON.stringify(assignedMembers));
-      if (activityId)            form.append('activity_id', activityId);
-      if (fileInput?.files?.[0]) form.append('linked_file', fileInput.files[0]);
-
       saveBtn.disabled=true; saveBtn.textContent='Creating…';
+      const projectId = localStorage.getItem('activeProjectId');
+      let data;
+      if (activityId) {
+        const task = {
+          title, description: desc || '', start_date: startDate, end_date: endDate,
+          assigned_members: assignedMembers,
+          ...(selectedActivity.activity_type === 'stages'
+            ? { stages: taskStages.map((stage) => ({
+              title: stage.title.trim(), weight_pct: stage.weight_pct, is_hold_point: stage.is_hold_point,
+            })) }
+            : {}),
+        };
+        if (activityTasks.length && !isClientSide) {
+          const previewRes = await _wcFetch(`${API}/planning-execution/${encodeURIComponent(activityId)}/tasks`, {
+            method: 'POST',
+            body: JSON.stringify({ task, new_task_weight_pct: share, preview: true }),
+          });
+          if (!previewRes) throw new Error('Could not preview the activity task shares.');
+          const preview = await previewRes.json();
+          if (!previewRes.ok) throw new Error(preview.error || `HTTP ${previewRes.status}`);
+          const summary = preview.weights.map((row) => `${row.title}: ${row.after}%`).join('\n');
+          if (!window.confirm(`Task shares will be updated to:\n${summary}\n\nContinue?`)) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Create Task';
+            return;
+          }
+        }
+        const res = await _wcFetch(`${API}/planning-execution/${encodeURIComponent(activityId)}/tasks`, {
+          method: 'POST',
+          body: JSON.stringify({
+            task,
+            new_task_weight_pct: isClientSide ? undefined : activityTasks.length ? share : 100,
+          }),
+        });
+        if (!res) throw new Error('Could not create the task.');
+        data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      } else {
+        const res = await _wcFetch(`${API}/work-center`, {
+          method: 'POST',
+          body: JSON.stringify({
+            projectId, title, description: desc || '', start_date: startDate, end_date: endDate,
+            activity_type: type, planned_quantity: planned, unit,
+            stages: type === 'stages' ? taskStages : [],
+            assigned_members: assignedMembers,
+          }),
+        });
+        if (!res) throw new Error('Could not create the standalone task.');
+        data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      }
 
-      const res  = await _wcFetch(`${API}/work-center`, { method:'POST', body:form });
-      if (!res) return;
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
-
-      alert(`✓ Task "${title}" created and assigned to ${assignedMembers.length} member(s).`);
+      alert(`Task "${title}" created and assigned to ${assignedMembers.length} member(s).`);
       delete recordsCache['work-center'];
       loadWCRecords();
       collapseGrayPart();
     } catch (err) {
       alert('Error: ' + err.message);
-      const sb = document.getElementById('wc-cr-save');
-      if (sb) { sb.disabled=false; sb.textContent='✓ Create Task'; }
+        const sb = document.getElementById('wc-cr-save');
+        if (sb) { sb.disabled=false; sb.textContent='Create Task'; }
     }
   });
 }
@@ -15233,7 +15505,7 @@ function _pe2DefaultType() {
   const s = wcSide(window.currentUserRole);
   return s === 'Consultant' ? 'count' : s === 'Client' ? 'stages' : 'quantity';
 }
-function _pe2NewTask() { return { title: '', members: [], weight: 100, stages: [_pe2NewStage(100)] }; }
+function _pe2NewTask() { return { title: '', instructions: '', start_date: '', end_date: '', members: [], weight: 100, stages: [_pe2NewStage(100)] }; }
 function _pe2NewStage(weight) { return { title: '', weight, hold: false }; }
 function _pe2Measured() { return _pe2.type === 'quantity' || _pe2.type === 'count'; }
 
@@ -15275,12 +15547,14 @@ function _pe2FormHtml() {
   <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
     <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
       <h3 style="margin:0;color:#1f2937;font-size:18px;font-weight:700;">Add Activity</h3>
-      <p style="margin:4px 0 0;font-size:12px;color:#6b7280;">Plan the activity and hand it to your team in one step. Each task carries a share of the activity.</p>
+      <p style="margin:4px 0 0;font-size:12px;color:#6b7280;">Set the activity plan, then divide the work into tasks for your team. The details entered here are included in the activity record.</p>
     </div>
     <div id="pe2-body" style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
 
       <div>
-        <label style="${_peLabelStyle()}">Milestone</label>
+        <h4 style="margin:0 0 8px;font-size:14px;color:#1f2937;">1. Milestone and activity dates</h4>
+        <p style="font-size:12px;color:#6b7280;margin:0 0 8px;">Choose a schedule milestone first. You can also create an activity without a milestone.</p>
+        <label style="${_peLabelStyle()}">Schedule milestone</label>
         <select id="pe2-milestone" style="${_peInputStyle()}">
           <option value="">No milestone</option>
           ${base.length ? `<optgroup label="Schedule milestones">${base.map(msOption).join('')}</optgroup>` : ''}
@@ -15292,6 +15566,7 @@ function _pe2FormHtml() {
       </div>
 
       <div>
+        <h4 style="margin:0 0 8px;font-size:14px;color:#1f2937;">2. Activity details</h4>
         <label style="${_peLabelStyle()}">Activity title *</label>
         <input id="pe2-title" type="text" placeholder="e.g. Excavation of grid B foundation" style="${_peInputStyle()}padding:10px 12px;font-size:14px;"/>
       </div>
@@ -15300,11 +15575,12 @@ function _pe2FormHtml() {
         <textarea id="pe2-desc" placeholder="Scope and objectives" style="width:100%;min-height:64px;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box;"></textarea>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div><label style="${_peLabelStyle()}">Start date *</label><input id="pe2-start" type="date" style="${_peInputStyle()}"/></div>
-        <div><label style="${_peLabelStyle()}">End date *</label><input id="pe2-end" type="date" style="${_peInputStyle()}"/></div>
+        <div><label style="${_peLabelStyle()}">Activity start date *</label><input id="pe2-start" type="date" style="${_peInputStyle()}"/></div>
+        <div><label style="${_peLabelStyle()}">Activity end date *</label><input id="pe2-end" type="date" style="${_peInputStyle()}"/></div>
       </div>
 
       <div>
+        <h4 style="margin:0 0 8px;font-size:14px;color:#1f2937;">3. How will progress be measured?</h4>
         <label style="${_peLabelStyle()}">How is progress measured? *</label>
         <select id="pe2-type" style="${_peInputStyle()}">
           ${Object.entries(PE2_TYPES).map(([k, t]) => `<option value="${k}"${k === _pe2.type ? ' selected' : ''}>${t.label}</option>`).join('')}
@@ -15322,7 +15598,7 @@ function _pe2FormHtml() {
       </div>
 
       <details>
-        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#374151;">Resource plan (optional)</summary>
+        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#374151;">Planned resources (optional)</summary>
         <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">
           <textarea id="pe2-work" placeholder="Planned work" style="width:100%;min-height:50px;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;box-sizing:border-box;"></textarea>
           <input id="pe2-manpower" type="text" placeholder="Planned manpower" style="${_peInputStyle()}"/>
@@ -15330,14 +15606,13 @@ function _pe2FormHtml() {
           <input id="pe2-materials" type="text" placeholder="Planned materials" style="${_peInputStyle()}"/>
         </div>
       </details>
-      <div><label style="${_peLabelStyle()}">Plan file</label><input id="pe2-file" type="file" style="font-size:13px;color:#374151;"/></div>
 
       <div style="border-top:1px solid #e5e7eb;padding-top:12px;">
         <div style="display:flex;align-items:center;justify-content:space-between;">
-          <label style="${_peLabelStyle()}margin:0;">Tasks</label>
+          <h4 style="margin:0;font-size:14px;color:#1f2937;">4. Task sheet</h4>
           <span id="pe2-total" style="font-size:12px;font-weight:600;"></span>
         </div>
-        <p style="font-size:11px;color:#6b7280;margin:4px 0 8px;">Each task is handed to team members in Work Center. Weights show how much of the activity each task is worth.</p>
+        <p style="font-size:12px;color:#6b7280;margin:4px 0 8px;">Add at least one task. Each task stays within the activity dates. Shares must total 100%.</p>
         <div id="pe2-tasks" style="display:flex;flex-direction:column;gap:10px;"></div>
         <div style="display:flex;gap:8px;margin-top:10px;">
           <button type="button" id="pe2-add-task" style="padding:8px 12px;font-size:13px;border:1px solid #d1d5db;border-radius:8px;background:#fff;cursor:pointer;">+ Add task</button>
@@ -15356,14 +15631,16 @@ function _pe2TasksHtml() {
   const measured = _pe2Measured();
   const unit = (document.getElementById('pe2-unit')?.value || '').trim();
   const qty = Number(document.getElementById('pe2-qty')?.value) || 0;
+  const activityStart = document.getElementById('pe2-start')?.value || '';
+  const activityEnd = document.getElementById('pe2-end')?.value || '';
   const many = _pe2.tasks.length > 1;
   return _pe2.tasks.map((t, i) => {
     const target = measured && qty > 0 ? Math.round(((qty * (t.weight || 0)) / 100) * 1000) / 1000 : null;
     const members = _pe2.members.length
       ? _pe2.members.map((m) => `
-          <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;border:1px solid #d1d5db;border-radius:14px;padding:3px 9px;margin:2px;cursor:pointer;background:${t.members.includes(m.id) ? '#e5e7eb' : '#fff'};">
-            <input type="checkbox" data-task="${i}" data-member="${m.id}" ${t.members.includes(m.id) ? 'checked' : ''}/>
-            ${escapeHtml(m.title || m.email)}${m.position ? ` <span style="color:#6b7280;">(${escapeHtml(m.position)})</span>` : ''}
+          <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;padding:7px 0;border-bottom:1px solid #f3f4f6;cursor:pointer;">
+            <input type="checkbox" data-task="${i}" data-member="${m.id}" ${t.members.includes(m.id) ? 'checked' : ''} style="margin-top:3px;"/>
+            <span>${escapeHtml(m.title || m.email)}${m.position ? ` <span style="color:#6b7280;">(${escapeHtml(m.position)})</span>` : ''}</span>
           </label>`).join('')
       : '<span style="font-size:12px;color:#9ca3af;">No team members are assigned to your side yet (Assign Team).</span>';
     const stages = _pe2.type === 'stages' ? `
@@ -15380,16 +15657,24 @@ function _pe2TasksHtml() {
         <button type="button" data-stage-add="${i}" style="font-size:12px;border:1px solid #d1d5db;border-radius:8px;background:#fff;padding:4px 8px;cursor:pointer;">+ Add stage</button>
       </div>` : '';
     return `
-      <div style="border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:#fafafa;">
-        <div style="display:grid;grid-template-columns:1fr ${many ? '90px' : ''} auto;gap:8px;align-items:end;">
+      <div style="border:1px solid #d1d5db;padding:14px;background:#fff;">
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) 100px auto;gap:8px;align-items:end;">
           <div><label style="${_peLabelStyle()}">Task ${i + 1} title *</label>
-            <input data-task-title="${i}" type="text" value="${escapeHtml(t.title)}" style="${_peInputStyle()}"/></div>
-          ${many ? `<div><label style="${_peLabelStyle()}">Weight %</label>
-            <input data-task-weight="${i}" type="number" min="0" step="any" value="${t.weight}" style="${_peInputStyle()}"/></div>` : ''}
-          <button type="button" data-task-del="${i}" ${many ? '' : 'disabled'} title="Remove task" style="border:none;background:none;cursor:pointer;color:#6b7280;font-size:16px;">x</button>
+            <input data-task-title="${i}" type="text" value="${escapeHtml(t.title)}" placeholder="What work will be done?" style="${_peInputStyle()}"/></div>
+          <div><label style="${_peLabelStyle()}">Share % *</label>
+            <input data-task-weight="${i}" type="number" min="0.01" max="100" step="0.01" value="${t.weight}" ${many ? '' : 'readonly'} style="${_peInputStyle()}"/></div>
+          <button type="button" data-task-del="${i}" ${many ? '' : 'disabled'} title="Remove task" style="border:none;background:none;cursor:pointer;color:#6b7280;font-size:16px;">Remove</button>
         </div>
-        ${measured ? `<div data-task-target="${i}" style="font-size:12px;color:#6b7280;margin-top:4px;">${target != null ? `Target: ${target} ${escapeHtml(unit)}` : 'Target follows the planned amount.'}</div>` : ''}
-        <div style="margin-top:6px;"><label style="${_peLabelStyle()}">Assigned to *</label>${members}</div>
+        <div style="margin-top:10px;"><label style="${_peLabelStyle()}">Assigned to *</label><div style="max-height:150px;overflow:auto;">${members}</div></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
+          <div><label style="${_peLabelStyle()}">Task start date *</label>
+            <input data-task-start="${i}" type="date" value="${escapeHtml(t.start_date || activityStart)}" min="${escapeHtml(activityStart)}" max="${escapeHtml(activityEnd)}" style="${_peInputStyle()}"/></div>
+          <div><label style="${_peLabelStyle()}">Task end date *</label>
+            <input data-task-end="${i}" type="date" value="${escapeHtml(t.end_date || activityEnd)}" min="${escapeHtml(t.start_date || activityStart)}" max="${escapeHtml(activityEnd)}" style="${_peInputStyle()}"/></div>
+        </div>
+        <div style="margin-top:10px;"><label style="${_peLabelStyle()}">Instructions for the team (optional)</label>
+          <textarea data-task-instructions="${i}" placeholder="What should the team know?" style="width:100%;min-height:54px;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;resize:vertical;box-sizing:border-box;">${escapeHtml(t.instructions)}</textarea></div>
+        ${measured ? `<div data-task-target="${i}" style="font-size:12px;color:#4b5563;margin-top:8px;">${target != null ? `Calculated target: ${target} ${escapeHtml(unit)}` : 'The target is calculated from the planned amount and task share.'}</div>` : ''}
         ${stages}
       </div>`;
   }).join('');
@@ -15454,11 +15739,47 @@ function _pe2MilestoneNote() {
   const m = _pe2.milestones.find((x) => `${x.kind === 'baseline' ? 'b' : 'a'}:${x.id}` === sel);
   const drives = wcSide(window.currentUserRole) === 'Contractor';
   if (!m) { note.textContent = sel === 'new' ? 'A standalone milestone is a label of your side. It is not linked to the schedule.' : ''; return; }
+  const period = [m.planned_start, m.planned_end].filter(Boolean).map(_wcFmtDate).join(' to ');
   note.textContent = !drives
     ? 'Reference only: this activity does not change the milestone percentage.'
     : m.typed_progress
       ? `This milestone has typed progress (${m.progress_pct}%). Linking replaces it with progress from activities, which starts at 0% until the consultant certifies work. You will be asked to confirm.`
       : 'The milestone percentage will follow the consultant-certified progress of this activity and the other contractor activities linked to it.';
+  if (period) note.textContent += ` Milestone dates: ${period}. Activity dates must stay inside this period.`;
+  _pe2ApplyDateBounds();
+}
+
+function _pe2ApplyDateBounds() {
+  const selected = document.getElementById('pe2-milestone')?.value || '';
+  const milestone = _pe2?.milestones.find((m) =>
+    `${m.kind === 'baseline' ? 'b' : 'a'}:${m.id}` === selected);
+  const start = document.getElementById('pe2-start');
+  const end = document.getElementById('pe2-end');
+  if (!start || !end) return;
+  start.min = milestone?.planned_start ? String(milestone.planned_start).slice(0, 10) : '';
+  start.max = milestone?.planned_end ? String(milestone.planned_end).slice(0, 10) : '';
+  end.min = start.value || start.min;
+  end.max = milestone?.planned_end ? String(milestone.planned_end).slice(0, 10) : '';
+  if (start.value && start.min && start.value < start.min) start.value = '';
+  if (start.value && start.max && start.value > start.max) start.value = '';
+  if (end.value && end.min && end.value < end.min) end.value = '';
+  if (end.value && end.max && end.value > end.max) end.value = '';
+  _pe2?.tasks.forEach((task) => {
+    if (task.start_date && (task.start_date < start.value || task.start_date > end.value)) task.start_date = start.value;
+    if (task.end_date && (task.end_date < task.start_date || task.end_date > end.value)) task.end_date = end.value;
+  });
+  document.querySelectorAll('[data-task-start]').forEach((input) => {
+    const task = _pe2?.tasks[Number(input.dataset.taskStart)];
+    input.min = start.value;
+    input.max = end.value;
+    if (task) input.value = task.start_date || start.value;
+  });
+  document.querySelectorAll('[data-task-end]').forEach((input) => {
+    const task = _pe2?.tasks[Number(input.dataset.taskEnd)];
+    input.min = task?.start_date || start.value;
+    input.max = end.value;
+    if (task) input.value = task.end_date || end.value;
+  });
 }
 
 function _pe2Wire() {
@@ -15468,6 +15789,8 @@ function _pe2Wire() {
   _pe2MilestoneNote();
 
   $('pe2-milestone').addEventListener('change', _pe2MilestoneNote);
+  $('pe2-start').addEventListener('change', () => { _pe2ApplyDateBounds(); _pe2RenderTasks(); });
+  $('pe2-end').addEventListener('change', () => { _pe2ApplyDateBounds(); _pe2RenderTasks(); });
   $('pe2-type').addEventListener('change', (e) => {
     _pe2.type = e.target.value;
     _pe2.tasks.forEach((t) => { if (!t.stages.length) t.stages = [_pe2NewStage(100)]; });
@@ -15494,6 +15817,20 @@ function _pe2Wire() {
     const d = e.target.dataset;
     if (d.taskTitle != null) _pe2.tasks[+d.taskTitle].title = e.target.value;
     else if (d.taskWeight != null) { _pe2.tasks[+d.taskWeight].weight = e.target.value === '' ? 0 : Number(e.target.value); _pe2.weightsEdited = true; _pe2UpdateTotals(); }
+    else if (d.taskInstructions != null) _pe2.tasks[+d.taskInstructions].instructions = e.target.value;
+    else if (d.taskStart != null) {
+      const task = _pe2.tasks[+d.taskStart];
+      task.start_date = e.target.value;
+      const end = document.querySelector(`[data-task-end="${d.taskStart}"]`);
+      if (end) {
+        end.min = e.target.value;
+        if (end.value && end.value < e.target.value) { end.value = e.target.value; task.end_date = end.value; }
+      }
+    } else if (d.taskEnd != null) {
+      _pe2.tasks[+d.taskEnd].end_date = e.target.value;
+      const start = document.querySelector(`[data-task-start="${d.taskEnd}"]`);
+      if (start) start.max = e.target.value;
+    }
     else if (d.stageTitle != null) { const [i, j] = d.stageTitle.split(':').map(Number); _pe2.tasks[i].stages[j].title = e.target.value; }
     else if (d.stageWeight != null) { const [i, j] = d.stageWeight.split(':').map(Number); _pe2.tasks[i].stages[j].weight = e.target.value === '' ? 0 : Number(e.target.value); _pe2UpdateTotals(); }
   });
@@ -15536,6 +15873,10 @@ function _pe2Problem() {
   if (!v('pe2-title')) return 'Activity title is required.';
   if (!v('pe2-start') || !v('pe2-end')) return 'Start and end dates are required.';
   if (v('pe2-end') < v('pe2-start')) return 'The end date cannot be before the start date.';
+  const selected = document.getElementById('pe2-milestone')?.value || '';
+  const milestone = _pe2.milestones.find((m) => `${m.kind === 'baseline' ? 'b' : 'a'}:${m.id}` === selected);
+  if (milestone?.planned_start && v('pe2-start') < String(milestone.planned_start).slice(0, 10)) return 'The activity cannot start before the milestone.';
+  if (milestone?.planned_end && v('pe2-end') > String(milestone.planned_end).slice(0, 10)) return 'The activity cannot end after the milestone.';
   if (document.getElementById('pe2-milestone')?.value === 'new' && !v('pe2-milestone-text')) return 'Type the standalone milestone name, or choose another option.';
   if (_pe2Measured()) {
     if (!(Number(v('pe2-qty')) > 0)) return 'The planned amount must be above 0.';
@@ -15545,6 +15886,10 @@ function _pe2Problem() {
   for (const [i, t] of _pe2.tasks.entries()) {
     if (!t.title.trim()) return `Task ${i + 1} needs a title.`;
     if (!t.members.length) return `Task ${i + 1} needs at least one assigned team member.`;
+    const taskStart = t.start_date || v('pe2-start');
+    const taskEnd = t.end_date || v('pe2-end');
+    if (!taskStart || !taskEnd || taskStart < v('pe2-start') || taskEnd > v('pe2-end') || taskEnd < taskStart)
+      return `Task ${i + 1} dates must stay inside the activity dates.`;
     if (_pe2.type === 'stages') {
       if (t.stages.some((s) => !s.title.trim())) return `Every stage of task ${i + 1} needs a title.`;
       if (_pe2WeightTotal(t.stages.map((s) => s.weight)) !== 100) return `Stage weights of task ${i + 1} must add up to 100%.`;
@@ -15575,12 +15920,13 @@ function _pe2Payload(confirmReplace) {
   const many = _pe2.tasks.length > 1;
   form.append('tasks', JSON.stringify(_pe2.tasks.map((t) => ({
     title: t.title.trim(),
+    description: t.instructions.trim(),
+    start_date: t.start_date || v('pe2-start'),
+    end_date: t.end_date || v('pe2-end'),
     assigned_members: t.members.map((id) => ({ id })),
     ...(many ? { weight_pct: t.weight } : {}),
     ...(_pe2.type === 'stages' ? { stages: t.stages.map((s) => ({ title: s.title.trim(), weight_pct: s.weight, is_hold_point: !!s.hold })) } : {}),
   }))));
-  const file = document.getElementById('pe2-file')?.files?.[0];
-  if (file) form.append('linked_file', file);
   if (confirmReplace) form.append('confirm_replace_manual', 'true');
   return form;
 }
