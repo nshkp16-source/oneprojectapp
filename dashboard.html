@@ -15181,17 +15181,22 @@ async function _peLoadDetail(recordId, tabKey) {
   }
   try {
     const projectId = localStorage.getItem('activeProjectId');
-    const [cardResponse, verificationResponse] = await Promise.all([
-      _wcFetch(`${API}/planning-execution/${encodeURIComponent(recordId)}/activity-card?projectId=${encodeURIComponent(projectId)}`),
-      _wcFetch(`${API}/activities/${encodeURIComponent(recordId)}/verifications`),
-    ]);
+    const cardResponse = await _wcFetch(
+      `${API}/planning-execution/${encodeURIComponent(recordId)}/activity-card?projectId=${encodeURIComponent(projectId)}`
+    );
     if (!cardResponse) throw new Error('Could not load the activity details.');
     const card = await cardResponse.json();
     if (!cardResponse.ok) throw new Error(card.error || `HTTP ${cardResponse.status}`);
     let verificationData = { verifications: [], rework: [] };
-    if (verificationResponse && verificationResponse.ok) verificationData = await verificationResponse.json();
-    else if (card.activity.drives_milestone && card.viewer_side !== 'Client' && verificationResponse)
-      throw new Error('Could not load verification details.');
+    if (card.activity.drives_milestone && card.viewer_side !== 'Client') {
+      const verificationResponse = await _wcFetch(`${API}/activities/${encodeURIComponent(recordId)}/verifications`);
+      if (!verificationResponse) throw new Error('Could not load verification details.');
+      if (!verificationResponse.ok) {
+        const error = await verificationResponse.json().catch(() => ({}));
+        throw new Error(error.error || `Could not load verification details (HTTP ${verificationResponse.status}).`);
+      }
+      verificationData = await verificationResponse.json();
+    }
     const selectedTab = sessionStorage.getItem(`pe-activity-tab-${recordId}`) || 'overview';
     const verificationId = sessionStorage.getItem(`pe-verification-${recordId}`);
     container.innerHTML = _peActivityCardHtml(card, verificationData, selectedTab);
@@ -15210,6 +15215,7 @@ async function _peLoadDetail(recordId, tabKey) {
 }
 
 function _peActivityCardHtml(card, verificationData = { verifications: [], rework: [] }, selectedTab = 'overview') {
+  verificationData = verificationData || { verifications: [], rework: [] };
   const activity = card.activity || {};
   const tasks = card.tasks || [];
   const reports = card.progress_reports || [];
@@ -19921,6 +19927,6 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
 }
 
 </script>
-<script src="./backend/workflow-dashboard.js"></script>
+<script src="./backend/workflow-dashboard.js?v=20261103-activity-card-guard"></script>
 </body>
 </html>
