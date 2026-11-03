@@ -14275,37 +14275,15 @@ function _peDeriveStatus(task, trackingEntries) {
   return { label: 'Ongoing', color: '#3b82f6' };
 }
 
-// ── Auto-calculate progress % and delay from schedule variance ────────────────
-// progressPct  = (previousActualTotal + enteredQty) / plannedQty * 100
-//   → calculated from the planned quantity and actual execution
-// delayDays    = implied from schedule variance:
-//   expected% = daysElapsed / totalDuration * 100
-//   variance  = progressPct - expected%
-//   if variance < 0 → delayDays = |variance| / 100 * totalDuration
-function _peCalcProgress(task, previousTotalActual, enteredQty, reportDate, pctOverride) {
+// ── Auto-calculate progress % from actual execution ───────────────────────────
+function _peCalcProgress(task, previousTotalActual, enteredQty, pctOverride) {
   const plannedQty  = Number(task.planned_quantity) || 1;
   const totalActual = previousTotalActual + (Number(enteredQty) || 0);
   const autoPct     = Math.min(100, Math.round((totalActual / plannedQty) * 100));
   const pct         = (pctOverride !== '' && pctOverride !== null && pctOverride !== undefined)
     ? Math.min(100, Math.max(0, Number(pctOverride) || 0))
     : autoPct;
-
-  const start      = task.start_date ? new Date(task.start_date) : null;
-  const end        = task.end_date   ? new Date(task.end_date)   : null;
-  const repDate    = reportDate      ? new Date(reportDate)      : new Date();
-  let   delayDays  = 0;
-  let   variance   = null;
-  let   expectedPct = null;
-
-  if (start && end) {
-    const totalDays   = Math.max(1, Math.round((end - start) / 86400000));
-    const elapsed     = Math.max(0, Math.round((repDate - start) / 86400000));
-    expectedPct       = Math.min(100, Math.round((elapsed / totalDays) * 100));
-    variance          = pct - expectedPct;
-    if (variance < 0) delayDays = Math.round((Math.abs(variance) / 100) * totalDays);
-  }
-
-  return { autoPct, pct, totalActual, delayDays, variance, expectedPct };
+  return { autoPct, pct, totalActual };
 }
 
 // ── Style helpers ─────────────────────────────────────────────────────────────
@@ -14550,7 +14528,7 @@ function _peDetailHtml(task, trackingEntries, canEdit) {
                 ${entryDelayDays > 0
                   ? `<span style="background:#fff1f2;color:#991b1b;border:1px solid #fca5a5;
                       border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;">
-                      ⚠️ ${entryDelayDays}d delay</span>` : ''}
+                      ⚠️ ${entryDelayDays}d calculated delay</span>` : ''}
                 <div style="display:flex;align-items:center;gap:5px;">
                   <div style="background:#e5e7eb;border-radius:999px;height:6px;width:70px;">
                     <div style="background:#10b981;height:6px;border-radius:999px;
@@ -14578,9 +14556,6 @@ function _peDetailHtml(task, trackingEntries, canEdit) {
               ? `<div style="font-size:12px;color:#374151;margin-top:6px;padding:8px 10px;
                   background:#fff1f2;border:1px solid #fecdd3;border-radius:6px;">
                   ⚠️ <strong>Issues:</strong> ${escapeHtml(e.issues)}</div>` : ''}
-            ${entryDelayDays > 0 && e.delay_reason
-              ? `<div style="margin-top:6px;font-size:12px;color:#6b7280;">
-                  <strong>Delay reason:</strong> ${escapeHtml(e.delay_reason)}</div>` : ''}
             ${e.status_change_to_closed
               ? `<div style="margin-top:6px;padding:5px 8px;background:#f3f4f6;
                   border:1px solid #d1d5db;border-radius:6px;font-size:12px;color:#6b7280;">
@@ -14591,9 +14566,7 @@ function _peDetailHtml(task, trackingEntries, canEdit) {
     : `<div style="text-align:center;padding:20px 0;color:#9ca3af;font-size:12px;">No execution entries yet.</div>`;
 
   // ── Execution form (canEdit only) ─────────────────────────────────────────
-  // IMPORTANT: progress_pct and delay_days are NO LONGER manual inputs.
-  // They are derived in _peWireDetailButtons via _peCalcProgress() and
-  // sent to the backend as computed values.
+  // Progress is previewed from quantity; delay is calculated by the server.
   const execFormHtml = canEdit ? `
     <details id="pe-entry-editor-${task.id}" style="grid-column:1 / -1;background:#fff;border:1px solid #d1d5db;border-radius:12px;">
       <summary style="padding:13px 16px;cursor:pointer;font-size:13px;font-weight:700;color:#007B8A;">📝 Report Entry <span style="font-size:11px;font-weight:400;color:#6b7280;">(click to expand)</span></summary>
@@ -14793,9 +14766,7 @@ function _peWireDetailButtons(recordId, task, trackingEntries, canEdit) {
     window[`_peRecalc_${recordId}`] = function() {
       const enteredQty    = parseFloat(document.getElementById(`pe-act-qty-${recordId}`)?.value) || 0;
       const pctOverride   = null;
-      const reportDate    = document.getElementById(`pe-rep-date-${recordId}`)?.value || new Date().toISOString().slice(0,10);
-
-      const calc = _peCalcProgress(task, previousTotalActual, enteredQty, reportDate, pctOverride);
+      const calc = _peCalcProgress(task, previousTotalActual, enteredQty, pctOverride);
 
       // Update progress display
       const pctDisplay  = document.getElementById(`pe-pct-display-${recordId}`);
@@ -14807,36 +14778,6 @@ function _peWireDetailButtons(recordId, task, trackingEntries, canEdit) {
       if (totalDisp)   totalDisp.textContent = calc.totalActual + ' ' + (task.unit || '');
       if (pctSource)   pctSource.textContent = pctOverride !== null ? 'manually overridden' : 'auto from quantity';
 
-      // Update delay display
-      const expectedEl  = document.getElementById(`pe-expected-pct-${recordId}`);
-      const actualEl    = document.getElementById(`pe-actual-pct-disp-${recordId}`);
-      const delayEl     = document.getElementById(`pe-delay-display-${recordId}`);
-      const vBadgeWrap  = document.getElementById(`pe-variance-badge-wrap-${recordId}`);
-      if (expectedEl)  expectedEl.textContent = calc.expectedPct !== null ? calc.expectedPct + '%' : '—';
-      if (actualEl)    actualEl.textContent   = calc.pct + '%';
-      if (delayEl) {
-        if (calc.delayDays > 0) {
-          delayEl.textContent = calc.delayDays + 'd';
-          delayEl.style.color = '#dc2626';
-        } else {
-          delayEl.textContent = 'None';
-          delayEl.style.color = '#059669';
-        }
-      }
-      if (vBadgeWrap && calc.variance !== null) {
-        const v = calc.variance;
-        let bgColor, textColor, borderColor, icon;
-        if (v >= 0)       { bgColor='#f0fdf4'; textColor='#166534'; borderColor='#bbf7d0'; icon='↑'; }
-        else if (v >= -10){ bgColor='#fefce8'; textColor='#854d0e'; borderColor='#fef08a'; icon='~'; }
-        else              { bgColor='#fff1f2'; textColor='#991b1b'; borderColor='#fecdd3'; icon='↓'; }
-        vBadgeWrap.innerHTML = `
-          <div style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;
-            background:${bgColor};color:${textColor};border:1px solid ${borderColor};
-            border-radius:999px;font-size:12px;font-weight:600;">
-            ${icon} Variance: ${v >= 0 ? '+' : ''}${v}%
-            ${v < 0 ? ` — ${calc.delayDays} day(s) behind schedule` : ' — on track'}
-          </div>`;
-      }
     };
 
     // Run once on load to init displays
@@ -14857,7 +14798,7 @@ function _peWireDetailButtons(recordId, task, trackingEntries, canEdit) {
 }
 
 // ── Save execution entry ──────────────────────────────────────────────────────
-// progress_pct and delay_days are now COMPUTED here, not read from manual inputs.
+// Progress is computed here; delay is calculated by the server from the activity dates.
 async function _peHandleSaveActual(recordId, task, trackingEntries) {
   window._peSavingEntries = window._peSavingEntries || new Set();
   if (window._peSavingEntries.has(String(recordId))) return;
@@ -14873,7 +14814,6 @@ async function _peHandleSaveActual(recordId, task, trackingEntries) {
     const materials   = document.getElementById(`pe-act-materials-${recordId}`)?.value.trim();
     const remark      = document.getElementById(`pe-act-remark-${recordId}`)?.value.trim();
     const issues      = document.getElementById(`pe-act-issues-${recordId}`)?.value.trim();
-    const delayReason = '';
     const pctOverride = null;
     const closeCb     = document.getElementById(`pe-close-activity-${recordId}`);
     const markClosed  = closeCb?.checked || false;
@@ -14883,9 +14823,9 @@ async function _peHandleSaveActual(recordId, task, trackingEntries) {
     if (!qty)        return alert('Actual quantity is required.');
     if (!remark)     return alert('Day remark is required — please describe what happened today.');
 
-    // Compute progress % and delay days from schedule variance
+    // Compute the progress figure from actual quantity; the server calculates delay.
     const previousTotalActual = trackingEntries.reduce((s, e) => s + (Number(e.actual_quantity) || 0), 0);
-    const calc = _peCalcProgress(task, previousTotalActual, qty, reportDate, pctOverride);
+    const calc = _peCalcProgress(task, previousTotalActual, qty, pctOverride);
 
     const form = new FormData();
     form.append('projectId',               projectId);
@@ -14897,10 +14837,8 @@ async function _peHandleSaveActual(recordId, task, trackingEntries) {
     form.append('equipment_used',          equipment || '');
     form.append('materials_used',          materials || '');
     form.append('progress_pct',            String(calc.pct));        // computed
-    form.append('delay_days',              String(calc.delayDays));  // computed
     form.append('day_remark',              remark);
     form.append('issues',                  issues || '');
-    form.append('delay_reason',            delayReason || '');
     form.append('status_change_to_closed', markClosed ? '1' : '0');
     if (fileInput?.files?.[0]) form.append('attachment', fileInput.files[0]);
 
