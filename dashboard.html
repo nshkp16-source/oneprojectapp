@@ -2147,6 +2147,81 @@
     @media (prefers-reduced-motion: reduce) {
       .left-main-part, .left-main-part.mobile-open { transition: none; }
     }
+
+    /* ══════════════════════════════════════════════════════════════
+       DIALOGS ON NARROW / ROTATED SCREENS
+       • sit above the slide-in menu (z 1000) and its backdrop (z 999)
+       • never taller than the screen; scroll inside instead of clipping
+    ══════════════════════════════════════════════════════════════ */
+    .modal-overlay { z-index: 1100; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    .modal-content {
+      max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px);
+      overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+    }
+    .logout-dialog {
+      z-index: 1100;
+      max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px); overflow-y: auto;
+      box-shadow: 0 0 0 100vmax rgba(0,0,0,0.45), var(--sh-md);
+    }
+    @media (max-width: 480px) {
+      .modal-content { max-height: calc(100dvh - 16px); }
+    }
+    @media (orientation: landscape) and (max-height: 500px) {
+      .modal-overlay {
+        align-items: center;
+        padding: 8px calc(8px + env(safe-area-inset-right, 0px)) 8px calc(8px + env(safe-area-inset-left, 0px));
+      }
+      .modal-content {
+        border-radius: var(--r-lg); max-width: 420px;
+        max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px);
+        padding: 14px 18px;
+      }
+      .modal-content h3 { margin-bottom: 8px; }
+      .modal-actions { margin-top: 10px; }
+      .logout-dialog { width: min(360px, calc(100% - 32px)); padding: 14px 18px; }
+    }
+
+    /* ══════════════════════════════════════════════════════════════
+       ROTATED / SHORT PHONE SCREENS — nothing may be cut off at the bottom
+       1. Heights follow the REAL visible height (--app-h, set by script)
+          instead of 100vh, which is taller than the screen on mobile
+          browsers because of the address/tool bars.
+       2. Logout stays pinned at the bottom of the menu; the menu items
+          scroll above it.
+       3. Summary panel: one scroller only (the drawer), and content is
+          top-aligned — vertically-centred overflow hides its top part.
+    ══════════════════════════════════════════════════════════════ */
+    @media (max-width: 960px) {
+      html, body { height: var(--app-h, 100%); }
+      .layout { height: var(--app-h, 100dvh); }
+      .mob-drawer { height: var(--app-h, 100dvh); }
+
+      /* menu */
+      .left-main-part {
+        height: var(--app-h, 100dvh);
+        padding-bottom: 0;
+        overscroll-behavior: contain;
+      }
+      .left-main-part > * { flex-shrink: 0; }
+      .logout-block {
+        position: sticky; bottom: 0; z-index: 2;
+        background: var(--sidebar-bg);
+        padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+      }
+
+      /* summary panel inside the full-screen sheet */
+      .mob-drawer-body-schedule { padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+      .mob-drawer-body-schedule .gray-right-part {
+        flex: 1 0 auto; min-height: auto; overflow: visible;
+      }
+      .mob-drawer-body-schedule .gray-part-placeholder {
+        flex: 0 0 auto; min-height: auto; overflow: visible; align-items: flex-start;
+      }
+      .mob-drawer-body-schedule .gray-scroll-content { height: auto; overflow: visible; }
+    }
+    @media (max-width: 960px) and (orientation: landscape) {
+      .left-main-part.mobile-open { width: min(240px, 70vw); }
+    }
   </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/signature_pad/4.1.7/signature_pad.umd.min.js"></script>
@@ -2161,6 +2236,13 @@
   <script>
   /* Compact layout = phones, small tablets and landscape phones. CSS uses the same 960px breakpoint. */
   function isCompactLayout() { return window.matchMedia("(max-width: 960px)").matches; }
+  /* Real visible height (changes with the browser bars and on rotation). CSS uses var(--app-h). */
+  (function(){
+    function setAppH(){ document.documentElement.style.setProperty('--app-h', window.innerHeight + 'px'); }
+    setAppH();
+    window.addEventListener('resize', setAppH);
+    window.addEventListener('orientationchange', function(){ setAppH(); setTimeout(setAppH, 150); setTimeout(setAppH, 500); });
+  })();
   </script>
   <!-- mobile sidebar backdrop -->
   <div id="sidebarBackdrop"></div>
@@ -2498,124 +2580,6 @@
 
             </div>
 
-            <!-- Settings Dialog -->
-            <div class="modal-overlay" id="settingsDialog">
-              <div class="modal-content">
-                <h3 data-translate="settings">Settings</h3>
-                <div style="display:flex; flex-direction:column; gap:10px;">
-                  <button id="resetPasswordBtn" class="btn primary" style="width:100%; text-align:left;" data-translate="reset-password">🔑 Reset Password</button>
-                  <button id="changeLanguageBtn" class="btn primary" style="width:100%; text-align:left;" data-translate="change-language">🌐 Change Language</button>
-                  <button id="exitProjectBtn"    class="btn primary" style="width:100%; text-align:left;" data-translate="exit-project">Project action</button>
-                </div>
-                <div class="modal-actions">
-                  <button class="modal-close" data-translate="confirm-close" onclick="document.getElementById('settingsDialog').classList.remove('active')">Close</button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Expanded Chart Modal -->
-            <div class="modal-overlay" id="chartExpandModal" style="display:none; z-index:9999;">
-              <div class="modal-content" style="width:90vw; max-width:1000px; height:85vh; display:flex; flex-direction:column; padding:20px;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-                  <h3 style="margin:0;">All Milestones Progress</h3>
-                  <button onclick="document.getElementById('chartExpandModal').style.display='none';" style="background:none; border:none; font-size:24px; cursor:pointer; color:#999;">&times;</button>
-                </div>
-                <div style="display:flex; gap:12px; margin-bottom:16px; align-items:center;">
-                  <button id="chartPrevBtn" onclick="expandChartNavPrev()" style="padding:8px 12px; border:1px solid #ccc; background:#f9f9f9; border-radius:4px; cursor:pointer;">← Previous</button>
-                  <div style="flex:1;">
-                    <div id="expandChartTitle" style="font-size:16px; font-weight:bold; color:#007B8A; text-align:center; margin-bottom:6px;">Milestone</div>
-                    <div id="expandChartProgress" style="font-size:12px; color:#666; text-align:center;"></div>
-                  </div>
-                  <button id="chartNextBtn" onclick="expandChartNavNext()" style="padding:8px 12px; border:1px solid #ccc; background:#f9f9f9; border-radius:4px; cursor:pointer;">Next →</button>
-                </div>
-                <div id="expandChartContainer" style="flex:1; background:#f4f9fc; border-radius:8px; display:flex; align-items:flex-end; gap:6px; padding:20px; overflow-x:auto; position:relative;">
-                  <div style="font-size:13px; color:#bbb;">Loading chart…</div>
-                </div>
-                <div id="expandChartLabels" style="display:flex; gap:6px; margin-top:12px; padding:0 20px; font-size:11px; color:#999; text-align:center;"></div>
-              </div>
-            </div>
-
-            <!-- Weather Forecast Dialog -->
-            <div class="modal-overlay" id="weatherForecastModal" aria-hidden="true" style="z-index:10000;">
-              <div id="weatherForecastDialogContent" class="modal-content" style="width:min(94vw,820px); max-height:90vh; overflow:auto; padding:0; border:0; background:#202650; color:#fff;">
-                <div style="padding:20px 22px 22px; background:linear-gradient(145deg,#171b45 0%,#303765 58%,#4b5480 100%); position:relative; overflow:hidden;">
-                  <div style="position:absolute; width:220px; height:220px; right:-80px; top:-100px; border-radius:50%; background:rgba(255,255,255,0.08);"></div>
-                  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; position:relative;">
-                    <div>
-                      <div style="font-size:12px; opacity:0.75; text-transform:uppercase; letter-spacing:0.7px;">Current weather</div>
-                      <h3 id="weatherForecastLocation" style="margin:4px 0 0; color:#fff; font-size:18px;"></h3>
-                    </div>
-                    <button type="button" onclick="closeWeatherForecastDialog()" aria-label="Close weather forecast" style="background:rgba(255,255,255,0.12); border:0; border-radius:50%; width:32px; height:32px; font-size:22px; line-height:1; color:#fff; cursor:pointer;">&times;</button>
-                  </div>
-                  <div style="display:flex; align-items:center; gap:18px; margin-top:22px; position:relative;">
-                    <div id="weatherForecastCurrentIcon" style="font-size:58px; line-height:1;">🌤️</div>
-                    <div>
-                      <div id="weatherForecastTemperature" style="font-size:56px; line-height:0.95; font-weight:700; letter-spacing:0;">—°</div>
-                      <div id="weatherForecastCondition" style="font-size:16px; margin-top:8px; color:#dbeafe;">Loading weather...</div>
-                    </div>
-                  </div>
-                  <div id="weatherForecastDetails" style="display:flex; flex-wrap:wrap; gap:18px; margin-top:22px; font-size:12px; color:#dbeafe; position:relative;"></div>
-                </div>
-                <div style="padding:18px 22px 20px; background:#252b59;">
-                  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px;">
-                    <strong style="font-size:15px;">7-day forecast</strong>
-                    <span style="font-size:11px; color:#b8c1e2;">High / Low</span>
-                  </div>
-                  <div id="weatherForecastList" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(92px,1fr)); gap:8px;"></div>
-                  <div style="text-align:right; margin-top:14px;">
-                    <button type="button" onclick="closeWeatherForecastDialog()" style="border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.08); color:#fff; border-radius:6px; padding:7px 14px; cursor:pointer;">Close</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Language Selection Dialog -->
-            <div class="modal-overlay" id="languageDialog">
-              <div class="modal-content">
-                <h3 data-translate="change-language">Change Language</h3>
-                <p style="color:#666; font-size:13px; margin-bottom:12px;" data-translate="select-language">Select your preferred language:</p>
-                <div style="display:flex; flex-direction:column; gap:12px;">
-                  <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px; border-radius:6px; background:#f5f5f5;">
-                    <input type="radio" name="language" value="English" checked>
-                    <span style="font-weight:bold;">🇬🇧 English</span>
-                    <span style="color:#999; font-size:12px; margin-left:auto;" data-translate="lang-default">(Default)</span>
-                  </label>
-                  <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px; border-radius:6px; background:#f5f5f5;">
-                    <input type="radio" name="language" value="French">
-                    <span style="font-weight:bold;">🇫🇷 French</span>
-                  </label>
-                </div>
-                <div class="modal-actions">
-                  <button onclick="document.getElementById('languageDialog').classList.remove('active')" data-translate="cancel">Cancel</button>
-                  <button class="primary" id="applyLanguageBtn" data-translate="apply">Apply</button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Reset Password Dialog -->
-            <div class="modal-overlay" id="resetPasswordDialog">
-              <div class="modal-content">
-                <h3 data-translate="reset-password-title">Reset Password</h3>
-                <p data-translate="reset-password-msg">Do you want to change your password?</p>
-                <div class="modal-actions">
-                  <button onclick="document.getElementById('resetPasswordDialog').classList.remove('active')" data-translate="cancel">Cancel</button>
-                  <button class="primary" id="confirmResetBtn" data-translate="ok">OK</button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Exit Project Dialog -->
-            <div class="modal-overlay" id="exitProjectDialog">
-              <div class="modal-content">
-                <h3 data-translate="exit-project-title">Project action</h3>
-                <p data-translate="exit-project-msg">Project action details.</p>
-                <div class="modal-actions">
-                  <button onclick="document.getElementById('exitProjectDialog').classList.remove('active')" data-translate="cancel">Cancel</button>
-                  <button class="primary" id="confirmExitBtn" data-translate="ok">OK</button>
-                </div>
-              </div>
-            </div>
-
 
 
           </div><!-- end grayPlaceholder -->
@@ -2632,6 +2596,125 @@
       <button class="btn primary" id="confirmLogout" data-translate="ok">OK</button>
     </div>
   </div>
+
+  <!-- Dialogs: kept at body level (not inside the gray panel, which is display:none on phones) -->
+    <!-- Settings Dialog -->
+    <div class="modal-overlay" id="settingsDialog">
+      <div class="modal-content">
+        <h3 data-translate="settings">Settings</h3>
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <button id="resetPasswordBtn" class="btn primary" style="width:100%; text-align:left;" data-translate="reset-password">🔑 Reset Password</button>
+          <button id="changeLanguageBtn" class="btn primary" style="width:100%; text-align:left;" data-translate="change-language">🌐 Change Language</button>
+          <button id="exitProjectBtn"    class="btn primary" style="width:100%; text-align:left;" data-translate="exit-project">Project action</button>
+        </div>
+        <div class="modal-actions">
+          <button class="modal-close" data-translate="confirm-close" onclick="document.getElementById('settingsDialog').classList.remove('active')">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Expanded Chart Modal -->
+    <div class="modal-overlay" id="chartExpandModal" style="display:none; z-index:9999;">
+      <div class="modal-content" style="width:90vw; max-width:1000px; height:85vh; display:flex; flex-direction:column; padding:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <h3 style="margin:0;">All Milestones Progress</h3>
+          <button onclick="document.getElementById('chartExpandModal').style.display='none';" style="background:none; border:none; font-size:24px; cursor:pointer; color:#999;">&times;</button>
+        </div>
+        <div style="display:flex; gap:12px; margin-bottom:16px; align-items:center;">
+          <button id="chartPrevBtn" onclick="expandChartNavPrev()" style="padding:8px 12px; border:1px solid #ccc; background:#f9f9f9; border-radius:4px; cursor:pointer;">← Previous</button>
+          <div style="flex:1;">
+            <div id="expandChartTitle" style="font-size:16px; font-weight:bold; color:#007B8A; text-align:center; margin-bottom:6px;">Milestone</div>
+            <div id="expandChartProgress" style="font-size:12px; color:#666; text-align:center;"></div>
+          </div>
+          <button id="chartNextBtn" onclick="expandChartNavNext()" style="padding:8px 12px; border:1px solid #ccc; background:#f9f9f9; border-radius:4px; cursor:pointer;">Next →</button>
+        </div>
+        <div id="expandChartContainer" style="flex:1; background:#f4f9fc; border-radius:8px; display:flex; align-items:flex-end; gap:6px; padding:20px; overflow-x:auto; position:relative;">
+          <div style="font-size:13px; color:#bbb;">Loading chart…</div>
+        </div>
+        <div id="expandChartLabels" style="display:flex; gap:6px; margin-top:12px; padding:0 20px; font-size:11px; color:#999; text-align:center;"></div>
+      </div>
+    </div>
+
+    <!-- Weather Forecast Dialog -->
+    <div class="modal-overlay" id="weatherForecastModal" aria-hidden="true" style="z-index:10000;">
+      <div id="weatherForecastDialogContent" class="modal-content" style="width:min(94vw,820px); max-height:90vh; overflow:auto; padding:0; border:0; background:#202650; color:#fff;">
+        <div style="padding:20px 22px 22px; background:linear-gradient(145deg,#171b45 0%,#303765 58%,#4b5480 100%); position:relative; overflow:hidden;">
+          <div style="position:absolute; width:220px; height:220px; right:-80px; top:-100px; border-radius:50%; background:rgba(255,255,255,0.08);"></div>
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; position:relative;">
+            <div>
+              <div style="font-size:12px; opacity:0.75; text-transform:uppercase; letter-spacing:0.7px;">Current weather</div>
+              <h3 id="weatherForecastLocation" style="margin:4px 0 0; color:#fff; font-size:18px;"></h3>
+            </div>
+            <button type="button" onclick="closeWeatherForecastDialog()" aria-label="Close weather forecast" style="background:rgba(255,255,255,0.12); border:0; border-radius:50%; width:32px; height:32px; font-size:22px; line-height:1; color:#fff; cursor:pointer;">&times;</button>
+          </div>
+          <div style="display:flex; align-items:center; gap:18px; margin-top:22px; position:relative;">
+            <div id="weatherForecastCurrentIcon" style="font-size:58px; line-height:1;">🌤️</div>
+            <div>
+              <div id="weatherForecastTemperature" style="font-size:56px; line-height:0.95; font-weight:700; letter-spacing:0;">—°</div>
+              <div id="weatherForecastCondition" style="font-size:16px; margin-top:8px; color:#dbeafe;">Loading weather...</div>
+            </div>
+          </div>
+          <div id="weatherForecastDetails" style="display:flex; flex-wrap:wrap; gap:18px; margin-top:22px; font-size:12px; color:#dbeafe; position:relative;"></div>
+        </div>
+        <div style="padding:18px 22px 20px; background:#252b59;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px;">
+            <strong style="font-size:15px;">7-day forecast</strong>
+            <span style="font-size:11px; color:#b8c1e2;">High / Low</span>
+          </div>
+          <div id="weatherForecastList" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(92px,1fr)); gap:8px;"></div>
+          <div style="text-align:right; margin-top:14px;">
+            <button type="button" onclick="closeWeatherForecastDialog()" style="border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.08); color:#fff; border-radius:6px; padding:7px 14px; cursor:pointer;">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Language Selection Dialog -->
+    <div class="modal-overlay" id="languageDialog">
+      <div class="modal-content">
+        <h3 data-translate="change-language">Change Language</h3>
+        <p style="color:#666; font-size:13px; margin-bottom:12px;" data-translate="select-language">Select your preferred language:</p>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px; border-radius:6px; background:#f5f5f5;">
+            <input type="radio" name="language" value="English" checked>
+            <span style="font-weight:bold;">🇬🇧 English</span>
+            <span style="color:#999; font-size:12px; margin-left:auto;" data-translate="lang-default">(Default)</span>
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; padding:8px; border-radius:6px; background:#f5f5f5;">
+            <input type="radio" name="language" value="French">
+            <span style="font-weight:bold;">🇫🇷 French</span>
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button onclick="document.getElementById('languageDialog').classList.remove('active')" data-translate="cancel">Cancel</button>
+          <button class="primary" id="applyLanguageBtn" data-translate="apply">Apply</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reset Password Dialog -->
+    <div class="modal-overlay" id="resetPasswordDialog">
+      <div class="modal-content">
+        <h3 data-translate="reset-password-title">Reset Password</h3>
+        <p data-translate="reset-password-msg">Do you want to change your password?</p>
+        <div class="modal-actions">
+          <button onclick="document.getElementById('resetPasswordDialog').classList.remove('active')" data-translate="cancel">Cancel</button>
+          <button class="primary" id="confirmResetBtn" data-translate="ok">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Exit Project Dialog -->
+    <div class="modal-overlay" id="exitProjectDialog">
+      <div class="modal-content">
+        <h3 data-translate="exit-project-title">Project action</h3>
+        <p data-translate="exit-project-msg">Project action details.</p>
+        <div class="modal-actions">
+          <button onclick="document.getElementById('exitProjectDialog').classList.remove('active')" data-translate="cancel">Cancel</button>
+          <button class="primary" id="confirmExitBtn" data-translate="ok">OK</button>
+        </div>
+      </div>
+    </div>
 
 
   <!-- ══════════════════════════════════════════════
@@ -3873,7 +3956,15 @@ const logoutDialog  = document.getElementById('logoutDialog');
 const confirmLogout = document.getElementById('confirmLogout');
 const cancelLogout  = document.getElementById('cancelLogout');
 
-logoutBtn.addEventListener('click',    (e) => { e.stopPropagation(); logoutDialog.classList.add('active'); });
+logoutBtn.addEventListener('click',    (e) => {
+  e.stopPropagation();
+  // on phones the slide-in menu is open: close it first so the dialog isn't left under its backdrop
+  if (window.matchMedia('(max-width: 960px)').matches) {
+    const bd = document.getElementById('sidebarBackdrop');
+    if (bd && bd.classList.contains('active')) bd.click();
+  }
+  logoutDialog.classList.add('active');
+});
 cancelLogout.addEventListener('click', ()  => { logoutDialog.classList.remove('active'); });
 confirmLogout.addEventListener('click', async () => {
   const rt = localStorage.getItem("refreshToken");
