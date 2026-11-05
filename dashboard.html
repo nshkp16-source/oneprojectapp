@@ -2082,6 +2082,56 @@
       }
     }
 
+
+    /* ── Schedule inside the full-screen sheet: list first, tap a milestone → its own screen ── */
+    @media (max-width: 960px) {
+      #p3root { height: auto; min-height: 100%; overflow: visible; }
+      #p3root .p3-topbar { position: sticky; top: 0; z-index: 30; }
+      #p3root .p3scroll { flex: none; overflow: visible; }
+      #p3root .p3content { flex-direction: column; align-items: stretch; min-height: 0; }
+      #p3root .p3list { width: 100%; max-height: none; position: static; border-right: 0; border-bottom: 1px solid var(--c-border); }
+      #p3root .p3list-hdr { position: static; }
+      #p3root .p3ms { padding: 14px 16px; }
+      #p3root .p3ms [style*="max-width:155px"] { max-width: calc(100vw - 130px) !important; }
+      #p3root .p3detail { display: none; width: 100%; padding: 12px; }
+      #p3root .gtt-lbl-row, #p3root .gtt-row { cursor: pointer; }
+      #p3root .p3-msbar { display: none; }
+      #p3root.ms-open .p3detail { display: flex; }
+      #p3root.ms-open .p3list, #p3root.ms-open .p3sum,
+      #p3root.ms-open .p3-gantt, #p3root.ms-open .p3-viewonly-bar { display: none; }
+      #p3root.ms-open .p3-msbar {
+        display: flex; align-items: center; gap: 8px; width: 100%; min-height: 48px; padding: 6px 14px;
+        border: 0; border-bottom: 1px solid var(--c-border); background: var(--c-surface);
+        color: var(--c-brand); font: inherit; font-size: 14px; font-weight: 600; text-align: left; cursor: pointer;
+      }
+      #p3root .p3-msbar-name {
+        margin-left: auto; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        color: var(--c-text); font-weight: 600;
+      }
+    }
+    @media (max-width: 960px) {
+      .mob-drawer-body-schedule .gray-part-content { padding: 0; }
+      /* the sheet header already has a close button, so the schedule's own bar only
+         scrolls with the list, and is replaced by the "All milestones" bar on a milestone screen */
+      #p3root:not(.ms-open) .p3-topbar { position: static; }
+      #p3root.ms-open .p3-topbar > .sc-tb { display: none; }
+      #p3root .sc-tb > div:last-child { flex-wrap: wrap; }
+      #p3root #p3Back { display: none; }
+      /* Timeline / Quantity / Progress cards stack instead of forcing an 876px-wide row */
+      #p3root .p3detail [style*="min-width:876px"] { min-width: 0 !important; grid-template-columns: minmax(0, 1fr) !important; }
+    }
+    @media (max-width: 640px) {
+      #p3root .p3detail .p3-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+      #p3root .p3detail .p3-entry-grid { grid-template-columns: 1fr !important; gap: 8px !important; }
+      #p3root .p3detail .p3-btn-footer { flex-wrap: wrap !important; gap: 8px !important; }
+      #p3root .p3detail .p3-btn-footer > div:first-child { width: 100%; }
+      #p3root .p3detail .p3-btn-footer .p3-btn-group { display: flex !important; flex-wrap: wrap !important; gap: 6px !important; width: 100%; }
+      #p3root .p3detail .p3-btn-footer .p3-btn-group .sc-btn { flex: 1 1 auto; min-width: 120px; text-align: center; }
+      #p3root .p3detail .p3-log-row { flex-wrap: wrap !important; min-width: 0 !important; gap: 4px 10px !important; }
+      #p3root .p3detail .p3-log-row > div { min-width: 0 !important; flex-shrink: 1 !important; }
+      #p3root .p3detail .sc-card-hdr { flex-wrap: wrap; gap: 6px; }
+    }
+
     /* phones: bigger touch targets, and 16px fields so iOS does not zoom on focus */
     @media (max-width: 960px) and (pointer: coarse) {
       input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]),
@@ -2804,18 +2854,20 @@
   window.addEventListener('resize', syncFocus);
 
   /* 3 ─ back button / Escape closes the top-most screen */
-  var open = { schedule: false, sidebar: false, card: false };
+  var open = { schedule: false, sidebar: false, card: false, ms: false };
   var stack = [], ignore = 0;
   var closers = {
     schedule: function(){ if (typeof collapseGrayPart === 'function') collapseGrayPart(); else if (drawer) drawer.classList.remove('open'); },
     sidebar:  function(){ if (sidebar) sidebar.classList.remove('mobile-open'); if (backdrop) backdrop.classList.remove('active'); },
-    card:     exitCardFocus
+    card:     exitCardFocus,
+    ms:       function(){ var r = document.getElementById('p3root'); if (r) r.classList.remove('ms-open'); }
   };
   function current(){
     return {
       schedule: !!(drawer && drawer.classList.contains('open')),
       sidebar:  !!(sidebar && sidebar.classList.contains('mobile-open')),
-      card:     document.body.classList.contains('card-focus')
+      card:     document.body.classList.contains('card-focus'),
+      ms:       !!document.querySelector('#p3root.ms-open')
     };
   }
   function syncHistory(){
@@ -2832,6 +2884,7 @@
     });
   }
   var obsOpts = { attributes: true, attributeFilter: ['class'] };
+  if (schedBody) new MutationObserver(syncHistory).observe(schedBody, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
   if (drawer)  new MutationObserver(syncHistory).observe(drawer, obsOpts);
   if (sidebar) new MutationObserver(syncHistory).observe(sidebar, obsOpts);
   new MutationObserver(syncHistory).observe(document.body, obsOpts);
@@ -6803,6 +6856,7 @@ function openActualProgressPage(savedSchedule) {
         ] : []),
         { id: 'p3Back', label: '← Back', cls: 'sc-btn sc-btn-ghost-dark' },
       ])}
+      <button type="button" class="p3-msbar" id="p3MsBar"><span aria-hidden="true">←</span><span>All milestones</span><span class="p3-msbar-name" id="p3MsBarName"></span></button>
     </div>
     ${AppState.schedulePaused
       ? `<div class="p3-viewonly-bar">⏸ Schedule paused at deletion request on ${_fmtDateShort(AppState.schedulePauseStartedAt)}. Delay tracking resumes if the project is restored.</div>`
@@ -6895,6 +6949,7 @@ function openActualProgressPage(savedSchedule) {
   const _el = id => document.getElementById(id);
 
   _el('p3Back')?.addEventListener('click', () => collapseGrayPart());
+  _el('p3MsBar')?.addEventListener('click', closeMilestone);
   _el('p3ExtensionsTile')?.addEventListener('click', () => openExtensionDetailsModal(extensions, pms));
   // FIX 1: Edit Plan passes full savedSchedule (with both milestone arrays)
   _el('p3EditPlan')?.addEventListener('click', () => openProjectScheduleForm(savedSchedule));
@@ -7009,7 +7064,7 @@ function openActualProgressPage(savedSchedule) {
     el.querySelectorAll('.p3ms').forEach(item => {
       item.addEventListener('click', () => {
         if (isShortViewport()) toggleMsAccordion(item.dataset.id);
-        else selectMs(item.dataset.id);
+        else openMilestone(item.dataset.id);
       });
     });
   }
@@ -7020,6 +7075,26 @@ function openActualProgressPage(savedSchedule) {
     const ms = msList.find(m => String(m.id) === idStr);
     if (!ms) return;
     renderList(); renderDetail(ms); updateSummary(ms);
+  }
+
+  // ── Phones / small tablets: a tapped milestone (list row OR Gantt row) opens on its own
+  // screen — progress entry + progress log — with a Back bar. Wide screens keep the
+  // side-by-side list + detail and simply scroll the detail into view.
+  function openMilestone(id) {
+    selectMs(id);
+    if (typeof isCompactLayout === 'function' && isCompactLayout()) {
+      const ms = msList.find(m => String(m.id) === String(id));
+      const nm = _el('p3MsBarName'); if (nm) nm.textContent = ms ? (ms.title || 'Untitled') : '';
+      _el('p3root')?.classList.add('ms-open');
+      const sb = document.getElementById('mobScheduleBody'); if (sb) sb.scrollTop = 0;
+    } else {
+      _el('p3Scroll')?.scrollTo?.({ top: 0, behavior: 'smooth' });
+    }
+  }
+  function closeMilestone() {
+    const root = _el('p3root'); if (!root) return;
+    root.classList.remove('ms-open');
+    requestAnimationFrame(() => document.querySelector('.p3ms.active')?.scrollIntoView({ block: 'center' }));
   }
 
   // ── Accordion (short viewport): expand/collapse a milestone row
@@ -7797,6 +7872,15 @@ function openActualProgressPage(savedSchedule) {
       </div>`;
     }).join('');
   }
+
+  // Clicking a milestone in the Gantt (its label or its bar row) opens that milestone.
+  const _ganttPick = (box, rowSel) => box?.addEventListener('click', e => {
+    const row = e.target.closest(rowSel); if (!row) return;
+    const idx = Array.prototype.indexOf.call(box.querySelectorAll(rowSel), row);
+    if (msList[idx]) openMilestone(msList[idx].id);
+  });
+  _ganttPick(_el('p3GttLabels'), '.gtt-lbl-row');
+  _ganttPick(_el('p3GttInner'),  '.gtt-row');
 
   _el('p3GttScroll')?.addEventListener('scroll', function() {
     const labels = document.querySelector('.gtt-labels');
