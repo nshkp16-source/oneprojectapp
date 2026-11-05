@@ -13780,18 +13780,24 @@ function _wcPlanRow(label, value) {
   </div>`;
 }
 
-function _wcQueryPanelHtml(task, queries, leader) {
-  const members = Array.isArray(task.assigned_members) ? task.assigned_members : [];
+function _wcQueryPanelHtml(task, reports, queries, leader) {
+  reports = Array.isArray(reports) ? reports : [];
   const askForm = leader ? `<div style="border:1px solid #dbe3ec;border-radius:9px;padding:14px;margin-bottom:14px;background:#f8fafc;">
-    <h4 style="margin:0 0 8px;font-size:13px;color:#172033;">Ask a team member for an explanation</h4>
-    <p style="font-size:12px;color:#526078;margin:0 0 10px;">A question does not reject or change a progress report. The member answers here, then you can mark it resolved.</p>
-    <label style="display:block;font-size:11px;font-weight:600;color:#526078;margin-bottom:4px;">Ask *</label>
-    <select id="wc-query-member-${task.id}" style="width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;margin-bottom:9px;">
-      <option value="">Choose assigned team member</option>
-      ${members.map((member) => `<option value="${escapeHtml(String(member.id))}">${escapeHtml(member.email || member.name || `Team member ${member.id}`)}</option>`).join('')}
+    <h4 style="margin:0 0 8px;font-size:13px;color:#172033;">Ask about a progress report</h4>
+    <p style="font-size:12px;color:#526078;margin:0 0 10px;">Choose a report to send your question directly to the team member who submitted it. This does not change the report or its progress.</p>
+    <label for="wc-query-report-${task.id}" style="display:block;font-size:11px;font-weight:600;color:#526078;margin-bottom:4px;">Progress report *</label>
+    <select id="wc-query-report-${task.id}" style="width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;margin-bottom:9px;" ${reports.length ? '' : 'disabled'}>
+      <option value="">${reports.length ? 'Choose a report' : 'No reports have been submitted yet'}</option>
+      ${reports.map((report) => {
+        const member = [report.member_title, report.member_position].filter(Boolean).join(' · ')
+          || report.member_email || `Team member ${report.member_id}`;
+        const summary = String(report.work_done || 'No work description').replace(/\s+/g, ' ').trim();
+        return `<option value="${escapeHtml(String(report.id))}">${escapeHtml(_wcFmtDate(report.report_date))} · ${escapeHtml(member)} · ${escapeHtml(summary.slice(0, 100))}</option>`;
+      }).join('')}
     </select>
-    <textarea id="wc-query-question-${task.id}" maxlength="5000" placeholder="What needs explaining?" style="width:100%;min-height:70px;padding:9px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;font:inherit;"></textarea>
-    <button data-action="wc-query-create" style="margin-top:8px;padding:8px 13px;border:0;border-radius:7px;background:#007B8A;color:#fff;font-weight:600;cursor:pointer;">Send question</button>
+    <label for="wc-query-question-${task.id}" style="display:block;font-size:11px;font-weight:600;color:#526078;margin-bottom:4px;">Question *</label>
+    <textarea id="wc-query-question-${task.id}" maxlength="5000" placeholder="What needs explaining about this report?" style="width:100%;min-height:70px;padding:9px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;font:inherit;"></textarea>
+    <button data-action="wc-query-create" style="margin-top:8px;padding:8px 13px;border:0;border-radius:7px;background:#007B8A;color:#fff;font-weight:600;cursor:pointer;" ${reports.length ? '' : 'disabled'}>Send question</button>
   </div>` : '';
   const list = queries.length ? queries.map((query) => {
     const status = { open: 'Waiting for team member to answer', answered: 'Answered · waiting for leader review', resolved: 'Resolved' }[query.status] || query.status;
@@ -13807,6 +13813,7 @@ function _wcQueryPanelHtml(task, queries, leader) {
     return `<article style="border:1px solid ${query.status === 'open' ? '#fcd34d' : '#dbe3ec'};border-radius:9px;padding:13px;margin-bottom:10px;background:${query.status === 'open' ? '#fffdf5' : '#fff'};">
       <div style="font-size:12px;font-weight:700;color:#172033;margin-bottom:8px;">Question · ${escapeHtml(date)}</div>
       ${_wcPlanRow('Asked by', `${escapeHtml(query.asked_by_role || 'Project leader')}${query.recipient_email ? ` · to ${escapeHtml(query.recipient_email)}` : ''}`)}
+      ${query.report_id ? _wcPlanRow('Progress report', `${escapeHtml(_wcFmtDate(query.report_date))}${query.report_work_done ? ` · ${escapeHtml(query.report_work_done)}` : ''}`) : ''}
       ${_wcPlanRow('Question', escapeHtml(query.question))}
       ${query.answer ? _wcPlanRow('Answer', escapeHtml(query.answer)) : ''}
       ${_wcPlanRow('Status', escapeHtml(status))}
@@ -13884,7 +13891,7 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
     ${leader ? `<div data-wc-pane="reports" role="tabpanel" ${selected !== 'reports' ? 'hidden' : ''}></div>` : ''}
     ${!leader && isActive ? `<div data-wc-pane="progress" role="tabpanel" ${selected !== 'progress' ? 'hidden' : ''}></div>` : ''}
     ${!leader ? `<div data-wc-pane="my-reports" role="tabpanel" ${selected !== 'my-reports' ? 'hidden' : ''}></div>` : ''}
-    <div data-wc-pane="queries" role="tabpanel" ${selected !== 'queries' ? 'hidden' : ''}>${_wcQueryPanelHtml(task, queries || [], leader)}</div>`;
+    <div data-wc-pane="queries" role="tabpanel" ${selected !== 'queries' ? 'hidden' : ''}>${_wcQueryPanelHtml(task, reports, queries || [], leader)}</div>`;
   container.appendChild(shell);
   const detailsPane = shell.querySelector('[data-wc-pane="details"]');
   const typeLabel = { quantity: 'quantity', count: 'item count', stages: 'completed stages', percentage: 'reported percentage' }[_wcTypeOf(task)] || 'reported percentage';
@@ -14201,14 +14208,14 @@ async function _wcRefreshTaskCard(taskId, tab, message) {
 async function _wcHandleQueryCreate(taskId) {
   let saved = false;
   try {
-    const memberId = document.getElementById(`wc-query-member-${taskId}`)?.value;
+    const reportId = document.getElementById(`wc-query-report-${taskId}`)?.value;
     const question = document.getElementById(`wc-query-question-${taskId}`)?.value.trim();
-    if (!memberId) throw new Error('Choose a team member to ask.');
+    if (!reportId) throw new Error('Choose a progress report to ask about.');
     if (!question) throw new Error('Enter a question.');
     const projectId = await ensureActiveProjectId();
     if (!projectId) return;
     const res = await _wcFetch(`${API}/work-center/${taskId}/queries`, {
-      method: 'POST', body: JSON.stringify({ projectId, memberId, question }),
+      method: 'POST', body: JSON.stringify({ projectId, reportId, question }),
     });
     const data = res ? await res.json().catch(() => ({})) : {};
     if (!res || !res.ok) throw new Error(data.error || 'Could not send the question.');
