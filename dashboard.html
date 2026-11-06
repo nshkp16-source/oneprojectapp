@@ -7220,6 +7220,19 @@ function openActualProgressPage(savedSchedule) {
         <div style="margin-top:6px;">Typed milestone entries are disabled. The value shown here follows consultant-certified activity progress.</div>
       </div></div>`;
     }
+    const contractorNeedsConsultant = ms.hasConsultant
+      && wcSide(AppState.user?.role || window.currentUserRole) === 'Contractor';
+    if (contractorNeedsConsultant) {
+      return `<div class="sc-card" style="order:4;"><div style="padding:18px 20px;color:var(--c-muted);">
+        <strong style="color:var(--c-text);">Milestone progress is recorded by the consultant on this project.</strong>
+        <div style="margin-top:6px;">Contractor progress is recorded through linked activities.</div>
+        ${ms.consultantProgressRequest
+          ? `<p style="font-size:12px;">Consultant requested on ${_wcFmtDate(ms.consultantProgressRequest.requested_at)}${ms.consultantProgressRequest.note ? ` · ${escapeHtml(ms.consultantProgressRequest.note)}` : ''}</p>`
+          : AppState.canWrite && isWCLeader(AppState.user?.role || window.currentUserRole)
+            ? '<button type="button" class="sc-btn sc-btn-primary" data-p3-request-consultant-progress style="margin-top:10px;">Ask consultant to record progress</button>'
+            : ''}
+      </div></div>`;
+    }
     if (AppState.canWrite && !completed) {
       return `
     <div class="sc-card" id="p3DailyCard" style="order:4;">
@@ -7442,6 +7455,10 @@ function openActualProgressPage(savedSchedule) {
       : null;
     // FIX 5/6: determine which table this milestone belongs to
     const isExtMs     = ms._sourceTable === 'additional_milestones';
+    const contractorManualProgressBlocked = ms.hasConsultant
+      && wcSide(AppState.user?.role || window.currentUserRole) === 'Contractor';
+    const activityEntries = ms.progress_source === 'activities' ? (ms.activityEntries || []) : [];
+    const progressEntries = ms.progress_source === 'activities' ? activityEntries : (ms.entries || []);
 
     el.innerHTML = `
     <div class="sc-card">
@@ -7526,19 +7543,29 @@ function openActualProgressPage(savedSchedule) {
     <div class="sc-card" id="p3ProgressLogCard" style="order:2;">
       <div class="sc-card-hdr">
         <span class="sc-card-label">Progress Log</span>
-        <span style="font-size:11px;color:var(--c-muted);font-family:var(--font-mono);">${(ms.entries || []).length} entries</span>
+        <span style="font-size:11px;color:var(--c-muted);font-family:var(--font-mono);">${progressEntries.length} entries</span>
       </div>
       <div id="p3EntriesLog" style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
-        ${!(ms.entries || []).length
+        ${!progressEntries.length
           ? '<div style="padding:20px;text-align:center;color:#8aa8a4;font-size:13px;">No entries yet.</div>'
-          : [...(ms.entries || [])].reverse().map(e => `
-          <div class="p3-log-row" style="display:flex;align-items:center;gap:12px;padding:10px 20px;border-bottom:1px solid #f0f5f4;min-width:max-content;">
-            <div style="font-size:11px;font-family:var(--font-mono);color:${accentColor};font-weight:500;min-width:90px;">${e.date}</div>
-            <div style="font-size:13px;font-weight:600;color:var(--c-text);min-width:80px;">+${e.qty} ${ms.unit || ''}</div>
-            <div style="font-size:12px;color:#6b8f8a;min-width:200px;">${e.remarks || '—'}</div>
-            <div style="font-size:11px;font-family:var(--font-mono);color:var(--c-faint);min-width:120px;">${e.cumulative} ${ms.unit || ''} total</div>
-            ${AppState.canWrite && !completed ? `<div style="display:flex;gap:6px;margin-left:auto;"><button class="sc-btn sc-btn-ghost p3-entry-edit" data-entry-id="${e.id}" style="padding:4px 8px;font-size:11px;">Edit</button><button class="sc-btn sc-btn-danger p3-entry-delete" data-entry-id="${e.id}" style="padding:4px 8px;font-size:11px;">Delete</button></div>` : ''}
-          </div>`).join('')
+          : [...progressEntries].reverse().map(e => ms.progress_source === 'activities'
+            ? `<div class="p3-log-row" style="padding:12px 20px;border-bottom:1px solid #f0f5f4;">
+                <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                  <strong>${_wcFmtDate(e.report_date)}</strong>
+                  <span>${Number(e.derived_progress_pct) || 0}% certified milestone progress</span>
+                </div>
+                ${(e.contributions || []).filter(item => Number(item.certified_progress_pct) > 0).map(item => `
+                  <div style="margin-top:6px;padding-left:10px;color:#475569;font-size:12px;">
+                    ${escapeHtml(item.title || `Activity ${item.activity_id}`)} · ${Number(item.weight_pct) || 0}% share · ${Number(item.certified_progress_pct) || 0}% certified
+                  </div>`).join('') || '<div style="margin-top:6px;color:#64748b;font-size:12px;">No activity progress had been certified at this point.</div>'}
+              </div>`
+            : `<div class="p3-log-row" style="display:flex;align-items:center;gap:12px;padding:10px 20px;border-bottom:1px solid #f0f5f4;min-width:max-content;">
+                <div style="font-size:11px;font-family:var(--font-mono);color:${accentColor};font-weight:500;min-width:90px;">${e.date}</div>
+                <div style="font-size:13px;font-weight:600;color:var(--c-text);min-width:80px;">+${e.qty} ${ms.unit || ''}</div>
+                <div style="font-size:12px;color:#6b8f8a;min-width:200px;">${e.remarks || '—'}</div>
+                <div style="font-size:11px;font-family:var(--font-mono);color:var(--c-faint);min-width:120px;">${e.cumulative} ${ms.unit || ''} total</div>
+                ${AppState.canWrite && !completed && !contractorManualProgressBlocked ? `<div style="display:flex;gap:6px;margin-left:auto;"><button class="sc-btn sc-btn-ghost p3-entry-edit" data-entry-id="${e.id}" style="padding:4px 8px;font-size:11px;">Edit</button><button class="sc-btn sc-btn-danger p3-entry-delete" data-entry-id="${e.id}" style="padding:4px 8px;font-size:11px;">Delete</button></div>` : ''}
+              </div>`).join('')
         }
       </div>
     </div>
@@ -7558,6 +7585,24 @@ function openActualProgressPage(savedSchedule) {
         markEnded(ms, isExtMs);
       });
     }
+    el.querySelector('[data-p3-request-consultant-progress]')?.addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      const note = (prompt('Optional note for the consultant:') || '').trim();
+      button.disabled = true;
+      try {
+        const response = await fetch(`${BACKEND}/api/milestones/${isExtMs ? 'additional' : 'baseline'}/${encodeURIComponent(ms.id)}/progress-request`, {
+          method: 'POST', headers: _authHeaders(true),
+          body: JSON.stringify({ note }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        ms.consultantProgressRequest = result.request;
+        renderDetail(ms, targetEl);
+      } catch (error) {
+        button.disabled = false;
+        alert(`Unable to request consultant progress: ${error.message}`);
+      }
+    });
     _el('p3ReopenMsBtn')?.addEventListener('click', async () => {
       if (!confirm('Reopen this completed milestone so its entries, photos, and progress can be edited?')) return;
       const res = await fetch(`${BACKEND}/api/reopen-milestone`, {
@@ -15858,8 +15903,9 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
   const leader = isWCLeader(window.currentUserRole);
   const contractorLeader = leader && viewerSide === 'Contractor';
   const consultantLeader = leader && viewerSide === 'Consultant';
+  const reviewTasks = viewerSide === 'Consultant' ? [] : tasks;
   const openRework = rework.filter(item => item.status !== 'closed');
-  const holdPoints = tasks.flatMap(task => (task.stages || [])
+  const holdPoints = reviewTasks.flatMap(task => (task.stages || [])
     .filter(stage => stage.is_hold_point && stage.completed_at && !stage.hold_verified_at)
     .map(stage => ({ ...stage, task_title: task.title })));
   const requestOptions = [
@@ -15885,7 +15931,11 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
         </label>
       </div>
       <label style="display:block;margin-top:10px;font-size:12px;color:#475569;">Note for the reviewer
-        <textarea name="note" rows="2" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></textarea>
+        <textarea name="note" rows="2" maxlength="500" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></textarea>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:12px;color:#475569;">
+        <input type="checkbox" name="shareActivitySummary" value="true">
+        <span>Share the activity plan summary with the consultant, including planned work and resources.</span>
       </label>
       <label style="display:block;margin-top:10px;font-size:12px;color:#475569;">Consultant inspectors (optional)
         <select name="inspectorIds" multiple data-pe-inspectors size="3" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;">
@@ -15898,6 +15948,7 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
     </form>` : '';
   const history = verifications.map(item => {
     const figures = Array.isArray(item.claimed_figures) ? item.claimed_figures : [];
+    const consultantView = viewerSide === 'Consultant';
     const requestTimestamp = item.requested_at ? new Date(item.requested_at).getTime() : Number.POSITIVE_INFINITY;
     const evidence = reports.filter(report =>
       String(report.report_date).slice(0, 10) <= String(item.cut_off_date).slice(0, 10) &&
@@ -15906,7 +15957,9 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
     const mine = signers.some(signer => signer.signer_role === 'TeamMember' &&
       String(signer.signer_user_id) === String(window.currentUserId) && signer.status === 'pending');
     const pendingInspectors = signers.some(signer => signer.is_team_member && signer.status === 'pending');
-    const evidenceHtml = evidence.length ? evidence.map(report => `
+    const evidenceHtml = consultantView
+      ? `<div style="font-size:12px;color:#475569;">${Number(item.activity_summary?.approved_report_count) || 0} approved reports · ${Number(item.activity_summary?.approved_quantity) || 0} ${escapeHtml(activity.unit || '')} reported</div>`
+      : evidence.length ? evidence.map(report => `
       <div style="padding:10px 0;border-top:1px solid #e2e8f0;">
         <strong style="font-size:12px;color:#1e293b;">${escapeHtml(report.task_title || 'Task')} · ${escapeHtml(String(report.report_date).slice(0, 10))}</strong>
         <div style="margin-top:4px;font-size:12px;color:#475569;">${escapeHtml(report.work_done || report.notes || 'No work description provided.')}</div>
@@ -15918,12 +15971,32 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
         </div>
         ${[['Manpower', report.manpower], ['Equipment', report.equipment], ['Materials', report.materials], ['Issues', report.issues]].filter(([, value]) => value).map(([label, value]) => `<div style="margin-top:3px;font-size:11px;color:#64748b;">${label}: ${escapeHtml(value)}</div>`).join('')}
       </div>`).join('') : '<p style="font-size:12px;color:#64748b;">No approved task reports were recorded by this cut-off date.</p>';
-    const figureHtml = figures.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:10px;">
+    const figureHtml = consultantView ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:10px;">
+      ${[
+        ['Activity tasks', Number(item.activity_summary?.task_count) || 0],
+        ['Approved reports', Number(item.activity_summary?.approved_report_count) || 0],
+        ['Quantity reported', `${Number(item.activity_summary?.approved_quantity) || 0} ${activity.unit || ''}`],
+        ['Claimed activity progress', `${Number(item.claimed_progress_pct) || 0}%`],
+      ].map(([label, value]) => `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:9px;font-size:11px;color:#475569;"><span style="display:block;color:#64748b;">${label}</span><strong style="display:block;margin-top:4px;color:#1e293b;font-size:15px;">${value}</strong></div>`).join('')}</div>`
+      : figures.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:10px;">
       ${figures.map(figure => `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:9px;font-size:11px;color:#475569;">
         <strong style="color:#1e293b;">${escapeHtml(figure.title || 'Task')}</strong><br>
         ${Number(figure.progress_pct) || 0}% of ${Number(figure.weight_pct) || 0}% share
         ${figure.target_quantity != null ? `<br>Quantity: ${Number(figure.approved_quantity) || 0} of ${Number(figure.target_quantity)} ${escapeHtml(activity.unit || '')}` : ''}
       </div>`).join('')}</div>` : '';
+    const shared = item.shared_activity_summary;
+    const sharedSummaryHtml = consultantView && item.share_activity_summary && shared ? `
+      <details style="margin-top:10px;border:1px solid #cbd5e1;border-radius:8px;padding:9px 11px;">
+        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Contractor-shared activity plan</summary>
+        <div style="margin-top:8px;font-size:12px;color:#475569;">
+          ${shared.description ? `<p>${escapeHtml(shared.description)}</p>` : ''}
+          ${shared.done_when ? `<p><strong>Completion criteria:</strong> ${escapeHtml(shared.done_when)}</p>` : ''}
+          ${shared.planned_quantity != null ? `<p><strong>Planned quantity:</strong> ${Number(shared.planned_quantity)} ${escapeHtml(shared.unit || '')}</p>` : ''}
+          ${shared.start_date || shared.end_date ? `<p><strong>Planned dates:</strong> ${escapeHtml(String(shared.start_date || '—').slice(0, 10))} – ${escapeHtml(String(shared.end_date || '—').slice(0, 10))}</p>` : ''}
+          ${[['Work', shared.planned_work], ['Manpower', shared.planned_manpower], ['Equipment', shared.planned_equipment], ['Materials', shared.planned_materials]]
+            .filter(([, value]) => value).map(([label, value]) => `<p><strong>${label}:</strong> ${escapeHtml(value)}</p>`).join('')}
+        </div>
+      </details>` : '';
     const signerHtml = signers.map(signer => `<div style="font-size:11px;color:#64748b;margin-top:4px;">
       Inspector/reviewer ${escapeHtml(signer.signer_position || signer.signer_role || 'Reviewer')}: ${escapeHtml(String(signer.status || 'pending').replace(/_/g, ' '))}
       ${signer.outcome ? ` · ${escapeHtml(String(signer.outcome).replace(/_/g, ' '))}` : ''}
@@ -15954,8 +16027,29 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
           <input name="certified_progress_pct" type="number" min="0" max="${Number(item.claimed_progress_pct) || 100}" step="0.1" value="${Number(item.claimed_progress_pct) || 0}" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></label>
         <label style="display:block;margin-top:8px;font-size:12px;color:#475569;">Decision reason or notes
           <textarea name="reason" rows="2" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></textarea></label>
+        ${item.kind === 'completion' ? `<div data-pe-snag-fields style="display:none;margin-top:10px;padding:10px;border:1px solid #fbbf24;border-radius:8px;background:#fffbeb;">
+          <strong style="font-size:12px;color:#92400e;">Optional snag</strong>
+          <label style="display:block;margin-top:6px;font-size:12px;color:#475569;">What remains to be corrected?
+            <textarea name="snag_reason" rows="2" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></textarea></label>
+          <label style="display:block;margin-top:6px;font-size:12px;color:#475569;">Certified progress while the snag is open (%)
+            <input name="snag_certified_progress_pct" type="number" min="0" max="99.9" step="0.1" value="95" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></label>
+        </div>` : ''}
         ${pendingInspectors ? `<label style="display:block;margin-top:8px;font-size:12px;color:#92400e;"><input type="checkbox" name="skip_inspectors" value="true"> Decide without the pending inspector recommendation</label>` : ''}
         <button class="rc-btn rc-btn--approve rc-btn--sm" type="submit" style="margin-top:10px;">Submit decision</button>
+      </form>` : '';
+    const revisions = Array.isArray(item.decision_revisions) ? item.decision_revisions : [];
+    const latestRevision = revisions[revisions.length - 1];
+    const revisionHistory = revisions.map(revision => `<div style="margin-top:5px;font-size:11px;color:#64748b;">
+      Revised to ${Number(revision.revised_certified_pct)}% by ${escapeHtml(revision.changed_by_role || 'consultant')} on ${escapeHtml(String(revision.changed_at || '').slice(0, 10))}: ${escapeHtml(revision.reason || '')}
+    </div>`).join('');
+    const reviseForm = consultantLeader && ['verified', 'verified_with_changes'].includes(item.status) ? `
+      <form data-pe-form="revise" data-verification-id="${escapeHtml(String(item.id))}" style="margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0;">
+        <strong style="font-size:12px;color:#334155;">Revise certified progress</strong>
+        <label style="display:block;margin-top:8px;font-size:12px;color:#475569;">Certified progress (%)
+          <input name="certified_progress_pct" type="number" min="0" max="${Number(item.claimed_progress_pct) || 100}" step="0.1" value="${Number(latestRevision?.revised_certified_pct ?? item.certified_progress_pct) || 0}" required style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></label>
+        <label style="display:block;margin-top:8px;font-size:12px;color:#475569;">Reason for revision
+          <textarea name="reason" rows="2" required style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></textarea></label>
+        <button class="rc-btn rc-btn--sm" type="submit" style="margin-top:8px;">Save revised decision</button>
       </form>` : '';
     const withdraw = item.status === 'pending' && contractorLeader
       ? `<button class="rc-btn rc-btn--sm rc-btn--danger" data-pe-action="withdraw" data-verification-id="${escapeHtml(String(item.id))}" type="button" style="margin-top:12px;">Withdraw request</button>` : '';
@@ -15968,15 +16062,17 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
         <div style="margin-top:8px;color:#334155;font-size:12px;">Claimed at request ${Number(item.claimed_progress_pct) || 0}% · Current certified progress ${Number(activity.certified_progress_pct) || 0}%</div>
       ${item.request_note ? `<p style="margin:8px 0;color:#475569;font-size:12px;">Request note: ${escapeHtml(item.request_note)}</p>` : ''}
       ${attachmentHtml(item.attachments) ? `<div style="margin-top:8px;">Request files: ${attachmentHtml(item.attachments)}</div>` : ''}
-      ${figureHtml}<div style="margin-top:12px;"><strong style="font-size:12px;color:#334155;">Approved work reported by this cut-off</strong>${evidenceHtml}</div>
+      ${figureHtml}${sharedSummaryHtml}<div style="margin-top:12px;"><strong style="font-size:12px;color:#334155;">${consultantView ? 'Activity progress summary by this cut-off' : 'Approved work reported by this cut-off'}</strong>${evidenceHtml}</div>
       ${signerHtml}${item.decision_reason ? `<p style="font-size:12px;color:#475569;">Decision note: ${escapeHtml(item.decision_reason)}</p>` : ''}
       ${item.decided_by_role ? `<div style="font-size:11px;color:#64748b;">Decision by ${escapeHtml(item.decided_by_role)} on ${escapeHtml(String(item.decided_at || '').slice(0, 10))}${item.certified_progress_pct != null ? ` · Certified ${Number(item.certified_progress_pct)}%` : ''}</div>` : ''}
+      ${revisionHistory}
       ${attachmentHtml(item.decision_attachments) ? `<div style="margin-top:8px;">Decision files: ${attachmentHtml(item.decision_attachments)}</div>` : ''}
-      ${inspectorForm}${decisionForm}${withdraw}
+      ${inspectorForm}${decisionForm}${reviseForm}${withdraw}
     </article>`;
   }).join('');
   const reworkActions = rework.map(item => `<article id="pe-rework-${escapeHtml(String(item.id))}" style="border-top:1px solid #e2e8f0;padding:10px 0;">
     <strong style="font-size:12px;color:#334155;">${escapeHtml(String(item.kind || 'rework').replace(/_/g, ' '))} · ${escapeHtml(String(item.status || '').replace(/_/g, ' '))}</strong>
+    ${item.kind === 'snag' && item.certified_progress_pct != null ? `<div style="font-size:11px;color:#92400e;">Certified progress while open: ${Number(item.certified_progress_pct)}%</div>` : ''}
     <p style="font-size:12px;color:#475569;margin:5px 0;">${escapeHtml(item.reason || '')}</p>
     ${item.correction_note ? `<p style="font-size:11px;color:#64748b;margin:4px 0;">Correction: ${escapeHtml(item.correction_note)}</p>` : ''}
     ${contractorLeader && item.status === 'open' ? `<form data-pe-form="correct-rework" data-rework-id="${escapeHtml(String(item.id))}" style="display:flex;gap:8px;margin-top:8px;">
@@ -15988,10 +16084,12 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
     <form data-pe-form="raise-rework" style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;margin-bottom:12px;">
       <strong style="display:block;margin-bottom:8px;color:#0f172a;">Raise rework or snag</strong>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <select name="kind" style="padding:8px;border:1px solid #cbd5e1;border-radius:7px;"><option value="rework">Rework</option><option value="snag">Snag</option></select>
+        <select name="kind" data-pe-rework-kind style="padding:8px;border:1px solid #cbd5e1;border-radius:7px;"><option value="rework">Rework</option><option value="snag">Snag</option></select>
         <select name="task_id" style="flex:1;min-width:160px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;">
-          <option value="">Activity-level item</option>${tasks.map(task => `<option value="${escapeHtml(String(task.id))}">${escapeHtml(task.title || 'Task')}</option>`).join('')}</select>
+          <option value="">Activity-level item</option>${reviewTasks.map(task => `<option value="${escapeHtml(String(task.id))}">${escapeHtml(task.title || 'Task')}</option>`).join('')}</select>
       </div>
+      <label data-pe-raised-snag-percent style="display:none;margin-top:8px;font-size:12px;color:#475569;">Certified progress while the snag is open (%)
+        <input name="certified_progress_pct" type="number" min="0" max="99.9" step="0.1" value="95" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></label>
       <textarea name="reason" required rows="2" placeholder="Explain what needs to be corrected or checked" style="width:100%;margin-top:8px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></textarea>
       <button class="rc-btn rc-btn--sm" type="submit" style="margin-top:8px;">Raise item</button>
     </form>` : '';
@@ -16039,6 +16137,12 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
     const form = select.closest('form');
     const field = form?.querySelector('[data-pe-certified-field]');
     if (field) field.style.display = select.value === 'verified_with_changes' ? 'block' : 'none';
+    const snagFields = form?.querySelector('[data-pe-snag-fields]');
+    if (snagFields) snagFields.style.display = select.value === 'verified' ? 'block' : 'none';
+  }));
+  container.querySelectorAll('[data-pe-rework-kind]').forEach(select => select.addEventListener('change', () => {
+    const field = select.closest('form')?.querySelector('[data-pe-raised-snag-percent]');
+    if (field) field.style.display = select.value === 'snag' ? 'block' : 'none';
   }));
   const inspectors = container.querySelector('[data-pe-inspectors]');
   if (inspectors && card.viewer_side === 'Contractor') {
@@ -16077,7 +16181,17 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
         body = values;
       } else if (form.dataset.peForm === 'decision') {
         url = `${API}/verifications/${encodeURIComponent(form.dataset.verificationId)}/decide`;
-        body = { ...values, skip_inspectors: form.elements.skip_inspectors?.checked ? 'true' : 'false' };
+        body = {
+          ...values,
+          rework: values.snag_reason ? [{
+            reason: values.snag_reason,
+            certified_progress_pct: values.snag_certified_progress_pct,
+          }] : [],
+          skip_inspectors: form.elements.skip_inspectors?.checked ? 'true' : 'false',
+        };
+      } else if (form.dataset.peForm === 'revise') {
+        url = `${API}/verifications/${encodeURIComponent(form.dataset.verificationId)}/revise`;
+        body = values;
       } else if (form.dataset.peForm === 'raise-rework') {
         url = `${API}/activities/${encodeURIComponent(recordId)}/rework`;
         body = { ...values, task_id: values.task_id || null };
@@ -16085,7 +16199,7 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
         url = `${API}/rework/${encodeURIComponent(form.dataset.reworkId)}/correct`;
         body = values;
       }
-      const method = ['request', 'raise-rework'].includes(form.dataset.peForm) ? 'POST' : 'PUT';
+      const method = ['request', 'raise-rework', 'revise'].includes(form.dataset.peForm) ? 'POST' : 'PUT';
       const response = await _wcFetch(url, { method, body: body instanceof FormData ? body : JSON.stringify(body) });
       if (!response) throw new Error('Your session could not be refreshed. Please sign in again.');
       const result = await response.json();
@@ -16094,6 +16208,7 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
       await _peLoadDetail(recordId, 'planning-execution');
       delete recordsCache['planning-execution'];
       _peShowActivityNotice(recordId, form.dataset.peForm === 'request' ? 'Verification request submitted.' :
+        form.dataset.peForm === 'revise' ? 'Decision revised.' :
         form.dataset.peForm === 'inspect' ? 'Inspector recommendation submitted.' :
           form.dataset.peForm.includes('rework') ? 'Rework item updated.' : 'Verification decision recorded.');
     } catch (err) {
@@ -16967,9 +17082,7 @@ function _pe2FormHtml() {
           <option value="">No milestone</option>
           ${base.length ? `<optgroup label="Schedule milestones">${base.map(msOption).join('')}</optgroup>` : ''}
           ${add.length ? `<optgroup label="Additional milestones">${add.map(msOption).join('')}</optgroup>` : ''}
-          <option value="new">Type a standalone milestone...</option>
         </select>
-        <input id="pe2-milestone-text" type="text" placeholder="Standalone milestone name" style="${_peInputStyle()}margin-top:6px;display:none;"/>
         <p id="pe2-milestone-note" style="font-size:11px;color:#6b7280;margin:4px 0 0;min-height:14px;"></p>
       </div>
 
@@ -17149,12 +17262,10 @@ function _pe2RenderMeasure() {
 function _pe2MilestoneNote() {
   const sel = document.getElementById('pe2-milestone')?.value || '';
   const note = document.getElementById('pe2-milestone-note');
-  const text = document.getElementById('pe2-milestone-text');
-  if (text) text.style.display = sel === 'new' ? 'block' : 'none';
   if (!note) return;
   const m = _pe2.milestones.find((x) => `${x.kind === 'baseline' ? 'b' : 'a'}:${x.id}` === sel);
   const drives = wcSide(window.currentUserRole) === 'Contractor';
-  if (!m) { note.textContent = sel === 'new' ? 'A standalone milestone is a label of your side. It is not linked to the schedule.' : ''; return; }
+  if (!m) { note.textContent = ''; return; }
   const period = [m.planned_start, m.planned_end].filter(Boolean).map(_wcFmtDate).join(' to ');
   note.textContent = !drives
     ? 'Reference only: this activity does not change the milestone percentage.'
@@ -17294,7 +17405,6 @@ function _pe2Problem() {
   const milestone = _pe2.milestones.find((m) => `${m.kind === 'baseline' ? 'b' : 'a'}:${m.id}` === selected);
   if (milestone?.planned_start && v('pe2-start') < String(milestone.planned_start).slice(0, 10)) return 'The activity cannot start before the milestone.';
   if (milestone?.planned_end && v('pe2-end') > String(milestone.planned_end).slice(0, 10)) return 'The activity cannot end after the milestone.';
-  if (document.getElementById('pe2-milestone')?.value === 'new' && !v('pe2-milestone-text')) return 'Type the standalone milestone name, or choose another option.';
   if (_pe2Measured()) {
     if (!(Number(v('pe2-qty')) > 0)) return 'The planned amount must be above 0.';
     if (!v('pe2-unit')) return _pe2.type === 'count' ? 'Say what is counted.' : 'Please select a unit.';
@@ -17333,7 +17443,6 @@ function _pe2Payload(confirmReplace) {
   const sel = document.getElementById('pe2-milestone')?.value || '';
   if (sel.startsWith('b:')) form.append('baseline_milestone_id', sel.slice(2));
   else if (sel.startsWith('a:')) form.append('additional_milestone_id', sel.slice(2));
-  else if (sel === 'new') form.append('milestone_name', v('pe2-milestone-text'));
   const many = _pe2.tasks.length > 1;
   form.append('tasks', JSON.stringify(_pe2.tasks.map((t) => ({
     title: t.title.trim(),
