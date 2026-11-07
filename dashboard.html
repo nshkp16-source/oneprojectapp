@@ -12778,7 +12778,7 @@ async function _openTaskQueryNotification(queryId) {
   if (!queryResponse || !queryResponse.ok) return false;
   const queryData = await queryResponse.json();
   const query = (queryData.queries || []).find((item) => String(item.id) === String(queryId));
-  if (!query?.report_id) return false;
+  if (!query) return false;
   const leader = isWCLeader(window.currentUserRole);
   const tabKey = leader ? 'reports' : 'my-reports';
   try {
@@ -12788,15 +12788,13 @@ async function _openTaskQueryNotification(queryId) {
   const opened = await _openRecordNotification('work_center_task', taskId);
   if (!opened) return false;
   const detailSelector = `#wc-detail-${CSS.escape(String(taskId))}`;
-  const reportMount = await _waitForElement(`${detailSelector} [data-wc-report-queries="${CSS.escape(String(query.report_id))}"]`);
-  if (!reportMount) return false;
   document.querySelector(`${detailSelector} [data-wc-tab="${tabKey}"]`)?.click();
-  const report = document.querySelector(`${detailSelector} [data-wc-report-id="${CSS.escape(String(query.report_id))}"]`);
-  if (!report) return false;
-  report.open = true;
-  const queryCard = await _waitForElement(`#wc-query-${CSS.escape(String(queryId))}`);
+  const queryCard = await _waitForElement(`${detailSelector} #wc-query-${CSS.escape(String(queryId))}`);
+  if (!queryCard) return false;
+  const report = queryCard.closest('[data-wc-report-card]');
+  if (report) report.open = true;
   queryCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  return Boolean(queryCard);
+  return true;
 }
 
 async function _openActivityVerificationNotification(verificationId, resolvedTarget = null) {
@@ -14277,8 +14275,8 @@ function _wcFilesHtml(task, reports, leader) {
 }
 
 function _wcQueryPanelHtml(task, report, queries, leader) {
-  const reportId = String(report.id);
-  const askForm = leader ? `<div style="margin:12px 0;padding:12px;background:#f8fafc;border:1px solid #dbe3ec;border-radius:9px;">
+  const reportId = report ? String(report.id) : '';
+  const askForm = leader && report ? `<div style="margin:12px 0;padding:12px;background:#f8fafc;border:1px solid #dbe3ec;border-radius:9px;">
     <label for="wc-query-question-${reportId}" style="display:block;font-size:12px;font-weight:600;color:#334155;margin-bottom:5px;">Ask about this report</label>
     <textarea id="wc-query-question-${reportId}" maxlength="5000" placeholder="What needs explaining about this report?"
       style="width:100%;min-height:60px;padding:9px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;font:inherit;"></textarea>
@@ -14306,8 +14304,9 @@ function _wcQueryPanelHtml(task, report, queries, leader) {
       ${answerActions}${resolveAction}
     </article>`;
   }).join('') : `<p style="font-size:12px;color:#64748b;margin:8px 0;">No questions about this report yet.</p>`;
-  return `<section aria-label="Questions about report ${escapeHtml(reportId)}" style="border-top:1px solid #e5e7eb;padding-top:10px;">
-    <h4 style="margin:0;font-size:12px;color:#334155;">Questions${queries.length ? ` (${queries.length})` : ''}</h4>
+  return `<section aria-label="${report ? `Questions about report ${escapeHtml(reportId)}` : 'Other questions'}" style="border-top:1px solid #e5e7eb;padding-top:10px;">
+    <h4 style="margin:0;font-size:12px;color:#334155;">${report ? 'Questions' : 'Other questions'}${queries.length ? ` (${queries.length})` : ''}</h4>
+    ${report ? '' : '<p style="font-size:11px;color:#64748b;margin:4px 0 8px;">These questions are not linked to a progress report.</p>'}
     ${askForm}${list}</section>`;
 }
 
@@ -14385,17 +14384,20 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
     const rejected = reports.filter((entry) => entry.validation_status === 'rejected').length;
     const voided = reports.filter((entry) => entry.validation_status === 'voided').length;
     const reportPane = shell.querySelector('[data-wc-pane="reports"]');
-    reportPane.insertAdjacentHTML('afterbegin', `<div role="group" aria-label="Filter reports" style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 12px;">
-      ${[['all', 'All', reports.length], ['pending', 'Pending', pending], ['approved', 'Approved', approved], ['rejected', 'Rejected', rejected], ['voided', 'Voided', voided]]
-        .map(([status, label, count]) => `<button type="button" data-report-filter="${status}" aria-pressed="${status === 'pending'}"
-          style="padding:6px 10px;border:1px solid ${status === 'pending' ? '#007B8A' : '#cbd5e1'};border-radius:999px;background:${status === 'pending' ? '#e6f4f5' : '#fff'};color:${status === 'pending' ? '#006570' : '#475569'};font-size:11px;font-weight:600;cursor:pointer;">${label} ${count}</button>`).join('')}
-    </div>`);
-    reportPane.appendChild(actionPanel);
-    let reportFilter = 'pending';
+    let reportFilter = pending ? 'pending' : 'all';
+    const filterCounts = { all: reports.length, pending, approved, rejected, voided };
     try {
       const savedFilter = sessionStorage.getItem(`wc-report-filter-${taskId}`);
-      if (['all', 'pending', 'approved', 'rejected', 'voided'].includes(savedFilter)) reportFilter = savedFilter;
+      if (Object.prototype.hasOwnProperty.call(filterCounts, savedFilter)
+        && (savedFilter === 'all' || filterCounts[savedFilter] > 0))
+        reportFilter = savedFilter;
     } catch {}
+    reportPane.insertAdjacentHTML('afterbegin', `<div role="group" aria-label="Filter reports" style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 12px;">
+      ${[['all', 'All', reports.length], ['pending', 'Pending', pending], ['approved', 'Approved', approved], ['rejected', 'Rejected', rejected], ['voided', 'Voided', voided]]
+        .map(([status, label, count]) => `<button type="button" data-report-filter="${status}" aria-pressed="${status === reportFilter}"
+          style="padding:6px 10px;border:1px solid ${status === reportFilter ? '#007B8A' : '#cbd5e1'};border-radius:999px;background:${status === reportFilter ? '#e6f4f5' : '#fff'};color:${status === reportFilter ? '#006570' : '#475569'};font-size:11px;font-weight:600;cursor:pointer;">${label} ${count}</button>`).join('')}
+    </div>`);
+    reportPane.appendChild(actionPanel);
     const applyReportFilter = (status) => {
       for (const card of reportPane.querySelectorAll('[data-wc-report-card]'))
         card.hidden = status !== 'all' && card.getAttribute('data-report-status') !== status;
@@ -14426,6 +14428,14 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
     if (!report) continue;
     const reportQueries = (queries || []).filter((query) => String(query.report_id) === reportId);
     mount.innerHTML = _wcQueryPanelHtml(task, report, reportQueries, leader);
+  }
+  const reportIds = new Set(reports.map((entry) => String(entry.id)));
+  const orphanQueries = (queries || []).filter((query) =>
+    !query.report_id || !reportIds.has(String(query.report_id)));
+  if (orphanQueries.length) {
+    const queryPane = shell.querySelector(`[data-wc-pane="${leader ? 'reports' : 'my-reports'}"]`);
+    queryPane?.insertAdjacentHTML('afterbegin',
+      `<div data-wc-orphan-queries style="margin:4px 0 14px;">${_wcQueryPanelHtml(task, null, orphanQueries, leader)}</div>`);
   }
   shell.querySelector('[data-wc-add-file]')?.addEventListener('click', () => {
     shell.querySelector('[data-action="wc-toggle-edit"]')?.click();
@@ -20631,9 +20641,9 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
     return data;
   }
 
-  window._peActivityCardHtml = function (card) {
+  window._peActivityCardHtml = function (card, verificationData, selectedTab) {
     const html = typeof originalActivityHtml === 'function'
-      ? originalActivityHtml(card, { verifications: [], rework: [] }, 'overview')
+      ? originalActivityHtml(card, verificationData, selectedTab)
       : activityBaseHtml(card);
     if (!card?.can_edit_activity || typeof originalActivityHtml !== 'function') return html;
     return html.replace(/<div data-pe-pane="overview"[^>]*>/,
@@ -20655,8 +20665,9 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
     if (typeof originalPEStatus === 'function') originalPEStatus(activity, entries);
   };
 
-  window._peWireActivityCard = function (recordId, card) {
-    if (typeof originalActivityWire === 'function') originalActivityWire(recordId, card);
+  window._peWireActivityCard = function (recordId, card, cachedRecord, verificationData) {
+    if (typeof originalActivityWire === 'function')
+      originalActivityWire(recordId, card, cachedRecord, verificationData);
     const detail = document.getElementById(`pe-detail-inner-${recordId}`);
     detail?.querySelector('[data-wf-save-plan]')?.addEventListener('click', () => saveActivityPlan(recordId, detail));
   };
