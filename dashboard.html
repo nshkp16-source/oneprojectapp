@@ -12774,12 +12774,29 @@ async function _openTaskQueryNotification(queryId) {
   const data = await response.json();
   const taskId = data.target?.recordId;
   if (!taskId) return false;
-  try { sessionStorage.setItem(`wc-task-tab-${taskId}`, 'queries'); } catch {}
+  const queryResponse = await authFetch(`${API}/work-center/${encodeURIComponent(taskId)}/queries?projectId=${encodeURIComponent(projectId)}`);
+  if (!queryResponse || !queryResponse.ok) return false;
+  const queryData = await queryResponse.json();
+  const query = (queryData.queries || []).find((item) => String(item.id) === String(queryId));
+  if (!query?.report_id) return false;
+  const leader = isWCLeader(window.currentUserRole);
+  const tabKey = leader ? 'reports' : 'my-reports';
+  try {
+    sessionStorage.setItem(`wc-task-tab-${taskId}`, tabKey);
+    if (leader) sessionStorage.setItem(`wc-report-filter-${taskId}`, 'all');
+  } catch {}
   const opened = await _openRecordNotification('work_center_task', taskId);
-  if (opened) {
-    document.querySelector(`.doc-item[data-id="${taskId}"] [data-wc-tab="queries"]`)?.click();
-  }
-  return opened;
+  if (!opened) return false;
+  const detailSelector = `#wc-detail-${CSS.escape(String(taskId))}`;
+  const reportMount = await _waitForElement(`${detailSelector} [data-wc-report-queries="${CSS.escape(String(query.report_id))}"]`);
+  if (!reportMount) return false;
+  document.querySelector(`${detailSelector} [data-wc-tab="${tabKey}"]`)?.click();
+  const report = document.querySelector(`${detailSelector} [data-wc-report-id="${CSS.escape(String(query.report_id))}"]`);
+  if (!report) return false;
+  report.open = true;
+  const queryCard = await _waitForElement(`#wc-query-${CSS.escape(String(queryId))}`);
+  queryCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  return Boolean(queryCard);
 }
 
 async function _openActivityVerificationNotification(verificationId, resolvedTarget = null) {
@@ -13476,7 +13493,7 @@ bottomContent.addEventListener('click', (e) => {
     return;
   }
   if (action === 'wc-query-create') {
-    _wcHandleQueryCreate(recordId);
+    _wcHandleQueryCreate(recordId, actionEl.getAttribute('data-report-id'));
     return;
   }
   if (action === 'wc-query-answer') {
@@ -13512,6 +13529,8 @@ function _wcDeriveStatus(task) {
   const today = new Date(); today.setHours(0,0,0,0);
   const start = task.start_date ? new Date(task.start_date.slice(0,10) + 'T00:00:00') : null;
   if (!start || today < start)      return { label: 'Not Yet Started', color: '#f59e0b' };
+  const end = task.end_date ? new Date(task.end_date.slice(0, 10) + 'T00:00:00') : null;
+  if (end && today > end && Number(task.progress_pct) < 100) return { label: 'Overdue', color: '#dc2626' };
   return { label: 'Ongoing', color: '#3b82f6' };
 }
 
@@ -13521,11 +13540,14 @@ function _wcStatusBadgeHtml(task) {
     ${st.label}</span>`;
 }
 
-function _wcActivityStatusBadge(status, avgProgress) {
+function _wcActivityStatusBadge(status, avgProgress, endDate) {
   let label, color;
   if (!status || status === 'not_yet_started') { label='Not Yet Started'; color='#f59e0b'; }
   else if (status === 'completed')             { label='Completed';       color='#10b981'; }
   else if (status === 'closed')               { label='Closed';          color='#6b7280'; }
+  else if (endDate && new Date(`${String(endDate).slice(0, 10)}T00:00:00`) < new Date(new Date().setHours(0, 0, 0, 0))) {
+    label='Overdue'; color='#dc2626';
+  }
   else {
     const pct = Number(avgProgress) || 0;
     label = pct > 0 ? 'Ongoing' : 'Delayed';
@@ -13658,7 +13680,7 @@ function _renderWCList(records) {
         background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;
         padding:3px 10px;font-size:11px;color:#166534;max-width:100%;">
         <strong>${escapeHtml(task.activity_title)}</strong>
-        ${_wcActivityStatusBadge(task.activity_status, task.activity_progress)}
+        ${_wcActivityStatusBadge(task.activity_status, task.activity_progress, task.activity_end_date)}
       </div>` : `
       <div style="margin-top:5px;font-size:11px;color:#4b5563;">
         Standalone task · ${escapeHtml(task.activity_type || 'percentage')}
@@ -13687,9 +13709,9 @@ function _renderWCList(records) {
             <div style="font-size:11px;color:#9ca3af;margin-top:3px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
               <span>By <strong style="color:#6b7280;">${escapeHtml(task.creator_role||'N/A')}</strong></span>
               <span>•</span>
-              <span>📅 ${escapeHtml(startDate)} → ${escapeHtml(endDate)}</span>
+              <span>${escapeHtml(startDate)} → ${escapeHtml(endDate)}</span>
               <span>•</span>
-              <span>👥 ${memberCount} member${memberCount===1?'':'s'}</span>
+              <span>${memberCount} member${memberCount===1?'':'s'}</span>
             </div>
             ${activityPill}
           </div>
@@ -13701,7 +13723,7 @@ function _renderWCList(records) {
         </div>
         <div class="doc-detail" id="detail-${task.id}" style="display:none;border-top:1px solid #e5e7eb;">
           <div id="wc-detail-${task.id}" style="padding:16px;background:#f8fafc;">
-            <p style="color:#9ca3af;font-size:13px;text-align:center;padding:24px 0;">⏳ Loading…</p>
+            <p style="color:#9ca3af;font-size:13px;text-align:center;padding:24px 0;">Loading task…</p>
           </div>
         </div>
       </li>`;
@@ -13762,25 +13784,11 @@ function _wcPMView(task, progressEntries) {
   const st       = _wcDeriveStatus(task);
 
   const activityInfo = task.activity_id && task.activity_title ? (() => {
-    const pct    = Number(task.activity_progress) || 0;
-    const barClr = pct >= 100 ? '#10b981' : '#3b82f6';
     return `
-      <div style="padding:10px 12px;background:#f0fdf4;border:1px solid #bbf7d0;
-        border-radius:10px;margin-bottom:2px;">
-        <div style="font-size:11px;font-weight:700;color:#166534;margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px;">
-          Linked P&amp;E Activity</div>
-        <div style="font-size:13px;font-weight:600;color:#1f2937;margin-bottom:4px;">
-          ${escapeHtml(task.activity_title)}</div>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px;color:#6b7280;">
-          <span>📅 ${_wcFmtDate(task.activity_start_date)} → ${_wcFmtDate(task.activity_end_date)}</span>
-          ${_wcActivityStatusBadge(task.activity_status, task.activity_progress)}
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <div style="flex:1;background:#d1fae5;border-radius:999px;height:6px;">
-            <div style="background:${barClr};height:6px;border-radius:999px;width:${pct}%;transition:width .4s;"></div>
-          </div>
-          <span style="font-size:11px;font-weight:700;color:${barClr};">${pct}%</span>
-        </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#166534;">
+        <span>Activity: <strong>${escapeHtml(task.activity_title)}</strong></span>
+        <span>${_wcFmtDate(task.activity_start_date)} – ${_wcFmtDate(task.activity_end_date)}</span>
+        ${_wcActivityStatusBadge(task.activity_status, task.activity_progress, task.activity_end_date)}
       </div>`;
   })() : '';
 
@@ -13789,20 +13797,32 @@ function _wcPMView(task, progressEntries) {
         const vc     = valColor[e.validation_status] || '#6b7280';
         const vLabel = (e.validation_status||'pending').charAt(0).toUpperCase()+(e.validation_status||'pending').slice(1);
         const canVal = !e.validation_status || e.validation_status === 'pending';
+        const memberName = e.member_title || e.member_name || e.member_email || 'Team member';
         return `
-          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;
-            padding:14px;margin-bottom:10px;">
+          <details data-wc-report-card data-report-id="${escapeHtml(String(e.id))}" data-report-status="${escapeHtml(e.validation_status || 'pending')}"
+            style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:10px;">
+            <summary style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:12px;cursor:pointer;list-style-position:inside;">
+              <span style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0;">
+                <strong>${_wcFmtDate(e.report_date)}</strong>
+                <span>${escapeHtml(memberName)}${e.member_position ? ` · ${escapeHtml(e.member_position)}` : ''}</span>
+                <strong>${escapeHtml(_wcEntryFigure(task, e))}</strong>
+                ${e.attachment_name ? '<span aria-label="Has attachment" title="Has attachment">Attachment</span>' : ''}
+              </span>
+              <span style="background:${vc}18;color:${vc};border:1px solid ${vc}40;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:600;">${escapeHtml(vLabel)}</span>
+            </summary>
+            <div style="padding:14px;border-top:1px solid #e5e7eb;">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;
               flex-wrap:wrap;gap:8px;margin-bottom:10px;">
               <div>
                 <div style="font-size:13px;font-weight:600;color:#1f2937;">
-                  👤 ${escapeHtml(e.member_email||'Team Member')}
+                  ${escapeHtml(memberName)}
                   ${e.member_position?`<span style="font-size:10px;background:#f3f4f6;color:#6b7280;
                     border-radius:4px;padding:1px 6px;margin-left:5px;">${escapeHtml(e.member_position)}</span>`:''}
                 </div>
+                ${e.member_email && e.member_email !== memberName ? `<div style="font-size:11px;color:#6b7280;">${escapeHtml(e.member_email)}</div>` : ''}
                 <div style="font-size:11px;color:#9ca3af;margin-top:2px;">
-                  📅 ${_wcFmtDate(e.report_date)} &nbsp;•&nbsp; Submitted
-                  ${e.submitted_at?new Date(e.submitted_at).toLocaleString(undefined,{dateStyle:'short',timeStyle:'short'}):'—'}
+                  ${_wcFmtDate(e.report_date)} · Submitted
+                  ${e.submitted_at?`${_wcFmtDate(e.submitted_at)} ${new Date(e.submitted_at).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'})}`:'—'}
                 </div>
               </div>
               <span style="background:${vc}18;color:${vc};border:1px solid ${vc}40;
@@ -13850,7 +13870,7 @@ function _wcPMView(task, progressEntries) {
                 style="display:inline-flex;align-items:center;gap:5px;background:#eff6ff;
                 color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:4px 10px;
                 font-size:12px;cursor:pointer;margin-bottom:10px;">
-                ⬇️ ${escapeHtml(e.attachment_name)}</a>`:''}
+                Download ${escapeHtml(e.attachment_name)}</a>`:''}
             ${canVal?`
               <div style="border-top:1px solid #e5e7eb;padding-top:10px;">
                 <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;
@@ -13862,41 +13882,40 @@ function _wcPMView(task, progressEntries) {
                 <div style="display:flex;gap:7px;">
                   <button data-action="wc-validate" data-progress-id="${escapeHtml(String(e.id))}" data-validate-action="approved"
                     style="flex:1;padding:8px;font-size:12px;font-weight:600;background:#d1fae5;
-                    color:#065f46;border:1px solid #6ee7b7;border-radius:8px;cursor:pointer;">✅ Approve</button>
+                    color:#065f46;border:1px solid #6ee7b7;border-radius:8px;cursor:pointer;">Approve</button>
                   <button data-action="wc-validate" data-progress-id="${escapeHtml(String(e.id))}" data-validate-action="rejected"
                     style="flex:1;padding:8px;font-size:12px;font-weight:600;background:#fee2e2;
-                    color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">❌ Reject</button>
+                    color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">Reject</button>
                   <button data-action="wc-validate" data-progress-id="${escapeHtml(String(e.id))}" data-validate-action="comment_only"
                     style="flex:1;padding:8px;font-size:12px;font-weight:600;background:#f3f4f6;
-                    color:#374151;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;">💬 Comment</button>
+                    color:#374151;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;">Comment</button>
                 </div>
               </div>`:`
               <div style="padding:8px 10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;font-size:12px;color:#6b7280;">
-                ${(e.validation_notes||e.void_reason)?`💬 <em>${escapeHtml(e.validation_notes||e.void_reason)}</em>`:''}
+                ${(e.validation_notes||e.void_reason)?`<em>${escapeHtml(e.validation_notes||e.void_reason)}</em>`:''}
                 ${e.validation_status==='approved'&&task.status!=='closed'?`
                   <div style="margin-top:6px;">
+                    <label for="wc-val-notes-${escapeHtml(String(e.id))}" style="display:block;margin:8px 0 4px;font-size:11px;font-weight:600;">Reason for voiding *</label>
+                    <textarea id="wc-val-notes-${escapeHtml(String(e.id))}" maxlength="1000" placeholder="Explain why this report must be voided"
+                      style="width:100%;min-height:54px;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:12px;resize:vertical;box-sizing:border-box;margin-bottom:8px;"></textarea>
                     <button data-action="wc-validate" data-progress-id="${escapeHtml(String(e.id))}" data-validate-action="voided"
-                      style="padding:5px 10px;font-size:11px;font-weight:600;background:#f3f4f6;color:#374151;
-                      border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">Void this report</button>
+                      class="rc-btn rc-btn--sm rc-btn--danger">Void this report</button>
                   </div>`:''}</div>`}
-          </div>`;
+            <div data-wc-report-queries="${escapeHtml(String(e.id))}" style="margin-top:12px;"></div>
+          </div></details>`;
       }).join('')
-    : `<div style="text-align:center;padding:24px 0;color:#9ca3af;font-size:13px;">📭 No progress entries yet.</div>`;
+    : `<div style="padding:18px;border:1px dashed #cbd5e1;border-radius:9px;background:#f8fafc;color:#64748b;font-size:13px;">No progress reports have been submitted yet.</div>`;
 
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
         <div style="display:flex;align-items:center;justify-content:space-between;
           padding-bottom:10px;border-bottom:2px solid #e5e7eb;margin-bottom:14px;">
-          <span style="font-size:13px;font-weight:700;color:#007B8A;">Task details</span>
-          <div style="display:flex;gap:6px;">
+          <span></span><div style="display:flex;gap:6px;">
             <button id="wc-edit-btn-${task.id}" data-action="wc-toggle-edit"
               style="padding:4px 12px;font-size:11px;font-weight:600;background:#f3f4f6;
               color:#374151;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">
-              ✏️ Edit</button>
-            <button data-action="wc-delete"
-              style="padding:4px 10px;font-size:11px;font-weight:600;background:#fff1f2;
-              color:#991b1b;border:1px solid #fca5a5;border-radius:6px;cursor:pointer;">🗑️</button>
+              Edit</button>
           </div>
         </div>
 
@@ -13919,26 +13938,19 @@ function _wcPMView(task, progressEntries) {
                     <span style="display:inline-flex;align-items:center;gap:4px;
                       background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd;
                       border-radius:999px;padding:3px 10px;font-size:12px;">
-                      👤 ${escapeHtml(m.email||'')}
-                      ${m.position?`<span style="color:#6b7280;font-size:10px;">(${escapeHtml(m.position)})</span>`:''}
+                      ${escapeHtml(m.title || m.name || m.email || `Member ${m.id}`)}
+                      ${m.position?`<span style="color:#6b7280;font-size:10px;">· ${escapeHtml(m.position)}</span>`:''}
+                      ${m.email && (m.title || m.name) ? `<span style="color:#6b7280;font-size:10px;">(${escapeHtml(m.email)})</span>` : ''}
                     </span>`).join('')
                 : '<span style="font-size:12px;color:#9ca3af;">None assigned</span>'}
             </div>
           </div>
-          ${task.linked_file_name?`
-            <div>
-              <div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Linked File</div>
-              <a data-action="wc-dl-task" data-filename="${escapeHtml(task.linked_file_name)}"
-                style="display:inline-flex;align-items:center;gap:5px;background:#eff6ff;
-                color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:5px 10px;
-                font-size:12px;cursor:pointer;">⬇️ ${escapeHtml(task.linked_file_name)}</a>
-            </div>`:''}
         </div>
 
         <div id="wc-edit-${task.id}" style="display:none;flex-direction:column;gap:11px;">
           <div style="padding:8px 12px;background:#fffbeb;border:1px solid #fcd34d;
             border-radius:8px;font-size:12px;color:#92400e;margin-bottom:2px;">
-            ✏️ Edit mode — changes save on Update button</div>
+            Edit mode — changes save on Update button</div>
           <div>
             ${_wcLabel('Title *')}
             ${_wcInput(`wc-ed-title-${task.id}`, 'text', task.title)}
@@ -14002,6 +14014,9 @@ function _wcPMView(task, progressEntries) {
             <button data-action="wc-update"
               style="flex:1;padding:10px;font-size:13px;font-weight:700;background:#007B8A;
               color:#fff;border:none;border-radius:8px;cursor:pointer;">💾 Update Task</button>
+            <button data-action="wc-delete"
+              style="padding:10px 12px;font-size:12px;font-weight:600;background:#fff1f2;
+              color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">Delete task</button>
             <button data-action="wc-cancel-edit"
               style="padding:10px 14px;font-size:13px;font-weight:600;background:#f3f4f6;
               color:#374151;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;">✕</button>
@@ -14016,7 +14031,7 @@ function _wcPMView(task, progressEntries) {
           <span style="font-size:11px;font-weight:400;color:#6b7280;">
             ${progressEntries.length} entr${progressEntries.length===1?'y':'ies'}</span>
         </div>
-        <div style="max-height:540px;overflow-y:auto;">${progressHtml}</div>
+        <div>${progressHtml}</div>
       </div>
     </div>`;
 }
@@ -14030,11 +14045,17 @@ function _wcMemberView(task, myEntries) {
         const vc     = valColor[e.validation_status] || '#6b7280';
         const vLabel = (e.validation_status||'pending').charAt(0).toUpperCase()+(e.validation_status||'pending').slice(1);
         return `
-          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;
-            padding:10px;margin-bottom:8px;">
+          <details data-wc-report-card data-report-id="${escapeHtml(String(e.id))}" data-report-status="${escapeHtml(e.validation_status || 'pending')}"
+            style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:8px;">
+            <summary style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:10px;cursor:pointer;list-style-position:inside;">
+              <span><strong>${_wcFmtDate(e.report_date)}</strong> · ${escapeHtml(_wcEntryFigure(task, e))}
+                ${e.attachment_name ? '<span aria-label="Has attachment" title="Has attachment">Attachment</span>' : ''}</span>
+              <span style="background:${vc}18;color:${vc};border:1px solid ${vc}40;border-radius:999px;padding:1px 8px;font-size:11px;font-weight:600;">${escapeHtml(vLabel)}</span>
+            </summary>
+            <div style="padding:10px;border-top:1px solid #e5e7eb;">
             <div style="display:flex;justify-content:space-between;align-items:center;
               flex-wrap:wrap;gap:6px;margin-bottom:6px;">
-              <div style="font-size:12px;font-weight:600;color:#1f2937;">📅 ${_wcFmtDate(e.report_date)}</div>
+              <div style="font-size:12px;font-weight:600;color:#1f2937;">${_wcFmtDate(e.report_date)}</div>
               <span style="background:${vc}18;color:${vc};border:1px solid ${vc}40;
                 border-radius:999px;padding:1px 8px;font-size:11px;font-weight:600;">${escapeHtml(vLabel)}</span>
             </div>
@@ -14048,31 +14069,27 @@ function _wcMemberView(task, myEntries) {
               ${e.issues?`<div style="grid-column:span 2;"><span style="color:#9ca3af;font-size:10px;text-transform:uppercase;letter-spacing:.4px;">Issues</span><br>${escapeHtml(e.issues)}</div>`:''}
               ${e.notes?`<div style="grid-column:span 2;"><span style="color:#9ca3af;font-size:10px;text-transform:uppercase;letter-spacing:.4px;">Additional notes</span><br>${escapeHtml(e.notes)}</div>`:''}
             </div>
-            ${e.attachment_name?`<div style="margin-top:8px;font-size:11px;color:#526078;">Attachment: ${escapeHtml(e.attachment_name)}</div>`:''}
+            ${e.attachment_name?`<a data-action="wc-dl-progress" data-progress-id="${escapeHtml(String(e.id))}" data-filename="${escapeHtml(e.attachment_name)}" style="display:inline-block;margin-top:8px;font-size:11px;color:#0369a1;">Download attachment: ${escapeHtml(e.attachment_name)}</a>`:''}
             ${(e.validation_notes||e.void_reason)?`
               <div style="margin-top:8px;padding:6px 10px;background:#fffbeb;
                 border:1px solid #fcd34d;border-radius:6px;font-size:12px;color:#92400e;">
-                💬 Leader: <em>${escapeHtml(e.validation_notes||e.void_reason)}</em></div>`:''}
-          </div>`;
+                Leader note: <em>${escapeHtml(e.validation_notes||e.void_reason)}</em></div>`:''}
+            <div data-wc-report-queries="${escapeHtml(String(e.id))}" style="margin-top:12px;"></div>
+          </div></details>`;
       }).join('')
-    : `<div style="text-align:center;padding:16px 0;color:#9ca3af;font-size:12px;">No submissions yet.</div>`;
+    : `<div style="padding:14px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;color:#64748b;font-size:12px;">You have not submitted a report yet.</div>`;
 
   const activityInfo = task.activity_id && task.activity_title ? `
-    <div style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;
-      border-radius:8px;font-size:12px;color:#166534;">
-      <strong>${escapeHtml(task.activity_title)}</strong>
-      &nbsp;•&nbsp; ${_wcFmtDate(task.activity_start_date)} → ${_wcFmtDate(task.activity_end_date)}
-      &nbsp; ${_wcActivityStatusBadge(task.activity_status, task.activity_progress)}
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#166534;">
+      <span>Activity: <strong>${escapeHtml(task.activity_title)}</strong></span>
+      <span>${_wcFmtDate(task.activity_start_date)} – ${_wcFmtDate(task.activity_end_date)}</span>
+      ${_wcActivityStatusBadge(task.activity_status, task.activity_progress, task.activity_end_date)}
     </div>` : '';
 
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
-        <div style="font-size:13px;font-weight:700;color:#007B8A;padding-bottom:10px;
-          border-bottom:2px solid #e5e7eb;margin-bottom:14px;">
-          Task details <span style="font-size:11px;font-weight:400;color:#9ca3af;">(read-only)</span>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:10px;font-size:12px;color:#374151;">
+        <div id="wc-read-${task.id}" style="display:flex;flex-direction:column;gap:10px;font-size:12px;color:#374151;">
           ${activityInfo}${_wcTaskShareHtml(task)}
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             ${_wcReadField('Work Package', escapeHtml(task.work_package||'—'))}
@@ -14081,14 +14098,6 @@ function _wcMemberView(task, myEntries) {
             <div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;">Instructions for the team</div>
             <div style="line-height:1.6;">${escapeHtml(task.description)}</div>
           </div>`:''}
-          ${task.linked_file_name?`
-            <div>
-              <div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Linked File</div>
-              <a data-action="wc-dl-task" data-filename="${escapeHtml(task.linked_file_name)}"
-                style="display:inline-flex;align-items:center;gap:5px;background:#eff6ff;
-                color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:5px 10px;
-                font-size:12px;cursor:pointer;">⬇️ ${escapeHtml(task.linked_file_name)}</a>
-            </div>`:''}
         </div>
       </div>
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;
@@ -14133,13 +14142,13 @@ function _wcMemberView(task, myEntries) {
         <button data-action="wc-submit-progress" data-task-id="${escapeHtml(String(task.id))}"
           style="width:100%;padding:11px;font-size:13px;font-weight:700;
           background:#007B8A;color:#fff;border:none;border-radius:10px;cursor:pointer;">
-          ✅ Submit Progress Report</button>
+          Submit Progress Report</button>
         <div style="border-top:1px solid #e5e7eb;padding-top:10px;">
           <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">
             My Previous Submissions</div>
           <p style="font-size:11px;line-height:1.5;color:#64748b;margin:0 0 8px;">
             This history shows what you submitted and the leader’s decision. Pending reports are waiting for review; rejected or voided reports do not count toward progress.</p>
-          <div style="max-height:200px;overflow-y:auto;">${myHistoryHtml}</div>
+          <div>${myHistoryHtml}</div>
         </div>
       </div>
     </div>`;
@@ -14167,7 +14176,7 @@ function _wcTaskSummaryHtml(task, entries, queries, leader) {
     const done = approved.reduce((sum, entry) => sum + (Number(entry.quantity_done) || 0), 0);
     const target = Number(task.target_quantity);
     progressText = target > 0
-      ? `${progress}% · ${done} of ${target}${escapeHtml(_wcUnitText(task))}`
+      ? `${progress}% · ${done}${escapeHtml(_wcUnitText(task))} completed`
       : `${progress}% · ${done} completed`;
   } else if (type === 'stages') {
     const doneStages = new Set(approved.map((entry) => String(entry.stage_id)).filter(Boolean));
@@ -14204,11 +14213,13 @@ function _wcActivityPlanHtml(task) {
       ? `${type === 'quantity' ? 'Quantity' : 'Count'} · planned ${escapeHtml(String(task.target_quantity))}${escapeHtml(_wcUnitText(task))}`
       : type === 'stages' ? 'Stages' : 'Percentage';
     const stages = _wcStagesOf(task);
-    return `<section style="border-top:1px solid #dbe3ec;padding-top:12px;margin-top:12px;">
-      <h4 style="font-size:13px;color:#172033;margin:0 0 8px;">Standalone task plan</h4>
-      ${_wcPlanRow('Progress measured by', measure)}
-      ${stages.length ? _wcPlanRow('Stages', stages.map((stage) => `${escapeHtml(stage.title)} (${Number(stage.weight_pct) || 0}%)`).join(', ')) : ''}
-    </section>`;
+    return `<details style="border-top:1px solid #dbe3ec;padding-top:12px;margin-top:12px;">
+      <summary style="cursor:pointer;font-size:13px;font-weight:700;color:#172033;">Task plan</summary>
+      <div style="padding-top:6px;">
+        ${_wcPlanRow('Progress measured by', measure)}
+        ${stages.length ? _wcPlanRow('Stages', stages.map((stage) => `${escapeHtml(stage.title)} (${Number(stage.weight_pct) || 0}%)`).join(', ')) : ''}
+      </div>
+    </details>`;
   }
   const typeLabel = { quantity: 'Quantity', count: 'Count', stages: 'Stages', percentage: 'Percentage' }[_wcTypeOf(task)] || 'Percentage';
   const planned = task.activity_planned_quantity != null
@@ -14218,47 +14229,61 @@ function _wcActivityPlanHtml(task) {
     ? `${escapeHtml(task.activity_milestone_title)}${task.activity_milestone_start || task.activity_milestone_end
       ? ` (${escapeHtml(_wcFmtDate(task.activity_milestone_start))} to ${escapeHtml(_wcFmtDate(task.activity_milestone_end))})` : ''}`
     : 'No milestone linked';
-  return `<section style="border-top:1px solid #dbe3ec;padding-top:12px;margin-top:12px;">
-    <h4 style="font-size:13px;color:#172033;margin:0 0 8px;">Activity plan</h4>
-    ${_wcPlanRow('Activity', escapeHtml(task.activity_title || '—'))}
-    ${_wcPlanRow('Milestone', milestone)}
-    ${_wcPlanRow('Activity dates', `${escapeHtml(_wcFmtDate(task.activity_start_date))} to ${escapeHtml(_wcFmtDate(task.activity_end_date))}`)}
-    ${_wcPlanRow('Scope', escapeHtml(task.activity_description || 'Not set'))}
-    ${_wcPlanRow('Measured by', `${typeLabel}${['quantity', 'count'].includes(_wcTypeOf(task)) ? ` · planned ${planned}` : ''}`)}
-    ${stages.length ? _wcPlanRow('Task stages', stages.map((stage) =>
-      `${escapeHtml(stage.title)} (${Number(stage.weight_pct) || 0}%${stage.is_hold_point ? ', hold point' : ''})${stage.completed_at ? ' · completed' : ''}`).join('; ')) : ''}
-    ${_wcPlanRow('Finished when', escapeHtml(task.activity_done_when || 'Not set'))}
-    ${_wcPlanRow('Planned work', escapeHtml(task.activity_planned_work || 'Not set'))}
-    ${_wcPlanRow('Planned manpower', escapeHtml(task.activity_planned_manpower || 'Not set'))}
-    ${_wcPlanRow('Planned equipment', escapeHtml(task.activity_planned_equipment || 'Not set'))}
-    ${_wcPlanRow('Planned materials', escapeHtml(task.activity_planned_materials || 'Not set'))}
-  </section>`;
+  return `<details style="border-top:1px solid #dbe3ec;padding-top:12px;margin-top:12px;">
+    <summary style="cursor:pointer;font-size:13px;font-weight:700;color:#172033;">Activity plan</summary>
+    <div style="padding-top:6px;">
+      ${_wcPlanRow('Milestone', milestone === 'No milestone linked' ? '' : milestone)}
+      ${_wcPlanRow('Scope', task.activity_description)}
+      ${_wcPlanRow('Measured by', `${typeLabel}${['quantity', 'count'].includes(_wcTypeOf(task)) ? ` · planned ${planned}` : ''}`)}
+      ${stages.length ? _wcPlanRow('Task stages', stages.map((stage) =>
+        `${escapeHtml(stage.title)} (${Number(stage.weight_pct) || 0}%${stage.is_hold_point ? ', hold point' : ''})${stage.completed_at ? ' · completed' : ''}`).join('; ')) : ''}
+      ${_wcPlanRow('Finished when', task.activity_done_when)}
+      ${_wcPlanRow('Planned work', task.activity_planned_work)}
+      ${_wcPlanRow('Planned manpower', task.activity_planned_manpower)}
+      ${_wcPlanRow('Planned equipment', task.activity_planned_equipment)}
+      ${_wcPlanRow('Planned materials', task.activity_planned_materials)}
+    </div>
+  </details>`;
 }
 
 function _wcPlanRow(label, value) {
+  if (!String(value || '').trim() || String(value).trim() === 'Not set') return '';
   return `<div style="display:grid;grid-template-columns:minmax(130px,190px) minmax(0,1fr);gap:10px;padding:8px 0;border-bottom:1px solid #e8edf3;font-size:12px;line-height:1.5;">
     <strong style="color:#526078;">${label}</strong><span style="color:#172033;">${value || 'Not set'}</span>
   </div>`;
 }
 
-function _wcQueryPanelHtml(task, reports, queries, leader) {
-  reports = Array.isArray(reports) ? reports : [];
-  const askForm = leader ? `<div style="border:1px solid #dbe3ec;border-radius:9px;padding:14px;margin-bottom:14px;background:#f8fafc;">
-    <h4 style="margin:0 0 8px;font-size:13px;color:#172033;">Ask about a progress report</h4>
-    <p style="font-size:12px;color:#526078;margin:0 0 10px;">Choose a report to send your question directly to the team member who submitted it. This does not change the report or its progress.</p>
-    <label for="wc-query-report-${task.id}" style="display:block;font-size:11px;font-weight:600;color:#526078;margin-bottom:4px;">Progress report *</label>
-    <select id="wc-query-report-${task.id}" style="width:100%;padding:9px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;margin-bottom:9px;" ${reports.length ? '' : 'disabled'}>
-      <option value="">${reports.length ? 'Choose a report' : 'No reports have been submitted yet'}</option>
-      ${reports.map((report) => {
-        const member = [report.member_title, report.member_position].filter(Boolean).join(' · ')
-          || report.member_email || `Team member ${report.member_id}`;
-        const summary = String(report.work_done || 'No work description').replace(/\s+/g, ' ').trim();
-        return `<option value="${escapeHtml(String(report.id))}">${escapeHtml(_wcFmtDate(report.report_date))} · ${escapeHtml(member)} · ${escapeHtml(summary.slice(0, 100))}</option>`;
-      }).join('')}
-    </select>
-    <label for="wc-query-question-${task.id}" style="display:block;font-size:11px;font-weight:600;color:#526078;margin-bottom:4px;">Question *</label>
-    <textarea id="wc-query-question-${task.id}" maxlength="5000" placeholder="What needs explaining about this report?" style="width:100%;min-height:70px;padding:9px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;font:inherit;"></textarea>
-    <button data-action="wc-query-create" style="margin-top:8px;padding:8px 13px;border:0;border-radius:7px;background:#007B8A;color:#fff;font-weight:600;cursor:pointer;" ${reports.length ? '' : 'disabled'}>Send question</button>
+function _wcFilesHtml(task, reports, leader) {
+  const taskFile = task.linked_file_name
+    ? `<a data-action="wc-dl-task" data-filename="${escapeHtml(task.linked_file_name)}"
+        style="color:#0369a1;cursor:pointer;">${escapeHtml(task.linked_file_name)}</a>`
+    : `<span style="color:#64748b;">No task file attached.</span>`;
+  const reportFiles = reports.filter((report) => report.attachment_name).map((report) =>
+    `<div style="padding:5px 0;border-top:1px solid #e8edf3;">
+      <a data-action="wc-dl-progress" data-progress-id="${escapeHtml(String(report.id))}"
+        data-filename="${escapeHtml(report.attachment_name)}" style="color:#0369a1;cursor:pointer;">
+        ${escapeHtml(report.attachment_name)}</a>
+      <span style="font-size:11px;color:#64748b;"> · ${escapeHtml(_wcFmtDate(report.report_date))}</span>
+    </div>`).join('');
+  return `<section style="padding:10px 0;border-top:1px solid #dbe3ec;">
+    <h3 style="margin:0 0 7px;font-size:13px;color:#172033;">Files</h3>
+    <div style="font-size:12px;">Task file: ${taskFile}
+      ${leader ? `<button type="button" data-wc-add-file style="margin-left:8px;padding:4px 9px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#334155;cursor:pointer;">${task.linked_file_name ? 'Replace file' : 'Add file'}</button>` : ''}
+    </div>
+    <div style="margin-top:7px;font-size:12px;">Report attachments:
+      ${reportFiles || '<span style="color:#64748b;"> None attached.</span>'}
+    </div>
+  </section>`;
+}
+
+function _wcQueryPanelHtml(task, report, queries, leader) {
+  const reportId = String(report.id);
+  const askForm = leader ? `<div style="margin:12px 0;padding:12px;background:#f8fafc;border:1px solid #dbe3ec;border-radius:9px;">
+    <label for="wc-query-question-${reportId}" style="display:block;font-size:12px;font-weight:600;color:#334155;margin-bottom:5px;">Ask about this report</label>
+    <textarea id="wc-query-question-${reportId}" maxlength="5000" placeholder="What needs explaining about this report?"
+      style="width:100%;min-height:60px;padding:9px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;font:inherit;"></textarea>
+    <button data-action="wc-query-create" data-report-id="${escapeHtml(reportId)}"
+      style="margin-top:8px;padding:8px 13px;border:0;border-radius:7px;background:#007B8A;color:#fff;font-weight:600;cursor:pointer;">Send question</button>
   </div>` : '';
   const list = queries.length ? queries.map((query) => {
     const status = { open: 'Waiting for team member to answer', answered: 'Answered · waiting for leader review', resolved: 'Resolved' }[query.status] || query.status;
@@ -14271,7 +14296,7 @@ function _wcQueryPanelHtml(task, reports, queries, leader) {
     const resolveAction = leader && query.status === 'answered'
       ? `<button data-action="wc-query-resolve" data-query-id="${escapeHtml(String(query.id))}" style="margin-top:10px;padding:8px 13px;border:1px solid #9aafc4;border-radius:7px;background:#fff;color:#172033;font-weight:600;cursor:pointer;">Mark as resolved</button>`
       : '';
-    return `<article style="border:1px solid ${query.status === 'open' ? '#fcd34d' : '#dbe3ec'};border-radius:9px;padding:13px;margin-bottom:10px;background:${query.status === 'open' ? '#fffdf5' : '#fff'};">
+    return `<article id="wc-query-${escapeHtml(String(query.id))}" style="border:1px solid ${query.status === 'open' ? '#fcd34d' : '#dbe3ec'};border-radius:9px;padding:13px;margin-bottom:10px;background:${query.status === 'open' ? '#fffdf5' : '#fff'};">
       <div style="font-size:12px;font-weight:700;color:#172033;margin-bottom:8px;">Question · ${escapeHtml(date)}</div>
       ${_wcPlanRow('Asked by', `${escapeHtml(query.asked_by_role || 'Project leader')}${query.recipient_email ? ` · to ${escapeHtml(query.recipient_email)}` : ''}`)}
       ${query.report_id ? _wcPlanRow('Progress report', `${escapeHtml(_wcFmtDate(query.report_date))}${query.report_work_done ? ` · ${escapeHtml(query.report_work_done)}` : ''}`) : ''}
@@ -14280,11 +14305,10 @@ function _wcQueryPanelHtml(task, reports, queries, leader) {
       ${_wcPlanRow('Status', escapeHtml(status))}
       ${answerActions}${resolveAction}
     </article>`;
-  }).join('') : `<p style="font-size:13px;color:#64748b;padding:12px 0;">No questions have been asked about this task.</p>`;
-  return `<div><h3 style="margin:0 0 6px;font-size:16px;color:#172033;">Task queries</h3>
-    <p style="font-size:12px;line-height:1.55;color:#526078;margin:0 0 12px;">
-      Use this tab to clarify task instructions or a progress report. A query and its answer are kept with the task; they do not approve, reject, or change reported progress.</p>
-    ${askForm}${list}</div>`;
+  }).join('') : `<p style="font-size:12px;color:#64748b;margin:8px 0;">No questions about this report yet.</p>`;
+  return `<section aria-label="Questions about report ${escapeHtml(reportId)}" style="border-top:1px solid #e5e7eb;padding-top:10px;">
+    <h4 style="margin:0;font-size:12px;color:#334155;">Questions${queries.length ? ` (${queries.length})` : ''}</h4>
+    ${askForm}${list}</section>`;
 }
 
 function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
@@ -14294,7 +14318,6 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
   const taskId = String(task.id);
   const reports = entries || [];
   const activeReports = reports.filter((entry) => entry.validation_status === 'pending').length;
-  const openQueries = (queries || []).filter((query) => query.status !== 'resolved').length;
 
   legacyGrid.remove();
   detailsPanel.style.width = '100%';
@@ -14311,6 +14334,7 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
       grid.style.flexDirection = 'column';
       grid.style.gap = '8px';
     }
+    readPanel.insertAdjacentHTML('afterbegin', _wcFilesHtml(task, reports, leader));
     readPanel.insertAdjacentHTML('beforeend', _wcActivityPlanHtml(task));
   }
 
@@ -14324,12 +14348,11 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
 
   const isActive = !['closed', 'completed'].includes(task.status);
   const definitions = leader
-    ? [{ key: 'details', label: 'Details' }, { key: 'reports', label: 'Reports', count: reports.length }, { key: 'queries', label: 'Queries', count: openQueries }]
+    ? [{ key: 'details', label: 'Details' }, { key: 'reports', label: 'Reports', count: reports.length }]
     : [
         { key: 'details', label: 'Details' },
         ...(isActive ? [{ key: 'progress', label: 'Report progress' }] : []),
         { key: 'my-reports', label: 'My reports', count: reports.length },
-        { key: 'queries', label: 'Queries', count: openQueries },
       ];
   const sessionKey = `wc-task-tab-${taskId}`;
   let selected = '';
@@ -14351,16 +14374,9 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
     <div data-wc-pane="details" role="tabpanel" ${selected !== 'details' ? 'hidden' : ''}></div>
     ${leader ? `<div data-wc-pane="reports" role="tabpanel" ${selected !== 'reports' ? 'hidden' : ''}></div>` : ''}
     ${!leader && isActive ? `<div data-wc-pane="progress" role="tabpanel" ${selected !== 'progress' ? 'hidden' : ''}></div>` : ''}
-    ${!leader ? `<div data-wc-pane="my-reports" role="tabpanel" ${selected !== 'my-reports' ? 'hidden' : ''}></div>` : ''}
-    <div data-wc-pane="queries" role="tabpanel" ${selected !== 'queries' ? 'hidden' : ''}>${_wcQueryPanelHtml(task, reports, queries || [], leader)}</div>`;
+    ${!leader ? `<div data-wc-pane="my-reports" role="tabpanel" ${selected !== 'my-reports' ? 'hidden' : ''}></div>` : ''}`;
   container.appendChild(shell);
   const detailsPane = shell.querySelector('[data-wc-pane="details"]');
-  const typeLabel = { quantity: 'quantity', count: 'item count', stages: 'completed stages', percentage: 'reported percentage' }[_wcTypeOf(task)] || 'reported percentage';
-  const detailsDescription = task.activity_id
-    ? `This task is part of “${escapeHtml(task.activity_title || 'the linked activity')}”. Its ${task.weight_pct == null ? 'progress' : `${Number(task.weight_pct)}% share`} contributes to the activity. Task progress is based on approved reports measured as ${typeLabel}; reports still awaiting a decision are not included.`
-    : `This is a standalone task and is not included in an activity. Task progress is based on approved reports measured as ${typeLabel}; reports still awaiting a decision are not included.`;
-  detailsPane.insertAdjacentHTML('beforeend', `<div style="margin:14px 16px 0;padding:12px 14px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:9px;color:#164e63;font-size:12px;line-height:1.6;">
-    <strong style="display:block;margin-bottom:3px;">How to read this task</strong>${detailsDescription}</div>`);
   detailsPane.appendChild(detailsPanel);
 
   if (leader) {
@@ -14368,10 +14384,33 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
     const approved = reports.filter((entry) => entry.validation_status === 'approved').length;
     const rejected = reports.filter((entry) => entry.validation_status === 'rejected').length;
     const voided = reports.filter((entry) => entry.validation_status === 'voided').length;
-    actionPanel.insertAdjacentHTML('afterbegin', `<p style="font-size:12px;line-height:1.55;color:#526078;margin:0 0 12px;">
-      Review each submission’s work description, measured result, resources, issues, and attachment. Approve only verified work; only approved reports count toward progress.
-      Current record: ${pending} pending, ${approved} approved, ${rejected} rejected, and ${voided} voided.</p>`);
-    shell.querySelector('[data-wc-pane="reports"]').appendChild(actionPanel);
+    const reportPane = shell.querySelector('[data-wc-pane="reports"]');
+    reportPane.insertAdjacentHTML('afterbegin', `<div role="group" aria-label="Filter reports" style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 12px;">
+      ${[['all', 'All', reports.length], ['pending', 'Pending', pending], ['approved', 'Approved', approved], ['rejected', 'Rejected', rejected], ['voided', 'Voided', voided]]
+        .map(([status, label, count]) => `<button type="button" data-report-filter="${status}" aria-pressed="${status === 'pending'}"
+          style="padding:6px 10px;border:1px solid ${status === 'pending' ? '#007B8A' : '#cbd5e1'};border-radius:999px;background:${status === 'pending' ? '#e6f4f5' : '#fff'};color:${status === 'pending' ? '#006570' : '#475569'};font-size:11px;font-weight:600;cursor:pointer;">${label} ${count}</button>`).join('')}
+    </div>`);
+    reportPane.appendChild(actionPanel);
+    let reportFilter = 'pending';
+    try {
+      const savedFilter = sessionStorage.getItem(`wc-report-filter-${taskId}`);
+      if (['all', 'pending', 'approved', 'rejected', 'voided'].includes(savedFilter)) reportFilter = savedFilter;
+    } catch {}
+    const applyReportFilter = (status) => {
+      for (const card of reportPane.querySelectorAll('[data-wc-report-card]'))
+        card.hidden = status !== 'all' && card.getAttribute('data-report-status') !== status;
+      for (const button of reportPane.querySelectorAll('[data-report-filter]')) {
+        const active = button.getAttribute('data-report-filter') === status;
+        button.setAttribute('aria-pressed', String(active));
+        button.style.borderColor = active ? '#007B8A' : '#cbd5e1';
+        button.style.background = active ? '#e6f4f5' : '#fff';
+        button.style.color = active ? '#006570' : '#475569';
+      }
+      try { sessionStorage.setItem(`wc-report-filter-${taskId}`, status); } catch {}
+    };
+    for (const button of reportPane.querySelectorAll('[data-report-filter]'))
+      button.addEventListener('click', () => applyReportFilter(button.getAttribute('data-report-filter')));
+    applyReportFilter(reportFilter);
   } else {
     const historyHeading = [...actionPanel.querySelectorAll('div')]
       .find((el) => el.textContent.trim() === 'My Previous Submissions');
@@ -14380,6 +14419,20 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
     if (isActive) shell.querySelector('[data-wc-pane="progress"]').appendChild(actionPanel);
     else actionPanel.remove();
   }
+
+  for (const mount of shell.querySelectorAll('[data-wc-report-queries]')) {
+    const reportId = mount.getAttribute('data-wc-report-queries');
+    const report = reports.find((entry) => String(entry.id) === reportId);
+    if (!report) continue;
+    const reportQueries = (queries || []).filter((query) => String(query.report_id) === reportId);
+    mount.innerHTML = _wcQueryPanelHtml(task, report, reportQueries, leader);
+  }
+  shell.querySelector('[data-wc-add-file]')?.addEventListener('click', () => {
+    shell.querySelector('[data-action="wc-toggle-edit"]')?.click();
+    const input = document.getElementById(`wc-ed-file-${taskId}`);
+    input?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    input?.click();
+  });
 
   for (const button of shell.querySelectorAll('[data-wc-tab]')) {
     button.addEventListener('click', () => {
@@ -14411,7 +14464,7 @@ function _wcWireDetailButtons(recordId, task, leader) {
       const editing = editEl.style.display !== 'none';
       readEl.style.display = editing ? 'flex'  : 'none';
       editEl.style.display = editing ? 'none'  : 'flex';
-      if (btn) btn.textContent = editing ? '✏️ Edit' : '✕ Cancel';
+      if (btn) btn.textContent = editing ? 'Edit' : 'Cancel';
     });
   container.querySelector(`[data-action="wc-cancel-edit"]`)
     ?.addEventListener('click', () => {
@@ -14420,7 +14473,7 @@ function _wcWireDetailButtons(recordId, task, leader) {
       const btn    = document.getElementById(`wc-edit-btn-${recordId}`);
       if (readEl) readEl.style.display = 'flex';
       if (editEl) editEl.style.display = 'none';
-      if (btn)    btn.textContent = '✏️ Edit';
+      if (btn)    btn.textContent = 'Edit';
     });
 
 }
@@ -14574,7 +14627,7 @@ function _wcTypeOf(task) { return (task && task.activity_type) || 'percentage'; 
 function _wcUnitText(task) { return task && task.activity_unit ? ` ${task.activity_unit}` : ''; }
 function _wcStagesOf(task) { return Array.isArray(task && task.stages) ? task.stages : []; }
 
-// "Share of activity 50%  |  Task progress 20%  |  Target 200 m3"
+// "Share of activity 50%  |  Target 200 m3"
 function _wcTaskShareHtml(task) {
   if (!task || task.weight_pct == null) return '';
   const type = _wcTypeOf(task);
@@ -14583,7 +14636,7 @@ function _wcTaskShareHtml(task) {
   return `
     <div style="padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;font-size:12px;color:#374151;">
       Share of the activity <strong>${escapeHtml(String(Number(task.weight_pct)))}%</strong>
-      &nbsp;|&nbsp; Task progress <strong>${escapeHtml(String(Number(task.progress_pct) || 0))}%</strong>${target}
+      ${target}
     </div>`;
 }
 
@@ -14666,12 +14719,11 @@ async function _wcRefreshTaskCard(taskId, tab, message) {
   if (message) _wcSetTaskCardMessage(taskId, message);
 }
 
-async function _wcHandleQueryCreate(taskId) {
+async function _wcHandleQueryCreate(taskId, reportId) {
   let saved = false;
   try {
-    const reportId = document.getElementById(`wc-query-report-${taskId}`)?.value;
-    const question = document.getElementById(`wc-query-question-${taskId}`)?.value.trim();
-    if (!reportId) throw new Error('Choose a progress report to ask about.');
+    const question = document.getElementById(`wc-query-question-${reportId}`)?.value.trim();
+    if (!reportId) throw new Error('Choose the report to ask about.');
     if (!question) throw new Error('Enter a question.');
     const projectId = await ensureActiveProjectId();
     if (!projectId) return;
@@ -14681,7 +14733,7 @@ async function _wcHandleQueryCreate(taskId) {
     const data = res ? await res.json().catch(() => ({})) : {};
     if (!res || !res.ok) throw new Error(data.error || 'Could not send the question.');
     saved = true;
-    await _wcRefreshTaskCard(taskId, 'queries', 'Question sent to the team member.');
+    await _wcRefreshTaskCard(taskId, 'reports', 'Question sent to the team member.');
   } catch (err) {
     console.error('Create task query error:', err);
     _wcSetTaskCardMessage(taskId, saved
@@ -14703,7 +14755,7 @@ async function _wcHandleQueryAnswer(taskId, queryId) {
     const data = res ? await res.json().catch(() => ({})) : {};
     if (!res || !res.ok) throw new Error(data.error || 'Could not send the answer.');
     saved = true;
-    await _wcRefreshTaskCard(taskId, 'queries', 'Answer sent. The task leader can now review it.');
+    await _wcRefreshTaskCard(taskId, 'my-reports', 'Answer sent. The task leader can now review it.');
   } catch (err) {
     console.error('Answer task query error:', err);
     _wcSetTaskCardMessage(taskId, saved
@@ -14723,7 +14775,8 @@ async function _wcHandleQueryResolve(taskId, queryId) {
     const data = res ? await res.json().catch(() => ({})) : {};
     if (!res || !res.ok) throw new Error(data.error || 'Could not resolve the query.');
     saved = true;
-    await _wcRefreshTaskCard(taskId, 'queries', 'Query marked as resolved.');
+    try { sessionStorage.setItem(`wc-report-filter-${taskId}`, 'all'); } catch {}
+    await _wcRefreshTaskCard(taskId, 'reports', 'Query marked as resolved.');
   } catch (err) {
     console.error('Resolve task query error:', err);
     _wcSetTaskCardMessage(taskId, saved
@@ -14792,8 +14845,7 @@ async function _wcHandleValidate(tabKey, progressId, validateAction, taskId) {
     let notes = document.getElementById(`wc-val-notes-${progressId}`)?.value.trim() || '';
     if (validateAction === 'rejected' && !notes) return alert('Please write the reason for rejecting in the notes box.');
     if (validateAction === 'voided') {
-      notes = (prompt('Why is this approved report being voided? The reason stays in the record.') || '').trim();
-      if (!notes) return;
+      if (!notes) return alert('Enter a reason for voiding this report.');
       if (!confirm('Voiding removes this report from progress. It stays in the record and cannot be changed again. Continue?')) return;
     }
     const projectId = await ensureActiveProjectId();
@@ -20478,6 +20530,591 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
 }
 
 </script>
-<script src="./backend/workflow-dashboard.js?v=20261103-activity-card-guard"></script>
+<script>
+// Activity reports, review, verification and milestone controls for the dashboard.
+// The server remains the source of truth for permissions and all progress calculations.
+
+(() => {
+  const esc = (value) => escapeHtml(value == null ? '' : String(value));
+  const pct = (value) => Math.max(0, Math.min(100, Number(value) || 0));
+  const inputStyle = 'width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;box-sizing:border-box;';
+  const panelStyle = 'background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px;';
+  const originalPEStatus = window._peUpdateStatusBadge;
+  const originalActivityHtml = window._peActivityCardHtml;
+  const originalActivityWire = window._peWireActivityCard;
+  const originalPELoadDetail = window._peLoadDetail;
+  const originalRenderPEShell = window._renderPEShell;
+  const originalOpenNotificationTarget = window._openNotificationTarget;
+
+  function activityBaseHtml(card) {
+    const activity = card.activity;
+    const clientView = card.viewer_side === 'Client';
+    const tasks = Array.isArray(card.tasks) ? card.tasks : [];
+    const claimed = pct(activity.claimed_progress_pct);
+    const certified = pct(activity.certified_progress_pct);
+    const displayed = clientView ? certified : claimed;
+    const typeNames = { quantity: 'Quantity', count: 'Count', stages: 'Stages', percentage: 'Percentage' };
+    const taskRows = clientView ? '' : tasks.map((task) => {
+      const progress = pct(task.progress_pct);
+      const members = (task.assigned_members || []).map((member) =>
+        member.title || member.name || member.email || `Member ${member.id}`).join(', ');
+      const stages = (task.stages || []).length ? `<div style="font-size:11px;color:#6b7280;margin-top:8px;">
+        ${task.stages.map((stage) => `${esc(stage.title)} (${pct(stage.weight_pct)}%)${stage.is_hold_point ? ' · hold point' : ''}${stage.completed_at ? ' · done' : ''}`).join(' → ')}
+      </div>` : '';
+      return `<article style="${panelStyle}">
+        <div style="display:flex;justify-content:space-between;gap:12px;"><strong>${esc(task.title)}</strong><strong>${pct(task.weight_pct)}% share</strong></div>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px;">${esc(members || 'No assignee listed')}</div>
+        <div style="font-size:11px;color:#6b7280;margin-top:6px;">Task progress <strong>${progress}%</strong>
+          ${task.target_quantity == null ? '' : ` · Target <strong>${esc(task.target_quantity)} ${esc(activity.unit || '')}</strong>`}</div>
+        <div style="height:6px;background:#e5e7eb;border-radius:999px;margin-top:6px;"><div style="height:6px;width:${progress}%;background:#0e7490;border-radius:999px;"></div></div>${stages}
+      </article>`;
+    }).join('');
+    const progress = clientView
+      ? `<div style="font-size:12px;color:#6b7280;margin-top:10px;">Certified progress <strong style="color:#047857;">${certified}%</strong></div>`
+      : `<div style="display:flex;justify-content:space-between;font-size:12px;margin-top:10px;"><span>Claimed <strong>${claimed}%</strong></span><span>Certified <strong style="color:#047857;">${certified}%</strong></span></div>`;
+    return `<section style="display:grid;gap:12px;">
+      <div style="${panelStyle}">
+        <h3 style="margin:0 0 8px;color:#1f2937;">${esc(activity.title || 'Activity')}</h3>
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+          <strong>${esc(typeNames[activity.activity_type] || 'Activity')} activity</strong>
+          <span>${esc(String(activity.start_date || '—').slice(0, 10))} → ${esc(String(activity.end_date || '—').slice(0, 10))}</span>
+        </div>
+        ${activity.done_when ? `<div style="font-size:12px;margin-top:6px;"><strong>Done when:</strong> ${esc(activity.done_when)}</div>` : ''}
+        ${activity.milestone_name ? `<div style="font-size:12px;color:#166534;margin-top:6px;">Milestone: ${esc(activity.milestone_name)}</div>` : ''}
+        ${activity.description ? `<p style="font-size:12px;color:#4b5563;">${esc(activity.description)}</p>` : ''}
+        <div style="height:8px;background:#e5e7eb;border-radius:999px;margin-top:12px;"><div style="height:8px;width:${displayed}%;background:#2563eb;border-radius:999px;"></div></div>${progress}
+      </div>
+      ${clientView ? '' : `<div style="display:flex;justify-content:space-between;align-items:center;">
+        <strong>Tasks (${tasks.length})</strong>${card.can_add_task ? '<button type="button" data-wf-open-add-task>+ Add task</button>' : ''}
+      </div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;">${taskRows}</div>
+      <div data-wf-add-task-form style="display:none;${panelStyle}"></div>`}
+    </section>`;
+  }
+
+  function activityEditHtml(activity) {
+    const date = (value) => esc(String(value || '').slice(0, 10));
+    const milestoneStart = activity.baseline_milestone_start || activity.additional_milestone_start || '';
+    const milestoneEnd = activity.baseline_milestone_end || activity.additional_milestone_end || '';
+    const input = (label, name, value = '', type = 'text', bounds = '') => `<label>${label}<input name="${name}" type="${type}" value="${esc(value)}" style="${inputStyle}"${bounds}${['title', 'start_date', 'end_date'].includes(name) ? ' required' : ''}></label>`;
+    const measured = ['quantity', 'count'].includes(activity.activity_type);
+    return `<details data-wf-edit-plan style="${panelStyle};margin-top:12px;">
+      <summary style="cursor:pointer;font-weight:700;">Edit activity plan</summary>
+      <form data-wf-edit-form>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px;margin-top:10px;">
+        ${input('Title', 'title', activity.title)}
+        ${input('Start date', 'start_date', date(activity.start_date), 'date', `${milestoneStart ? ` min="${esc(date(milestoneStart))}"` : ''}${milestoneEnd ? ` max="${esc(date(milestoneEnd))}"` : ''}`)}
+        ${input('End date', 'end_date', date(activity.end_date), 'date', `${milestoneStart ? ` min="${esc(date(milestoneStart))}"` : ''}${milestoneEnd ? ` max="${esc(date(milestoneEnd))}"` : ''}`)}
+        <label>Activity type<select name="activity_type" style="${inputStyle}">
+          ${['quantity', 'count', 'stages', 'percentage'].map((type) => `<option value="${type}"${activity.activity_type === type ? ' selected' : ''}>${type[0].toUpperCase()}${type.slice(1)}</option>`).join('')}
+        </select></label>
+        <label>Planned quantity<input name="planned_quantity" type="number" min="0.001" step="any" value="${esc(activity.planned_quantity ?? '')}" style="${inputStyle}"${measured ? ' required' : ''}></label>
+        ${input('Unit', 'unit', activity.unit || '')}
+        ${input('Done when', 'done_when', activity.done_when || '')}
+        ${input('Planned work', 'planned_work', activity.planned_work || '')}
+        ${input('Planned manpower', 'planned_manpower', activity.planned_manpower || '')}
+        ${input('Planned equipment', 'planned_equipment', activity.planned_equipment || '')}
+        ${input('Planned materials', 'planned_materials', activity.planned_materials || '')}
+        <label style="grid-column:1/-1;">Description<textarea name="description" rows="2" style="${inputStyle}">${esc(activity.description || '')}</textarea></label>
+        <label style="grid-column:1/-1;">Replace plan attachment<input name="linked_file" type="file"></label>
+      </div>
+      <p data-wf-edit-error style="color:#b91c1c;font-size:12px;margin:6px 0;"></p>
+      <button type="button" data-wf-save-plan style="margin-top:8px;">Save activity plan</button>
+      <p style="font-size:11px;color:#6b7280;">Activity type is locked after reports or execution entries exist. Quantity task targets are recalculated using their existing task shares.</p>
+      </form>
+    </details>`;
+  }
+  window._peActivityEditHtml = activityEditHtml;
+
+  async function responseData(response) {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || data.message || `Request failed (HTTP ${response.status}).`);
+    return data;
+  }
+
+  window._peActivityCardHtml = function (card) {
+    const html = typeof originalActivityHtml === 'function'
+      ? originalActivityHtml(card, { verifications: [], rework: [] }, 'overview')
+      : activityBaseHtml(card);
+    if (!card?.can_edit_activity || typeof originalActivityHtml !== 'function') return html;
+    return html.replace(/<div data-pe-pane="overview"[^>]*>/,
+      openingTag => `${openingTag}${activityEditHtml(card.activity)}`);
+  };
+
+  window._peUpdateStatusBadge = function (activity, entries) {
+    if (activity.client_view && wcSide(window.currentUserRole) === 'Client') {
+      const badge = document.getElementById(`pe-status-badge-${activity.id}`);
+      if (badge) {
+        const progress = pct(activity.certified_progress_pct);
+        badge.style.background = '#ecfdf5';
+        badge.style.color = '#047857';
+        badge.style.border = '1px solid #6ee7b7';
+        badge.textContent = `Certified ${progress}%`;
+      }
+      return;
+    }
+    if (typeof originalPEStatus === 'function') originalPEStatus(activity, entries);
+  };
+
+  window._peWireActivityCard = function (recordId, card) {
+    if (typeof originalActivityWire === 'function') originalActivityWire(recordId, card);
+    const detail = document.getElementById(`pe-detail-inner-${recordId}`);
+    detail?.querySelector('[data-wf-save-plan]')?.addEventListener('click', () => saveActivityPlan(recordId, detail));
+  };
+
+  if (typeof originalRenderPEShell === 'function') {
+    window._renderPEShell = function (...args) {
+      originalRenderPEShell.apply(this, args);
+      const header = document.querySelector('.bottom-fixed-header');
+      if (!header || header.querySelector('[data-wf-shell-actions]')) return;
+      const actions = document.createElement('div');
+      actions.dataset.wfShellActions = 'true';
+      actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;';
+      const pending = document.createElement('button');
+      pending.type = 'button';
+      pending.className = 'rc-btn rc-btn--sm';
+      pending.textContent = 'Pending verifications';
+      pending.addEventListener('click', () => window.openPendingVerifications());
+      actions.appendChild(pending);
+      if (['Contractor', 'Consultant', 'Client', 'ContractorPM', 'ConsultantPM', 'ClientPM',
+        'Contractor Project Manager', 'Consultant Project Manager', 'Client Project Manager'].includes(window.currentUserRole)) {
+        const closeout = document.createElement('button');
+        closeout.type = 'button';
+        closeout.className = 'rc-btn rc-btn--sm';
+        closeout.textContent = 'Download close-out CSV';
+        closeout.addEventListener('click', () => window.downloadCloseoutReport());
+        actions.appendChild(closeout);
+      }
+      header.appendChild(actions);
+    };
+  }
+
+  function wireAddTask(activityId, card, detail) {
+    const button = detail?.querySelector('[data-wf-open-add-task]');
+    const formContainer = detail?.querySelector('[data-wf-add-task-form]');
+    if (!button || !formContainer) return;
+    button.addEventListener('click', async () => {
+      if (formContainer.style.display === 'block') return;
+      formContainer.style.display = 'block';
+      formContainer.innerHTML = '<p>Loading assigned team members…</p>';
+      try {
+        const projectId = await ensureActiveProjectId();
+        if (!projectId) return;
+        const membersData = await responseData(await _wcFetch(
+          `${API}/work-center/team-members?projectId=${encodeURIComponent(projectId)}`,
+        ));
+        const memberOptions = (membersData.members || []).map((member) =>
+          `<option value="${esc(member.id)}">${esc(member.title || member.email || `Member ${member.id}`)}</option>`).join('');
+        const isStages = card.activity.activity_type === 'stages';
+        formContainer.innerHTML = `<form data-wf-add-task>
+          <strong>Add task</strong>
+          <label style="display:block;margin-top:8px;">Title<input name="title" required maxlength="200" style="${inputStyle}"></label>
+          <label style="display:block;margin-top:8px;">Description<textarea name="description" rows="2" style="${inputStyle}"></textarea></label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+            <label>Start date<input name="start_date" type="date" required value="${esc(String(card.activity.start_date).slice(0, 10))}" style="${inputStyle}"></label>
+            <label>End date<input name="end_date" type="date" required value="${esc(String(card.activity.end_date).slice(0, 10))}" style="${inputStyle}"></label>
+          </div>
+          <label style="display:block;margin-top:8px;">Priority<select name="priority" style="${inputStyle}"><option>normal</option><option>low</option><option>high</option></select></label>
+          <label style="display:block;margin-top:8px;">Assign team members<select name="members" multiple size="4" style="${inputStyle}">${memberOptions}</select></label>
+          ${isStages ? `<div data-wf-stage-list style="margin-top:8px;"><strong>Stages (weights must total 100%)</strong>
+            <div data-wf-stage-row style="display:flex;gap:6px;margin-top:5px;"><input data-stage-title placeholder="Stage title" style="${inputStyle}"><input data-stage-weight type="number" min="0.01" step="0.01" value="100" style="width:82px;"><label><input data-stage-hold type="checkbox"> Hold</label></div>
+            <button type="button" data-wf-add-stage style="margin-top:6px;">Add stage</button></div>` : ''}
+          <p data-wf-add-error style="color:#b91c1c;font-size:12px;"></p>
+          <button type="submit">Preview and add task</button><button type="button" data-wf-cancel-add>Cancel</button>
+        </form>`;
+        const form = formContainer.querySelector('[data-wf-add-task]');
+        formContainer.querySelector('[data-wf-cancel-add]').addEventListener('click', () => {
+          formContainer.style.display = 'none';
+          formContainer.innerHTML = '';
+        });
+        formContainer.querySelector('[data-wf-add-stage]')?.addEventListener('click', () => {
+          const list = formContainer.querySelector('[data-wf-stage-list]');
+          const current = list.querySelectorAll('[data-wf-stage-row]').length + 1;
+          const weight = (100 / current).toFixed(2);
+          list.querySelectorAll('[data-stage-weight]').forEach((input) => { input.value = weight; });
+          const row = document.createElement('div');
+          row.setAttribute('data-wf-stage-row', '');
+          row.style.cssText = 'display:flex;gap:6px;margin-top:5px;';
+          row.innerHTML = `<input data-stage-title placeholder="Stage title" style="${inputStyle}"><input data-stage-weight type="number" min="0.01" step="0.01" value="${(100 - Number(weight) * (current - 1)).toFixed(2)}" style="width:82px;"><label><input data-stage-hold type="checkbox"> Hold</label>`;
+          list.insertBefore(row, list.querySelector('[data-wf-add-stage]'));
+        });
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const error = form.querySelector('[data-wf-add-error]');
+          const task = {
+            title: form.elements.title.value.trim(),
+            description: form.elements.description.value.trim(),
+            start_date: form.elements.start_date.value,
+            end_date: form.elements.end_date.value,
+            priority: form.elements.priority.value,
+            assigned_members: [...form.elements.members.selectedOptions].map((option) => {
+              const member = (membersData.members || []).find((item) => String(item.id) === option.value);
+              return { id: member.id, title: member.title, email: member.email, position: member.position };
+            }),
+          };
+          if (isStages) {
+            task.stages = [...formContainer.querySelectorAll('[data-wf-stage-row]')].map((row, index) => ({
+              title: row.querySelector('[data-stage-title]').value.trim(),
+              weight_pct: Number(row.querySelector('[data-stage-weight]').value),
+              is_hold_point: row.querySelector('[data-stage-hold]').checked,
+              seq: index + 1,
+            }));
+            if (task.stages.some((stage) => !stage.title) || Math.round(task.stages.reduce((sum, stage) => sum + stage.weight_pct, 0) * 100) !== 10000) {
+              error.textContent = 'Enter a title for every stage and make their weights add up to 100%.';
+              return;
+            }
+          }
+          try {
+            const preview = await responseData(await _wcFetch(
+              `${API}/planning-execution/${encodeURIComponent(activityId)}/tasks`,
+              { method: 'POST', body: JSON.stringify({ projectId, task, preview: true }) },
+            ));
+            const weightSummary = (preview.weights || []).map((item) => `${item.title}: ${item.after}%`).join('\n');
+            if (!confirm(`Add this task and apply the following shares?\n${weightSummary}\nActivity progress: ${preview.progress_before}% → ${preview.progress_after}%.`)) return;
+            await responseData(await _wcFetch(
+              `${API}/planning-execution/${encodeURIComponent(activityId)}/tasks`,
+              { method: 'POST', body: JSON.stringify({ projectId, task }) },
+            ));
+            delete recordsCache['planning-execution'];
+            delete recordsCache['work-center'];
+            await loadPERecords();
+          } catch (error) { form.querySelector('[data-wf-add-error]').textContent = error.message; }
+        });
+      } catch (error) {
+        formContainer.innerHTML = `<p style="color:#b91c1c;">Could not load the add-task form: ${esc(error.message)}</p>`;
+      }
+    });
+  }
+
+  async function saveActivityPlan(activityId, container) {
+    const formElement = container.querySelector('[data-wf-edit-plan]');
+    const form = new FormData();
+    const projectId = await ensureActiveProjectId();
+    if (!projectId) return showErrorIn(formElement, 'Select a project before saving.');
+    const data = Object.fromEntries(new FormData(formElement.querySelector('[data-wf-edit-form]')).entries());
+    if (!String(data.title || '').trim()) return showErrorIn(formElement, 'Activity title is required.');
+    if (!data.start_date || !data.end_date || data.end_date < data.start_date)
+      return showErrorIn(formElement, 'Enter valid dates with the end date on or after the start date.');
+    if (['quantity', 'count'].includes(data.activity_type) && (!(Number(data.planned_quantity) > 0) || !String(data.unit || '').trim()))
+      return showErrorIn(formElement, 'Quantity and count activities need a planned amount above zero and a unit.');
+    form.append('projectId', projectId);
+    for (const [key, value] of Object.entries(data)) {
+      if (key !== 'linked_file') form.append(key, value);
+    }
+    const file = formElement.querySelector('[name="linked_file"]')?.files?.[0];
+    if (file) form.append('linked_file', file);
+    try {
+      await responseData(await _wcFetch(`${API}/planning-execution/${encodeURIComponent(activityId)}/plan`, { method: 'PUT', body: form }));
+      alert('Activity plan updated.');
+      delete recordsCache['planning-execution'];
+      await loadPERecords();
+    } catch (error) { showErrorIn(formElement, error.message); }
+  }
+
+  function showErrorIn(form, message) {
+    const target = form?.querySelector('[data-wf-edit-error]');
+    if (target) target.textContent = message;
+  }
+
+  async function loadActivityWorkflow(activityId, card) {
+    const controls = document.getElementById(`wf-activity-controls-${activityId}`);
+    if (!controls) return;
+    try {
+      const [verificationResponse, verificationData] = await (async () => {
+        const res = await _wcFetch(`${API}/activities/${activityId}/verifications`);
+        return [res, await responseData(res)];
+      })();
+      const list = controls.querySelector('[data-wf-verifications]');
+      if (list) {
+        const verifications = verificationData.verifications || [];
+        const rework = verificationData.rework || [];
+        list.innerHTML = `${verifications.length ? verifications.map((item) =>
+          `<div style="padding:7px 0;border-top:1px solid #e5e7eb;">
+            <strong>${esc(item.kind.replaceAll('_', ' '))}</strong> · ${esc(item.status)}
+            ${item.overdue ? '<strong style="color:#b91c1c;"> · OVERDUE</strong>' : ''}
+            ${item.respond_by ? `<div>Respond by ${esc(String(item.respond_by).slice(0, 10))}</div>` : ''}
+            ${item.decision_reason ? `<div>${esc(item.decision_reason)}</div>` : ''}
+            ${item.status === 'pending' && card.activity.side === 'Contractor' ? `<button type="button" data-wf-withdraw="${esc(item.id)}">Withdraw request</button>` : ''}
+          </div>`).join('') : '<div>No verification requests yet.</div>'}
+          ${rework.length ? `<div style="margin-top:8px;"><strong>Rework and snags</strong>${rework.map(item =>
+            `<div style="padding:6px 0;border-top:1px solid #e5e7eb;">${esc(item.kind)} · ${esc(item.status)}: ${esc(item.reason)}
+             ${item.status === 'open' && card.activity.side === 'Contractor' ? `<button type="button" data-wf-correct="${esc(item.id)}">Mark corrected</button>` : ''}
+             ${item.status !== 'closed' && card.viewer_side === 'Consultant' ? `<button type="button" data-wf-close="${esc(item.id)}">Close item</button>` : ''}</div>`).join('')}</div>` : ''}`;
+      }
+      controls.querySelector('[data-wf-request-submit]')?.addEventListener('click', () => requestVerification(activityId, controls, card));
+      if (controls.querySelector('[data-wf-inspectors]')) loadVerificationInspectors(controls);
+      controls.querySelector('[data-wf-rework-submit]')?.addEventListener('click', async () => {
+        const reason = controls.querySelector('[data-wf-rework-reason]')?.value.trim();
+        if (!reason) return alert('A reason is required.');
+        const kind = controls.querySelector('[data-wf-rework-kind]')?.value || 'rework';
+        if (await workflowAction(`/activities/${activityId}/rework`, 'POST', { kind, reason }))
+          await loadActivityWorkflow(activityId, card);
+      });
+      controls.querySelectorAll('[data-wf-withdraw]').forEach((button) =>
+        button.addEventListener('click', async () => {
+          if (await workflowAction(`/verifications/${button.dataset.wfWithdraw}/withdraw`, 'PUT', {})) await loadActivityWorkflow(activityId, card);
+        }));
+      controls.querySelectorAll('[data-wf-correct]').forEach((button) =>
+        button.addEventListener('click', async () => {
+          if (await workflowAction(`/rework/${button.dataset.wfCorrect}/correct`, 'PUT', {})) await loadActivityWorkflow(activityId, card);
+        }));
+      controls.querySelectorAll('[data-wf-close]').forEach((button) =>
+        button.addEventListener('click', async () => {
+          if (await workflowAction(`/rework/${button.dataset.wfClose}/close`, 'PUT', {})) await loadActivityWorkflow(activityId, card);
+        }));
+      if (verificationResponse.ok) await loadMilestoneWorkflow(controls, card);
+    } catch (error) {
+      const list = controls.querySelector('[data-wf-verifications]');
+      if (list) list.textContent = `Unable to load verification history: ${error.message}`;
+    }
+  }
+
+  async function requestVerification(activityId, controls, card) {
+    const kind = controls.querySelector('[data-wf-request-kind]')?.value || 'progress';
+    const form = new FormData();
+    form.append('kind', kind);
+    form.append('note', controls.querySelector('[data-wf-request-note]')?.value.trim() || '');
+    if (kind === 'hold_point') {
+      const stage = controls.querySelector('[data-wf-stage]')?.value;
+      if (!stage) return alert('Choose a hold point stage.');
+      form.append('stageId', stage);
+    }
+    const signers = [...(controls.querySelector('[data-wf-inspectors]')?.selectedOptions || [])]
+      .map((option) => ({ role: 'TeamMember', user_id: option.value }));
+    if (signers.length) form.append('signers', JSON.stringify(signers));
+    const file = controls.querySelector('[data-wf-request-file]')?.files?.[0];
+    if (file) form.append('attachment', file);
+    try {
+      await responseData(await _wcFetch(`${API}/activities/${activityId}/verifications`, { method: 'POST', body: form }));
+      await loadActivityWorkflow(activityId, card);
+    } catch (error) { alert(`Unable to request verification: ${error.message}`); }
+  }
+
+  async function loadVerificationInspectors(controls) {
+    const select = controls.querySelector('[data-wf-inspectors]');
+    if (!select) return;
+    try {
+      const projectId = await ensureActiveProjectId();
+      const result = await responseData(await _wcFetch(
+        `${API}/verification-inspectors?projectId=${encodeURIComponent(projectId)}`,
+      ));
+      select.innerHTML = result.inspectors.length
+        ? result.inspectors.map((person) => `<option value="${esc(person.id)}">${esc(person.title || person.email)}${person.position ? ` — ${esc(person.position)}` : ''}</option>`).join('')
+        : '<option disabled>No consultant team members are assigned.</option>';
+    } catch (error) {
+      select.innerHTML = `<option disabled>Unable to load inspectors: ${esc(error.message)}</option>`;
+    }
+  }
+
+  async function loadMilestoneWorkflow(controls, card) {
+    const detail = controls.querySelector('[data-wf-milestone]');
+    const kind = controls.dataset.milestoneKind;
+    const id = controls.dataset.milestoneId;
+    if (!detail || !kind || !id) return;
+    try {
+      const result = await responseData(await _wcFetch(`${API}/milestones/${kind}/${id}/progress-detail`));
+      const breakdown = result.breakdown_request
+        ? `<p>Breakdown request: ${esc(result.breakdown_request.note)}</p><button type="button" data-wf-withdraw-breakdown>Withdraw breakdown request</button>`
+        : '';
+      const canManage = card.viewer_side === 'Consultant' && isWCLeader(window.currentUserRole);
+      detail.innerHTML = `
+        <div>Derived progress: <strong>${pct(result.derived_progress_pct)}%</strong></div>
+        <div>Shown progress: <strong>${pct(result.progress_pct)}%</strong></div>
+        <div>Activity coverage: <strong>${pct(result.coverage_pct)}%</strong></div>
+        ${result.temporary_value ? `<p>Temporary consultant value: ${pct(result.temporary_value.value)}% — ${esc(result.temporary_value.reason)}</p><button type="button" data-wf-withdraw-override>Withdraw temporary value</button>` : ''}
+        ${breakdown}
+        ${result.activities.map((activity) => `<div style="border-top:1px solid #e5e7eb;padding-top:5px;margin-top:5px;">${esc(activity.title)} · ${Number(activity.weight_pct) || 0}% · ${pct(activity.certified_progress_pct ?? activity.progress_pct)}% certified</div>`).join('')}
+        ${canManage ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+          ${!result.breakdown_request ? '<button type="button" data-wf-breakdown>Request breakdown</button>' : ''}
+          ${!result.temporary_value ? '<button type="button" data-wf-override>Set temporary value</button>' : ''}
+        </div>` : ''}`;
+      detail.querySelector('[data-wf-breakdown]')?.addEventListener('click', async () => {
+        const note = (prompt('Describe the breakdown required:') || '').trim();
+        if (!note) return;
+        await workflowAction(`/milestones/${kind}/${id}/breakdown-request`, 'POST', { note });
+        await loadMilestoneWorkflow(controls, card);
+      });
+      detail.querySelector('[data-wf-override]')?.addEventListener('click', async () => {
+        const value = Number(prompt(`Enter a value from 0 to ${pct(result.derived_progress_pct)}%:`));
+        if (!Number.isFinite(value)) return;
+        const reason = (prompt('Reason for the temporary lower value:') || '').trim();
+        if (!reason) return alert('A reason is required.');
+        await workflowAction(`/milestones/${kind}/${id}/override`, 'POST', { value, reason });
+        await loadMilestoneWorkflow(controls, card);
+      });
+      detail.querySelector('[data-wf-withdraw-breakdown]')?.addEventListener('click', async () => {
+        await workflowAction(`/milestones/${kind}/${id}/breakdown-request/withdraw`, 'PUT', {});
+        await loadMilestoneWorkflow(controls, card);
+      });
+      detail.querySelector('[data-wf-withdraw-override]')?.addEventListener('click', async () => {
+        await workflowAction(`/milestones/${kind}/${id}/override/withdraw`, 'PUT', {});
+        await loadMilestoneWorkflow(controls, card);
+      });
+    } catch (error) { detail.textContent = `Unable to load milestone details: ${error.message}`; }
+  }
+
+  async function workflowAction(path, method, body) {
+    try {
+      await responseData(await _wcFetch(`${API}${path}`, {
+        method, body: JSON.stringify(body),
+      }));
+      alert('Saved.');
+      return true;
+    } catch (error) { alert(`Unable to complete action: ${error.message}`); }
+    return false;
+  }
+
+  window.openPendingVerifications = async function (verificationId = null) {
+    const projectId = await ensureActiveProjectId();
+    if (!projectId) return;
+    let rows;
+    try {
+      const result = await responseData(await _wcFetch(`${API}/verifications/pending?projectId=${encodeURIComponent(projectId)}`));
+      rows = result.pending || [];
+      if (verificationId) rows = rows.filter((item) => String(item.id) === String(verificationId));
+    } catch (error) {
+      expandGrayPart(`<section style="padding:18px;"><p style="color:#b91c1c;">Unable to load pending verifications: ${esc(error.message)}</p>
+        <button class="btn" type="button" onclick="collapseGrayPart()">Close</button></section>`);
+      return;
+    }
+    if (verificationId && window._openActivityVerificationNotification) {
+      const opened = await window._openActivityVerificationNotification(verificationId);
+      if (opened) return;
+    }
+    if (rows.length === 1 && window._openActivityVerificationNotification) {
+      const opened = await window._openActivityVerificationNotification(rows[0].id);
+      if (opened) return;
+    }
+    const body = rows.length ? rows.map((item) => `
+      <button type="button" class="rc-btn" data-wf-open-verification="${esc(item.id)}"
+        style="width:100%;text-align:left;margin:6px 0;padding:12px;">
+        <strong>${esc(item.activity_title)}</strong> · ${esc(String(item.kind).replace(/_/g, ' '))}
+        <span style="display:block;margin-top:4px;font-size:12px;color:${item.overdue ? '#b91c1c' : '#64748b'};">
+          Respond by ${esc(String(item.respond_by).slice(0, 10))}${item.overdue ? ' · Overdue' : ''}</span>
+      </button>`).join('') : '<p style="color:#64748b;">No pending verification requests.</p>';
+    expandGrayPart(`<section style="padding:18px;overflow:auto;height:100%;box-sizing:border-box;">
+      <button class="btn" type="button" onclick="collapseGrayPart()">← Back</button>
+      <h3 style="margin:14px 0 8px;color:#0f172a;">Pending verifications</h3>${body}</section>`);
+    document.getElementById('grayContent')?.querySelectorAll('[data-wf-open-verification]').forEach((button) =>
+      button.addEventListener('click', async () => {
+        collapseGrayPart();
+        await window._openActivityVerificationNotification?.(button.dataset.wfOpenVerification);
+      }));
+  };
+
+  window.downloadCloseoutReport = async function () {
+    try {
+      if (!['Contractor', 'Consultant', 'Client', 'ContractorPM', 'ConsultantPM', 'ClientPM',
+        'Contractor Project Manager', 'Consultant Project Manager', 'Client Project Manager'].includes(window.currentUserRole))
+        throw new Error('Only project-side leaders and project managers can download this report.');
+      const projectId = await ensureActiveProjectId();
+      if (!projectId) throw new Error('Select a project first.');
+      const side = wcSide(window.currentUserRole).toLowerCase();
+      const response = await _wcFetch(
+        `${API}/planning-execution/closeout-report?projectId=${encodeURIComponent(projectId)}&audience=side`,
+      );
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || `Report download failed (HTTP ${response.status}).`);
+      }
+      const blob = await response.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `oneproject-closeout-${side}-${projectId}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(link.href);
+    } catch (error) {
+      alert(`Unable to download the close-out report: ${error.message}`);
+    }
+  };
+
+  window.openMilestoneDeepLink = async function (milestone) {
+    if (!milestone?.kind || !milestone?.id) return alert('Milestone details are missing from this notification.');
+    try {
+      const result = await responseData(await _wcFetch(
+        `${API}/milestones/${encodeURIComponent(milestone.kind)}/${encodeURIComponent(milestone.id)}/progress-detail`,
+      ));
+      const clientView = wcSide(window.currentUserRole) === 'Client';
+      const activities = result.activities.map((activity) => `
+        <div style="padding:8px 0;border-top:1px solid #e5e7eb;">
+          <strong>${esc(activity.title)}</strong> · ${Number(activity.weight_pct) || 0}% share ·
+          ${clientView ? `${pct(activity.certified)}% certified` : `${pct(activity.claimed)}% claimed / ${pct(activity.certified)}% certified`}
+        </div>`).join('') || '<p>No linked activities yet.</p>';
+      expandGrayPart(`<section style="padding:16px;overflow:auto;height:100%;">
+        <button class="btn" type="button" onclick="collapseGrayPart()">← Back</button>
+        <h3>${esc(result.title || milestone.title || 'Milestone')}</h3>
+        <div style="${panelStyle}">
+          <div>Derived progress: <strong>${pct(result.derived_progress_pct)}%</strong></div>
+          <div>Shown progress: <strong>${pct(result.progress_pct)}%</strong></div>
+          <div>Activity coverage: <strong>${pct(result.coverage_pct)}%</strong></div>
+          ${result.breakdown_request ? `<p>Open breakdown request: ${esc(result.breakdown_request.note)}</p>` : ''}
+          ${result.temporary_value ? `<p>Temporary value: ${pct(result.temporary_value.value)}% — ${esc(result.temporary_value.reason)}</p>` : ''}
+          ${activities}
+        </div>
+      </section>`);
+    } catch (error) {
+      alert(`Unable to open milestone: ${error.message}`);
+    }
+  };
+
+  if (typeof originalOpenNotificationTarget === 'function') {
+    window._openNotificationTarget = async function (target) {
+      const workflowTypes = new Set([
+        'work_center_progress', 'work_center_task', 'activity_verification',
+        'rework_item', 'milestone_breakdown_request', 'milestone_override',
+      ]);
+      if (!workflowTypes.has(String(target?.entityType || ''))) {
+        return originalOpenNotificationTarget(target);
+      }
+      try {
+        const projectId = await ensureActiveProjectId();
+        if (!projectId) return false;
+        const query = new URLSearchParams({
+          projectId,
+          entityType: String(target.entityType),
+          entityId: String(target.entityId),
+        });
+        const result = await responseData(await _wcFetch(`${API}/notifications/target?${query}`));
+        if (result.target.tab === 'work-center') {
+          return await _openRecordNotification('workspace_work_center', String(result.target.recordId));
+        }
+        if (result.target.type === 'activity' && target.entityType === 'activity_verification') {
+          return await window._openActivityVerificationNotification(target.entityId, result.target);
+        }
+        if (result.target.type === 'activity' && target.entityType === 'rework_item') {
+          const activityId = String(result.target.recordId);
+          sessionStorage.setItem(`pe-activity-tab-${activityId}`, 'certification');
+          collapseGrayPart();
+          const opened = await _openRecordNotification('planning_execution', activityId);
+          if (!opened) return false;
+          const tab = await _waitForElement(`#pe-detail-inner-${CSS.escape(activityId)} [data-pe-tab="certification"]`);
+          tab?.click();
+          const item = await _waitForElement(`#pe-rework-${CSS.escape(String(target.entityId))}`);
+          item?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          return Boolean(item);
+        }
+        if (result.target.type === 'activity') {
+          return await _openRecordNotification('planning_execution', String(result.target.recordId));
+        }
+        if (result.target.type === 'verification') {
+          return await window._openActivityVerificationNotification(target.entityId, result.target);
+        }
+        if (result.target.type === 'milestone') {
+          await window.openMilestoneDeepLink(result.target.milestone);
+          return true;
+        }
+        throw new Error('The notification target is not supported.');
+      } catch (error) {
+        console.error('Unable to open workflow notification:', error);
+        if (typeof _showNotificationOpenError === 'function') _showNotificationOpenError();
+        else alert(`Unable to open notification: ${error.message}`);
+        return false;
+      }
+    };
+  }
+})();
+
+</script>
 </body>
 </html>
