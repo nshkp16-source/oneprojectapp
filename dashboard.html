@@ -13468,6 +13468,7 @@ bottomContent.addEventListener('click', (e) => {
     'wc-update','wc-delete','wc-submit-progress',
     'wc-validate','wc-dl-task','wc-dl-progress',
     'wc-query-create','wc-query-answer','wc-query-resolve',
+    'wc-task-card-action','wc-capture-report-location',
   ]);
   if (!WC_ACTIONS.has(action)) return;
 
@@ -13500,6 +13501,14 @@ bottomContent.addEventListener('click', (e) => {
   }
   if (action === 'wc-query-resolve') {
     _wcHandleQueryResolve(recordId, actionEl.getAttribute('data-query-id'));
+    return;
+  }
+  if (action === 'wc-task-card-action') {
+    _wcHandleTaskCardAction(actionEl, recordId);
+    return;
+  }
+  if (action === 'wc-capture-report-location') {
+    _wcCaptureReportLocation(actionEl.getAttribute('data-task-id') || recordId);
     return;
   }
   if (action === 'wc-dl-task')
@@ -13770,9 +13779,176 @@ async function _wcLoadDetail(recordId, tabKey) {
 
     _wcWireDetailButtons(recordId, task, leader);
     if (leader) _wcWirePMMembers(recordId, assignedMembers);
+    if (leader || isAssigned) await _wcRenderTaskCardExtras(task, container, leader);
   } catch (err) {
     console.error('WC detail load error:', err);
     container.innerHTML = `<p style="color:#ef4444;font-size:13px;text-align:center;">⚠️ Error loading task detail.</p>`;
+  }
+}
+
+async function _wcRenderTaskCardExtras(task, container, leader) {
+  const projectId = localStorage.getItem('activeProjectId');
+  const res = await _wcFetch(`${API}/work-center/${task.id}/card?projectId=${encodeURIComponent(projectId)}`);
+  const data = res ? await res.json().catch(() => ({})) : {};
+  if (!res || !res.ok) throw new Error(data.error || 'Could not load task collaboration details.');
+  const box = 'width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:7px;box-sizing:border-box;font:inherit;';
+  const section = document.createElement('section');
+  section.style.cssText = 'margin-top:14px;padding:14px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;';
+  const comments = (data.comments || []).map((comment) => `
+    <div style="padding:8px 0;border-bottom:1px solid #f1f5f9;">
+      <div style="font-size:11px;color:#64748b;">${escapeHtml(comment.author_role)} · ${escapeHtml(_wcFmtDate(comment.created_at))}</div>
+      <div style="white-space:pre-wrap;margin-top:3px;">${escapeHtml(comment.body)}</div>
+    </div>`).join('') || '<p style="color:#64748b;font-size:12px;">No comments yet.</p>';
+  const checklists = (data.checklists || []).map((list) => `
+    <div style="margin-top:10px;padding:10px;border:1px solid #e5e7eb;border-radius:8px;">
+      <strong>${escapeHtml(list.title)}</strong>${list.required_before_approval ? ' <span style="color:#b45309;font-size:11px;">Required for approval</span>' : ''}
+      ${(list.items || []).map((item) => `<label style="display:flex;gap:8px;align-items:flex-start;margin-top:7px;font-size:12px;">
+        <input type="checkbox" ${item.is_complete ? 'checked' : ''} data-action="wc-task-card-action"
+          data-card-operation="checklist-item" data-item-id="${escapeHtml(String(item.id))}"
+          data-complete="${item.is_complete ? 'false' : 'true'}" style="margin-top:2px;"/>
+        <span>${escapeHtml(item.title)}</span></label>`).join('')}
+    </div>`).join('');
+  const links = (data.links || []).map((link) => `<div style="font-size:12px;margin-top:5px;">
+    ${link.url ? `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.title)}</a>`
+      : `${escapeHtml(link.title)} <span style="color:#64748b;">(${escapeHtml(link.link_type)} ${escapeHtml(link.target_id || '')})</span>`}
+    </div>`).join('');
+  const location = data.location || {};
+  const dependencies = (data.dependencies || []).map((dep) =>
+    `<li>${escapeHtml(dep.title)} — ${Number(dep.progress_pct) || 0}% complete</li>`).join('');
+  const history = (data.history || []).map((item) =>
+    `<li>${escapeHtml(item.action.replace(/_/g, ' '))} · ${escapeHtml(_wcFmtDate(item.created_at))}</li>`).join('');
+  section.innerHTML = `
+    <h3 style="margin:0 0 10px;font-size:14px;color:#1f2937;">Task collaboration</h3>
+    <div style="font-size:12px;color:#475569;margin-bottom:12px;">
+      <strong>Location:</strong> ${[location.block, location.floor, location.zone, location.grid, location.drawing]
+        .filter(Boolean).map(escapeHtml).join(' · ') || 'Not set'}
+    </div>
+    ${leader ? `<details style="margin-bottom:12px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;">Edit task location</summary>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:8px;">
+        ${['block','floor','zone','grid','drawing'].map((key) => `<input data-card-field="${key}" value="${escapeHtml(location[key] || '')}" placeholder="${key[0].toUpperCase()+key.slice(1)}" style="${box}"/>`).join('')}
+      </div>
+      <button data-action="wc-task-card-action" data-card-operation="location" style="margin-top:8px;">Save location</button>
+    </details>` : ''}
+    <div style="margin-top:12px;"><strong style="font-size:12px;">Checklists</strong>${checklists || '<p style="font-size:12px;color:#64748b;">No checklist items.</p>'}</div>
+    ${leader ? `<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;">Add checklist</summary>
+      <input data-card-field="checklist-title" placeholder="Checklist title" style="${box};margin-top:8px;"/>
+      <textarea data-card-field="checklist-items" placeholder="One item per line" style="${box};margin-top:7px;min-height:65px;"></textarea>
+      <label style="display:block;font-size:12px;margin-top:6px;"><input type="checkbox" data-card-field="checklist-required"/> Required before report approval</label>
+      <button data-action="wc-task-card-action" data-card-operation="checklist-create" style="margin-top:7px;">Create checklist</button>
+    </details>` : ''}
+    <div style="margin-top:12px;"><strong style="font-size:12px;">Linked items</strong>${links || '<p style="font-size:12px;color:#64748b;">No links yet.</p>'}</div>
+    ${leader ? `<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;">Add link</summary>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:8px;">
+        <select data-card-field="link-type" style="${box}"><option value="url">Web link</option><option value="drawing">Drawing</option><option value="record">Record</option><option value="query">Query</option><option value="task">Task</option></select>
+        <input data-card-field="link-title" placeholder="Title" style="${box}"/>
+        <input data-card-field="link-target" placeholder="Item ID (internal link)" style="${box}"/>
+        <input data-card-field="link-url" placeholder="https://..." style="${box}"/>
+      </div>
+      <button data-action="wc-task-card-action" data-card-operation="link-create" style="margin-top:7px;">Add link</button>
+    </details>
+    <details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;">Save as task template</summary>
+      <input data-card-field="template-name" placeholder="Template name" style="${box};margin-top:8px;"/>
+      <button data-action="wc-task-card-action" data-card-operation="template-save" style="margin-top:7px;">Save template</button>
+    </details>` : ''}
+    ${leader ? `<button data-action="wc-task-card-action" data-card-operation="duplicate"
+      style="margin-top:10px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;cursor:pointer;">
+      Duplicate task</button>` : ''}
+    ${dependencies ? `<div style="margin-top:12px;font-size:12px;"><strong>Earlier tasks (warning only)</strong><ul>${dependencies}</ul></div>` : ''}
+    ${leader ? `<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;">Add earlier task warning</summary>
+      <select data-card-field="dependency" style="${box};margin-top:8px;">
+        <option value="">Choose task</option>${(recordsCache['work-center'] || []).filter((item) => item.id !== task.id && item.side === task.side)
+          .map((item) => `<option value="${escapeHtml(String(item.id))}">${escapeHtml(item.title)}</option>`).join('')}
+      </select>
+      <button data-action="wc-task-card-action" data-card-operation="dependency-create" style="margin-top:7px;">Add warning</button>
+    </details>` : ''}
+    <div style="margin-top:12px;"><strong style="font-size:12px;">Shared comments</strong>${comments}
+      <textarea data-card-field="comment" placeholder="Write a comment for the task team" style="${box};margin-top:8px;min-height:60px;"></textarea>
+      <button data-action="wc-task-card-action" data-card-operation="comment" style="margin-top:7px;">Add comment</button>
+    </div>
+    ${history ? `<details style="margin-top:12px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;">Change history</summary><ul style="font-size:11px;color:#64748b;">${history}</ul></details>` : ''}`;
+  container.appendChild(section);
+}
+
+async function _wcHandleTaskCardAction(actionEl, taskId) {
+  const section = actionEl.closest('section');
+  const field = (name) => section?.querySelector(`[data-card-field="${name}"]`);
+  const projectId = await ensureActiveProjectId();
+  if (!projectId || !section) return;
+  const operation = actionEl.getAttribute('data-card-operation');
+  let url = `${API}/work-center/${taskId}/card`;
+  let method = 'POST';
+  let body = { projectId };
+  if (operation === 'comment') {
+    url = `${API}/work-center/${taskId}/comments`;
+    body.body = field('comment')?.value.trim();
+  } else if (operation === 'location') {
+    url = `${API}/work-center/${taskId}/location`;
+    method = 'PATCH';
+    for (const key of ['block','floor','zone','grid','drawing']) body[key] = field(key)?.value.trim() || '';
+  } else if (operation === 'checklist-create') {
+    url = `${API}/work-center/${taskId}/checklists`;
+    body.title = field('checklist-title')?.value.trim();
+    body.items = (field('checklist-items')?.value || '').split(/\r?\n/).map((title) => title.trim()).filter(Boolean).map((title) => ({ title }));
+    body.requiredBeforeApproval = Boolean(field('checklist-required')?.checked);
+  } else if (operation === 'checklist-item') {
+    url = `${API}/work-center/${taskId}/checklist-items/${actionEl.getAttribute('data-item-id')}`;
+    method = 'PATCH';
+    body.isComplete = actionEl.getAttribute('data-complete') === 'true';
+  } else if (operation === 'link-create') {
+    url = `${API}/work-center/${taskId}/links`;
+    body.type = field('link-type')?.value;
+    body.title = field('link-title')?.value.trim();
+    body.targetId = field('link-target')?.value.trim();
+    body.url = field('link-url')?.value.trim();
+  } else if (operation === 'dependency-create') {
+    url = `${API}/work-center/${taskId}/dependencies`;
+    body.dependsOnTaskId = field('dependency')?.value;
+  } else if (operation === 'template-save') {
+    url = `${API}/work-center/templates`;
+    body.taskId = taskId;
+    body.name = field('template-name')?.value.trim();
+  } else if (operation === 'duplicate') {
+    const task = (recordsCache['work-center'] || []).find((item) => String(item.id) === String(taskId));
+    if (!task) throw new Error('Task details are not available to duplicate.');
+    const title = prompt('Name the duplicated task:', `${task.title} (copy)`);
+    if (!title?.trim()) return;
+    const startDate = String(task.start_date || '').slice(0, 10);
+    const endDate = String(task.end_date || '').slice(0, 10);
+    const taskData = {
+      title: title.trim(), description: task.description || '', work_package: task.work_package || '',
+      priority: task.priority || 'normal', start_date: startDate, end_date: endDate,
+      assigned_members: Array.isArray(task.assigned_members) ? task.assigned_members : [],
+      location_block: task.location_block || null, location_floor: task.location_floor || null,
+      location_zone: task.location_zone || null, location_grid: task.location_grid || null,
+      location_drawing: task.location_drawing || null,
+      stages: Array.isArray(task.stages) ? task.stages.map((stage) => ({
+        title: stage.title, weight_pct: Number(stage.weight_pct), is_hold_point: Boolean(stage.is_hold_point),
+      })) : [],
+    };
+    if (task.activity_id) {
+      url = `${API}/planning-execution/${task.activity_id}/tasks`;
+      body.task = taskData;
+      body.reason = `Duplicated from task ${task.id}`;
+    } else {
+      url = `${API}/work-center`;
+      body = {
+        projectId, title: taskData.title, description: taskData.description, priority: taskData.priority,
+        start_date: startDate, end_date: endDate, assigned_members: taskData.assigned_members,
+        activity_type: _wcTypeOf(task), planned_quantity: task.target_quantity ?? '',
+        unit: task.activity_unit || '', stages: taskData.stages,
+        location_block: taskData.location_block, location_floor: taskData.location_floor,
+        location_zone: taskData.location_zone, location_grid: taskData.location_grid,
+        location_drawing: taskData.location_drawing,
+      };
+    }
+  } else return;
+  try {
+    const res = await _wcFetch(url, { method, body: JSON.stringify(body) });
+    const data = res ? await res.json().catch(() => ({})) : {};
+    if (!res || !res.ok) throw new Error(data.error || 'Could not save this task detail.');
+    await _wcRefreshTaskCard(taskId, null, 'Task details saved.');
+  } catch (error) {
+    _wcSetTaskCardMessage(taskId, error.message || 'Could not save this task detail.', true);
   }
 }
 
@@ -13862,6 +14038,7 @@ function _wcPMView(task, progressEntries) {
                 <div style="padding:6px 8px;background:#fff1f2;border:1px solid #fecdd3;border-radius:6px;font-size:12px;">${escapeHtml(e.issues)}</div>
               </div>`:''}
             </div>
+            ${typeof _wcReportExtraHtml === 'function' ? _wcReportExtraHtml(e) : ''}
             ${e.attachment_name?`
               <a data-action="wc-dl-progress" data-progress-id="${escapeHtml(String(e.id))}"
                 data-filename="${escapeHtml(e.attachment_name)}"
@@ -14067,6 +14244,7 @@ function _wcMemberView(task, myEntries) {
               ${e.issues?`<div style="grid-column:span 2;"><span style="color:#9ca3af;font-size:10px;text-transform:uppercase;letter-spacing:.4px;">Issues</span><br>${escapeHtml(e.issues)}</div>`:''}
               ${e.notes?`<div style="grid-column:span 2;"><span style="color:#9ca3af;font-size:10px;text-transform:uppercase;letter-spacing:.4px;">Additional notes</span><br>${escapeHtml(e.notes)}</div>`:''}
             </div>
+            ${typeof _wcReportExtraHtml === 'function' ? _wcReportExtraHtml(e) : ''}
             ${e.attachment_name?`<a data-action="wc-dl-progress" data-progress-id="${escapeHtml(String(e.id))}" data-filename="${escapeHtml(e.attachment_name)}" style="display:inline-block;margin-top:8px;font-size:11px;color:#0369a1;">Download attachment: ${escapeHtml(e.attachment_name)}</a>`:''}
             ${(e.validation_notes||e.void_reason)?`
               <div style="margin-top:8px;padding:6px 10px;background:#fffbeb;
@@ -14135,6 +14313,41 @@ function _wcMemberView(task, myEntries) {
           <textarea id="wc-pr-notes-${task.id}"
             style="width:100%;min-height:50px;padding:9px 10px;border:1px solid #d1d5db;
             border-radius:8px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
+        </div>
+        <div>
+          ${_wcLabel('Photos (up to 10)')}
+          <input id="wc-pr-photos-${task.id}" type="file" accept="image/*" multiple
+            style="font-size:12px;color:#374151;"/>
+          <button type="button" data-action="wc-capture-report-location" data-task-id="${escapeHtml(String(task.id))}"
+            style="margin-left:8px;font-size:11px;">Include current location</button>
+          <span id="wc-pr-location-status-${task.id}" style="font-size:11px;color:#64748b;"></span>
+        </div>
+        <div style="padding:10px;border:1px solid #e5e7eb;border-radius:8px;">
+          <strong style="font-size:12px;">Resources used</strong>
+          ${['manpower','equipment','material'].map((type) => `
+            <div style="display:grid;grid-template-columns:1.5fr .8fr .8fr .8fr;gap:6px;margin-top:7px;">
+              <input id="wc-pr-resource-name-${type}-${task.id}" placeholder="${type[0].toUpperCase()+type.slice(1)} name" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
+              <input id="wc-pr-resource-qty-${type}-${task.id}" type="number" min="0" step="any" placeholder="Quantity" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
+              <input id="wc-pr-resource-unit-${type}-${task.id}" placeholder="Unit" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
+              <input id="wc-pr-resource-hours-${type}-${task.id}" type="number" min="0" step="any" placeholder="Hours" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
+            </div>`).join('')}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div>${_wcLabel('Delay cause')}
+            <select id="wc-pr-delay-cause-${task.id}" style="width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;">
+              <option value="">No delay</option><option value="weather">Weather</option><option value="materials">Materials</option>
+              <option value="equipment">Equipment</option><option value="access">Site access</option><option value="design">Design or information</option>
+              <option value="labor">Labor</option><option value="other">Other</option>
+            </select>
+          </div>
+          <div>${_wcLabel('Delay days')}
+            <input id="wc-pr-delay-days-${task.id}" type="number" min="0" max="365" step="1" value="0"
+              style="width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box;"/>
+          </div>
+        </div>
+        <div>${_wcLabel('Delay explanation')}
+          <textarea id="wc-pr-delay-note-${task.id}" maxlength="2000" placeholder="Explain the delay, if applicable"
+            style="width:100%;min-height:50px;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box;"></textarea>
         </div>
         <div>${_wcLabel('Attachment')}<input id="wc-pr-file-${task.id}" type="file" style="font-size:12px;color:#374151;"/></div>
         <button data-action="wc-submit-progress" data-task-id="${escapeHtml(String(task.id))}"
@@ -14699,6 +14912,29 @@ function _wcEntryFigure(task, e) {
   return `${Number(e.progress_pct) || 0}%`;
 }
 
+function _wcReportExtraHtml(entry) {
+  const resources = Array.isArray(entry.resources) ? entry.resources : [];
+  const photos = Array.isArray(entry.photos) ? entry.photos : [];
+  const photoHtml = photos.map((photo) => `
+    <a href="${escapeHtml(photo.file_url)}" target="_blank" rel="noopener noreferrer"
+      style="display:inline-block;margin:4px 6px 4px 0;">
+      <img src="${escapeHtml(photo.file_url)}" alt="${escapeHtml(photo.file_name || 'Report photo')}"
+        style="width:92px;height:70px;object-fit:cover;border-radius:6px;border:1px solid #e5e7eb;"/>
+    </a>`).join('');
+  const resourceHtml = resources.map((resource) => {
+    const amount = resource.quantity == null ? '' : `${escapeHtml(String(resource.quantity))}${resource.unit ? ` ${escapeHtml(resource.unit)}` : ''}`;
+    const hours = resource.hours == null ? '' : `${escapeHtml(String(resource.hours))} hours`;
+    return `<li>${escapeHtml(resource.resource_type)}: ${escapeHtml(resource.name)}${amount ? ` · ${amount}` : ''}${hours ? ` · ${hours}` : ''}</li>`;
+  }).join('');
+  const delayHtml = entry.delay_cause ? `
+    <div style="margin-top:8px;font-size:12px;color:#92400e;">
+      Delay: ${escapeHtml(entry.delay_cause)}${Number(entry.delay_days) ? ` · ${escapeHtml(String(entry.delay_days))} day(s)` : ''}
+      ${entry.delay_note ? ` — ${escapeHtml(entry.delay_note)}` : ''}
+    </div>` : '';
+  return `${photoHtml ? `<div style="margin-top:8px;">${photoHtml}</div>` : ''}
+    ${resourceHtml ? `<ul style="margin:8px 0;padding-left:18px;font-size:12px;">${resourceHtml}</ul>` : ''}${delayHtml}`;
+}
+
 function _wcSetTaskCardMessage(taskId, message, isError = false) {
   const container = document.getElementById(`wc-detail-${taskId}`);
   const summary = container?.querySelector('[data-wc-card-summary]');
@@ -14795,8 +15031,90 @@ async function _wcHandleQueryResolve(taskId, queryId) {
   }
 }
 
+window._wcReportLocationByTask = window._wcReportLocationByTask || {};
+function _wcCaptureReportLocation(taskId) {
+  const status = document.getElementById(`wc-pr-location-status-${taskId}`);
+  if (!navigator.geolocation) {
+    if (status) status.textContent = 'Location is not available in this browser.';
+    return;
+  }
+  if (status) status.textContent = 'Getting location…';
+  navigator.geolocation.getCurrentPosition((position) => {
+    window._wcReportLocationByTask[String(taskId)] = {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracy: position.coords.accuracy,
+    };
+    if (status) status.textContent = 'Location will be attached to photos.';
+  }, (error) => {
+    if (status) status.textContent = error.message || 'Location could not be read.';
+  }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
+}
+
+function _wcOpenOfflineReportDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('oneproject-work-center', 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains('reports'))
+        request.result.createObjectStore('reports', { keyPath: 'key' });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('Offline report storage could not be opened.'));
+  });
+}
+
+async function _wcQueueOfflineReport(form, taskId) {
+  const record = { key: form.get('idempotencyKey'), taskId: String(taskId), fields: [] };
+  for (const [name, value] of form.entries()) {
+    record.fields.push(value instanceof Blob
+      ? { name, blob: value, fileName: value.name || 'photo', fileType: value.type || 'application/octet-stream' }
+      : { name, value: String(value) });
+  }
+  const db = await _wcOpenOfflineReportDb();
+  await new Promise((resolve, reject) => {
+    const request = db.transaction('reports', 'readwrite').objectStore('reports').put(record);
+    request.onsuccess = resolve;
+    request.onerror = () => reject(request.error || new Error('The offline report could not be saved.'));
+  });
+  db.close();
+}
+
+async function _wcSyncOfflineReports() {
+  if (!navigator.onLine || !window.indexedDB) return;
+  let db;
+  try {
+    db = await _wcOpenOfflineReportDb();
+    const records = await new Promise((resolve, reject) => {
+      const request = db.transaction('reports', 'readonly').objectStore('reports').getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error || new Error('Offline reports could not be read.'));
+    });
+    for (const record of records) {
+      const form = new FormData();
+      for (const field of record.fields) {
+        if (field.blob) form.append(field.name, field.blob, field.fileName);
+        else form.append(field.name, field.value);
+      }
+      const response = await _wcFetch(`${API}/work-center-progress`, { method: 'POST', body: form });
+      if (!response || !response.ok) continue;
+      await new Promise((resolve, reject) => {
+        const request = db.transaction('reports', 'readwrite').objectStore('reports').delete(record.key);
+        request.onsuccess = resolve;
+        request.onerror = () => reject(request.error || new Error('Synced report could not be cleared from offline storage.'));
+      });
+    }
+  } catch (error) {
+    console.error('Offline report synchronization failed:', error);
+  } finally {
+    if (db) db.close();
+  }
+}
+if (window.addEventListener) window.addEventListener('online', _wcSyncOfflineReports);
+if (typeof navigator !== 'undefined' && navigator.onLine) _wcSyncOfflineReports();
+
 async function _wcHandleSubmitProgress(taskId, tabKey) {
   let submitted = false;
+  let reportForm = null;
   try {
     const g = (name) => document.getElementById(`wc-pr-${name}-${taskId}`);
     const task = (recordsCache['work-center'] || []).find((r) => String(r.id) === String(taskId)) || {};
@@ -14807,6 +15125,7 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
     if (!reportDate) return alert('Report date is required.');
 
     const form = new FormData();
+    reportForm = form;
     if (type === 'quantity' || type === 'count') {
       const done = Number(g('qty')?.value);
       if (!(done > 0)) return alert(type === 'count' ? 'Enter how many items were completed.' : 'Enter the quantity done.');
@@ -14835,16 +15154,49 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
     form.append('workDone', workDone);
     for (const [field, name] of [['manpower', 'manpower'], ['equipment', 'equipment'], ['materials', 'materials'], ['issues', 'issues'], ['notes', 'notes']])
       form.append(field, g(name)?.value.trim() || '');
+    const resources = ['manpower', 'equipment', 'material'].map((type) => ({
+      type,
+      name: document.getElementById(`wc-pr-resource-name-${type}-${taskId}`)?.value.trim() || '',
+      quantity: document.getElementById(`wc-pr-resource-qty-${type}-${taskId}`)?.value || '',
+      unit: document.getElementById(`wc-pr-resource-unit-${type}-${taskId}`)?.value.trim() || '',
+      hours: document.getElementById(`wc-pr-resource-hours-${type}-${taskId}`)?.value || '',
+    })).filter((resource) => resource.name);
+    form.append('resources', JSON.stringify(resources));
+    form.append('delayCause', document.getElementById(`wc-pr-delay-cause-${taskId}`)?.value || '');
+    form.append('delayDays', document.getElementById(`wc-pr-delay-days-${taskId}`)?.value || '0');
+    form.append('delayNote', document.getElementById(`wc-pr-delay-note-${taskId}`)?.value.trim() || '');
     const file = g('file');
     if (file?.files?.[0]) form.append('attachment', file.files[0]);
+    const photoInput = document.getElementById(`wc-pr-photos-${taskId}`);
+    const photos = Array.from(photoInput?.files || []);
+    if (photos.length > 10) return alert('Choose no more than 10 photos.');
+    const location = window._wcReportLocationByTask[String(taskId)] || {};
+    for (const photo of photos) form.append('photos', photo);
+    form.append('photoMeta', JSON.stringify(photos.map((photo) => ({
+      capturedAt: photo.lastModified ? new Date(photo.lastModified).toISOString() : null,
+      latitude: location.latitude ?? null,
+      longitude: location.longitude ?? null,
+      accuracy: location.accuracy ?? null,
+    }))));
+    form.append('idempotencyKey', (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`));
 
     const res = await _wcFetch(`${API}/work-center-progress`, { method: 'POST', body: form });
-    if (!res) return;
+    if (!res) throw new Error('The report could not be sent.');
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || data.message || 'Failed to submit progress');
     submitted = true;
     await _wcRefreshTaskCard(taskId, 'my-reports', 'Report submitted. It counts toward progress after a leader approves it.' + (data.warning ? ` ${data.warning}` : ''));
   } catch (err) {
+    if (!submitted && reportForm && typeof navigator !== 'undefined'
+      && navigator.onLine === false && window.indexedDB) {
+      try {
+        await _wcQueueOfflineReport(reportForm, taskId);
+        alert('You are offline. The report is saved on this device and will sync when you reconnect.');
+      } catch (storageError) {
+        alert(`Offline report could not be saved: ${storageError.message}`);
+      }
+      return;
+    }
     alert(submitted ? `Report submitted, but the task card could not refresh: ${err.message}` : 'Failed to submit progress: ' + err.message);
   }
 }
@@ -14945,6 +15297,17 @@ async function _wcOpenCreateForm() {
     alert('Only side leaders can create tasks.'); return;
   }
   const projectId = localStorage.getItem('activeProjectId');
+  let taskTemplates = [];
+  let templateLoadMessage = '';
+  try {
+    const response = await _wcFetch(`${API}/work-center/templates?projectId=${encodeURIComponent(projectId)}`);
+    const result = response ? await response.json().catch(() => ({})) : {};
+    if (!response || !response.ok) throw new Error(result.error || 'Task templates could not be loaded.');
+    taskTemplates = result.templates || [];
+  } catch (error) {
+    templateLoadMessage = error.message || 'Task templates could not be loaded.';
+    console.error('Load work-center templates error:', error);
+  }
 
   let peActivities = [];
   try {
@@ -15016,6 +15379,15 @@ async function _wcOpenCreateForm() {
           Assign a task to your team. Linked tasks use the activity’s measure and dates; standalone tasks have their own measure.</p>
       </div>
       <div style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
+
+        <div>
+          <label for="wc-cr-template" style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:5px;">Start from a saved template</label>
+          <select id="wc-cr-template" style="width:100%;padding:9px 10px;border:1px solid var(--field-border);border-radius:var(--field-radius);font-size:13px;background:#fff;">
+            <option value="">Blank task</option>${taskTemplates.map((template) =>
+              `<option value="${escapeHtml(String(template.id))}">${escapeHtml(template.name)}</option>`).join('')}
+          </select>
+          ${templateLoadMessage ? `<div style="font-size:11px;color:#b91c1c;margin-top:4px;">${escapeHtml(templateLoadMessage)}</div>` : ''}
+        </div>
 
         <div>
           <h4 style="margin:0 0 8px;font-size:14px;color:#1f2937;">1. Choose an activity</h4>
@@ -15323,6 +15695,27 @@ async function _wcOpenCreateForm() {
   }
 
   document.getElementById('wc-cr-type')?.addEventListener('change', _wcUpdateCreateMeasure);
+  document.getElementById('wc-cr-template')?.addEventListener('change', (event) => {
+    const template = taskTemplates.find((item) => String(item.id) === String(event.target.value));
+    if (!template) return;
+    const data = template.task_data || {};
+    window._wcActTabSwitch?.('none');
+    const title = document.getElementById('wc-cr-title');
+    const description = document.getElementById('wc-cr-desc');
+    const type = document.getElementById('wc-cr-type');
+    const target = document.getElementById('wc-cr-target');
+    const unit = document.getElementById('wc-cr-unit');
+    if (title) title.value = data.title || '';
+    if (description) description.value = data.description || '';
+    if (type) type.value = ['quantity','count','stages','percentage'].includes(data.activity_type)
+      ? data.activity_type : 'percentage';
+    if (target) target.value = data.target_quantity ?? '';
+    if (unit) unit.value = data.activity_unit || '';
+    taskStages = Array.isArray(data.stages) && data.stages.length
+      ? data.stages.map((stage) => ({ title: stage.title, weight_pct: Number(stage.weight_pct), is_hold_point: false }))
+      : [{ title: '', weight_pct: 100, is_hold_point: false }];
+    _wcUpdateCreateMeasure();
+  });
   document.getElementById('wc-cr-share')?.addEventListener('change', () => {
     refreshSharePreview();
   });
