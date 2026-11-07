@@ -13909,7 +13909,10 @@ async function _wcHandleTaskCardAction(actionEl, taskId) {
     body.name = field('template-name')?.value.trim();
   } else if (operation === 'duplicate') {
     const task = (recordsCache['work-center'] || []).find((item) => String(item.id) === String(taskId));
-    if (!task) throw new Error('Task details are not available to duplicate.');
+    if (!task) {
+      _wcSetTaskCardMessage(taskId, 'Task details are not available to duplicate.', true);
+      return;
+    }
     const title = prompt('Name the duplicated task:', `${task.title} (copy)`);
     if (!title?.trim()) return;
     const startDate = String(task.start_date || '').slice(0, 10);
@@ -14325,11 +14328,15 @@ function _wcMemberView(task, myEntries) {
         <div style="padding:10px;border:1px solid #e5e7eb;border-radius:8px;">
           <strong style="font-size:12px;">Resources used</strong>
           ${['manpower','equipment','material'].map((type) => `
-            <div style="display:grid;grid-template-columns:1.5fr .8fr .8fr .8fr;gap:6px;margin-top:7px;">
+            <div style="display:grid;grid-template-columns:1.3fr .8fr .7fr .8fr 1.1fr;gap:6px;margin-top:7px;">
               <input id="wc-pr-resource-name-${type}-${task.id}" placeholder="${type[0].toUpperCase()+type.slice(1)} name" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
               <input id="wc-pr-resource-qty-${type}-${task.id}" type="number" min="0" step="any" placeholder="Quantity" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
               <input id="wc-pr-resource-unit-${type}-${task.id}" placeholder="Unit" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
               <input id="wc-pr-resource-hours-${type}-${task.id}" type="number" min="0" step="any" placeholder="Hours" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
+              <select id="wc-pr-resource-member-${type}-${task.id}" aria-label="Assign ${type} to a task member" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;">
+                <option value="">Assigned group</option>${(Array.isArray(task.assigned_members) ? task.assigned_members : []).map((member) =>
+                  `<option value="${escapeHtml(String(member.id))}">${escapeHtml(member.title || member.name || member.email || `Member ${member.id}`)}</option>`).join('')}
+              </select>
             </div>`).join('')}
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -14720,14 +14727,15 @@ async function _wcWirePMMembers(taskId, currentAssigned) {
               border-radius:8px;cursor:pointer;margin-bottom:6px;transition:all .2s;">
               <input type="checkbox" data-member-id="${escapeHtml(String(m.id))}"
                 data-member-email="${escapeHtml(m.email)}"
+                data-member-name="${escapeHtml(m.title || '')}"
                 data-member-position="${escapeHtml(m.position||'')}"
                 ${checked?'checked':''}
                 style="width:15px;height:15px;accent-color:#007B8A;flex-shrink:0;"/>
               <div style="flex:1;min-width:0;">
                 <div style="font-size:13px;font-weight:600;color:#1f2937;white-space:nowrap;
-                  overflow:hidden;text-overflow:ellipsis;">${escapeHtml(m.email)}</div>
+                  overflow:hidden;text-overflow:ellipsis;">${escapeHtml(m.title || m.email)}</div>
                 <div style="font-size:11px;color:#6b7280;">
-                  ${escapeHtml(m.position||'No position')}${m.title?' · '+escapeHtml(m.title):''}</div>
+                  ${escapeHtml(m.position || 'No position')}${m.title && m.email ? ` · ${escapeHtml(m.email)}` : ''}</div>
               </div>
             </label>`;
         }).join('')
@@ -14756,6 +14764,7 @@ async function _wcHandleUpdate(taskId, tabKey) {
     membersEl?.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
       assignedMembers.push({
         id:       cb.getAttribute('data-member-id'),
+        title:    cb.getAttribute('data-member-name'),
         email:    cb.getAttribute('data-member-email'),
         position: cb.getAttribute('data-member-position'),
       });
@@ -14915,16 +14924,26 @@ function _wcEntryFigure(task, e) {
 function _wcReportExtraHtml(entry) {
   const resources = Array.isArray(entry.resources) ? entry.resources : [];
   const photos = Array.isArray(entry.photos) ? entry.photos : [];
-  const photoHtml = photos.map((photo) => `
-    <a href="${escapeHtml(photo.file_url)}" target="_blank" rel="noopener noreferrer"
-      style="display:inline-block;margin:4px 6px 4px 0;">
-      <img src="${escapeHtml(photo.file_url)}" alt="${escapeHtml(photo.file_name || 'Report photo')}"
-        style="width:92px;height:70px;object-fit:cover;border-radius:6px;border:1px solid #e5e7eb;"/>
-    </a>`).join('');
+  const photoHtml = photos.map((photo) => {
+    const captured = photo.captured_at && !Number.isNaN(Date.parse(photo.captured_at))
+      ? new Date(photo.captured_at).toLocaleString() : 'Capture time unavailable';
+    const coordinates = photo.latitude != null && photo.longitude != null
+      ? `${Number(photo.latitude).toFixed(6)}, ${Number(photo.longitude).toFixed(6)}`
+      : 'Location unavailable';
+    return `<div style="display:inline-flex;flex-direction:column;vertical-align:top;margin:4px 8px 4px 0;">
+      <a href="${escapeHtml(photo.file_url)}" target="_blank" rel="noopener noreferrer">
+        <img src="${escapeHtml(photo.file_url)}" alt="${escapeHtml(photo.file_name || 'Report photo')}"
+          style="width:92px;height:70px;object-fit:cover;border-radius:6px;border:1px solid #e5e7eb;"/>
+      </a>
+      <span style="font-size:10px;color:#64748b;max-width:160px;">${escapeHtml(captured)} · ${escapeHtml(coordinates)}</span>
+    </div>`;
+  }).join('');
   const resourceHtml = resources.map((resource) => {
     const amount = resource.quantity == null ? '' : `${escapeHtml(String(resource.quantity))}${resource.unit ? ` ${escapeHtml(resource.unit)}` : ''}`;
     const hours = resource.hours == null ? '' : `${escapeHtml(String(resource.hours))} hours`;
-    return `<li>${escapeHtml(resource.resource_type)}: ${escapeHtml(resource.name)}${amount ? ` · ${amount}` : ''}${hours ? ` · ${hours}` : ''}</li>`;
+    const assignedTo = resource.assigned_member_name || (resource.assigned_member_id
+      ? `Member ${resource.assigned_member_id}` : 'Assigned group');
+    return `<li>${escapeHtml(resource.resource_type)}: ${escapeHtml(resource.name)}${amount ? ` · ${amount}` : ''}${hours ? ` · ${hours}` : ''} · ${escapeHtml(assignedTo)}</li>`;
   }).join('');
   const delayHtml = entry.delay_cause ? `
     <div style="margin-top:8px;font-size:12px;color:#92400e;">
@@ -15051,6 +15070,85 @@ function _wcCaptureReportLocation(taskId) {
   }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
 }
 
+async function _wcReadPhotoMetadata(file) {
+  try {
+    const data = new DataView(await file.arrayBuffer());
+    const readExif = (start, length) => {
+      if (start < 0 || start + length > data.byteLength) return null;
+      return String.fromCharCode(...new Uint8Array(data.buffer, start, length)).replace(/\0.*$/s, '');
+    };
+    if (data.byteLength < 4 || data.getUint16(0) !== 0xffd8) return {};
+    let cursor = 2, tiff = null;
+    while (cursor + 4 <= data.byteLength) {
+      if (data.getUint8(cursor) !== 0xff) break;
+      const marker = data.getUint8(cursor + 1);
+      if (marker === 0xd9 || marker === 0xda) break;
+      const length = data.getUint16(cursor + 2);
+      const start = cursor + 4;
+      if (length < 2 || start + length - 2 > data.byteLength) break;
+      if (marker === 0xe1 && readExif(start, 6) === 'Exif') {
+        tiff = start + 6;
+        break;
+      }
+      cursor = start + length - 2;
+    }
+    if (tiff == null || tiff + 8 > data.byteLength) return {};
+    const little = data.getUint16(tiff) === 0x4949;
+    const u16 = (offset) => offset + 2 <= data.byteLength ? data.getUint16(offset, little) : null;
+    const u32 = (offset) => offset + 4 <= data.byteLength ? data.getUint32(offset, little) : null;
+    const ifd = (relative) => {
+      const offset = tiff + relative;
+      const count = u16(offset);
+      if (count == null || count > 512 || offset + 2 + count * 12 > data.byteLength) return new Map();
+      const entries = new Map();
+      for (let index = 0; index < count; index++) {
+        const entry = offset + 2 + index * 12;
+        entries.set(u16(entry), { entry, type: u16(entry + 2), count: u32(entry + 4) });
+      }
+      return entries;
+    };
+    const valueOffset = (tag) => {
+      if (!tag) return null;
+      const relative = tag.count * ({ 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1, 9: 4, 10: 8 }[tag.type] || 1) <= 4
+        ? tag.entry + 8 : tiff + (u32(tag.entry + 8) || 0);
+      return relative;
+    };
+    const ifd0 = ifd(u32(tiff + 4) || 0);
+    const exifPointer = u32(ifd0.get(0x8769)?.entry + 8);
+    const exifIfd = exifPointer ? ifd(exifPointer) : new Map();
+    const dateTag = exifIfd.get(0x9003);
+    const dateText = dateTag ? readExif(valueOffset(dateTag), Math.min(dateTag.count, 32)) : '';
+    const dateMatch = dateText.match(/^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
+    const capturedAt = dateMatch
+      ? new Date(Number(dateMatch[1]), Number(dateMatch[2]) - 1, Number(dateMatch[3]),
+        Number(dateMatch[4]), Number(dateMatch[5]), Number(dateMatch[6])).toISOString()
+      : null;
+    const gpsPointerTag = ifd0.get(0x8825);
+    const gpsPointer = gpsPointerTag ? u32(gpsPointerTag.entry + 8) : null;
+    const gps = gpsPointer ? ifd(gpsPointer) : new Map();
+    const gpsRef = (tag) => tag ? readExif(valueOffset(tag), Math.min(tag.count, 4)).trim() : '';
+    const gpsCoordinate = (tag, ref) => {
+      if (!tag || tag.type !== 5 || tag.count < 3) return null;
+      const offset = valueOffset(tag), parts = [];
+      for (let index = 0; index < 3; index++) {
+        const numerator = u32(offset + index * 8), denominator = u32(offset + index * 8 + 4);
+        if (numerator == null || !denominator) return null;
+        parts.push(numerator / denominator);
+      }
+      const result = parts[0] + parts[1] / 60 + parts[2] / 3600;
+      return ref === 'S' || ref === 'W' ? -result : result;
+    };
+    return {
+      capturedAt,
+      latitude: gpsCoordinate(gps.get(2), gpsRef(gps.get(1))),
+      longitude: gpsCoordinate(gps.get(4), gpsRef(gps.get(3))),
+    };
+  } catch (error) {
+    console.warn('Could not read optional photo metadata:', error);
+    return {};
+  }
+}
+
 function _wcOpenOfflineReportDb() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open('oneproject-work-center', 1);
@@ -15082,6 +15180,7 @@ async function _wcQueueOfflineReport(form, taskId) {
 async function _wcSyncOfflineReports() {
   if (!navigator.onLine || !window.indexedDB) return;
   let db;
+  let syncedAny = false;
   try {
     db = await _wcOpenOfflineReportDb();
     const records = await new Promise((resolve, reject) => {
@@ -15096,15 +15195,29 @@ async function _wcSyncOfflineReports() {
         else form.append(field.name, field.value);
       }
       const response = await _wcFetch(`${API}/work-center-progress`, { method: 'POST', body: form });
-      if (!response || !response.ok) continue;
+      if (!response) {
+        alert('An offline report could not sync yet. It remains saved on this device for another retry.');
+        break;
+      }
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        alert(`An offline report could not sync: ${result.error || 'The server rejected it.'} It remains saved on this device.`);
+        break;
+      }
       await new Promise((resolve, reject) => {
         const request = db.transaction('reports', 'readwrite').objectStore('reports').delete(record.key);
         request.onsuccess = resolve;
         request.onerror = () => reject(request.error || new Error('Synced report could not be cleared from offline storage.'));
       });
+      syncedAny = true;
+    }
+    if (syncedAny) {
+      delete recordsCache['work-center'];
+      loadWCRecords();
     }
   } catch (error) {
     console.error('Offline report synchronization failed:', error);
+    alert(`Offline report sync failed: ${error.message || 'The saved report remains on this device.'}`);
   } finally {
     if (db) db.close();
   }
@@ -15115,6 +15228,8 @@ if (typeof navigator !== 'undefined' && navigator.onLine) _wcSyncOfflineReports(
 async function _wcHandleSubmitProgress(taskId, tabKey) {
   let submitted = false;
   let reportForm = null;
+  let requestAttempted = false;
+  let responseReceived = false;
   try {
     const g = (name) => document.getElementById(`wc-pr-${name}-${taskId}`);
     const task = (recordsCache['work-center'] || []).find((r) => String(r.id) === String(taskId)) || {};
@@ -15160,6 +15275,7 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
       quantity: document.getElementById(`wc-pr-resource-qty-${type}-${taskId}`)?.value || '',
       unit: document.getElementById(`wc-pr-resource-unit-${type}-${taskId}`)?.value.trim() || '',
       hours: document.getElementById(`wc-pr-resource-hours-${type}-${taskId}`)?.value || '',
+      assignedMemberId: document.getElementById(`wc-pr-resource-member-${type}-${taskId}`)?.value || null,
     })).filter((resource) => resource.name);
     form.append('resources', JSON.stringify(resources));
     form.append('delayCause', document.getElementById(`wc-pr-delay-cause-${taskId}`)?.value || '');
@@ -15172,26 +15288,33 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
     if (photos.length > 10) return alert('Choose no more than 10 photos.');
     const location = window._wcReportLocationByTask[String(taskId)] || {};
     for (const photo of photos) form.append('photos', photo);
-    form.append('photoMeta', JSON.stringify(photos.map((photo) => ({
-      capturedAt: photo.lastModified ? new Date(photo.lastModified).toISOString() : null,
-      latitude: location.latitude ?? null,
-      longitude: location.longitude ?? null,
-      accuracy: location.accuracy ?? null,
-    }))));
-    form.append('idempotencyKey', (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`));
+    const photoMetadata = [];
+    for (const photo of photos) {
+      const metadata = await _wcReadPhotoMetadata(photo);
+      photoMetadata.push({
+        capturedAt: metadata.capturedAt || null,
+        latitude: location.latitude ?? metadata.latitude ?? null,
+        longitude: location.longitude ?? metadata.longitude ?? null,
+        accuracy: location.accuracy ?? null,
+      });
+    }
+    form.append('photoMeta', JSON.stringify(photoMetadata));
+    form.append('idempotencyKey', (window.crypto?.randomUUID
+      ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`));
 
+    requestAttempted = true;
     const res = await _wcFetch(`${API}/work-center-progress`, { method: 'POST', body: form });
+    responseReceived = Boolean(res);
     if (!res) throw new Error('The report could not be sent.');
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || data.message || 'Failed to submit progress');
     submitted = true;
     await _wcRefreshTaskCard(taskId, 'my-reports', 'Report submitted. It counts toward progress after a leader approves it.' + (data.warning ? ` ${data.warning}` : ''));
   } catch (err) {
-    if (!submitted && reportForm && typeof navigator !== 'undefined'
-      && navigator.onLine === false && window.indexedDB) {
+    if (!submitted && requestAttempted && !responseReceived && reportForm && window.indexedDB) {
       try {
         await _wcQueueOfflineReport(reportForm, taskId);
-        alert('You are offline. The report is saved on this device and will sync when you reconnect.');
+        alert('The report could not reach the server. It is saved on this device and will retry when you reconnect.');
       } catch (storageError) {
         alert(`Offline report could not be saved: ${storageError.message}`);
       }
@@ -15441,6 +15564,14 @@ async function _wcOpenCreateForm() {
           <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Title *</label>
           <input type="text" id="wc-cr-title" placeholder="e.g. Excavate foundation, Zone B"
             style="width:100%;padding:9px 10px;border:1px solid var(--field-border);border-radius:var(--field-radius);font-size:14px;box-sizing:border-box;"/>
+        </div>
+        <div>
+          <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px;">Task location (optional)</label>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;">
+            ${['block','floor','zone','grid','drawing'].map((key) =>
+              `<input id="wc-cr-location-${key}" maxlength="150" placeholder="${key[0].toUpperCase()+key.slice(1)}"
+                style="width:100%;padding:8px 10px;border:1px solid var(--field-border);border-radius:var(--field-radius);box-sizing:border-box;"/>`).join('')}
+          </div>
         </div>
         <div style="max-width:260px;">
           <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Priority *</label>
@@ -15711,9 +15842,18 @@ async function _wcOpenCreateForm() {
       ? data.activity_type : 'percentage';
     if (target) target.value = data.target_quantity ?? '';
     if (unit) unit.value = data.activity_unit || '';
+    for (const key of ['block','floor','zone','grid','drawing']) {
+      const input = document.getElementById(`wc-cr-location-${key}`);
+      if (input) input.value = data.location?.[key] || '';
+    }
     taskStages = Array.isArray(data.stages) && data.stages.length
       ? data.stages.map((stage) => ({ title: stage.title, weight_pct: Number(stage.weight_pct), is_hold_point: false }))
       : [{ title: '', weight_pct: 100, is_hold_point: false }];
+    const assignedIds = new Set((Array.isArray(data.assigned_members) ? data.assigned_members : [])
+      .map((member) => String(member.id)));
+    document.querySelectorAll('#wc-cr-members input[data-member-id]').forEach((input) => {
+      input.checked = assignedIds.has(String(input.getAttribute('data-member-id')));
+    });
     _wcUpdateCreateMeasure();
   });
   document.getElementById('wc-cr-share')?.addEventListener('change', () => {
@@ -15743,13 +15883,14 @@ async function _wcOpenCreateForm() {
               border-bottom:1px solid #e5e7eb;cursor:pointer;margin-bottom:0;">
               <input type="checkbox" data-member-id="${escapeHtml(String(m.id))}"
                 data-member-email="${escapeHtml(m.email)}"
+                data-member-name="${escapeHtml(m.title || '')}"
                 data-member-position="${escapeHtml(m.position||'')}"
                 style="width:15px;height:15px;accent-color:#007B8A;flex-shrink:0;"/>
               <div style="flex:1;min-width:0;">
                 <div style="font-size:13px;font-weight:600;color:#1f2937;white-space:nowrap;
-                  overflow:hidden;text-overflow:ellipsis;">${escapeHtml(m.email)}</div>
+                  overflow:hidden;text-overflow:ellipsis;">${escapeHtml(m.title || m.email)}</div>
                 <div style="font-size:11px;color:#6b7280;">
-                  ${escapeHtml(m.position||'No position listed')}${m.title?' · '+escapeHtml(m.title):''}</div>
+                  ${escapeHtml(m.position || 'No position listed')}${m.title && m.email ? ` · ${escapeHtml(m.email)}` : ''}</div>
               </div>
             </label>`).join('')
         : `<p style="font-size:12px;color:#9ca3af;text-align:center;padding:12px 0;">No team members found for your side.</p>`;
@@ -15779,6 +15920,8 @@ async function _wcOpenCreateForm() {
       const unit = document.getElementById('wc-cr-unit')?.value.trim() || '';
       const priority = document.getElementById('wc-cr-priority')?.value || 'normal';
       const share = Number(document.getElementById('wc-cr-share')?.value);
+      const location = Object.fromEntries(['block','floor','zone','grid','drawing'].map((key) =>
+        [key, document.getElementById(`wc-cr-location-${key}`)?.value.trim() || '']));
 
       if (!title)                 throw new Error('Title is required.');
       if (usePickMode && !activityId) throw new Error('Choose an activity or select “No activity (standalone)”.');
@@ -15808,6 +15951,7 @@ async function _wcOpenCreateForm() {
         ?.querySelectorAll('input[type="checkbox"]:checked')
         .forEach(cb => assignedMembers.push({
           id:       cb.getAttribute('data-member-id'),
+          title:    cb.getAttribute('data-member-name'),
           email:    cb.getAttribute('data-member-email'),
           position: cb.getAttribute('data-member-position'),
         }));
@@ -15821,6 +15965,8 @@ async function _wcOpenCreateForm() {
           title, description: desc || '', start_date: startDate, end_date: endDate,
           priority,
           assigned_members: assignedMembers,
+          location_block: location.block, location_floor: location.floor, location_zone: location.zone,
+          location_grid: location.grid, location_drawing: location.drawing,
           ...(selectedActivity.activity_type === 'stages'
             ? { stages: taskStages.map((stage) => ({
               title: stage.title.trim(), weight_pct: stage.weight_pct, is_hold_point: stage.is_hold_point,
@@ -15861,6 +16007,8 @@ async function _wcOpenCreateForm() {
             activity_type: type, planned_quantity: planned, unit,
             stages: type === 'stages' ? taskStages : [],
             assigned_members: assignedMembers,
+            location_block: location.block, location_floor: location.floor, location_zone: location.zone,
+            location_grid: location.grid, location_drawing: location.drawing,
           }),
         });
         if (!res) throw new Error('Could not create the standalone task.');
