@@ -12886,6 +12886,7 @@ async function _openActivityVerificationNotification(verificationId, resolvedTar
   tab?.click();
   const detail = await _waitForElement(`#pe-verification-${CSS.escape(String(verificationId))}`);
   detail?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (detail) Promise.resolve(window._markVerificationRead?.(verificationId)).then(() => window._refreshPendingBadge?.());
   return Boolean(detail);
 }
 
@@ -16746,11 +16747,13 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
   const rework = verificationData.rework || [];
   const viewerSide = card.viewer_side;
   const clientView = viewerSide === 'Client';
+  // Tasks are the contractor's internal breakdown. The client and the consultant (viewing a contractor activity) do not get this tab.
+  const hideTasksTab = clientView || (viewerSide === 'Consultant' && activity.side === 'Contractor');
   const canEditAttachments = Boolean(card.can_edit_activity);
   const canCertify = Boolean(activity.drives_milestone && activity.side === 'Contractor' && viewerSide !== 'Client');
   const tabs = [
     ['overview', 'Overview'],
-    ...(clientView ? [] : [['tasks', 'Tasks', tasks.length]]),
+    ...(hideTasksTab ? [] : [['tasks', 'Tasks', tasks.length]]),
     ['progress', 'Progress'],
     ['attachments', 'Attachment', attachments.length + (activity.linked_file_name ? 1 : 0)],
     ...(canCertify ? [['certification', 'Certification', verifications.filter(item => item.status === 'pending').length, true]] : []),
@@ -17104,6 +17107,10 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
       </form>` : '';
     const withdraw = item.status === 'pending' && contractorLeader
       ? `<button class="rc-btn rc-btn--sm rc-btn--danger" data-pe-action="withdraw" data-verification-id="${escapeHtml(String(item.id))}" type="button" style="margin-top:12px;">Withdraw request</button>` : '';
+    const receiptDay = String(item.seen_at || '').slice(0, 10);
+    const receiptNote = viewerSide !== 'Contractor' ? ''
+      : item.status === 'pending' ? (receiptDay ? ` · Opened by the consultant ${receiptDay}, no decision yet` : ' · Not opened by the consultant yet')
+      : receiptDay ? ` · First opened by the consultant ${receiptDay}` : '';
     const vStatus = String(item.status || '');
     const vCls = vStatus === 'pending' ? '' : ['verified', 'verified_with_changes'].includes(vStatus) ? 'pe-tchip--ok' : vStatus === 'rejected' ? 'pe-tchip--bad' : '';
     const vChip = vStatus === 'pending'
@@ -17112,7 +17119,7 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
     return `<article id="pe-verification-${escapeHtml(String(item.id))}" class="pe-vitem">
       <button type="button" class="pe-vhead" data-pe-vtoggle aria-expanded="false">
         <span class="pe-vmain">${escapeHtml(String(item.kind || 'progress').replace(/_/g, ' '))} review ${vChip}</span>
-        <span class="pe-vmeta" style="${item.overdue ? 'color:#b91c1c;font-weight:600;' : ''}">Requested ${escapeHtml(String(item.requested_at || '').slice(0, 10))}${item.respond_by ? ` · Due ${escapeHtml(String(item.respond_by).slice(0, 10))}` : ''}${item.overdue ? ' · Overdue' : ''}</span>
+        <span class="pe-vmeta" style="${item.overdue ? 'color:#b91c1c;font-weight:600;' : ''}">Requested ${escapeHtml(String(item.requested_at || '').slice(0, 10))}${item.respond_by ? ` · Due ${escapeHtml(String(item.respond_by).slice(0, 10))}` : ''}${item.overdue ? ' · Overdue' : ''}${escapeHtml(receiptNote)}</span>
         <span class="pe-vchev" aria-hidden="true"></span>
       </button>
       <div class="pe-vbody" hidden>
@@ -17395,6 +17402,7 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
     entry.querySelector('.pe-vbody').hidden = false;
     button.setAttribute('aria-expanded', 'true');
     entry.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    window._markVerificationRead?.(String(entry.id).replace('pe-verification-', ''));
   }));
   container.querySelectorAll('[data-pe-cert-back]').forEach(button => button.addEventListener('click', () => {
     closeVerifications(button.closest('[data-pe-cert-root]'));
@@ -21807,8 +21815,10 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
       const pending = document.createElement('button');
       pending.type = 'button';
       pending.className = 'rc-btn rc-btn--sm';
+      pending.dataset.wfPendingButton = 'true';
       pending.textContent = 'Pending verifications';
       pending.addEventListener('click', () => window.openPendingVerifications());
+      setTimeout(() => window._refreshPendingBadge?.(), 0);
       actions.appendChild(pending);
       if (['Contractor', 'Consultant', 'Client', 'ContractorPM', 'ConsultantPM', 'ClientPM',
         'Contractor Project Manager', 'Consultant Project Manager', 'Client Project Manager'].includes(window.currentUserRole)) {
@@ -22104,14 +22114,41 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
     return false;
   }
 
+  // Read receipts: a consultant-side reader opening a request records it once. Contractors never call this.
+  const _verificationReadSent = new Set();
+  window._markVerificationRead = function (verificationId) {
+    const role = window.currentUserRole;
+    if (wcSide(role) !== 'Consultant' && role !== 'TeamMember') return Promise.resolve(false);
+    const key = String(verificationId);
+    if (_verificationReadSent.has(key)) return Promise.resolve(true);
+    return _wcFetch(`${API}/verifications/${encodeURIComponent(key)}/read`, { method: 'POST', body: JSON.stringify({}) })
+      .then((response) => {
+        const ok = Boolean(response && response.ok);
+        if (ok) _verificationReadSent.add(key);
+        return ok;
+      }).catch(() => false);
+  };
+
+  // "Pending verifications (3, 1 new)" on the button that opens the list.
+  window._refreshPendingBadge = async function () {
+    const button = document.querySelector('[data-wf-pending-button]');
+    const projectId = localStorage.getItem('activeProjectId');
+    if (!button || !projectId) return;
+    try {
+      const result = await responseData(await _wcFetch(`${API}/verifications/pending?projectId=${encodeURIComponent(projectId)}`));
+      const rows = result.pending || [];
+      const fresh = rows.filter((item) => item.is_unread).length;
+      button.textContent = rows.length ? `Pending verifications (${rows.length}${fresh ? `, ${fresh} new` : ''})` : 'Pending verifications';
+    } catch (error) { /* the button keeps its plain label */ }
+  };
+
   window.openPendingVerifications = async function (verificationId = null) {
     const projectId = await ensureActiveProjectId();
     if (!projectId) return;
-    let rows;
+    let pendingRows;
     try {
       const result = await responseData(await _wcFetch(`${API}/verifications/pending?projectId=${encodeURIComponent(projectId)}`));
-      rows = result.pending || [];
-      if (verificationId) rows = rows.filter((item) => String(item.id) === String(verificationId));
+      pendingRows = result.pending || [];
     } catch (error) {
       expandGrayPart(`<section style="padding:18px;"><p style="color:#b91c1c;">Unable to load pending verifications: ${esc(error.message)}</p>
         <button class="btn" type="button" onclick="collapseGrayPart()">Close</button></section>`);
@@ -22123,6 +22160,9 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
     }
     const consultantSide = wcSide(window.currentUserRole) === 'Consultant' || window.currentUserRole === 'TeamMember';
     const kindLabel = { progress: 'Progress', hold_point: 'Hold point', completion: 'Completion' };
+    const outcomeLabel = { verified: 'Verified', verified_with_changes: 'Verified with changes', rejected: 'Rejected', withdrawn: 'Withdrawn' };
+    const day = (value) => esc(String(value || '').slice(0, 10));
+    const chipStyle = 'display:inline-block;font-size:11px;border:1px solid #cbd5e1;border-radius:999px;padding:1px 8px;color:#334155;background:#f8fafc;';
     const dueText = (item) => {
       const days = Number(item.days_left);
       if (item.overdue) return `Overdue by ${Math.abs(days) || 1} day${Math.abs(days) === 1 ? '' : 's'}`;
@@ -22135,6 +22175,17 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
       if (item.kind === 'hold_point') return `Hold point: ${esc(item.stage_title || 'stage')}. Inspect this stage before work continues. Later stages stay locked until you verify it.`;
       if (item.kind === 'completion') return 'The contractor says the activity is complete. Inspect the finished work and list any snags before certifying completion.';
       return `The contractor claims ${claimed}%. Last certified is ${certified}%. You are asked to confirm an increase of ${Math.round(Math.max(0, claimed - certified) * 100) / 100} points.`;
+    };
+    // What the contractor sees about the consultant side: opened or not, and when. Never who.
+    const receiptText = (item) => {
+      if (consultantSide) return '';
+      if (item.status === 'withdrawn') return item.seen_at ? `Opened by the consultant ${day(item.seen_at)} before it was withdrawn` : 'Not opened by the consultant before it was withdrawn';
+      if (item.status && item.status !== 'pending') return item.seen_at ? `Opened by the consultant ${day(item.seen_at)}` : '';
+      return item.seen_at ? `Opened by the consultant ${day(item.seen_at)}, no decision yet` : 'Not opened by the consultant yet';
+    };
+    const receiptChip = (item) => {
+      const text = receiptText(item);
+      return text ? `<span style="display:block;margin-top:6px;"><span style="${chipStyle}">${text}</span></span>` : '';
     };
     const stat = (label, value) => `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:8px;font-size:11px;color:#475569;">
       <span style="display:block;color:#64748b;">${label}</span><strong style="display:block;margin-top:3px;color:#1e293b;font-size:14px;">${value}</strong></div>`;
@@ -22159,57 +22210,179 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
         <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Approved reports shared as evidence (${item.shared_evidence.length})</summary>
         <div style="margin-top:6px;">${html}</div></details>`;
     };
-    const rowHtml = (item) => {
+    const rowShell = (item, unread, headHtml, bodyHtml) => `<article style="background:#fff;border:1px solid #dbe3ec;border-radius:10px;margin:0 0 10px;overflow:hidden;">
+        <button type="button" data-wf-vtoggle data-wf-id="${esc(item.id)}" data-wf-unread="${unread ? 'true' : 'false'}" aria-expanded="false"
+          style="display:block;width:100%;box-sizing:border-box;padding:12px 14px;border:0;background:#fff;cursor:pointer;text-align:left;font-family:inherit;color:#0f172a;">
+          ${headHtml}
+        </button>
+        <div data-wf-vbody hidden style="padding:12px 14px 14px;border-top:1px solid #e2e8f0;">${bodyHtml}</div>
+      </article>`;
+    const openButton = (item, label) => `<button type="button" class="rc-btn rc-btn--approve rc-btn--sm" data-wf-open-verification="${esc(item.id)}" style="margin-top:12px;">${label}</button>`;
+    const pendingRow = (item) => {
       const summary = item.activity_summary || {};
       const unit = item.activity_unit || '';
-      const dueColor = item.overdue ? '#b91c1c' : '#475569';
-      return `<article style="background:#fff;border:1px solid #dbe3ec;border-radius:10px;margin:0 0 10px;overflow:hidden;">
-        <button type="button" data-wf-vtoggle aria-expanded="false"
-          style="display:block;width:100%;box-sizing:border-box;padding:12px 14px;border:0;background:#fff;cursor:pointer;text-align:left;font-family:inherit;color:#0f172a;">
-          <span style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 12px;">
-            <strong style="font-size:14px;">${esc(item.activity_title)}</strong>
-            <span style="font-size:12px;font-weight:600;color:${dueColor};">${esc(dueText(item))}</span>
+      const unread = consultantSide && item.is_unread === true;
+      const head = `<span style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 12px;">
+            <span><strong style="font-size:14px;">${esc(item.activity_title)}</strong>${unread ? ` <span data-wf-new style="${chipStyle}font-weight:600;color:#0f172a;border-color:#0f172a;">New</span>` : ''}</span>
+            <span style="font-size:12px;font-weight:600;color:${item.overdue ? '#b91c1c' : '#475569'};">${esc(dueText(item))}</span>
           </span>
           <span style="display:block;margin-top:4px;font-size:12px;color:#64748b;">
             ${esc(kindLabel[item.kind] || String(item.kind).replace(/_/g, ' '))} review &middot; Claimed ${Number(item.claimed_progress_pct) || 0}% &middot; Certified ${Number(item.activity_certified_progress_pct) || 0}%
-            &middot; Respond by ${esc(String(item.respond_by).slice(0, 10))}
-          </span>
-        </button>
-        <div data-wf-vbody hidden style="padding:12px 14px 14px;border-top:1px solid #e2e8f0;">
-          <div style="font-size:12px;color:#334155;"><strong>What to check:</strong> ${checkText(item)}</div>
+            &middot; Respond by ${day(item.respond_by)}
+          </span>${receiptChip(item)}`;
+      const body = `<div style="font-size:12px;color:#334155;"><strong>What to check:</strong> ${checkText(item)}</div>
           ${item.request_note ? `<p style="margin:8px 0 0;font-size:12px;color:#475569;">Contractor note: ${esc(item.request_note)}</p>` : ''}
-          <div style="margin-top:8px;font-size:11px;color:#64748b;">Requested ${esc(String(item.requested_at || '').slice(0, 10))} by ${esc(item.requested_by_role || 'contractor')} &middot; Cut-off ${esc(String(item.cut_off_date || '').slice(0, 10))}${Number(item.pending_inspectors) > 0 ? ' &middot; Inspector recommendation pending' : ''}</div>
+          <div style="margin-top:8px;font-size:11px;color:#64748b;">Requested ${day(item.requested_at)} by ${esc(item.requested_by_role || 'contractor')} &middot; Cut-off ${day(item.cut_off_date)}${Number(item.pending_inspectors) > 0 ? ' &middot; Inspector recommendation pending' : ''}</div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:10px;">
             ${stat('Tasks', Number(summary.task_count) || 0)}
             ${stat('Approved reports', Number(summary.approved_report_count) || 0)}
             ${stat('Quantity reported', `${Number(summary.approved_quantity) || 0}${unit ? ' ' + esc(unit) : ''}${Number(summary.planned_quantity) > 0 ? ` of ${Number(summary.planned_quantity)}` : ''}`)}
           </div>
           ${sharedPlan(item)}${evidenceBlock(item)}
-          <button type="button" class="rc-btn rc-btn--approve rc-btn--sm" data-wf-open-verification="${esc(item.id)}" style="margin-top:12px;">
-            ${consultantSide ? 'Open full review and answer' : 'Open activity'}</button>
-        </div>
-      </article>`;
+          ${openButton(item, consultantSide ? 'Open full review and answer' : 'Open activity')}`;
+      return rowShell(item, unread, head, body);
     };
-    const heading = consultantSide ? 'Pending verifications' : 'Requests waiting for the consultant';
-    const body = rows.length ? rows.map(rowHtml).join('') : '<p style="color:#64748b;">No pending verification requests.</p>';
+    const historyRow = (item) => {
+      const claimed = Number(item.claimed_progress_pct) || 0;
+      const decided = item.status === 'withdrawn'
+        ? `Withdrawn &middot; requested ${day(item.requested_at)}`
+        : `Decided ${day(item.decided_at)}${item.decided_by_role ? ` by ${esc(item.decided_by_role)}` : ''}`;
+      const figures = item.status === 'rejected' || item.status === 'withdrawn'
+        ? `Claimed ${claimed}%`
+        : `Claimed ${claimed}% &middot; Certified ${Number(item.certified_progress_pct) || 0}%`;
+      const head = `<span style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 12px;">
+            <strong style="font-size:14px;">${esc(item.activity_title)}</strong>
+            <span style="${chipStyle}font-weight:600;">${esc(outcomeLabel[item.status] || String(item.status).replace(/_/g, ' '))}</span>
+          </span>
+          <span style="display:block;margin-top:4px;font-size:12px;color:#64748b;">
+            ${esc(kindLabel[item.kind] || String(item.kind).replace(/_/g, ' '))} review &middot; ${decided} &middot; ${figures}
+          </span>${receiptChip(item)}`;
+      const body = `${item.decision_reason ? `<div style="font-size:12px;color:#334155;"><strong>Decision note:</strong> ${esc(item.decision_reason)}</div>` : ''}
+          ${item.request_note ? `<p style="margin:8px 0 0;font-size:12px;color:#475569;">Contractor note: ${esc(item.request_note)}</p>` : ''}
+          <div style="margin-top:8px;font-size:11px;color:#64748b;">Requested ${day(item.requested_at)} by ${esc(item.requested_by_role || 'contractor')} &middot; Cut-off ${day(item.cut_off_date)}${item.kind === 'hold_point' && item.stage_title ? ` &middot; Stage: ${esc(item.stage_title)}` : ''}</div>
+          ${openButton(item, 'Open activity')}`;
+      return rowShell(item, false, head, body);
+    };
+
+    const state = { tab: 'pending', query: '', status: '', history: [], hasMore: false, loading: false, error: '', ticket: 0 };
     expandGrayPart(`<section style="padding:18px;overflow:auto;height:100%;box-sizing:border-box;">
       <button class="btn" type="button" onclick="collapseGrayPart()">← Back</button>
-      <h3 style="margin:14px 0 4px;color:#0f172a;">${heading}${rows.length ? ` (${rows.length})` : ''}</h3>
-      ${rows.length ? '<p style="margin:0 0 12px;font-size:12px;color:#64748b;">Most urgent first. Open a request to see what to check before you answer.</p>' : ''}${body}</section>`);
+      <h3 style="margin:14px 0 8px;color:#0f172a;">${consultantSide ? 'Verifications' : 'Verification requests'}</h3>
+      <div data-wf-vtabs style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+        <input type="search" data-wf-vsearch placeholder="Search activity, note or decision" aria-label="Search verification requests"
+          style="flex:1;min-width:200px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;">
+        <select data-wf-vstatus hidden aria-label="Filter by outcome" style="padding:8px;border:1px solid #cbd5e1;border-radius:7px;">
+          <option value="">All outcomes</option><option value="verified">Verified</option><option value="verified_with_changes">Verified with changes</option>
+          <option value="rejected">Rejected</option><option value="withdrawn">Withdrawn</option></select>
+      </div>
+      <p data-wf-vhint style="margin:0 0 12px;font-size:12px;color:#64748b;"></p>
+      <div data-wf-vlist></div></section>`);
     const panel = document.getElementById('grayContent');
-    panel?.querySelectorAll('[data-wf-vtoggle]').forEach((button) =>
-      button.addEventListener('click', () => {
-        const target = button.parentElement.querySelector('[data-wf-vbody]');
+    if (!panel) return;
+    const tabsEl = panel.querySelector('[data-wf-vtabs]');
+    const listEl = panel.querySelector('[data-wf-vlist]');
+    const hintEl = panel.querySelector('[data-wf-vhint]');
+    const searchEl = panel.querySelector('[data-wf-vsearch]');
+    const statusEl = panel.querySelector('[data-wf-vstatus]');
+
+    const paintTabs = () => {
+      const fresh = consultantSide ? pendingRows.filter((item) => item.is_unread === true).length : 0;
+      const tab = (key, label) => `<button type="button" data-wf-vtab="${key}" aria-pressed="${state.tab === key}"
+        style="padding:7px 14px;border:1px solid ${state.tab === key ? '#0f172a' : '#cbd5e1'};border-radius:999px;background:${state.tab === key ? '#0f172a' : '#fff'};color:${state.tab === key ? '#fff' : '#334155'};cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;">${label}</button>`;
+      tabsEl.innerHTML = tab('pending', `Pending (${pendingRows.length}${fresh ? `, ${fresh} new` : ''})`) + tab('history', 'History');
+    };
+    const paintList = () => {
+      if (state.tab === 'pending') {
+        const needle = state.query.trim().toLowerCase();
+        const shown = pendingRows.filter((item) => !needle || [item.activity_title, kindLabel[item.kind], item.request_note]
+          .some((value) => String(value || '').toLowerCase().includes(needle)));
+        hintEl.textContent = consultantSide
+          ? 'Most urgent first. Open a request to see what to check before you answer. New requests stay marked until you open them.'
+          : 'Requests the consultant has not answered yet. Each one shows whether the consultant has opened it.';
+        listEl.innerHTML = shown.length ? shown.map(pendingRow).join('')
+          : `<p style="color:#64748b;">${needle ? 'No pending request matches your search.' : 'No pending verification requests. Earlier requests are under History.'}</p>`;
+        return;
+      }
+      hintEl.textContent = 'Earlier requests, newest first. Search by activity, note or decision, or filter by outcome.';
+      if (state.error) { listEl.innerHTML = `<p style="color:#b91c1c;">${esc(state.error)}</p>`; return; }
+      if (state.loading && !state.history.length) { listEl.innerHTML = '<p style="color:#64748b;">Loading earlier requests...</p>'; return; }
+      const more = state.hasMore ? `<button type="button" class="rc-btn rc-btn--sm" data-wf-load-more ${state.loading ? 'disabled' : ''}>${state.loading ? 'Loading...' : 'Load more'}</button>` : '';
+      listEl.innerHTML = state.history.length ? state.history.map(historyRow).join('') + more
+        : `<p style="color:#64748b;">${state.query.trim() || state.status ? 'No earlier request matches your search.' : 'No earlier requests yet.'}</p>`;
+    };
+    const loadHistory = async (append = false) => {
+      const ticket = ++state.ticket;
+      state.loading = true;
+      state.error = '';
+      if (!append) { state.history = []; state.hasMore = false; }
+      paintList();
+      try {
+        const params = new URLSearchParams({ projectId: String(projectId), limit: '25', offset: String(append ? state.history.length : 0) });
+        if (state.query.trim()) params.set('q', state.query.trim());
+        if (state.status) params.set('status', state.status);
+        const result = await responseData(await _wcFetch(`${API}/verifications/history?${params.toString()}`));
+        if (ticket !== state.ticket) return;
+        state.history = append ? state.history.concat(result.history || []) : (result.history || []);
+        state.hasMore = Boolean(result.has_more);
+      } catch (error) {
+        if (ticket !== state.ticket) return;
+        state.error = `Unable to load earlier requests: ${error.message}`;
+      }
+      state.loading = false;
+      paintList();
+    };
+
+    paintTabs();
+    paintList();
+    window._refreshPendingBadge?.();
+
+    tabsEl.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-wf-vtab]');
+      if (!button || button.dataset.wfVtab === state.tab) return;
+      state.tab = button.dataset.wfVtab;
+      statusEl.hidden = state.tab !== 'history';
+      paintTabs();
+      if (state.tab === 'history') loadHistory(false); else paintList();
+    });
+    let searchTimer = null;
+    searchEl.addEventListener('input', () => {
+      state.query = searchEl.value;
+      if (state.tab === 'pending') { paintList(); return; }
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => loadHistory(false), 300);
+    });
+    statusEl.addEventListener('change', () => { state.status = statusEl.value; loadHistory(false); });
+    listEl.addEventListener('click', async (event) => {
+      const toggle = event.target.closest('[data-wf-vtoggle]');
+      if (toggle) {
+        const target = toggle.parentElement.querySelector('[data-wf-vbody]');
         const opening = target.hidden;
         target.hidden = !opening;
-        button.setAttribute('aria-expanded', String(opening));
-      }));
-    panel?.querySelectorAll('[data-wf-open-verification]').forEach((button) =>
-      button.addEventListener('click', async () => {
+        toggle.setAttribute('aria-expanded', String(opening));
+        if (opening && toggle.dataset.wfUnread === 'true') {
+          toggle.dataset.wfUnread = 'false';
+          const id = toggle.dataset.wfId;
+          window._markVerificationRead(id).then((ok) => {
+            if (!ok) { toggle.dataset.wfUnread = 'true'; return; }
+            const row = pendingRows.find((item) => String(item.id) === String(id));
+            if (row) row.is_unread = false;
+            toggle.querySelectorAll('[data-wf-new]').forEach((marker) => marker.remove());
+            paintTabs();
+            window._refreshPendingBadge?.();
+          });
+        }
+        return;
+      }
+      const open = event.target.closest('[data-wf-open-verification]');
+      if (open) {
         collapseGrayPart();
-        const opened = await window._openActivityVerificationNotification?.(button.dataset.wfOpenVerification);
+        const opened = await window._openActivityVerificationNotification?.(open.dataset.wfOpenVerification);
         if (!opened) alert('The activity could not be opened. Check your connection and try again. If it keeps failing, reload the page and open the request from the list again.');
-      }));
+        return;
+      }
+      if (event.target.closest('[data-wf-load-more]')) loadHistory(true);
+    });
   };
 
   window.downloadCloseoutReport = async function () {
