@@ -12879,7 +12879,8 @@ async function _openActivityVerificationNotification(verificationId, resolvedTar
     console.error('Could not retain the verification destination:', err);
   }
   collapseGrayPart();
-  const opened = await _openRecordNotification('planning_execution', activityId);
+  let opened = await _openRecordNotification('planning_execution', activityId, 2500);
+  if (!opened) opened = await _openActivityCardInPanel(activityId);
   if (!opened) return false;
   const tab = await _waitForElement(`#pe-detail-inner-${CSS.escape(String(activityId))} [data-pe-tab="certification"]`);
   tab?.click();
@@ -12888,7 +12889,23 @@ async function _openActivityVerificationNotification(verificationId, resolvedTar
   return Boolean(detail);
 }
 
-async function _openRecordNotification(entityType, entityId) {
+// Opens an activity card in the side panel. Used when the activity belongs to another side (a consultant reviewing a
+// contractor activity), so it is not in the viewer's own Planning and Execution list.
+async function _openActivityCardInPanel(activityId) {
+  try {
+    expandGrayPart(`<section style="padding:18px;overflow:auto;height:100%;box-sizing:border-box;">
+      <button class="btn" type="button" onclick="collapseGrayPart()">← Back</button>
+      <div id="pe-detail-inner-${escapeHtml(String(activityId))}" style="margin-top:12px;">
+        <p style="color:#64748b;font-size:13px;">Loading the activity...</p></div></section>`);
+    await _peLoadDetail(activityId, 'planning-execution');
+    return Boolean(document.getElementById(`pe-detail-inner-${CSS.escape(String(activityId))}`)?.querySelector('[data-pe-tab]'));
+  } catch (err) {
+    console.error('Could not open the activity card in the panel:', err);
+    return false;
+  }
+}
+
+async function _openRecordNotification(entityType, entityId, waitMs = 6000) {
   const tableTabs = {
     contractual_records: 'contractual',
     administrative_records: 'administrative',
@@ -12903,7 +12920,7 @@ async function _openRecordNotification(entityType, entityId) {
   if (!tabKey) return false;
   const section = WORKSPACE_TABS[tabKey] ? 'workspace' : 'Project-Records';
   _selectNotificationTab(section, tabKey);
-  if (!await _waitForCachedRecord(tabKey, entityId)) return false;
+  if (!await _waitForCachedRecord(tabKey, entityId, waitMs)) return false;
 
   const card = Array.from(document.querySelectorAll(`.doc-item[data-tab-key="${tabKey}"]`))
     .find(item => String(item.getAttribute('data-id')) === String(entityId));
@@ -16648,11 +16665,9 @@ function _peUpdateStatusBadge(task, trackingEntries) {
 async function _peLoadDetail(recordId, tabKey) {
   const container = document.getElementById(`pe-detail-inner-${recordId}`);
   if (!container) return;
-  const task = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
-  if (!task) {
-    container.innerHTML = `<p style="color:#ef4444;text-align:center;">Activity not found.</p>`;
-    return;
-  }
+  // The list only holds the viewer's own side. A consultant opening a contractor activity (from a verification
+  // request) has no cached record, so the card data from the server is used instead.
+  let task = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
   try {
     const projectId = localStorage.getItem('activeProjectId');
     const cardResponse = await _wcFetch(
@@ -16661,6 +16676,7 @@ async function _peLoadDetail(recordId, tabKey) {
     if (!cardResponse) throw new Error('Could not load the activity details.');
     const card = await cardResponse.json();
     if (!cardResponse.ok) throw new Error(card.error || `HTTP ${cardResponse.status}`);
+    if (!task) task = { ...card.activity };
     let verificationData = { verifications: [], rework: [] };
     if (card.activity.drives_milestone && card.viewer_side !== 'Client') {
       const verificationResponse = await _wcFetch(`${API}/activities/${encodeURIComponent(recordId)}/verifications`);
@@ -22191,7 +22207,8 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
     panel?.querySelectorAll('[data-wf-open-verification]').forEach((button) =>
       button.addEventListener('click', async () => {
         collapseGrayPart();
-        await window._openActivityVerificationNotification?.(button.dataset.wfOpenVerification);
+        const opened = await window._openActivityVerificationNotification?.(button.dataset.wfOpenVerification);
+        if (!opened) alert('The activity could not be opened. Check your connection and try again. If it keeps failing, reload the page and open the request from the list again.');
       }));
   };
 
