@@ -14770,6 +14770,58 @@ function _wcPlanRow(label, value) {
   </div>`;
 }
 
+function _cardAttachmentTypeOptions() {
+  return [
+    ['site_photos', 'Site photos / field evidence'],
+    ['daily_progress', 'Daily work progress evidence'],
+    ['materials_delivery', 'Material delivery / usage evidence'],
+    ['equipment', 'Equipment / plant evidence'],
+    ['manpower', 'Manpower / crew evidence'],
+    ['quality_test', 'Quality / test results'],
+    ['inspection_hold_point', 'Inspection / hold-point evidence'],
+    ['issue_delay', 'Field issue / delay evidence'],
+    ['other', 'Other'],
+  ];
+}
+
+function _cardAttachmentTypeFields(prefix) {
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-top:8px;">
+    <label style="display:block;font-size:11px;color:#526078;">Execution evidence type *
+      <select id="${prefix}-type" style="display:block;width:100%;margin-top:4px;padding:7px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;">
+        <option value="">Select a type</option>${_cardAttachmentTypeOptions().map(([value, label]) =>
+          `<option value="${value}">${label}</option>`).join('')}
+      </select>
+    </label>
+    <label style="display:block;font-size:11px;color:#526078;">Custom execution type (required for Other)
+      <input id="${prefix}-custom" type="text" maxlength="120" placeholder="Name the execution evidence"
+        style="display:block;width:100%;margin-top:4px;padding:7px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;"/>
+    </label>
+  </div>
+  <small style="display:block;margin-top:5px;color:#64748b;">The selected type applies to every selected file. Upload another batch to use a different type.</small>`;
+}
+
+function _cardAttachmentTypeValue(prefix) {
+  const attachmentType = document.getElementById(`${prefix}-type`)?.value || '';
+  const customAttachmentType = document.getElementById(`${prefix}-custom`)?.value.trim() || '';
+  if (!attachmentType) throw new Error('Choose an attachment type.');
+  if (attachmentType === 'other' && !customAttachmentType)
+    throw new Error('Enter a custom attachment type for Other.');
+  return { attachmentType, customAttachmentType: attachmentType === 'other' ? customAttachmentType : '' };
+}
+
+function _appendCardAttachmentType(form, prefix) {
+  const { attachmentType, customAttachmentType } = _cardAttachmentTypeValue(prefix);
+  form.append('attachmentType', attachmentType);
+  form.append('customAttachmentType', customAttachmentType);
+}
+
+function _cardAttachmentTypeLabel(file) {
+  const type = file.attachment_type || 'other';
+  const label = _cardAttachmentTypeOptions().find(([value]) => value === type)?.[1] || 'Other';
+  return type === 'other' && file.custom_attachment_type
+    ? `${label}: ${file.custom_attachment_type}` : label;
+}
+
 function _wcFilesHtml(task, reports, attachments, leader) {
   const taskFiles = [
     ...(task.linked_file_name ? [{ legacy: true, file_name: task.linked_file_name }] : []),
@@ -14781,6 +14833,7 @@ function _wcFilesHtml(task, reports, attachments, leader) {
       : `<button type="button" data-wc-attachment-preview="${escapeHtml(file.file_url)}"
           data-wc-attachment-name="${escapeHtml(file.file_name)}" data-wc-attachment-mime="${escapeHtml(file.mime_type || '')}"
           style="padding:0;border:0;background:none;color:#0369a1;cursor:pointer;text-align:left;overflow-wrap:anywhere;">${escapeHtml(file.file_name)}</button>
+        <span style="font-size:11px;color:#64748b;">${escapeHtml(_cardAttachmentTypeLabel(file))}</span>
         ${leader ? `<button type="button" data-wc-attachment-delete="${escapeHtml(String(file.id))}"
           style="padding:3px 7px;border:1px solid #fecaca;border-radius:5px;background:#fff;color:#b91c1c;cursor:pointer;">Remove</button>` : ''}`}
   </div>`).join('');
@@ -14798,7 +14851,7 @@ function _wcFilesHtml(task, reports, attachments, leader) {
       <input type="file" data-wc-attachment-input multiple style="font-size:12px;max-width:100%;"/>
       <button type="button" data-wc-attachment-upload
         style="padding:6px 10px;border:0;border-radius:6px;background:#007B8A;color:#fff;font-weight:600;cursor:pointer;">Upload selected files</button>
-    </div>` : ''}
+    </div>${_cardAttachmentTypeFields('wc-card-attachment-type')}` : ''}
     <div style="margin-top:14px;font-size:12px;font-weight:600;color:#172033;">Progress report attachments</div>
     ${reportFiles || '<div style="padding:7px 0;color:#64748b;">None attached.</div>'}
   </section>`;
@@ -14975,6 +15028,7 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
       const projectId = await ensureActiveProjectId();
       const body = new FormData();
       body.append('projectId', projectId);
+      _appendCardAttachmentType(body, 'wc-card-attachment-type');
       for (const file of input.files) body.append('attachments', file);
       const response = await _wcFetch(`${API}/work-center/${taskId}/attachments`, { method: 'POST', body });
       const result = response ? await response.json().catch(() => ({})) : {};
@@ -15963,6 +16017,7 @@ async function _wcOpenCreateForm() {
         <div>
           <label for="wc-cr-attachments" style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px;">Attachments (optional)</label>
           <input id="wc-cr-attachments" type="file" multiple style="font-size:12px;color:#374151;"/>
+          ${_cardAttachmentTypeFields('wc-create-attachment-type')}
         </div>
         <div style="max-width:260px;">
           <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Priority *</label>
@@ -16383,6 +16438,7 @@ async function _wcOpenCreateForm() {
         const body = new FormData();
         body.append('task', JSON.stringify(task));
         if (!isClientSide) body.append('new_task_weight_pct', String(activityTasks.length ? share : 100));
+        if (attachmentFiles.length) _appendCardAttachmentType(body, 'wc-create-attachment-type');
         for (const file of attachmentFiles) body.append('attachments', file);
         const res = await _wcFetch(`${API}/planning-execution/${encodeURIComponent(activityId)}/tasks`, {
           method: 'POST', body,
@@ -16408,6 +16464,7 @@ async function _wcOpenCreateForm() {
         body.append('location_zone', location.zone);
         body.append('location_grid', location.grid);
         body.append('location_drawing', location.drawing);
+        if (attachmentFiles.length) _appendCardAttachmentType(body, 'wc-create-attachment-type');
         for (const file of attachmentFiles) body.append('attachments', file);
         const res = await _wcFetch(`${API}/work-center`, { method: 'POST', body });
         if (!res) throw new Error('Could not create the standalone task.');
@@ -16823,6 +16880,7 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
                 data-pe-attachment-name="${escapeHtml(file.file_name)}" data-pe-attachment-mime="${escapeHtml(file.mime_type || '')}"
                 style="padding:0;border:0;background:none;color:#0369a1;cursor:pointer;text-align:left;overflow-wrap:anywhere;">${escapeHtml(file.file_name)}</button>`
             : `<span style="font-size:13px;color:#334155;">${escapeHtml(file.file_name)}</span>`}
+          ${!file.legacy ? `<span style="font-size:11px;color:#64748b;">${escapeHtml(_cardAttachmentTypeLabel(file))}</span>` : ''}
           ${canEditAttachments && !file.legacy
             ? `<button type="button" data-pe-attachment-delete="${escapeHtml(String(file.id))}"
                 style="padding:3px 7px;border:1px solid #fecaca;border-radius:5px;background:#fff;color:#b91c1c;cursor:pointer;">Remove</button>` : ''}
@@ -16831,7 +16889,7 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
         <input type="file" data-pe-attachment-input multiple style="font-size:12px;max-width:100%;"/>
         <button type="button" data-pe-attachment-upload
           style="padding:7px 11px;border:0;border-radius:7px;background:#007B8A;color:#fff;font-weight:600;cursor:pointer;">Upload selected files</button>
-      </div>` : ''}
+      </div>${_cardAttachmentTypeFields('pe-card-attachment-type')}` : ''}
     </section>`;
   const taskRows = tasks.length ? tasks.map(task => {
     const tStatus = String(task.status || 'not_started');
@@ -17233,6 +17291,7 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
       const projectId = localStorage.getItem('activeProjectId');
       const body = new FormData();
       body.append('projectId', projectId || '');
+      _appendCardAttachmentType(body, 'pe-card-attachment-type');
       for (const file of input.files) body.append('attachments', file);
       const response = await _wcFetch(`${API}/planning-execution/${encodeURIComponent(recordId)}/attachments`,
         { method: 'POST', body });
@@ -18318,6 +18377,7 @@ function _pe2FormHtml() {
       <div>
         <label style="${_peLabelStyle()}">Attachments (optional)</label>
         <input id="pe2-attachments" type="file" multiple style="font-size:13px;color:#374151;"/>
+        ${_cardAttachmentTypeFields('pe2-attachment-type')}
       </div>
 
       <div style="border-top:1px solid #e5e7eb;padding-top:12px;">
@@ -18646,7 +18706,9 @@ function _pe2Payload(confirmReplace) {
     ...(many ? { weight_pct: t.weight } : {}),
     ...(_pe2.type === 'stages' ? { stages: t.stages.map((s) => ({ title: s.title.trim(), weight_pct: s.weight, is_hold_point: !!s.hold })) } : {}),
   }))));
-  for (const file of document.getElementById('pe2-attachments')?.files || [])
+  const attachmentFiles = document.getElementById('pe2-attachments')?.files || [];
+  if (attachmentFiles.length) _appendCardAttachmentType(form, 'pe2-attachment-type');
+  for (const file of attachmentFiles)
     form.append('attachments', file);
   if (confirmReplace) form.append('confirm_replace_manual', 'true');
   return form;
