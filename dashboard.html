@@ -1027,6 +1027,33 @@
       margin-left: 4px; padding: 2px 7px; border-radius: var(--chip-radius);
       background: #eef2f7; font-size: 11px;
     }
+    .pe-tab-count--warn { background: #fef3c7; color: #92400e; font-weight: 700; }
+    /* Activity card: one text scale, one set of status colours */
+    .pe-row-title { font-size: 15px; font-weight: 600; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pe-row-meta { font-size: 12px; color: #475569; margin-top: 4px; }
+    .pe-due--late { color: #b91c1c; font-weight: 600; }
+    .pe-due--soon { color: #92400e; font-weight: 600; }
+    .pe-row-bar { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+    .pe-row-bar strong { font-size: 13px; color: #0f172a; }
+    .pe-row-bar span { font-size: 12px; color: #475569; white-space: nowrap; }
+    .pe-bar { flex: 1; height: 6px; border-radius: 999px; background: #e2e8f0; overflow: hidden; }
+    .pe-bar > i { display: block; height: 100%; border-radius: 999px; }
+    .pe-chip-warn { padding: 3px 9px; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 11px; font-weight: 600; white-space: nowrap; }
+    .pe-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1px; background: #e2e8f0; border-bottom: 1px solid #e2e8f0; }
+    .pe-kpi { background: #fff; padding: 14px 20px; }
+    .pe-kpi-l { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #475569; }
+    .pe-kpi-v { font-size: 24px; font-weight: 700; margin-top: 4px; color: #0f172a; }
+    .pe-panel { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 18px 20px; }
+    .pe-label { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #475569; }
+    .pe-text { font-size: 14px; line-height: 1.55; color: #0f172a; margin-top: 6px; overflow-wrap: anywhere; }
+    .pe-task { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; width: 100%; box-sizing: border-box; text-align: left; padding: 14px 16px; margin-bottom: 10px; background: #fff; border: 1px solid #cbd5e1; border-radius: 10px; cursor: pointer; font-family: inherit; color: #0f172a; }
+    .pe-task:hover, .pe-task:focus-visible { border-color: #0f766e; box-shadow: 0 1px 4px rgba(15,118,110,.2); outline: none; }
+    .pe-task-open { display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: #0f766e; white-space: nowrap; }
+    .pe-tchip { padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; background: #e2e8f0; color: #334155; }
+    .pe-tchip--ok { background: #dcfce7; color: #166534; }
+    .pe-tchip--active { background: #ccfbf1; color: #0f766e; }
+    .pe-stage { padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: #334155; font-size: 11px; }
+    .pe-stage--done { background: #dcfce7; color: #166534; }
     /* Back link, empty state, Add button */
     .bottom-list-back {
       display: inline-flex; align-items: center; gap: 6px;
@@ -13517,6 +13544,14 @@ bottomContent.addEventListener('click', (e) => {
     { _wcDownloadProgress(actionEl.getAttribute('data-progress-id'), actionEl.getAttribute('data-filename')); return; }
 });
 
+bottomContent.addEventListener('change', (event) => {
+  const dateInput = event.target.closest('input[id^="wc-pr-date-"]');
+  if (!dateInput) return;
+  const taskId = dateInput.id.slice('wc-pr-date-'.length);
+  const task = (recordsCache['work-center'] || []).find((record) => String(record.id) === taskId);
+  const delayInput = document.getElementById(`wc-pr-delay-days-${taskId}`);
+  if (delayInput) delayInput.value = String(_wcReportDelayDays(dateInput.value, task?.end_date));
+});
 
 // ███████████████████████████████████████████████████████████████████████
 //  WORK CENTER
@@ -13528,6 +13563,18 @@ function _wcFmtDate(raw) {
   const date = new Date(year, month - 1, day);
   if (!year || !month || !day || Number.isNaN(date.getTime())) return '—';
   return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function _wcReportDelayDays(reportDate, plannedEndDate) {
+  const toUtcDay = (value) => {
+    const text = String(value || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+    const time = Date.parse(`${text}T00:00:00Z`);
+    return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === text ? time : null;
+  };
+  const reportDay = toUtcDay(reportDate), plannedEndDay = toUtcDay(plannedEndDate);
+  if (reportDay == null || plannedEndDay == null || reportDay <= plannedEndDay) return 0;
+  return Math.floor((reportDay - plannedEndDay) / 86400000);
 }
 
 function _wcDeriveStatus(task) {
@@ -14567,9 +14614,11 @@ function _wcMemberView(task, myEntries) {
               <option value="labor">Labor</option><option value="other">Other</option>
             </select>
           </div>
-          <div>${_wcLabel('Delay days')}
-            <input id="wc-pr-delay-days-${task.id}" type="number" min="0" max="365" step="1" value="0"
+          <div>${_wcLabel('Delay days (auto)')}
+            <input id="wc-pr-delay-days-${task.id}" type="number" min="0" max="365" step="1"
+              value="${_wcReportDelayDays(new Date().toISOString().slice(0, 10), task.end_date)}" readonly
               style="width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box;"/>
+            <small style="display:block;color:#64748b;margin-top:3px;">Calculated from the report date and task planned end date.</small>
           </div>
         </div>
         <div>${_wcLabel('Delay explanation')}
@@ -15147,9 +15196,11 @@ function _wcReportExtraHtml(entry) {
       ? `Member ${resource.assigned_member_id}` : 'Assigned group');
     return `<span style="${chip}">${escapeHtml(resource.resource_type)}: ${escapeHtml(resource.name)}${amount ? ` \u00b7 ${amount}` : ''}${hours ? ` \u00b7 ${hours}` : ''} \u00b7 ${escapeHtml(assignedTo)}</span>`;
   }).join('');
-  const delayHtml = entry.delay_cause ? `
+  const scheduleDelayDays = Number(entry.schedule_delay_days ?? entry.delay_days) || 0;
+  const delayHtml = entry.delay_cause || scheduleDelayDays > 0 ? `
     <span style="display:inline-block;font-size:12px;background:#fffbeb;color:#92400e;padding:3px 9px;border-radius:6px;margin:0 6px 6px 0;">
-      Delay: ${escapeHtml(entry.delay_cause)}${Number(entry.delay_days) ? ` \u00b7 ${escapeHtml(String(entry.delay_days))} day(s)` : ''}
+      ${entry.delay_cause ? `Delay: ${escapeHtml(entry.delay_cause)}` : 'Schedule delay'}
+      ${scheduleDelayDays ? ` \u00b7 ${escapeHtml(String(scheduleDelayDays))} day(s) past planned end` : ''}
       ${entry.delay_note ? ` \u00b7 ${escapeHtml(entry.delay_note)}` : ''}
     </span>` : '';
   return `${photoHtml ? `<div style="margin-top:8px;"><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;">${photoHtml}</div>${photoCaption}</div>` : ''}
@@ -15481,7 +15532,7 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
     })).filter((resource) => resource.name);
     form.append('resources', JSON.stringify(resources));
     form.append('delayCause', document.getElementById(`wc-pr-delay-cause-${taskId}`)?.value || '');
-    form.append('delayDays', document.getElementById(`wc-pr-delay-days-${taskId}`)?.value || '0');
+    form.append('delayDays', String(_wcReportDelayDays(reportDate, task.end_date)));
     form.append('delayNote', document.getElementById(`wc-pr-delay-note-${taskId}`)?.value.trim() || '');
     const file = g('file');
     if (file?.files?.[0]) form.append('attachment', file.files[0]);
@@ -16396,7 +16447,7 @@ function _renderPEList(records) {
       const startDate = formatDate(r.start_date);
       const endDate   = formatDate(r.end_date);
       const pct       = Math.min(100, Number(r.progress_pct ?? r.actual_progress ?? r.avg_progress) || 0);
-      const barColor  = pct >= 100 ? '#10b981' : '#3b82f6';
+      let barColor  = pct >= 100 ? '#15803d' : '#0f766e';
       const hasQuantity = ['quantity', 'count'].includes(String(r.activity_type || '').toLowerCase()) &&
         Number(r.planned_quantity) > 0;
       const amountLine = hasQuantity
@@ -16410,6 +16461,10 @@ function _renderPEList(records) {
       const timeNote = status.label === 'Completed' ? '' : dayDelta === null ? ''
         : dayDelta < 0 ? `${Math.abs(dayDelta)} day${Math.abs(dayDelta) === 1 ? '' : 's'} overdue`
           : dayDelta === 0 ? 'Due today' : `${dayDelta} day${dayDelta === 1 ? '' : 's'} left`;
+      const timeCls = !timeNote ? '' : dayDelta < 0 ? 'pe-due--late' : dayDelta <= 3 ? 'pe-due--soon' : '';
+      if (dayDelta !== null && dayDelta < 0 && pct < 100) barColor = '#b91c1c';
+      const amountDetail = hasQuantity ? `${Number(r.approved_actual_quantity || 0)} of ${Number(r.planned_quantity)} ${r.unit || ''}` : '';
+      const reviewCount = Number(r.pending_report_count) || 0;
 
       return `
         <li class="doc-item" data-id="${escapeHtml(String(r.id))}" data-tab-key="planning-execution"
@@ -16418,37 +16473,24 @@ function _renderPEList(records) {
           <div class="doc-item-header" data-action="toggle"
             style="display:flex;flex-wrap:wrap;align-items:center;padding:12px 16px;cursor:pointer;gap:12px;">
             <div style="flex:1;min-width:0;">
-              <div style="font-weight:600;font-size:14px;color:#1f2937;
-                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                ${escapeHtml(r.title)}
+              <div class="pe-row-title">${escapeHtml(r.title)}</div>
+              <div class="pe-row-meta">
+                ${escapeHtml(String(r.activity_type || 'progress').replace(/_/g, ' '))}
+                · ${escapeHtml(startDate)} – ${escapeHtml(endDate)}
+                ${timeNote ? ` · <span class="${timeCls}">${escapeHtml(timeNote)}</span>` : ''}
+                · ${Number(r.task_count) || 0} task${Number(r.task_count) === 1 ? '' : 's'}
               </div>
-              <div style="font-size:11px;color:#9ca3af;margin-top:3px;">
-                Created by <strong style="color:#6b7280;">${String(r.creator_id) === String(window.currentUserId) ? 'you' : escapeHtml(r.creator_role || 'project team')}</strong>
-                &nbsp;·&nbsp; ${escapeHtml(startDate)} – ${escapeHtml(endDate)}
-              </div>
-              <div style="font-size:11px;color:#64748b;margin-top:3px;">
-                ${escapeHtml(r.activity_type || 'Progress')}
-                ${hasQuantity ? ` · Planned ${escapeHtml(String(r.planned_quantity))} ${escapeHtml(r.unit || '')}` : ''}
-                ${timeNote ? ` · ${escapeHtml(timeNote)}` : ''}
-              </div>
-              <div style="margin-top:7px;display:flex;align-items:center;gap:8px;">
-                <div style="flex:1;background:#e5e7eb;border-radius:999px;height:6px;">
-                  <div style="background:${barColor};height:6px;border-radius:999px;
-                    width:${pct}%;transition:width .4s;"></div>
-                </div>
-                <span style="font-size:11px;font-weight:700;color:${barColor};min-width:34px;text-align:right;">
-                  ${escapeHtml(amountLine)}</span>
-              </div>
-              <div style="font-size:11px;color:#64748b;margin-top:5px;">
-                ${Number(r.task_count) || 0} task${Number(r.task_count) === 1 ? '' : 's'}
-                ${Number(r.pending_report_count) ? ` · ${Number(r.pending_report_count)} report${Number(r.pending_report_count) === 1 ? '' : 's'} awaiting review` : ''}
+              <div class="pe-row-bar">
+                <div class="pe-bar"><i style="width:${pct}%;background:${barColor};"></i></div>
+                <strong>${pct}%</strong>${amountDetail ? `<span>${escapeHtml(amountDetail)}</span>` : ''}
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+              ${reviewCount ? `<span class="pe-chip-warn">${reviewCount} to review</span>` : ''}
               <span id="pe-status-badge-${r.id}"
                 class="ui-chip" style="border-radius:var(--chip-radius);padding:4px 10px;font-size:11px;font-weight:600;
                 white-space:nowrap;background:${status.color}18;color:${status.color};">${status.label}</span>
-              <span style="color:#9ca3af;font-size:16px;" class="chevron-${r.id}">▾</span>
+              <span style="color:#475569;font-size:16px;" class="chevron-${r.id}">▾</span>
             </div>
           </div>
           <div class="doc-detail" id="pe-detail-${r.id}" style="display:none;border-top:1px solid #e5e7eb;">
@@ -16530,9 +16572,9 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
   const canCertify = Boolean(activity.drives_milestone && activity.side === 'Contractor' && viewerSide !== 'Client');
   const tabs = [
     ['overview', 'Overview'],
-    ...(clientView ? [] : [['tasks', `Tasks (${tasks.length})`]]),
+    ...(clientView ? [] : [['tasks', 'Tasks', tasks.length]]),
     ['progress', 'Progress'],
-    ...(canCertify ? [['certification', 'Certification']] : []),
+    ...(canCertify ? [['certification', 'Certification', verifications.filter(item => item.status === 'pending').length, true]] : []),
   ];
   const activeTab = tabs.some(([id]) => id === selectedTab) ? selectedTab : 'overview';
   const certified = Math.max(0, Math.min(100, Number(activity.certified_progress_pct) || 0));
@@ -16561,61 +16603,54 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
   const actual = clientView ? `${certified}% certified` : activity.activity_type === 'quantity' || activity.activity_type === 'count'
     ? `${reports.reduce((sum, item) => sum + (Number(item.quantity_done) || 0), 0)} ${activity.unit || ''}`
     : `${progress}%`;
-  const tabButtons = tabs.map(([id, label]) => `
+  const tabButtons = tabs.map(([id, label, count, warn]) => `
     <button class="detail-tab" type="button"
-      data-pe-tab="${id}" aria-selected="${id === activeTab ? 'true' : 'false'}">${escapeHtml(label)}</button>`).join('');
+      data-pe-tab="${id}" aria-selected="${id === activeTab ? 'true' : 'false'}">${escapeHtml(label)}${count ? ` <span class="detail-tab-count${warn ? ' pe-tab-count--warn' : ''}">${count}</span>` : ''}</button>`).join('');
+  const resCell = (label, value) => `<div><div style="font-size:11px;color:#475569;">${label}</div><div style="margin-top:2px;font-size:13px;line-height:1.5;overflow-wrap:anywhere;">${escapeHtml(String(value || '—'))}</div></div>`;
   const overview = `
     <section style="display:grid;gap:14px;">
-      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;">
-        <h3 style="margin:0 0 12px;color:#0f172a;font-size:15px;">1. The activity</h3>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
-          ${_peInfoCell('Milestone', milestoneTitle || 'Standalone activity')}
-          ${milestoneTitle ? _peInfoCell('Milestone period', `${dateText(milestoneStart)} – ${dateText(milestoneEnd)}`) : ''}
-          ${_peInfoCell('Scope', activity.description || 'No scope description provided.')}
-          ${_peInfoCell('Finished when', activity.done_when || 'No completion condition provided.')}
-          ${_peInfoCell('Created on', dateText(activity.created_at))}
-          ${activity.linked_file_name ? _peInfoCell('Plan file', activity.linked_file_name) : ''}
+      <div class="pe-panel" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:24px;">
+        <div><div class="pe-label">Scope</div><div class="pe-text">${escapeHtml(activity.description || 'No scope description provided.')}</div></div>
+        <div><div class="pe-label">Finished when</div><div class="pe-text">${escapeHtml(activity.done_when || 'No completion condition provided.')}</div></div>
+      </div>
+      <div class="pe-panel">
+        <div class="pe-label">Planned resources</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin-top:10px;">
+          ${resCell('Work', activity.planned_work)}${resCell('Manpower', activity.planned_manpower)}
+          ${resCell('Equipment', activity.planned_equipment)}${resCell('Materials', activity.planned_materials)}
         </div>
       </div>
-      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;">
-        <h3 style="margin:0 0 12px;color:#0f172a;font-size:15px;">2. How progress is measured</h3>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
-          ${_peInfoCell('Measure', String(activity.activity_type || 'progress').replace(/_/g, ' '))}
-          ${_peInfoCell('Planned amount', measure)}
-          ${_peInfoCell(clientView ? 'Certified progress' : 'Approved work to date', actual)}
-        </div>
-        <p style="margin:12px 0 0;color:#64748b;font-size:12px;line-height:1.55;">
-          ${clientView ? 'Only consultant-certified progress is shown to the client.' : 'Progress is calculated from approved reports submitted against this activity’s tasks.'}</p>
-      </div>
-      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;">
-        <h3 style="margin:0 0 12px;color:#0f172a;font-size:15px;">3. Planned resources</h3>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
-          ${_peInfoCell('Planned work', activity.planned_work || '—')}
-          ${_peInfoCell('Manpower', activity.planned_manpower || '—')}
-          ${_peInfoCell('Equipment', activity.planned_equipment || '—')}
-          ${_peInfoCell('Materials', activity.planned_materials || '—')}
-        </div>
+      <div style="font-size:12px;color:#475569;padding:0 4px;line-height:1.6;">
+        ${activity.drives_milestone && milestoneTitle ? `Counts for ${Number(activity.milestone_weight_pct) || 0}% of ${escapeHtml(milestoneTitle)}${milestoneStart || milestoneEnd ? ` (${escapeHtml(dateText(milestoneStart))} – ${escapeHtml(dateText(milestoneEnd))})` : ''}<br>` : ''}
+        ${activity.linked_file_name ? `Plan file: ${escapeHtml(activity.linked_file_name)} · ` : ''}Created ${escapeHtml(dateText(activity.created_at))}${activity.creator_role ? ` by ${escapeHtml(activity.creator_role)}` : ''}
       </div>
     </section>`;
-  const taskRows = tasks.length ? tasks.map(task => `
-    <article style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;margin-bottom:10px;">
-      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-        <strong style="color:#0f172a;">${escapeHtml(task.title || 'Untitled task')}</strong>
-        <span style="font-size:12px;color:#475569;">${Number(task.progress_pct) || 0}% · ${escapeHtml(String(task.status || 'not yet started').replace(/_/g, ' '))}</span>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:10px;font-size:12px;color:#475569;">
-        <span>Assigned to: ${escapeHtml((task.assigned_members || []).map(member => member.name || member.full_name || member.email || member.position || 'Team member').join(', ') || 'Not assigned')}</span>
-        <span>Dates: ${dateText(task.start_date)} – ${dateText(task.end_date)}</span>
-        <span>Activity share: ${Number(task.weight_pct) || 0}%</span>
-        ${task.target_quantity != null ? `<span>Target: ${Number(task.target_quantity)} ${escapeHtml(activity.unit || '')}</span>` : ''}
-        ${Number(task.pending_report_count) ? `<span style="color:#92400e;">${Number(task.pending_report_count)} report(s) awaiting review</span>` : ''}
-      </div>
-      ${task.description ? `<p style="margin:10px 0 0;color:#64748b;font-size:12px;">${escapeHtml(task.description)}</p>` : ''}
-      ${task.priority ? `<div style="margin-top:7px;font-size:11px;color:#64748b;">Priority: <strong style="color:#334155;">${escapeHtml(String(task.priority).replace(/_/g, ' '))}</strong></div>` : ''}
-      ${(task.stages || []).length ? `<div style="margin-top:9px;padding-top:8px;border-top:1px solid #e2e8f0;font-size:11px;color:#475569;">
-        <strong>Stages:</strong> ${(task.stages || []).map(stage => `${escapeHtml(stage.title)} (${Number(stage.weight_pct) || 0}%${stage.is_hold_point ? ', hold point' : ''}${stage.completed_at ? ', complete' : ''}${stage.hold_verified_at ? ', verified' : ''})`).join(' · ')}
-      </div>` : ''}
-    </article>`).join('') : '<p style="color:#64748b;">No tasks have been added to this activity yet.</p>';
+  const taskRows = tasks.length ? tasks.map(task => {
+    const tStatus = String(task.status || 'not_started');
+    const tCls = tStatus === 'completed' ? 'pe-tchip--ok' : tStatus === 'in_progress' ? 'pe-tchip--active' : '';
+    const tPct = Math.max(0, Math.min(100, Number(task.progress_pct) || 0));
+    const people = (task.assigned_members || []).map(member => member.name || member.full_name || member.email || member.position || 'Team member').join(', ') || 'Not assigned';
+    const pendingReports = Number(task.pending_report_count) || 0;
+    const stageChips = (task.stages || []).map(stage => `<span class="pe-stage${stage.completed_at ? ' pe-stage--done' : ''}">${stage.completed_at ? '✓ ' : ''}${escapeHtml(stage.title)}${stage.is_hold_point ? ' · hold point' : ''}${stage.hold_verified_at ? ' · verified' : ''}</span>`).join('');
+    return `
+    <button type="button" class="pe-task" data-pe-open-task="${escapeHtml(String(task.id))}" aria-label="Open task ${escapeHtml(task.title || 'Untitled task')} in Work Centre">
+      <span style="flex:1;min-width:220px;display:block;">
+        <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <strong style="font-size:14px;">${escapeHtml(task.title || 'Untitled task')}</strong>
+          <span class="pe-tchip ${tCls}">${escapeHtml(tStatus.replace(/_/g, ' '))}</span>
+          ${pendingReports ? `<span class="pe-chip-warn">${pendingReports} to review</span>` : ''}
+        </span>
+        <span style="display:block;font-size:12px;color:#475569;margin-top:4px;">${escapeHtml(people)} · ${escapeHtml(dateText(task.start_date))} – ${escapeHtml(dateText(task.end_date))} · ${Number(task.weight_pct) || 0}% of activity</span>
+        <span style="display:flex;align-items:center;gap:10px;margin-top:8px;">
+          <span class="pe-bar"><i style="width:${tPct}%;background:#0f766e;"></i></span>
+          <strong style="font-size:12px;">${tPct}%</strong>
+          ${task.target_quantity != null ? `<span style="font-size:12px;color:#475569;">Target ${Number(task.target_quantity)} ${escapeHtml(activity.unit || '')}</span>` : ''}
+        </span>
+        ${stageChips ? `<span style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">${stageChips}</span>` : ''}
+      </span>
+      <span class="pe-task-open">Open in Work Centre <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+    </button>`;
+  }).join('') : '<p style="color:#475569;">No tasks have been added to this activity yet.</p>';
   const orderedReports = [...reports].sort((a, b) => String(a.report_date).localeCompare(String(b.report_date)) ||
     String(a.submitted_at).localeCompare(String(b.submitted_at)));
   let runningQuantity = 0;
@@ -16658,19 +16693,15 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
     </tr>`;
   }).join('') : '';
   const progressPanel = clientView ? `
-    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;">
-      <strong>Certified progress: ${certified}%</strong>
-      <p style="font-size:12px;color:#64748b;margin:8px 0 0;">Task reports and claimed progress are not shown in the client view.</p>
+    <div class="pe-panel">
+      <p style="font-size:13px;color:#475569;margin:0;">Task reports and claimed progress are not shown in the client view. Certified progress is shown at the top of this card.</p>
     </div>` : `
-    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;">
-      <div style="display:flex;flex-wrap:wrap;gap:18px;margin-bottom:14px;">
-        <strong>${clientView ? `Certified: ${escapeHtml(actual)}` : `Actual: ${escapeHtml(actual)}`}</strong>
-        ${clientView ? '' : `<span style="color:#64748b;">${progress}% claimed progress</span>`}
-      </div>
-      ${orderedReports.length ? `<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">
-        <thead><tr>${['Date','Task','Reported by','Approved work','Running total','Work description'].map(label => `<th style="text-align:left;padding:8px;border-bottom:1px solid #e5e7eb;color:#64748b;">${label}</th>`).join('')}</tr></thead>
-        <tbody>${reportRows}</tbody></table></div>` : '<p style="color:#64748b;">No approved task reports have been recorded yet.</p>'}
-    </div>`;
+    <div class="pe-panel" style="padding:0;overflow:hidden;">
+      ${orderedReports.length ? `<div style="overflow:auto;"><table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr>${['Date','Task','Reported by','Approved work','Running total','Work done'].map(label => `<th style="text-align:left;padding:10px 12px;border-bottom:1px solid #e2e8f0;color:#475569;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;">${label}</th>`).join('')}</tr></thead>
+        <tbody>${reportRows}</tbody></table></div>` : '<p style="color:#475569;padding:16px;margin:0;">No approved task reports have been recorded yet.</p>'}
+    </div>
+    <p style="font-size:12px;color:#475569;margin:10px 0 0;">Only approved reports are listed. Reports waiting for review are on the Tasks tab.</p>`;
   const verificationPanel = canCertify
     ? _peCertificationPanel(activity, tasks, reports, verifications, rework, viewerSide)
     : '';
@@ -16682,16 +16713,17 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
   };
   return `
     <div style="background:var(--section-bg);border:1px solid var(--section-border);border-radius:var(--section-radius);overflow:hidden;">
-      <div style="padding:18px;background:#f8fafc;border-bottom:1px solid var(--section-border);">
-        <div style="display:flex;gap:12px;align-items:center;margin-top:0;">
-          <div style="height:8px;background:#e2e8f0;border-radius:999px;flex:1;overflow:hidden;">
-            <div style="height:100%;width:${progress}%;background:${progress >= 100 ? '#16a34a' : '#0f766e'};border-radius:999px;"></div>
-          </div><strong style="font-size:12px;color:#334155;">${progress}% · ${escapeHtml(actual)}</strong>
-        </div>
-        ${clientView ? '' : `<div style="margin-top:7px;font-size:12px;color:#64748b;">Planned by today ${plannedToday}% · Actual ${progress}% · ${progress - plannedToday > 0 ? '+' : ''}${Math.round((progress - plannedToday) * 10) / 10}% difference</div>`}
-        ${activity.drives_milestone ? `<div style="margin-top:8px;font-size:12px;color:#64748b;">${clientView
-          ? `Certified ${certified}%`
-          : `Claimed ${Number(activity.claimed_progress_pct) || 0}% · Certified ${certified}% · Activity share ${Number(activity.milestone_weight_pct) || 0}%`}</div>` : ''}
+      <div class="pe-kpis">
+        ${(() => {
+          const variance = Math.round((progress - plannedToday) * 10) / 10;
+          const kpi = (label, value, color) => `<div class="pe-kpi"><div class="pe-kpi-l">${label}</div><div class="pe-kpi-v"${color ? ` style="color:${color};"` : ''}>${value}</div></div>`;
+          return [
+            kpi('Planned today', `${plannedToday}%`),
+            kpi(clientView ? 'Certified' : 'Actual', `${progress}%`),
+            kpi('Variance', `${variance > 0 ? '+' : variance < 0 ? '−' : ''}${Math.abs(variance)}%`, variance < 0 ? '#b91c1c' : variance > 0 ? '#15803d' : ''),
+            ...(activity.drives_milestone && !clientView ? [kpi('Certified', `${certified}%`, '#0f766e')] : []),
+          ].join('');
+        })()}
       </div>
       <nav aria-label="Activity details" class="detail-tab-list">${tabButtons}</nav>
       <div style="padding:16px;background:#f8fafc;">${tabs.map(([id]) => `<div data-pe-pane="${id}" style="display:${id === activeTab ? 'block' : 'none'};">${panes[id] || ''}</div>`).join('')}</div>
@@ -16902,7 +16934,7 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
     <div style="background:#f1f5f9;border:1px solid #dbe3ec;border-radius:10px;padding:14px;margin-bottom:14px;">
       <h3 style="margin:0 0 6px;color:#0f172a;font-size:15px;">Milestone certification</h3>
       <div style="font-size:12px;color:#475569;">${escapeHtml(activity.baseline_milestone_title || activity.additional_milestone_title || activity.milestone_name || 'Linked milestone')}
-        · Activity share ${Number(activity.milestone_weight_pct) || 0}% · Claimed ${Number(activity.claimed_progress_pct) || 0}% · Certified ${Number(activity.certified_progress_pct) || 0}%</div>
+</div>
       <div style="margin-top:6px;font-size:11px;color:#64748b;">Request verification when this milestone’s work is ready to be checked.</div>
       <button class="rc-btn rc-btn--sm" type="button" data-pe-action="open-milestone"
         data-milestone-kind="${activity.baseline_milestone_id ? 'baseline' : 'additional'}"
@@ -17050,6 +17082,10 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
       button.disabled = false;
       _peShowActivityNotice(recordId, `Could not withdraw request: ${err.message}`, true);
     }
+  }));
+  container.querySelectorAll('[data-pe-open-task]').forEach(button => button.addEventListener('click', async () => {
+    const opened = await _openRecordNotification('work_center_task', button.getAttribute('data-pe-open-task'));
+    if (!opened) _peShowActivityNotice(recordId, 'Could not open this task in Work Centre.', true);
   }));
   container.querySelectorAll('[data-pe-action="add-task"]').forEach(button => button.addEventListener('click', () => {
     sessionStorage.setItem('wc-create-activity-id', String(button.dataset.activityId));
