@@ -13779,102 +13779,317 @@ async function _wcLoadDetail(recordId, tabKey) {
 
     _wcWireDetailButtons(recordId, task, leader);
     if (leader) _wcWirePMMembers(recordId, assignedMembers);
-    if (leader || isAssigned) await _wcRenderTaskCardExtras(task, container, leader);
+    if (leader || isAssigned) await _wcRenderTaskCardExtras(task, container, leader, progressEntries);
   } catch (err) {
     console.error('WC detail load error:', err);
     container.innerHTML = `<p style="color:#ef4444;font-size:13px;text-align:center;">⚠️ Error loading task detail.</p>`;
   }
 }
 
-async function _wcRenderTaskCardExtras(task, container, leader) {
+function _wcHistoryText(item) {
+  const detail = item.detail || {};
+  const decisions = { approved: 'Report approved', rejected: 'Report rejected', voided: 'Report voided', comment_only: 'Comment added to a report' };
+  const labels = {
+    report_submitted: 'Report submitted', comment_added: 'Comment added', location_updated: 'Location updated',
+    task_updated: 'Task details updated', checklist_created: 'Checklist created', checklist_item_updated: 'Checklist item updated',
+    link_added: 'Link added', dependency_added: 'Earlier-task warning added',
+  };
+  if (item.action === 'report_decision') return decisions[detail.decision] || 'Report reviewed';
+  return labels[item.action] || String(item.action || '').replace(/_/g, ' ');
+}
+
+// Place and date chips under the task heading: the activity it belongs to, where on site, when, and which drawing.
+function _wcCardHeaderHtml(task, location) {
+  const chip = (label, text) => `<span style="font-size:12px;color:#475569;background:#f1f5f9;padding:3px 9px;border-radius:6px;">${label ? `<span style="color:#94a3b8;">${label}</span> ` : ''}${escapeHtml(text)}</span>`;
+  const place = [location.block, location.floor, location.zone, location.grid].filter(Boolean).join(' \u00b7 ');
+  const chips = [
+    task.activity_title ? chip('Activity', task.activity_title) : '',
+    place ? chip('Location', place) : '',
+    task.start_date || task.end_date ? chip('Dates', `${_wcFmtDate(task.start_date)} to ${_wcFmtDate(task.end_date)}`) : '',
+    location.drawing ? chip('Drawing', location.drawing) : '',
+  ].filter(Boolean).join('');
+  return chips ? `<div data-wc-card-header style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">${chips}</div>` : '';
+}
+
+// Four small figures: what is done, the task's share of its activity, report count, checklist progress.
+function _wcCardTilesHtml(task, entries, checklists) {
+  const type = _wcTypeOf(task);
+  const approved = entries.filter((entry) => entry.validation_status === 'approved');
+  const pending = Number(task.pending_report_count ?? entries.filter((entry) => entry.validation_status === 'pending').length);
+  const tile = (label, value, sub) => `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:9px 12px;min-width:0;">
+    <div style="font-size:11px;color:#64748b;">${label}</div>
+    <div style="font-size:18px;font-weight:600;color:#1f2937;margin-top:2px;">${value}${sub ? ` <span style="font-size:12px;font-weight:400;color:#64748b;">${sub}</span>` : ''}</div></div>`;
+  const tiles = [];
+  const progress = Math.max(0, Math.min(100, Number(task.progress_pct) || 0));
+  tiles.push(`<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:9px 12px;min-width:0;">
+    <div style="font-size:11px;color:#64748b;">Task progress</div>
+    <div style="font-size:18px;font-weight:600;color:#1f2937;margin-top:2px;">${progress}%</div>
+    <div style="height:6px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-top:6px;">
+      <div style="height:100%;width:${progress}%;background:#007B8A;border-radius:999px;"></div></div></div>`);
+  if (type === 'quantity' || type === 'count') {
+    const done = Number(task.approved_quantity_done ?? approved.reduce((sum, entry) => sum + (Number(entry.quantity_done) || 0), 0));
+    const target = Number(task.target_quantity);
+    tiles.push(tile(type === 'count' ? 'Items completed' : 'Quantity done', escapeHtml(String(done)),
+      target > 0 ? `of ${escapeHtml(String(target))}${escapeHtml(_wcUnitText(task))}` : ''));
+  } else if (type === 'stages') {
+    const stages = _wcStagesOf(task);
+    const doneStages = new Set(approved.map((entry) => String(entry.stage_id)).filter(Boolean));
+    tiles.push(tile('Stages done', String(stages.filter((stage) => stage.completed_at || doneStages.has(String(stage.id))).length), `of ${stages.length}`));
+  }
+  if (task.activity_id && task.weight_pct != null) tiles.push(tile('Share of activity', `${Number(task.weight_pct)}%`));
+  const reportCount = Number(task.total_report_count ?? entries.length);
+  tiles.push(tile('Reports', String(reportCount), pending ? `${pending} pending` : ''));
+  return `<div data-wc-card-tiles style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:12px;">${tiles.join('')}</div>`;
+}
+
+async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   const projectId = localStorage.getItem('activeProjectId');
   const res = await _wcFetch(`${API}/work-center/${task.id}/card?projectId=${encodeURIComponent(projectId)}`);
   const data = res ? await res.json().catch(() => ({})) : {};
   if (!res || !res.ok) throw new Error(data.error || 'Could not load task collaboration details.');
   const box = 'width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:7px;box-sizing:border-box;font:inherit;';
-  const section = document.createElement('section');
-  section.style.cssText = 'margin-top:14px;padding:14px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;';
-  const comments = (data.comments || []).map((comment) => `
-    <div style="padding:8px 0;border-bottom:1px solid #f1f5f9;">
-      <div style="font-size:11px;color:#64748b;">${escapeHtml(comment.author_role)} · ${escapeHtml(_wcFmtDate(comment.created_at))}</div>
-      <div style="white-space:pre-wrap;margin-top:3px;">${escapeHtml(comment.body)}</div>
-    </div>`).join('') || '<p style="color:#64748b;font-size:12px;">No comments yet.</p>';
-  const checklists = (data.checklists || []).map((list) => `
+  const muted = 'font-size:12px;color:#64748b;';
+  const heading = 'font-size:12px;font-weight:600;color:#1f2937;';
+  const location = data.location || {};
+  const checklistData = data.checklists || [];
+  let linkOptions = { tasks: [], queries: [], records: [], drawings: [] };
+  let linkOptionsError = '';
+  if (leader) {
+    try {
+      const optionsRes = await _wcFetch(`${API}/work-center/${task.id}/link-options?projectId=${encodeURIComponent(projectId)}`);
+      const optionsData = optionsRes ? await optionsRes.json().catch(() => ({})) : {};
+      if (!optionsRes || !optionsRes.ok) throw new Error(optionsData.error || 'Link choices could not be loaded.');
+      linkOptions = optionsData;
+    } catch (error) {
+      linkOptionsError = error.message || 'Link choices could not be loaded.';
+      console.error('Load task link choices error:', error);
+    }
+  }
+
+  const commentsHtml = (data.comments || []).map((comment) => `
+    <div style="padding:9px 0;border-bottom:1px solid #f1f5f9;">
+      <div style="font-size:11px;color:#64748b;">${escapeHtml(comment.author_role)} \u00b7 ${escapeHtml(_wcFmtDate(comment.created_at))}</div>
+      <div style="white-space:pre-wrap;margin-top:3px;font-size:13px;">${escapeHtml(comment.body)}</div>
+    </div>`).join('');
+  const commentsSection = `
+    <div style="${muted}margin-bottom:6px;">Shared with the task leader and the members assigned to this task.</div>
+    ${commentsHtml || '<p style="font-size:12px;color:#64748b;margin:8px 0;">No comments yet.</p>'}
+    <textarea data-card-field="comment" placeholder="Write a comment for the task team" style="${box};margin-top:10px;min-height:64px;"></textarea>
+    <button data-action="wc-task-card-action" data-card-operation="comment" style="margin-top:7px;">Add comment</button>`;
+
+  const checklistsHtml = checklistData.map((list) => `
     <div style="margin-top:10px;padding:10px;border:1px solid #e5e7eb;border-radius:8px;">
-      <strong>${escapeHtml(list.title)}</strong>${list.required_before_approval ? ' <span style="color:#b45309;font-size:11px;">Required for approval</span>' : ''}
+      <strong style="font-size:13px;">${escapeHtml(list.title)}</strong>${list.required_before_approval ? ' <span style="color:#b45309;font-size:11px;">Required for approval</span>' : ''}
       ${(list.items || []).map((item) => `<label style="display:flex;gap:8px;align-items:flex-start;margin-top:7px;font-size:12px;">
         <input type="checkbox" ${item.is_complete ? 'checked' : ''} data-action="wc-task-card-action"
           data-card-operation="checklist-item" data-item-id="${escapeHtml(String(item.id))}"
           data-complete="${item.is_complete ? 'false' : 'true'}" style="margin-top:2px;"/>
         <span>${escapeHtml(item.title)}</span></label>`).join('')}
     </div>`).join('');
+  const checklistSection = `
+    ${checklistsHtml || '<p style="font-size:12px;color:#64748b;margin:0;">No checklist items.</p>'}
+    ${leader ? `<details style="margin-top:12px;"><summary style="cursor:pointer;${heading}">Add checklist</summary>
+      <input data-card-field="checklist-title" placeholder="Checklist title" style="${box};margin-top:8px;"/>
+      <textarea data-card-field="checklist-items" placeholder="One item per line" style="${box};margin-top:7px;min-height:65px;"></textarea>
+      <label style="display:block;font-size:12px;margin-top:6px;"><input type="checkbox" data-card-field="checklist-required"/> Required before report approval</label>
+      <button data-action="wc-task-card-action" data-card-operation="checklist-create" style="margin-top:7px;">Create checklist</button>
+    </details>` : ''}`;
+
+  const historySection = (data.history || []).length
+    ? `<ul style="list-style:none;margin:0;padding:0;">${(data.history || []).map((item) => `
+        <li style="padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:12px;">
+          <span style="color:#1f2937;">${escapeHtml(_wcHistoryText(item))}</span>
+          <span style="color:#64748b;"> \u00b7 ${escapeHtml(item.actor_role || '')} \u00b7 ${escapeHtml(_wcFmtDate(item.created_at))}</span></li>`).join('')}</ul>`
+    : '<p style="font-size:12px;color:#64748b;margin:0;">No changes recorded yet.</p>';
+
   const links = (data.links || []).map((link) => `<div style="font-size:12px;margin-top:5px;">
     ${link.url ? `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.title)}</a>`
-      : `${escapeHtml(link.title)} <span style="color:#64748b;">(${escapeHtml(link.link_type)} ${escapeHtml(link.target_id || '')})</span>`}
+      : `<button type="button" data-action="wc-task-card-action" data-card-operation="link-open"
+          data-link-type="${escapeHtml(link.link_type)}" data-target-id="${escapeHtml(link.target_id || '')}"
+          style="padding:0;border:0;background:none;color:#007B8A;text-decoration:underline;cursor:pointer;font:inherit;">
+          ${escapeHtml(link.title)}</button>`}
     </div>`).join('');
-  const location = data.location || {};
   const dependencies = (data.dependencies || []).map((dep) =>
-    `<li>${escapeHtml(dep.title)} — ${Number(dep.progress_pct) || 0}% complete</li>`).join('');
-  const history = (data.history || []).map((item) =>
-    `<li>${escapeHtml(item.action.replace(/_/g, ' '))} · ${escapeHtml(_wcFmtDate(item.created_at))}</li>`).join('');
-  section.innerHTML = `
-    <h3 style="margin:0 0 10px;font-size:14px;color:#1f2937;">Task collaboration</h3>
-    <div style="font-size:12px;color:#475569;margin-bottom:12px;">
-      <strong>Location:</strong> ${[location.block, location.floor, location.zone, location.grid, location.drawing]
-        .filter(Boolean).map(escapeHtml).join(' · ') || 'Not set'}
-    </div>
-    ${leader ? `<details style="margin-bottom:12px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;">Edit task location</summary>
+    `<li>${escapeHtml(dep.title)} \u00b7 ${Number(dep.progress_pct) || 0}% complete</li>`).join('');
+  const moreSection = `
+    <div style="font-size:12px;color:#475569;"><strong>Location:</strong> ${[location.block, location.floor, location.zone, location.grid, location.drawing]
+      .filter(Boolean).map(escapeHtml).join(' \u00b7 ') || 'Not set'}</div>
+    ${leader ? `<details style="margin-top:10px;"><summary style="cursor:pointer;${heading}">Edit task location</summary>
       <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:8px;">
         ${['block','floor','zone','grid','drawing'].map((key) => `<input data-card-field="${key}" value="${escapeHtml(location[key] || '')}" placeholder="${key[0].toUpperCase()+key.slice(1)}" style="${box}"/>`).join('')}
       </div>
       <button data-action="wc-task-card-action" data-card-operation="location" style="margin-top:8px;">Save location</button>
     </details>` : ''}
-    <div style="margin-top:12px;"><strong style="font-size:12px;">Checklists</strong>${checklists || '<p style="font-size:12px;color:#64748b;">No checklist items.</p>'}</div>
-    ${leader ? `<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;">Add checklist</summary>
-      <input data-card-field="checklist-title" placeholder="Checklist title" style="${box};margin-top:8px;"/>
-      <textarea data-card-field="checklist-items" placeholder="One item per line" style="${box};margin-top:7px;min-height:65px;"></textarea>
-      <label style="display:block;font-size:12px;margin-top:6px;"><input type="checkbox" data-card-field="checklist-required"/> Required before report approval</label>
-      <button data-action="wc-task-card-action" data-card-operation="checklist-create" style="margin-top:7px;">Create checklist</button>
-    </details>` : ''}
-    <div style="margin-top:12px;"><strong style="font-size:12px;">Linked items</strong>${links || '<p style="font-size:12px;color:#64748b;">No links yet.</p>'}</div>
-    ${leader ? `<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;">Add link</summary>
+    <div style="margin-top:14px;"><strong style="${heading}">Linked items</strong>${links || '<p style="font-size:12px;color:#64748b;margin:4px 0 0;">No links yet.</p>'}</div>
+    ${leader ? `<details style="margin-top:10px;"><summary style="cursor:pointer;${heading}">Add link</summary>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:8px;">
-        <select data-card-field="link-type" style="${box}"><option value="url">Web link</option><option value="drawing">Drawing</option><option value="record">Record</option><option value="query">Query</option><option value="task">Task</option></select>
-        <input data-card-field="link-title" placeholder="Title" style="${box}"/>
-        <input data-card-field="link-target" placeholder="Item ID (internal link)" style="${box}"/>
-        <input data-card-field="link-url" placeholder="https://..." style="${box}"/>
+        <select data-card-field="link-type" style="${box}">
+          <option value="task">Task</option><option value="query">Task question</option>
+          <option value="drawing">Drawing (operational record)</option><option value="record">Project record</option>
+          <option value="url">Web link</option>
+        </select>
+        <select data-card-field="link-target" style="${box}"><option value="">Choose an item</option></select>
+        <input data-card-field="link-title" placeholder="Link title" style="${box};display:none;"/>
+        <input data-card-field="link-url" placeholder="https://..." style="${box};display:none;"/>
       </div>
+      ${linkOptionsError ? `<div role="status" style="font-size:11px;color:#b91c1c;margin-top:5px;">${escapeHtml(linkOptionsError)}</div>` : ''}
       <button data-action="wc-task-card-action" data-card-operation="link-create" style="margin-top:7px;">Add link</button>
-    </details>
-    <details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;">Save as task template</summary>
-      <input data-card-field="template-name" placeholder="Template name" style="${box};margin-top:8px;"/>
-      <button data-action="wc-task-card-action" data-card-operation="template-save" style="margin-top:7px;">Save template</button>
     </details>` : ''}
-    ${leader ? `<button data-action="wc-task-card-action" data-card-operation="duplicate"
-      style="margin-top:10px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;cursor:pointer;">
-      Duplicate task</button>` : ''}
-    ${dependencies ? `<div style="margin-top:12px;font-size:12px;"><strong>Earlier tasks (warning only)</strong><ul>${dependencies}</ul></div>` : ''}
-    ${leader ? `<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;">Add earlier task warning</summary>
+    ${dependencies ? `<div style="margin-top:14px;font-size:12px;"><strong>Earlier tasks (warning only)</strong><ul>${dependencies}</ul></div>` : ''}
+    ${leader ? `<details style="margin-top:10px;"><summary style="cursor:pointer;${heading}">Add earlier task warning</summary>
       <select data-card-field="dependency" style="${box};margin-top:8px;">
         <option value="">Choose task</option>${(recordsCache['work-center'] || []).filter((item) => item.id !== task.id && item.side === task.side)
           .map((item) => `<option value="${escapeHtml(String(item.id))}">${escapeHtml(item.title)}</option>`).join('')}
       </select>
       <button data-action="wc-task-card-action" data-card-operation="dependency-create" style="margin-top:7px;">Add warning</button>
-    </details>` : ''}
-    <div style="margin-top:12px;"><strong style="font-size:12px;">Shared comments</strong>${comments}
-      <textarea data-card-field="comment" placeholder="Write a comment for the task team" style="${box};margin-top:8px;min-height:60px;"></textarea>
-      <button data-action="wc-task-card-action" data-card-operation="comment" style="margin-top:7px;">Add comment</button>
-    </div>
-    ${history ? `<details style="margin-top:12px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;">Change history</summary><ul style="font-size:11px;color:#64748b;">${history}</ul></details>` : ''}`;
-  container.appendChild(section);
+    </details>
+    <details style="margin-top:10px;"><summary style="cursor:pointer;${heading}">Save as task template</summary>
+      <input data-card-field="template-name" placeholder="Template name" style="${box};margin-top:8px;"/>
+      <button data-action="wc-task-card-action" data-card-operation="template-save" style="margin-top:7px;">Save template</button>
+    </details>
+    <button data-action="wc-task-card-action" data-card-operation="duplicate"
+      style="margin-top:12px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;cursor:pointer;">Duplicate task</button>` : ''}`;
+
+  const makeSection = (key, html) => {
+    const section = document.createElement('section');
+    section.setAttribute('data-wc-card-section', key);
+    section.style.cssText = 'padding:4px 0;';
+    section.innerHTML = html;
+    return section;
+  };
+  const tablist = container.querySelector('[role="tablist"]');
+  const shell = tablist ? tablist.parentElement : null;
+  const checklistItems = checklistData.flatMap((list) => list.items || []);
+  const extraTabs = [
+    { key: 'checklist', label: 'Checklist', count: checklistItems.length ? `${checklistItems.filter((i) => i.is_complete).length}/${checklistItems.length}` : null, html: checklistSection },
+    { key: 'comments', label: 'Comments', count: (data.comments || []).length, html: commentsSection },
+    { key: 'history', label: 'History', count: null, html: historySection },
+  ];
+
+  if (!shell) {
+    // no tab bar in this view: show the same content stacked, so nothing is lost
+    const stacked = document.createElement('div');
+    stacked.setAttribute('data-wc-card-stacked', '');
+    stacked.innerHTML = `<div data-wc-card-header-slot></div>`;
+    for (const part of [{ label: 'Details', html: moreSection }, ...extraTabs]) {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'margin-top:14px;padding:14px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;';
+      wrap.innerHTML = `<h3 style="margin:0 0 8px;font-size:13px;color:#1f2937;">${part.label}</h3>`;
+      wrap.appendChild(makeSection(part.label.toLowerCase(), part.html));
+      stacked.appendChild(wrap);
+    }
+    container.appendChild(stacked);
+    return;
+  }
+
+  shell.insertAdjacentHTML('afterbegin', _wcCardHeaderHtml(task, location) + _wcCardTilesHtml(task, entries, checklistData));
+  const detailsPane = shell.querySelector('[data-wc-pane="details"]');
+  detailsPane?.appendChild(makeSection('details-more', moreSection));
+  if (leader && detailsPane) {
+    const typeSelect = detailsPane.querySelector('[data-card-field="link-type"]');
+    const targetSelect = detailsPane.querySelector('[data-card-field="link-target"]');
+    const titleInput = detailsPane.querySelector('[data-card-field="link-title"]');
+    const urlInput = detailsPane.querySelector('[data-card-field="link-url"]');
+    const updateLinkOptions = () => {
+      if (!typeSelect || !targetSelect) return;
+      const type = typeSelect.value;
+      const rows = type === 'task' ? linkOptions.tasks
+        : type === 'query' ? linkOptions.queries
+          : type === 'drawing' ? linkOptions.drawings : type === 'record' ? linkOptions.records : [];
+      targetSelect.innerHTML = `<option value="">Choose an item</option>${rows.map((item) =>
+        `<option value="${escapeHtml(item.targetId)}">${escapeHtml(item.title)}</option>`).join('')}`;
+      targetSelect.style.display = type === 'url' ? 'none' : '';
+      if (titleInput) titleInput.style.display = type === 'url' ? '' : 'none';
+      if (urlInput) urlInput.style.display = type === 'url' ? '' : 'none';
+    };
+    typeSelect?.addEventListener('change', updateLinkOptions);
+    updateLinkOptions();
+  }
+  const sessionKey = `wc-task-tab-${task.id}`;
+  let stored = '';
+  try { stored = sessionStorage.getItem(sessionKey) || ''; } catch {}
+  for (const tab of extraTabs) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.setAttribute('role', 'tab');
+    button.setAttribute('data-wc-tab', tab.key);
+    button.setAttribute('aria-selected', 'false');
+    button.className = 'detail-tab';
+    button.innerHTML = `${tab.label}${tab.count != null ? ` <span class="detail-tab-count">${escapeHtml(String(tab.count))}</span>` : ''}`;
+    tablist.appendChild(button);
+    const pane = document.createElement('div');
+    pane.setAttribute('data-wc-pane', tab.key);
+    pane.setAttribute('role', 'tabpanel');
+    pane.hidden = true;
+    pane.style.padding = '8px 16px 16px';
+    pane.appendChild(makeSection(tab.key, tab.html));
+    shell.appendChild(pane);
+  }
+  const activate = (key) => {
+    try { sessionStorage.setItem(sessionKey, key); } catch {}
+    for (const tab of shell.querySelectorAll('[data-wc-tab]')) {
+      const active = tab.getAttribute('data-wc-tab') === key;
+      tab.setAttribute('aria-selected', String(active));
+      tab.style.borderBottomColor = active ? '#007B8A' : 'transparent';
+      tab.style.color = active ? '#007B8A' : '#40516a';
+      tab.style.fontWeight = active ? '700' : '500';
+    }
+    for (const pane of shell.querySelectorAll('[data-wc-pane]')) pane.hidden = pane.getAttribute('data-wc-pane') !== key;
+  };
+  for (const tab of extraTabs) {
+    tablist.querySelector(`[data-wc-tab="${tab.key}"]`).addEventListener('click', () => activate(tab.key));
+  }
+  if (extraTabs.some((tab) => tab.key === stored)) activate(stored);
+}
+
+async function _wcOpenInternalTaskLink(type, targetId) {
+  let opened = false;
+  if (type === 'task') {
+    opened = await _openRecordNotification('work_center_task', targetId);
+  } else if (type === 'query') {
+    const [taskId, queryId] = String(targetId || '').split(':');
+    if (!/^\d+$/.test(taskId || '') || !/^\d+$/.test(queryId || '')) return false;
+    const tabKey = isWCLeader(window.currentUserRole) ? 'reports' : 'my-reports';
+    try {
+      sessionStorage.setItem(`wc-task-tab-${taskId}`, tabKey);
+      if (tabKey === 'reports') sessionStorage.setItem(`wc-report-filter-${taskId}`, 'all');
+    } catch (error) {
+      console.error('Could not retain the linked question destination:', error);
+    }
+    opened = await _openRecordNotification('work_center_task', taskId);
+    if (opened) {
+      const detailSelector = `#wc-detail-${CSS.escape(String(taskId))}`;
+      document.querySelector(`${detailSelector} [data-wc-tab="${tabKey}"]`)?.click();
+      const queryCard = await _waitForElement(`${detailSelector} #wc-query-${CSS.escape(String(queryId))}`);
+      if (!queryCard) return false;
+      const report = queryCard.closest('[data-wc-report-card]');
+      if (report) report.open = true;
+      queryCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  } else if (type === 'record' || type === 'drawing') {
+    const match = /^([a-z_]+):(\d+)$/.exec(String(targetId || ''));
+    if (!match) return false;
+    opened = await _openRecordNotification(match[1], match[2]);
+  }
+  return opened;
 }
 
 async function _wcHandleTaskCardAction(actionEl, taskId) {
   const section = actionEl.closest('section');
   const field = (name) => section?.querySelector(`[data-card-field="${name}"]`);
+  const operation = actionEl.getAttribute('data-card-operation');
+  if (operation === 'link-open') {
+    try {
+      const opened = await _wcOpenInternalTaskLink(
+        actionEl.getAttribute('data-link-type'), actionEl.getAttribute('data-target-id'));
+      if (!opened) throw new Error('This linked item is unavailable or you do not have access to it.');
+    } catch (error) {
+      _wcSetTaskCardMessage(taskId, error.message || 'Could not open the linked item.', true);
+    }
+    return;
+  }
   const projectId = await ensureActiveProjectId();
   if (!projectId || !section) return;
-  const operation = actionEl.getAttribute('data-card-operation');
   let url = `${API}/work-center/${taskId}/card`;
   let method = 'POST';
   let body = { projectId };
@@ -13897,9 +14112,14 @@ async function _wcHandleTaskCardAction(actionEl, taskId) {
   } else if (operation === 'link-create') {
     url = `${API}/work-center/${taskId}/links`;
     body.type = field('link-type')?.value;
-    body.title = field('link-title')?.value.trim();
     body.targetId = field('link-target')?.value.trim();
-    body.url = field('link-url')?.value.trim();
+    if (body.type === 'url') {
+      body.title = field('link-title')?.value.trim();
+      body.url = field('link-url')?.value.trim();
+    } else {
+      const target = field('link-target');
+      body.title = target?.selectedOptions?.[0]?.textContent.trim() || '';
+    }
   } else if (operation === 'dependency-create') {
     url = `${API}/work-center/${taskId}/dependencies`;
     body.dependsOnTaskId = field('dependency')?.value;
@@ -14385,23 +14605,8 @@ function _wcNotAssignedView() {
 }
 
 function _wcTaskSummaryHtml(task, entries, queries, leader) {
-  const type = _wcTypeOf(task);
-  const progress = Math.max(0, Math.min(100, Number(task.progress_pct) || 0));
-  const approved = entries.filter((entry) => entry.validation_status === 'approved');
   const unresolved = queries.filter((query) => query.status !== 'resolved');
-  let progressText = `${progress}%`;
-  if (['quantity', 'count'].includes(type)) {
-    const done = approved.reduce((sum, entry) => sum + (Number(entry.quantity_done) || 0), 0);
-    const target = Number(task.target_quantity);
-    progressText = target > 0
-      ? `${progress}% · ${done}${escapeHtml(_wcUnitText(task))} completed`
-      : `${progress}% · ${done} completed`;
-  } else if (type === 'stages') {
-    const doneStages = new Set(approved.map((entry) => String(entry.stage_id)).filter(Boolean));
-    const completed = _wcStagesOf(task).filter((stage) => stage.completed_at || doneStages.has(String(stage.id))).length;
-    progressText = `${progress}% · ${completed} of ${_wcStagesOf(task).length} stages`;
-  }
-  const pendingCount = entries.filter((entry) => entry.validation_status === 'pending').length;
+  const pendingCount = Number(task.pending_report_count ?? entries.filter((entry) => entry.validation_status === 'pending').length);
   const reportNote = leader && pendingCount
     ? `<span style="padding:4px 8px;border:1px solid #fcd34d;border-radius:999px;background:#fffbeb;color:#92400e;font-size:11px;">${pendingCount} report${pendingCount === 1 ? '' : 's'} waiting for approval</span>`
     : '';
@@ -14412,14 +14617,7 @@ function _wcTaskSummaryHtml(task, entries, queries, leader) {
       : `${unresolved.length} quer${unresolved.length === 1 ? 'y' : 'ies'} answered and awaiting review`}</span>`
     : '';
   return `
-    <section data-wc-card-summary style="background:var(--section-bg);border:1px solid var(--section-border);border-radius:var(--section-radius);padding:14px 16px;margin-bottom:12px;">
-      <div style="display:flex;align-items:center;gap:10px;max-width:560px;">
-        <span style="font-size:12px;font-weight:600;color:#526078;white-space:nowrap;">Progress</span>
-        <div style="height:7px;flex:1;background:#e5e7eb;border-radius:999px;overflow:hidden;">
-          <div style="height:100%;width:${progress}%;background:#007B8A;border-radius:999px;"></div>
-        </div>
-        <strong style="font-size:12px;color:#263247;white-space:nowrap;">${progressText}</strong>
-      </div>
+    <section data-wc-card-summary style="margin-bottom:${reportNote || queryNote ? '10px' : '0'};">
       ${reportNote || queryNote ? `<div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:9px;">${reportNote}${queryNote}</div>` : ''}
     </section>`;
 }
@@ -14930,28 +15128,32 @@ function _wcReportExtraHtml(entry) {
     const coordinates = photo.latitude != null && photo.longitude != null
       ? `${Number(photo.latitude).toFixed(6)}, ${Number(photo.longitude).toFixed(6)}`
       : 'Location unavailable';
-    return `<div style="display:inline-flex;flex-direction:column;vertical-align:top;margin:4px 8px 4px 0;">
+    return `<div style="display:flex;flex-direction:column;min-width:0;">
       <a href="${escapeHtml(photo.file_url)}" target="_blank" rel="noopener noreferrer">
         <img src="${escapeHtml(photo.file_url)}" alt="${escapeHtml(photo.file_name || 'Report photo')}"
-          style="width:92px;height:70px;object-fit:cover;border-radius:6px;border:1px solid #e5e7eb;"/>
+          style="width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:6px;border:1px solid #e5e7eb;display:block;"/>
       </a>
-      <span style="font-size:10px;color:#64748b;max-width:160px;">${escapeHtml(captured)} · ${escapeHtml(coordinates)}</span>
+      <span style="font-size:10px;color:#64748b;margin-top:2px;">${escapeHtml(captured)} \u00b7 ${escapeHtml(coordinates)}</span>
     </div>`;
   }).join('');
+  const withLocation = photos.filter((photo) => photo.latitude != null && photo.longitude != null).length;
+  const photoCaption = photos.length
+    ? `<div style="font-size:11px;color:#64748b;margin-top:4px;">${photos.length} photo${photos.length === 1 ? '' : 's'} \u00b7 location on ${withLocation}</div>` : '';
+  const chip = 'display:inline-block;font-size:12px;background:#f1f5f9;color:#475569;padding:3px 9px;border-radius:6px;margin:0 6px 6px 0;';
   const resourceHtml = resources.map((resource) => {
     const amount = resource.quantity == null ? '' : `${escapeHtml(String(resource.quantity))}${resource.unit ? ` ${escapeHtml(resource.unit)}` : ''}`;
     const hours = resource.hours == null ? '' : `${escapeHtml(String(resource.hours))} hours`;
     const assignedTo = resource.assigned_member_name || (resource.assigned_member_id
       ? `Member ${resource.assigned_member_id}` : 'Assigned group');
-    return `<li>${escapeHtml(resource.resource_type)}: ${escapeHtml(resource.name)}${amount ? ` · ${amount}` : ''}${hours ? ` · ${hours}` : ''} · ${escapeHtml(assignedTo)}</li>`;
+    return `<span style="${chip}">${escapeHtml(resource.resource_type)}: ${escapeHtml(resource.name)}${amount ? ` \u00b7 ${amount}` : ''}${hours ? ` \u00b7 ${hours}` : ''} \u00b7 ${escapeHtml(assignedTo)}</span>`;
   }).join('');
   const delayHtml = entry.delay_cause ? `
-    <div style="margin-top:8px;font-size:12px;color:#92400e;">
-      Delay: ${escapeHtml(entry.delay_cause)}${Number(entry.delay_days) ? ` · ${escapeHtml(String(entry.delay_days))} day(s)` : ''}
-      ${entry.delay_note ? ` — ${escapeHtml(entry.delay_note)}` : ''}
-    </div>` : '';
-  return `${photoHtml ? `<div style="margin-top:8px;">${photoHtml}</div>` : ''}
-    ${resourceHtml ? `<ul style="margin:8px 0;padding-left:18px;font-size:12px;">${resourceHtml}</ul>` : ''}${delayHtml}`;
+    <span style="display:inline-block;font-size:12px;background:#fffbeb;color:#92400e;padding:3px 9px;border-radius:6px;margin:0 6px 6px 0;">
+      Delay: ${escapeHtml(entry.delay_cause)}${Number(entry.delay_days) ? ` \u00b7 ${escapeHtml(String(entry.delay_days))} day(s)` : ''}
+      ${entry.delay_note ? ` \u00b7 ${escapeHtml(entry.delay_note)}` : ''}
+    </span>` : '';
+  return `${photoHtml ? `<div style="margin-top:8px;"><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;">${photoHtml}</div>${photoCaption}</div>` : ''}
+    ${resourceHtml || delayHtml ? `<div style="margin-top:8px;">${resourceHtml}${delayHtml}</div>` : ''}`;
 }
 
 function _wcSetTaskCardMessage(taskId, message, isError = false) {
