@@ -1054,6 +1054,28 @@
     .pe-tchip--active { background: #ccfbf1; color: #0f766e; }
     .pe-stage { padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: #334155; font-size: 11px; }
     .pe-stage--done { background: #dcfce7; color: #166534; }
+    .pe-vitem { background: #fff; border: 1px solid #dbe3ec; border-radius: 10px; margin: 0 0 10px; overflow: hidden; }
+    .pe-vhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; width: 100%; box-sizing: border-box; padding: 12px 14px; border: 0; background: #fff; cursor: pointer; font-family: inherit; text-align: left; color: #0f172a; }
+    .pe-vhead:hover, .pe-vhead:focus-visible { background: #f8fafc; outline: none; }
+    .pe-vmain { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 180px; font-size: 14px; font-weight: 600; text-transform: capitalize; }
+    .pe-vmeta { font-size: 12px; color: #475569; }
+    .pe-vchev::before { content: '▾'; color: #475569; }
+    .pe-vopen .pe-vchev::before { content: '▴'; }
+    .pe-vbody { padding: 12px 14px 14px; border-top: 1px solid #e2e8f0; }
+    .pe-vbody[hidden] { display: none; }
+    .pe-tchip--bad { background: #fee2e2; color: #b91c1c; }
+    [data-pe-cert-root] .pe-cert-back { display: none; }
+    .pe-cert-focused .pe-cert-back { display: inline-flex; }
+    .pe-cert-focused .pe-vitem:not(.pe-vopen) { display: none; }
+    .pe-csec { background: #fff; border: 1px solid #dbe3ec; border-radius: 10px; margin: 0 0 10px; overflow: hidden; }
+    .pe-copen > .pe-vhead .pe-vchev::before { content: '▴'; }
+    .pe-sec-focused > .pe-csec:not(.pe-copen) { display: none; }
+    [data-pe-csec-root] > .pe-sec-back { display: none; }
+    [data-pe-csec-root].pe-sec-focused > .pe-sec-back { display: inline-flex; }
+    .pe-fold > summary { display: flex; align-items: center; justify-content: space-between; cursor: pointer; list-style: none; min-height: 24px; }
+    .pe-fold > summary::-webkit-details-marker { display: none; }
+    .pe-fold-hint::before { content: 'Show'; font-size: 12px; font-weight: 600; color: #0f766e; }
+    .pe-fold[open] .pe-fold-hint::before { content: 'Hide'; }
     /* Back link, empty state, Add button */
     .bottom-list-back {
       display: inline-flex; align-items: center; gap: 6px;
@@ -10653,6 +10675,7 @@ function focusBottomCard(card) {
       otherCard.classList.remove('record-expanded', 'bottom-item-focused');
     }
   });
+  list.querySelectorAll('[data-pe-group]').forEach(header => { header.style.display = 'none'; });
   card.style.display = '';
   card.classList.add('bottom-item-focused', 'record-expanded');
   if (!document.getElementById('bottomListBack')) {
@@ -10661,7 +10684,7 @@ function focusBottomCard(card) {
     back.id = 'bottomListBack';
     back.className = 'bottom-list-back';
     back.setAttribute('data-action', 'bottom-list-back');
-    back.textContent = '← Back to all records';
+    back.textContent = card.getAttribute('data-tab-key') === 'planning-execution' ? '← Back to activities' : '← Back to all records';
     list.insertBefore(back, card);
   }
 }
@@ -10670,6 +10693,7 @@ function restoreBottomList() {
   const list = document.getElementById('recordsList');
   if (!list) return;
   document.getElementById('bottomListBack')?.remove();
+  list.querySelectorAll('[data-pe-group]').forEach(header => { header.style.display = ''; });
   list.querySelectorAll('.doc-item').forEach(card => {
     card.style.display = '';
     card.classList.remove('bottom-item-focused', 'record-expanded');
@@ -16434,7 +16458,7 @@ function _renderPEList(records) {
     const milestoneEnd = milestone.baseline_milestone_end || milestone.additional_milestone_end;
     const milestoneProgress = milestone.baseline_milestone_progress ?? milestone.additional_milestone_progress;
     const header = mName !== 'Standalone activities' ? `
-      <li style="list-style:none;padding:10px 2px 6px;margin:4px 0 8px;border-bottom:1px solid #e5e7eb;
+      <li data-pe-group style="list-style:none;padding:10px 2px 6px;margin:4px 0 8px;border-bottom:1px solid #e5e7eb;
         color:#475569;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:space-between;">
         <span>${escapeHtml(mName)}</span>
         <span style="font-size:11px;font-weight:400;color:#64748b;">
@@ -16550,6 +16574,8 @@ async function _peLoadDetail(recordId, tabKey) {
     _peUpdateStatusBadge({ ...task, ...card.activity });
     if (verificationId) {
       sessionStorage.removeItem(`pe-verification-${recordId}`);
+      document.getElementById(`pe-verification-${verificationId}`)?.closest('.pe-csec')?.querySelector(':scope > [data-pe-csec-toggle]')?.click();
+      document.querySelector(`#pe-verification-${CSS.escape(String(verificationId))} [data-pe-vtoggle]`)?.click();
       setTimeout(() => document.getElementById(`pe-verification-${verificationId}`)?.scrollIntoView({
         behavior: 'smooth', block: 'center',
       }), 0);
@@ -16613,13 +16639,13 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
         <div><div class="pe-label">Scope</div><div class="pe-text">${escapeHtml(activity.description || 'No scope description provided.')}</div></div>
         <div><div class="pe-label">Finished when</div><div class="pe-text">${escapeHtml(activity.done_when || 'No completion condition provided.')}</div></div>
       </div>
-      <div class="pe-panel">
-        <div class="pe-label">Planned resources</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin-top:10px;">
+      <details class="pe-panel pe-fold">
+        <summary><span class="pe-label">Planned resources</span><span class="pe-fold-hint" aria-hidden="true"></span></summary>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin-top:12px;">
           ${resCell('Work', activity.planned_work)}${resCell('Manpower', activity.planned_manpower)}
           ${resCell('Equipment', activity.planned_equipment)}${resCell('Materials', activity.planned_materials)}
         </div>
-      </div>
+      </details>
       <div style="font-size:12px;color:#475569;padding:0 4px;line-height:1.6;">
         ${activity.drives_milestone && milestoneTitle ? `Counts for ${Number(activity.milestone_weight_pct) || 0}% of ${escapeHtml(milestoneTitle)}${milestoneStart || milestoneEnd ? ` (${escapeHtml(dateText(milestoneStart))} – ${escapeHtml(dateText(milestoneEnd))})` : ''}<br>` : ''}
         ${activity.linked_file_name ? `Plan file: ${escapeHtml(activity.linked_file_name)} · ` : ''}Created ${escapeHtml(dateText(activity.created_at))}${activity.creator_role ? ` by ${escapeHtml(activity.creator_role)}` : ''}
@@ -16890,11 +16916,19 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
       </form>` : '';
     const withdraw = item.status === 'pending' && contractorLeader
       ? `<button class="rc-btn rc-btn--sm rc-btn--danger" data-pe-action="withdraw" data-verification-id="${escapeHtml(String(item.id))}" type="button" style="margin-top:12px;">Withdraw request</button>` : '';
-    return `<article id="pe-verification-${escapeHtml(String(item.id))}" style="background:#fff;border:1px solid #dbe3ec;border-radius:10px;padding:14px;margin:0 0 12px;">
-      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-        <strong style="color:#0f172a;">${escapeHtml(String(item.kind || 'progress').replace(/_/g, ' '))} review · ${escapeHtml(String(item.status || '').replace(/_/g, ' '))}</strong>
-          <span style="font-size:11px;color:${item.overdue ? '#b91c1c' : '#64748b'};">Cut-off ${escapeHtml(String(item.cut_off_date || '').slice(0, 10))} · Requested ${escapeHtml(String(item.requested_at || '').slice(0, 10))} · Due ${escapeHtml(String(item.respond_by || '').slice(0, 10))}${item.overdue ? ' · Overdue' : ''}</span>
-      </div>
+    const vStatus = String(item.status || '');
+    const vCls = vStatus === 'pending' ? '' : ['verified', 'verified_with_changes'].includes(vStatus) ? 'pe-tchip--ok' : vStatus === 'rejected' ? 'pe-tchip--bad' : '';
+    const vChip = vStatus === 'pending'
+      ? `<span class="pe-chip-warn">Pending</span>`
+      : `<span class="pe-tchip ${vCls}">${escapeHtml(vStatus.replace(/_/g, ' ') || 'unknown')}</span>`;
+    return `<article id="pe-verification-${escapeHtml(String(item.id))}" class="pe-vitem">
+      <button type="button" class="pe-vhead" data-pe-vtoggle aria-expanded="false">
+        <span class="pe-vmain">${escapeHtml(String(item.kind || 'progress').replace(/_/g, ' '))} review ${vChip}</span>
+        <span class="pe-vmeta" style="${item.overdue ? 'color:#b91c1c;font-weight:600;' : ''}">Requested ${escapeHtml(String(item.requested_at || '').slice(0, 10))}${item.respond_by ? ` · Due ${escapeHtml(String(item.respond_by).slice(0, 10))}` : ''}${item.overdue ? ' · Overdue' : ''}</span>
+        <span class="pe-vchev" aria-hidden="true"></span>
+      </button>
+      <div class="pe-vbody" hidden>
+      <div style="font-size:11px;color:#64748b;">Cut-off ${escapeHtml(String(item.cut_off_date || '').slice(0, 10))}</div>
         <div style="margin-top:5px;font-size:11px;color:#64748b;">Requested by ${escapeHtml(item.requested_by_role || 'Contractor representative')}</div>
         <div style="margin-top:8px;color:#334155;font-size:12px;">Claimed at request ${Number(item.claimed_progress_pct) || 0}% · Current certified progress ${Number(activity.certified_progress_pct) || 0}%</div>
       ${item.request_note ? `<p style="margin:8px 0;color:#475569;font-size:12px;">Request note: ${escapeHtml(item.request_note)}</p>` : ''}
@@ -16905,6 +16939,7 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
       ${revisionHistory}
       ${attachmentHtml(item.decision_attachments) ? `<div style="margin-top:8px;">Decision files: ${attachmentHtml(item.decision_attachments)}</div>` : ''}
       ${inspectorForm}${decisionForm}${reviseForm}${withdraw}
+      </div>
     </article>`;
   }).join('');
   const reworkActions = rework.map(item => `<article id="pe-rework-${escapeHtml(String(item.id))}" style="border-top:1px solid #e2e8f0;padding:10px 0;">
@@ -16930,25 +16965,45 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
       <textarea name="reason" required rows="2" placeholder="Explain what needs to be corrected or checked" style="width:100%;margin-top:8px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></textarea>
       <button class="rc-btn rc-btn--sm" type="submit" style="margin-top:8px;">Raise item</button>
     </form>` : '';
-  return `${requestForm}
-    <div style="background:#f1f5f9;border:1px solid #dbe3ec;border-radius:10px;padding:14px;margin-bottom:14px;">
-      <h3 style="margin:0 0 6px;color:#0f172a;font-size:15px;">Milestone certification</h3>
-      <div style="font-size:12px;color:#475569;">${escapeHtml(activity.baseline_milestone_title || activity.additional_milestone_title || activity.milestone_name || 'Linked milestone')}
-</div>
-      <div style="margin-top:6px;font-size:11px;color:#64748b;">Request verification when this milestone’s work is ready to be checked.</div>
+  const csec = (key, title, chipHtml, meta, body) => `
+    <section class="pe-csec" data-pe-csec="${key}">
+      <button type="button" class="pe-vhead" data-pe-csec-toggle aria-expanded="false">
+        <span class="pe-vmain">${title}${chipHtml || ''}</span>
+        <span class="pe-vmeta">${escapeHtml(meta || '')}</span>
+        <span class="pe-vchev" aria-hidden="true"></span>
+      </button>
+      <div class="pe-vbody" hidden>${body}</div>
+    </section>`;
+  const milestoneName = activity.baseline_milestone_title || activity.additional_milestone_title || activity.milestone_name || 'Linked milestone';
+  const requestNote = contractorLeader && !requestForm
+    ? (pending.length ? 'A verification request is already awaiting a decision.'
+      : 'There is no new progress, completed hold point, or completion request available for verification yet.') : '';
+  const sections = [
+    requestForm || requestNote
+      ? csec('request', 'Request verification', '', requestForm ? 'Ready to request' : pending.length ? 'Already pending' : 'Not available yet',
+        requestForm || `<p style="font-size:12px;color:#475569;margin:0;">${requestNote}</p>`) : '',
+    csec('requests', 'Verification requests', pending.length ? `<span class="pe-chip-warn">${pending.length} pending</span>` : '',
+      `${verifications.length} total`,
+      `<div data-pe-cert-root>
+        <button type="button" class="bottom-list-back pe-cert-back" data-pe-cert-back>← Back to verification requests</button>
+        <div>${history || '<p style="color:#475569;margin:0;">No verification requests have been made for this activity.</p>'}</div>
+      </div>`),
+    rework.length
+      ? csec('rework', 'Rework and snags', openRework.length ? `<span class="pe-chip-warn">${openRework.length} open</span>` : '', `${rework.length} total`, reworkActions) : '',
+    reworkForm ? csec('raise', 'Raise rework or snag', '', '', reworkForm) : '',
+    csec('milestone', 'Milestone', '', milestoneName, `
+      <div style="font-size:12px;color:#475569;">${escapeHtml(milestoneName)}</div>
+      <div style="margin-top:6px;font-size:12px;color:#475569;">Request verification when this milestone’s work is ready to be checked.</div>
       <button class="rc-btn rc-btn--sm" type="button" data-pe-action="open-milestone"
         data-milestone-kind="${activity.baseline_milestone_id ? 'baseline' : 'additional'}"
         data-milestone-id="${escapeHtml(String(activity.baseline_milestone_id || activity.additional_milestone_id || ''))}"
         data-milestone-title="${escapeHtml(activity.baseline_milestone_title || activity.additional_milestone_title || activity.milestone_name || '')}"
-        style="margin-top:10px;">Open milestone progress</button>
-    </div>
-    ${rework.length ? `<div style="padding:12px;background:${openRework.length ? '#fff7ed' : '#fff'};border:1px solid ${openRework.length ? '#fed7aa' : '#e5e7eb'};border-radius:9px;margin-bottom:12px;color:${openRework.length ? '#9a3412' : '#334155'};">
-      <strong style="font-size:12px;">Rework and snags${openRework.length ? ` · ${openRework.length} open` : ''}</strong>
-      <div style="margin-top:6px;">${reworkActions}</div></div>` : ''}
-    ${contractorLeader && !pending.length && !requestOptions ? `<p style="font-size:12px;color:#64748b;">There is no new progress, completed hold point, or completion request available for verification yet.</p>` : ''}
-    ${contractorLeader && pending.length ? `<p style="font-size:12px;color:#64748b;">A verification request is already awaiting a decision.</p>` : ''}
-    ${reworkForm}
-    ${history || '<p style="color:#64748b;">No verification requests have been made for this activity.</p>'}`;
+        style="margin-top:10px;">Open milestone progress</button>`),
+  ].join('');
+  return `<div data-pe-csec-root>
+    <button type="button" class="bottom-list-back pe-sec-back" data-pe-csec-back>← Back to certification</button>
+    ${sections}
+  </div>`;
 }
 
 function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
@@ -17082,6 +17137,53 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
       button.disabled = false;
       _peShowActivityNotice(recordId, `Could not withdraw request: ${err.message}`, true);
     }
+  }));
+  const closeVerifications = root => {
+    root.classList.remove('pe-cert-focused');
+    root.querySelectorAll('.pe-vitem').forEach(entry => {
+      entry.classList.remove('pe-vopen');
+      entry.querySelector('.pe-vbody').hidden = true;
+      entry.querySelector('[data-pe-vtoggle]').setAttribute('aria-expanded', 'false');
+    });
+  };
+  container.querySelectorAll('[data-pe-vtoggle]').forEach(button => button.addEventListener('click', () => {
+    const entry = button.closest('.pe-vitem');
+    const root = button.closest('[data-pe-cert-root]');
+    const opening = !entry.classList.contains('pe-vopen');
+    closeVerifications(root);
+    if (!opening) return;
+    root.classList.add('pe-cert-focused');
+    entry.classList.add('pe-vopen');
+    entry.querySelector('.pe-vbody').hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    entry.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }));
+  container.querySelectorAll('[data-pe-cert-back]').forEach(button => button.addEventListener('click', () => {
+    closeVerifications(button.closest('[data-pe-cert-root]'));
+  }));
+  const closeSections = root => {
+    root.classList.remove('pe-sec-focused');
+    root.querySelectorAll('[data-pe-cert-root]').forEach(closeVerifications);
+    root.querySelectorAll(':scope > .pe-csec').forEach(section => {
+      section.classList.remove('pe-copen');
+      section.querySelector(':scope > .pe-vbody').hidden = true;
+      section.querySelector(':scope > .pe-vhead').setAttribute('aria-expanded', 'false');
+    });
+  };
+  container.querySelectorAll('[data-pe-csec-toggle]').forEach(button => button.addEventListener('click', () => {
+    const section = button.closest('.pe-csec');
+    const root = section.parentElement;
+    const opening = !section.classList.contains('pe-copen');
+    closeSections(root);
+    if (!opening) return;
+    root.classList.add('pe-sec-focused');
+    section.classList.add('pe-copen');
+    section.querySelector(':scope > .pe-vbody').hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }));
+  container.querySelectorAll('[data-pe-csec-back]').forEach(button => button.addEventListener('click', () => {
+    closeSections(button.closest('[data-pe-csec-root]'));
   }));
   container.querySelectorAll('[data-pe-open-task]').forEach(button => button.addEventListener('click', async () => {
     const opened = await _openRecordNotification('work_center_task', button.getAttribute('data-pe-open-task'));
