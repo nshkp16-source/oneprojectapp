@@ -16690,6 +16690,36 @@ async function _peLoadDetail(recordId, tabKey) {
   }
 }
 
+window._peSharedEvidenceHtml = function (list, unit) {
+  const items = Array.isArray(list) ? list : [];
+  const e = (value) => escapeHtml(String(value ?? ''));
+  const u = unit ? ` ${e(unit)}` : '';
+  if (!items.length) return '<p style="font-size:12px;color:#64748b;">The contractor shared the evidence, but no approved reports exist up to the cut-off date.</p>';
+  const row = (r) => {
+    const figure = [
+      r.quantity_done != null ? `Done ${Number(r.quantity_done)}${u}` : '',
+      r.quantity_failed ? `Failed ${Number(r.quantity_failed)}` : '',
+      r.quantity_done == null && r.progress_pct != null ? `${Number(r.progress_pct)}% cumulative` : '',
+      r.stage_title ? `Stage: ${e(r.stage_title)}` : '',
+    ].filter(Boolean).join(' &middot; ');
+    const lines = [['Manpower', r.manpower], ['Equipment', r.equipment], ['Materials', r.materials], ['Issues', r.issues]]
+      .filter(([, value]) => value)
+      .map(([label, value]) => `<div style="margin-top:3px;font-size:11px;color:#64748b;">${label}: ${e(value)}</div>`).join('');
+    const resources = (Array.isArray(r.resources) ? r.resources : []).map((x) =>
+      `${e(x.name)}${x.quantity != null ? ` x${Number(x.quantity)}` : ''}${x.unit ? ` ${e(x.unit)}` : ''}${x.hours != null ? `, ${Number(x.hours)} h` : ''}`).join('; ');
+    const photos = (Array.isArray(r.photos) ? r.photos : []).filter((ph) => /^https:\/\//i.test(String(ph.file_url || '')))
+      .map((ph, index) => `<a href="${e(ph.file_url)}" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#0369a1;margin-right:10px;">Photo ${index + 1}</a>`).join('');
+    return `<div style="padding:10px 0;border-top:1px solid #e2e8f0;">
+      <strong style="font-size:12px;color:#1e293b;">${e(r.task_title || 'Task')} &middot; ${e(r.report_date)}</strong>
+      <div style="margin-top:4px;font-size:12px;color:#475569;">${e(r.work_done || 'No work description provided.')}</div>
+      ${figure ? `<div style="margin-top:4px;font-size:11px;color:#64748b;">${figure}</div>` : ''}
+      ${lines}${resources ? `<div style="margin-top:3px;font-size:11px;color:#64748b;">Resources: ${resources}</div>` : ''}
+      ${photos ? `<div style="margin-top:5px;">${photos}</div>` : ''}
+    </div>`;
+  };
+  return `<div style="max-height:360px;overflow:auto;">${items.map(row).join('')}</div>`;
+};
+
 function _peActivityCardHtml(card, verificationData = { verifications: [], rework: [] }, selectedTab = 'overview') {
   verificationData = verificationData || { verifications: [], rework: [] };
   const activity = card.activity || {};
@@ -16934,6 +16964,10 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
         <input type="checkbox" name="shareActivitySummary" value="true">
         <span>Share the activity plan summary with the consultant, including planned work and resources.</span>
       </label>
+      <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:12px;color:#475569;">
+        <input type="checkbox" name="shareEvidence" value="true">
+        <span>Share the approved reports up to the cut-off date as evidence (work done, quantities, manpower, equipment, materials, issues and photos). Rejected, pending and voided reports, member identities and private notes are never shared.</span>
+      </label>
       <label style="display:block;margin-top:10px;font-size:12px;color:#475569;">Consultant inspectors (optional)
         <select name="inspectorIds" multiple data-pe-inspectors size="3" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;">
           <option disabled>Loading inspectors…</option></select>
@@ -16954,8 +16988,12 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
     const mine = signers.some(signer => signer.signer_role === 'TeamMember' &&
       String(signer.signer_user_id) === String(window.currentUserId) && signer.status === 'pending');
     const pendingInspectors = signers.some(signer => signer.is_team_member && signer.status === 'pending');
+    const sharedEvidence = consultantView && item.share_evidence && Array.isArray(item.shared_evidence) ? item.shared_evidence : null;
+    const consultantEvidenceHtml = sharedEvidence
+      ? window._peSharedEvidenceHtml(sharedEvidence, activity.unit)
+      : '<p style="font-size:12px;color:#64748b;">The contractor did not share the individual reports. Check the work on site.</p>';
     const evidenceHtml = consultantView
-      ? `<div style="font-size:12px;color:#475569;">${Number(item.activity_summary?.approved_report_count) || 0} approved reports · ${Number(item.activity_summary?.approved_quantity) || 0} ${escapeHtml(activity.unit || '')} reported</div>`
+      ? `<div style="font-size:12px;color:#475569;">${Number(item.activity_summary?.approved_report_count) || 0} approved reports · ${Number(item.activity_summary?.approved_quantity) || 0} ${escapeHtml(activity.unit || '')} reported</div>${consultantEvidenceHtml}`
       : evidence.length ? evidence.map(report => `
       <div style="padding:10px 0;border-top:1px solid #e2e8f0;">
         <strong style="font-size:12px;color:#1e293b;">${escapeHtml(report.task_title || 'Task')} · ${escapeHtml(String(report.report_date).slice(0, 10))}</strong>
@@ -22067,21 +22105,90 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
       const opened = await window._openActivityVerificationNotification(verificationId);
       if (opened) return;
     }
-    if (rows.length === 1 && window._openActivityVerificationNotification) {
-      const opened = await window._openActivityVerificationNotification(rows[0].id);
-      if (opened) return;
-    }
-    const body = rows.length ? rows.map((item) => `
-      <button type="button" class="rc-btn" data-wf-open-verification="${esc(item.id)}"
-        style="width:100%;text-align:left;margin:6px 0;padding:12px;">
-        <strong>${esc(item.activity_title)}</strong> · ${esc(String(item.kind).replace(/_/g, ' '))}
-        <span style="display:block;margin-top:4px;font-size:12px;color:${item.overdue ? '#b91c1c' : '#64748b'};">
-          Respond by ${esc(String(item.respond_by).slice(0, 10))}${item.overdue ? ' · Overdue' : ''}</span>
-      </button>`).join('') : '<p style="color:#64748b;">No pending verification requests.</p>';
+    const consultantSide = wcSide(window.currentUserRole) === 'Consultant' || window.currentUserRole === 'TeamMember';
+    const kindLabel = { progress: 'Progress', hold_point: 'Hold point', completion: 'Completion' };
+    const dueText = (item) => {
+      const days = Number(item.days_left);
+      if (item.overdue) return `Overdue by ${Math.abs(days) || 1} day${Math.abs(days) === 1 ? '' : 's'}`;
+      if (days === 0) return 'Due today';
+      return `${days} day${days === 1 ? '' : 's'} left`;
+    };
+    const checkText = (item) => {
+      const claimed = Number(item.claimed_progress_pct) || 0;
+      const certified = Number(item.activity_certified_progress_pct) || 0;
+      if (item.kind === 'hold_point') return `Hold point: ${esc(item.stage_title || 'stage')}. Inspect this stage before work continues. Later stages stay locked until you verify it.`;
+      if (item.kind === 'completion') return 'The contractor says the activity is complete. Inspect the finished work and list any snags before certifying completion.';
+      return `The contractor claims ${claimed}%. Last certified is ${certified}%. You are asked to confirm an increase of ${Math.round(Math.max(0, claimed - certified) * 100) / 100} points.`;
+    };
+    const stat = (label, value) => `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:8px;font-size:11px;color:#475569;">
+      <span style="display:block;color:#64748b;">${label}</span><strong style="display:block;margin-top:3px;color:#1e293b;font-size:14px;">${value}</strong></div>`;
+    const sharedPlan = (item) => {
+      const shared = item.shared_activity_summary;
+      if (!item.share_activity_summary || !shared) return '';
+      return `<details style="margin-top:10px;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;background:#fff;">
+        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Contractor-shared activity plan</summary>
+        <div style="margin-top:8px;font-size:12px;color:#475569;">
+          ${shared.description ? `<p>${esc(shared.description)}</p>` : ''}
+          ${shared.done_when ? `<p><strong>Completion criteria:</strong> ${esc(shared.done_when)}</p>` : ''}
+          ${shared.planned_quantity != null ? `<p><strong>Planned quantity:</strong> ${Number(shared.planned_quantity)} ${esc(shared.unit || '')}</p>` : ''}
+          ${[['Work', shared.planned_work], ['Manpower', shared.planned_manpower], ['Equipment', shared.planned_equipment], ['Materials', shared.planned_materials]]
+            .filter(([, value]) => value).map(([label, value]) => `<p><strong>${label}:</strong> ${esc(value)}</p>`).join('')}
+        </div></details>`;
+    };
+    const evidenceBlock = (item) => {
+      if (!item.share_evidence || !Array.isArray(item.shared_evidence))
+        return '<p style="margin:10px 0 0;font-size:12px;color:#64748b;">The contractor did not share the individual reports. Check the work on site.</p>';
+      const html = window._peSharedEvidenceHtml ? window._peSharedEvidenceHtml(item.shared_evidence, item.activity_unit) : '';
+      return `<details style="margin-top:10px;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;background:#fff;">
+        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Approved reports shared as evidence (${item.shared_evidence.length})</summary>
+        <div style="margin-top:6px;">${html}</div></details>`;
+    };
+    const rowHtml = (item) => {
+      const summary = item.activity_summary || {};
+      const unit = item.activity_unit || '';
+      const dueColor = item.overdue ? '#b91c1c' : '#475569';
+      return `<article style="background:#fff;border:1px solid #dbe3ec;border-radius:10px;margin:0 0 10px;overflow:hidden;">
+        <button type="button" data-wf-vtoggle aria-expanded="false"
+          style="display:block;width:100%;box-sizing:border-box;padding:12px 14px;border:0;background:#fff;cursor:pointer;text-align:left;font-family:inherit;color:#0f172a;">
+          <span style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 12px;">
+            <strong style="font-size:14px;">${esc(item.activity_title)}</strong>
+            <span style="font-size:12px;font-weight:600;color:${dueColor};">${esc(dueText(item))}</span>
+          </span>
+          <span style="display:block;margin-top:4px;font-size:12px;color:#64748b;">
+            ${esc(kindLabel[item.kind] || String(item.kind).replace(/_/g, ' '))} review &middot; Claimed ${Number(item.claimed_progress_pct) || 0}% &middot; Certified ${Number(item.activity_certified_progress_pct) || 0}%
+            &middot; Respond by ${esc(String(item.respond_by).slice(0, 10))}
+          </span>
+        </button>
+        <div data-wf-vbody hidden style="padding:12px 14px 14px;border-top:1px solid #e2e8f0;">
+          <div style="font-size:12px;color:#334155;"><strong>What to check:</strong> ${checkText(item)}</div>
+          ${item.request_note ? `<p style="margin:8px 0 0;font-size:12px;color:#475569;">Contractor note: ${esc(item.request_note)}</p>` : ''}
+          <div style="margin-top:8px;font-size:11px;color:#64748b;">Requested ${esc(String(item.requested_at || '').slice(0, 10))} by ${esc(item.requested_by_role || 'contractor')} &middot; Cut-off ${esc(String(item.cut_off_date || '').slice(0, 10))}${Number(item.pending_inspectors) > 0 ? ' &middot; Inspector recommendation pending' : ''}</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:10px;">
+            ${stat('Tasks', Number(summary.task_count) || 0)}
+            ${stat('Approved reports', Number(summary.approved_report_count) || 0)}
+            ${stat('Quantity reported', `${Number(summary.approved_quantity) || 0}${unit ? ' ' + esc(unit) : ''}${Number(summary.planned_quantity) > 0 ? ` of ${Number(summary.planned_quantity)}` : ''}`)}
+          </div>
+          ${sharedPlan(item)}${evidenceBlock(item)}
+          <button type="button" class="rc-btn rc-btn--approve rc-btn--sm" data-wf-open-verification="${esc(item.id)}" style="margin-top:12px;">
+            ${consultantSide ? 'Open full review and answer' : 'Open activity'}</button>
+        </div>
+      </article>`;
+    };
+    const heading = consultantSide ? 'Pending verifications' : 'Requests waiting for the consultant';
+    const body = rows.length ? rows.map(rowHtml).join('') : '<p style="color:#64748b;">No pending verification requests.</p>';
     expandGrayPart(`<section style="padding:18px;overflow:auto;height:100%;box-sizing:border-box;">
       <button class="btn" type="button" onclick="collapseGrayPart()">← Back</button>
-      <h3 style="margin:14px 0 8px;color:#0f172a;">Pending verifications</h3>${body}</section>`);
-    document.getElementById('grayContent')?.querySelectorAll('[data-wf-open-verification]').forEach((button) =>
+      <h3 style="margin:14px 0 4px;color:#0f172a;">${heading}${rows.length ? ` (${rows.length})` : ''}</h3>
+      ${rows.length ? '<p style="margin:0 0 12px;font-size:12px;color:#64748b;">Most urgent first. Open a request to see what to check before you answer.</p>' : ''}${body}</section>`);
+    const panel = document.getElementById('grayContent');
+    panel?.querySelectorAll('[data-wf-vtoggle]').forEach((button) =>
+      button.addEventListener('click', () => {
+        const target = button.parentElement.querySelector('[data-wf-vbody]');
+        const opening = target.hidden;
+        target.hidden = !opening;
+        button.setAttribute('aria-expanded', String(opening));
+      }));
+    panel?.querySelectorAll('[data-wf-open-verification]').forEach((button) =>
       button.addEventListener('click', async () => {
         collapseGrayPart();
         await window._openActivityVerificationNotification?.(button.dataset.wfOpenVerification);
