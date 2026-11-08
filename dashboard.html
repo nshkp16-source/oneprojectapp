@@ -14139,6 +14139,13 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
     tablist.querySelector(`[data-wc-tab="${tab.key}"]`).addEventListener('click', () => activate(tab.key));
   }
   if (extraTabs.some((tab) => tab.key === stored)) activate(stored);
+  shell.addEventListener('change', (event) => {
+    const filter = event.target.closest('[data-wc-attachment-filter]');
+    if (!filter) return;
+    const selectedType = filter.value;
+    for (const row of shell.querySelectorAll('[data-wc-task-attachment-row]'))
+      row.style.display = selectedType === 'all' || row.dataset.wcAttachmentType === selectedType ? 'flex' : 'none';
+  });
 }
 
 async function _wcOpenInternalTaskLink(type, targetId) {
@@ -14827,7 +14834,10 @@ function _wcFilesHtml(task, reports, attachments, leader) {
     ...(task.linked_file_name ? [{ legacy: true, file_name: task.linked_file_name }] : []),
     ...(Array.isArray(attachments) ? attachments : []),
   ];
-  const taskFileRows = taskFiles.map((file) => `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid #e8edf3;">
+  const taskFileRows = taskFiles.map((file) => {
+    const type = _cardAttachmentTypeOptions().some(([value]) => value === file.attachment_type)
+      ? file.attachment_type : 'other';
+    return `<div data-wc-task-attachment-row data-wc-attachment-type="${type}" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid #e8edf3;">
     ${file.legacy
       ? `<a data-action="wc-dl-task" data-filename="${escapeHtml(file.file_name)}" style="color:#0369a1;cursor:pointer;overflow-wrap:anywhere;">${escapeHtml(file.file_name)}</a>`
       : `<button type="button" data-wc-attachment-preview="${escapeHtml(file.file_url)}"
@@ -14836,7 +14846,8 @@ function _wcFilesHtml(task, reports, attachments, leader) {
         <span style="font-size:11px;color:#64748b;">${escapeHtml(_cardAttachmentTypeLabel(file))}</span>
         ${leader ? `<button type="button" data-wc-attachment-delete="${escapeHtml(String(file.id))}"
           style="padding:3px 7px;border:1px solid #fecaca;border-radius:5px;background:#fff;color:#b91c1c;cursor:pointer;">Remove</button>` : ''}`}
-  </div>`).join('');
+  </div>`;
+  }).join('');
   const reportFiles = reports.filter((report) => report.attachment_name).map((report) =>
     `<div style="padding:5px 0;border-top:1px solid #e8edf3;">
       <a data-action="wc-dl-progress" data-progress-id="${escapeHtml(String(report.id))}"
@@ -14846,6 +14857,12 @@ function _wcFilesHtml(task, reports, attachments, leader) {
     </div>`).join('');
   return `<section style="padding:10px 0;">
     <div style="font-size:12px;font-weight:600;color:#172033;">Task attachments</div>
+    ${taskFiles.length ? `<label style="display:block;margin-top:7px;font-size:11px;color:#526078;">Filter by evidence type
+      <select data-wc-attachment-filter style="display:block;max-width:260px;width:100%;margin-top:4px;padding:6px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;">
+        <option value="all">All attachment types</option>
+        ${_cardAttachmentTypeOptions().map(([value, label]) => `<option value="${value}">${escapeHtml(label)}</option>`).join('')}
+      </select>
+    </label>` : ''}
     ${taskFileRows || '<div style="padding:7px 0;font-size:12px;color:#64748b;">No task attachments yet.</div>'}
     ${leader ? `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
       <input type="file" data-wc-attachment-input multiple style="font-size:12px;max-width:100%;"/>
@@ -16765,10 +16782,13 @@ async function _peLoadDetail(recordId, tabKey) {
 }
 
 window._peSharedEvidenceHtml = function (list, unit) {
-  const items = Array.isArray(list) ? list : [];
+  const items = Array.isArray(list) ? { reports: list, task_attachments: [] } : (list || {});
+  const reports = Array.isArray(items.reports) ? items.reports : [];
+  const taskAttachments = Array.isArray(items.task_attachments) ? items.task_attachments : [];
   const e = (value) => escapeHtml(String(value ?? ''));
   const u = unit ? ` ${e(unit)}` : '';
-  if (!items.length) return '<p style="font-size:12px;color:#64748b;">The contractor shared the evidence, but no approved reports exist up to the cut-off date.</p>';
+  if (!reports.length && !taskAttachments.length)
+    return '<p style="font-size:12px;color:#64748b;">The contractor shared the evidence, but no approved reports or task attachments exist for this request.</p>';
   const row = (r) => {
     const figure = [
       r.quantity_done != null ? `Done ${Number(r.quantity_done)}${u}` : '',
@@ -16791,7 +16811,22 @@ window._peSharedEvidenceHtml = function (list, unit) {
       ${photos ? `<div style="margin-top:5px;">${photos}</div>` : ''}
     </div>`;
   };
-  return `<div style="max-height:360px;overflow:auto;">${items.map(row).join('')}</div>`;
+  const attachmentRows = taskAttachments.map((file) => {
+    const url = /^https:\/\//i.test(String(file.file_url || '')) ? e(file.file_url) : '';
+    const name = e(file.file_name || 'Attachment');
+    return `<div style="padding:7px 0;border-top:1px solid #e2e8f0;">
+      <strong style="font-size:11px;color:#1e293b;">${e(file.task_title || 'Task')}</strong>
+      <div style="margin-top:3px;font-size:12px;">${url
+        ? `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#0369a1;overflow-wrap:anywhere;">${name}</a>`
+        : `<span style="overflow-wrap:anywhere;">${name}</span>`}
+        <span style="font-size:11px;color:#64748b;"> · ${e(_cardAttachmentTypeLabel(file))}</span></div>
+    </div>`;
+  }).join('');
+  return `<div style="max-height:360px;overflow:auto;">${reports.map(row).join('')}</div>
+    ${taskAttachments.length ? `<details style="margin-top:10px;border-top:1px solid #e2e8f0;padding-top:8px;">
+      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Task execution attachments (${taskAttachments.length})</summary>
+      <div style="max-height:240px;overflow:auto;margin-top:5px;">${attachmentRows}</div>
+    </details>` : ''}`;
 };
 
 function _peActivityCardHtml(card, verificationData = { verifications: [], rework: [] }, selectedTab = 'overview') {
@@ -17042,7 +17077,7 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
       </label>
       <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:12px;color:#475569;">
         <input type="checkbox" name="shareEvidence" value="true">
-        <span>Share the approved reports up to the cut-off date as evidence (work done, quantities, manpower, equipment, materials, issues and photos). Rejected, pending and voided reports, member identities and private notes are never shared.</span>
+        <span>Share approved reports up to the cut-off date as evidence (work done, quantities, manpower, equipment, materials, issues and photos). Task execution attachments are included automatically for the consultant's review. Rejected, pending and voided reports, member identities and private notes are never shared.</span>
       </label>
       <label style="display:block;margin-top:10px;font-size:12px;color:#475569;">Consultant inspectors (optional)
         <select name="inspectorIds" multiple data-pe-inspectors size="3" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;">
@@ -17064,10 +17099,12 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
     const mine = signers.some(signer => signer.signer_role === 'TeamMember' &&
       String(signer.signer_user_id) === String(window.currentUserId) && signer.status === 'pending');
     const pendingInspectors = signers.some(signer => signer.is_team_member && signer.status === 'pending');
-    const sharedEvidence = consultantView && item.share_evidence && Array.isArray(item.shared_evidence) ? item.shared_evidence : null;
+    const sharedEvidence = consultantView && item.shared_evidence
+      && (Array.isArray(item.shared_evidence) || typeof item.shared_evidence === 'object')
+      ? item.shared_evidence : null;
     const consultantEvidenceHtml = sharedEvidence
       ? window._peSharedEvidenceHtml(sharedEvidence, activity.unit)
-      : '<p style="font-size:12px;color:#64748b;">The contractor did not share the individual reports. Check the work on site.</p>';
+      : '<p style="font-size:12px;color:#64748b;">The contractor did not share reports or task execution attachments. Check the work on site.</p>';
     const evidenceHtml = consultantView
       ? `<div style="font-size:12px;color:#475569;">${Number(item.activity_summary?.approved_report_count) || 0} approved reports · ${Number(item.activity_summary?.approved_quantity) || 0} ${escapeHtml(activity.unit || '')} reported</div>${consultantEvidenceHtml}`
       : evidence.length ? evidence.map(report => `
@@ -22261,11 +22298,16 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
         </div></details>`;
     };
     const evidenceBlock = (item) => {
-      if (!item.share_evidence || !Array.isArray(item.shared_evidence))
-        return '<p style="margin:10px 0 0;font-size:12px;color:#64748b;">The contractor did not share the individual reports. Check the work on site.</p>';
-      const html = window._peSharedEvidenceHtml ? window._peSharedEvidenceHtml(item.shared_evidence, item.activity_unit) : '';
+      const evidence = item.shared_evidence;
+      if (!evidence
+        || (!Array.isArray(evidence) && typeof evidence !== 'object'))
+        return '<p style="margin:10px 0 0;font-size:12px;color:#64748b;">The contractor did not share reports or task execution attachments. Check the work on site.</p>';
+      const reportCount = Array.isArray(evidence) ? evidence.length
+        : (Array.isArray(evidence.reports) ? evidence.reports.length : 0);
+      const attachmentCount = Array.isArray(evidence.task_attachments) ? evidence.task_attachments.length : 0;
+      const html = window._peSharedEvidenceHtml ? window._peSharedEvidenceHtml(evidence, item.activity_unit) : '';
       return `<details style="margin-top:10px;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;background:#fff;">
-        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Approved reports shared as evidence (${item.shared_evidence.length})</summary>
+        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Shared evidence (${reportCount} reports · ${attachmentCount} task attachments)</summary>
         <div style="margin-top:6px;">${html}</div></details>`;
     };
     const rowShell = (item, unread, headHtml, bodyHtml) => `<article style="background:#fff;border:1px solid #dbe3ec;border-radius:10px;margin:0 0 10px;overflow:hidden;">
