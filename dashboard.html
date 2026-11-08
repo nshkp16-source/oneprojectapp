@@ -15942,6 +15942,10 @@ async function _wcOpenCreateForm() {
                 style="width:100%;padding:8px 10px;border:1px solid var(--field-border);border-radius:var(--field-radius);box-sizing:border-box;"/>`).join('')}
           </div>
         </div>
+        <div>
+          <label for="wc-cr-attachments" style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px;">Attachments (optional)</label>
+          <input id="wc-cr-attachments" type="file" multiple style="font-size:12px;color:#374151;"/>
+        </div>
         <div style="max-width:260px;">
           <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Priority *</label>
           <select id="wc-cr-priority" style="width:100%;padding:9px 10px;border:1px solid var(--field-border);border-radius:var(--field-radius);font-size:13px;background:#fff;">
@@ -16328,6 +16332,7 @@ async function _wcOpenCreateForm() {
 
       saveBtn.disabled=true; saveBtn.textContent='Creating…';
       const projectId = localStorage.getItem('activeProjectId');
+      const attachmentFiles = document.getElementById('wc-cr-attachments')?.files || [];
       let data;
       if (activityId) {
         const task = {
@@ -16357,29 +16362,36 @@ async function _wcOpenCreateForm() {
             return;
           }
         }
+        const body = new FormData();
+        body.append('task', JSON.stringify(task));
+        if (!isClientSide) body.append('new_task_weight_pct', String(activityTasks.length ? share : 100));
+        for (const file of attachmentFiles) body.append('attachments', file);
         const res = await _wcFetch(`${API}/planning-execution/${encodeURIComponent(activityId)}/tasks`, {
-          method: 'POST',
-          body: JSON.stringify({
-            task,
-            new_task_weight_pct: isClientSide ? undefined : activityTasks.length ? share : 100,
-          }),
+          method: 'POST', body,
         });
         if (!res) throw new Error('Could not create the task.');
         data = await res.json();
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       } else {
-        const res = await _wcFetch(`${API}/work-center`, {
-          method: 'POST',
-          body: JSON.stringify({
-            projectId, title, description: desc || '', start_date: startDate, end_date: endDate,
-            priority,
-            activity_type: type, planned_quantity: planned, unit,
-            stages: type === 'stages' ? taskStages : [],
-            assigned_members: assignedMembers,
-            location_block: location.block, location_floor: location.floor, location_zone: location.zone,
-            location_grid: location.grid, location_drawing: location.drawing,
-          }),
-        });
+        const body = new FormData();
+        body.append('projectId', projectId || '');
+        body.append('title', title);
+        body.append('description', desc || '');
+        body.append('start_date', startDate);
+        body.append('end_date', endDate);
+        body.append('priority', priority);
+        body.append('activity_type', type);
+        body.append('planned_quantity', planned);
+        body.append('unit', unit);
+        body.append('stages', JSON.stringify(type === 'stages' ? taskStages : []));
+        body.append('assigned_members', JSON.stringify(assignedMembers));
+        body.append('location_block', location.block);
+        body.append('location_floor', location.floor);
+        body.append('location_zone', location.zone);
+        body.append('location_grid', location.grid);
+        body.append('location_drawing', location.drawing);
+        for (const file of attachmentFiles) body.append('attachments', file);
+        const res = await _wcFetch(`${API}/work-center`, { method: 'POST', body });
         if (!res) throw new Error('Could not create the standalone task.');
         data = await res.json();
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -18241,6 +18253,11 @@ function _pe2FormHtml() {
         </div>
       </details>
 
+      <div>
+        <label style="${_peLabelStyle()}">Attachments (optional)</label>
+        <input id="pe2-attachments" type="file" multiple style="font-size:13px;color:#374151;"/>
+      </div>
+
       <div style="border-top:1px solid #e5e7eb;padding-top:12px;">
         <div style="display:flex;align-items:center;justify-content:space-between;">
           <h4 style="margin:0;font-size:14px;color:#1f2937;">4. Task sheet</h4>
@@ -18567,6 +18584,8 @@ function _pe2Payload(confirmReplace) {
     ...(many ? { weight_pct: t.weight } : {}),
     ...(_pe2.type === 'stages' ? { stages: t.stages.map((s) => ({ title: s.title.trim(), weight_pct: s.weight, is_hold_point: !!s.hold })) } : {}),
   }))));
+  for (const file of document.getElementById('pe2-attachments')?.files || [])
+    form.append('attachments', file);
   if (confirmReplace) form.append('confirm_replace_manual', 'true');
   return form;
 }
