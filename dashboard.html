@@ -13592,7 +13592,7 @@ bottomContent.addEventListener('click', (e) => {
   }
   if (action === 'wc-add-supporting-attachment') {
     const taskId = actionEl.getAttribute('data-task-id') || recordId;
-    const groups = item?.querySelector(`[data-wc-supporting-groups][data-task-id="${CSS.escape(String(taskId))}"]`);
+    const groups = document.querySelector(`[data-wc-supporting-groups][data-task-id="${CSS.escape(String(taskId))}"]`);
     if (groups) groups.insertAdjacentHTML('beforeend', _wcSupportingAttachmentGroupHtml(taskId, groups.children.length, true));
     return;
   }
@@ -13607,19 +13607,20 @@ bottomContent.addEventListener('click', (e) => {
 });
 
 bottomContent.addEventListener('change', (event) => {
-  const group = event.target.closest('[data-wc-supporting-group]');
-  if (group && (event.target.matches('[data-supporting-type]') || event.target.matches('[data-supporting-custom]'))) {
-    const typeInput = group.querySelector('[data-supporting-type]');
-    const customInput = group.querySelector('[data-supporting-custom]');
-    const filesInput = group.querySelector('[data-supporting-files]');
+  const supportingGroup = event.target.closest('[data-wc-supporting-group]');
+  if (supportingGroup && event.target.matches('[data-supporting-type]')) {
+    const typeInput = supportingGroup.querySelector('[data-supporting-type]');
+    const customInput = supportingGroup.querySelector('[data-supporting-custom]');
+    const filesInput = supportingGroup.querySelector('[data-supporting-files]');
+    const oldState = supportingGroup.dataset.supportingState || '';
     const selectedType = typeInput.value;
     if (selectedType !== 'other') customInput.value = '';
     customInput.disabled = selectedType !== 'other';
-    const customTitle = customInput.value.trim();
-    const nextState = `${selectedType}\n${selectedType === 'other' ? customTitle : ''}`;
-    if (group.dataset.supportingState && group.dataset.supportingState !== nextState) filesInput.value = '';
-    group.dataset.supportingState = nextState;
     customInput.required = selectedType === 'other';
+    const customTitle = customInput.value.trim();
+    const newState = `${selectedType}\n${selectedType === 'other' ? customTitle : ''}`;
+    if (oldState && oldState !== newState) filesInput.value = '';
+    supportingGroup.dataset.supportingState = newState;
     filesInput.disabled = !selectedType || (selectedType === 'other' && !customTitle);
     return;
   }
@@ -13635,13 +13636,12 @@ bottomContent.addEventListener('input', (event) => {
   const customInput = event.target.closest('[data-supporting-custom]');
   if (!customInput) return;
   const group = customInput.closest('[data-wc-supporting-group]');
-  const typeInput = group?.querySelector('[data-supporting-type]');
   const filesInput = group?.querySelector('[data-supporting-files]');
-  if (!group || !typeInput || !filesInput || typeInput.value !== 'other') return;
+  if (!group || !filesInput) return;
   const customTitle = customInput.value.trim();
-  const nextState = `other\n${customTitle}`;
-  if (group.dataset.supportingState && group.dataset.supportingState !== nextState) filesInput.value = '';
-  group.dataset.supportingState = nextState;
+  const newState = `other\n${customTitle}`;
+  if (group.dataset.supportingState && group.dataset.supportingState !== newState) filesInput.value = '';
+  group.dataset.supportingState = newState;
   filesInput.disabled = !customTitle;
 });
 
@@ -14100,7 +14100,10 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   const shell = tablist ? tablist.parentElement : null;
   const checklistItems = checklistData.flatMap((list) => list.items || []);
   const extraTabs = [
-    { key: 'attachments', label: 'Attachment', count: (data.attachments || []).length + (task.linked_file_name ? 1 : 0) + entries.filter((entry) => entry.attachment_name).length, html: _wcFilesHtml(task, entries, data.attachments, leader) },
+    { key: 'attachments', label: 'Attachment', count: (data.attachments || []).length + (task.linked_file_name ? 1 : 0)
+      + entries.reduce((total, entry) => total + (entry.attachment_name ? 1 : 0)
+        + (Array.isArray(entry.supporting_attachments) ? entry.supporting_attachments.length : 0), 0),
+      html: _wcFilesHtml(task, entries, data.attachments, leader) },
     { key: 'checklist', label: 'Checklist', count: checklistItems.length ? `${checklistItems.filter((i) => i.is_complete).length}/${checklistItems.length}` : null, html: checklistSection },
     { key: 'comments', label: 'Comments', count: (data.comments || []).length, html: commentsSection },
     { key: 'history', label: 'History', count: null, html: historySection },
@@ -14409,6 +14412,7 @@ function _wcPMView(task, progressEntries) {
                 color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;padding:4px 10px;
                 font-size:12px;cursor:pointer;margin-bottom:10px;">
                 Download ${escapeHtml(e.attachment_name)}</a>`:''}
+            ${_wcReportSupportingAttachmentsHtml(e)}
             ${canVal?`
               <div style="border-top:1px solid #e5e7eb;padding-top:10px;">
                 <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;
@@ -14728,7 +14732,6 @@ function _wcMemberView(task, myEntries) {
           <textarea id="wc-pr-delay-note-${task.id}" maxlength="2000" placeholder="Explain the delay, if applicable"
             style="width:100%;min-height:50px;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box;"></textarea>
         </div>
-        <div>${_wcLabel('Attachment')}<input id="wc-pr-file-${task.id}" type="file" style="font-size:12px;color:#374151;"/></div>
         <button data-action="wc-submit-progress" data-task-id="${escapeHtml(String(task.id))}"
           style="width:100%;padding:11px;font-size:13px;font-weight:700;
           background:#007B8A;color:#fff;border:none;border-radius:10px;cursor:pointer;">
@@ -14842,22 +14845,9 @@ function _supportingAttachmentTypeLabel(file) {
     ? `${label}: ${file.custom_attachment_type}` : label;
 }
 
-function _wcReportSupportingAttachmentsHtml(report) {
-  const files = Array.isArray(report.supporting_attachments) ? report.supporting_attachments : [];
-  return files.map((file) => {
-    const name = escapeHtml(file.file_name || 'Supporting attachment');
-    const url = /^https:\/\//i.test(String(file.file_url || '')) ? escapeHtml(file.file_url) : '';
-    return `<div style="margin-top:5px;font-size:11px;">
-      ${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#0369a1;overflow-wrap:anywhere;">${name}</a>`
-        : `<span style="overflow-wrap:anywhere;">${name}</span>`}
-      <span style="color:#64748b;"> · ${escapeHtml(_supportingAttachmentTypeLabel(file))}</span>
-    </div>`;
-  }).join('');
-}
-
-function _wcSupportingAttachmentGroupHtml(taskId, index, removable = false) {
+function _wcSupportingAttachmentGroupHtml(taskId, removable = false) {
   const box = 'width:100%;margin-top:4px;padding:7px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;';
-  return `<div data-wc-supporting-group data-group-index="${index}" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:8px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;">
+  return `<div data-wc-supporting-group style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:8px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;">
     <label style="display:block;font-size:11px;color:#526078;">Evidence title *
       <select data-supporting-type style="${box}background:#fff;">
         <option value="">Choose evidence title first</option>${_supportingAttachmentTypeOptions().map(([value, label]) =>
@@ -14874,6 +14864,19 @@ function _wcSupportingAttachmentGroupHtml(taskId, index, removable = false) {
     ${removable ? `<button type="button" data-action="wc-remove-supporting-attachment"
       data-task-id="${escapeHtml(String(taskId))}" style="align-self:end;padding:7px;border:1px solid #fecaca;border-radius:6px;background:#fff;color:#b91c1c;cursor:pointer;">Remove batch</button>` : ''}
   </div>`;
+}
+
+function _wcReportSupportingAttachmentsHtml(report) {
+  const files = Array.isArray(report.supporting_attachments) ? report.supporting_attachments : [];
+  return files.map((file) => {
+    const name = escapeHtml(file.file_name || 'Supporting attachment');
+    const url = /^https:\/\//i.test(String(file.file_url || '')) ? escapeHtml(file.file_url) : '';
+    return `<div style="margin-top:5px;font-size:11px;">
+      ${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#0369a1;overflow-wrap:anywhere;">${name}</a>`
+        : `<span style="overflow-wrap:anywhere;">${name}</span>`}
+      <span style="color:#64748b;"> · ${escapeHtml(_supportingAttachmentTypeLabel(file))}</span>
+    </div>`;
+  }).join('');
 }
 
 function _wcFilesHtml(task, reports, attachments, leader) {
@@ -14899,8 +14902,10 @@ function _wcFilesHtml(task, reports, attachments, leader) {
     const link = file.legacy
       ? `<a data-action="wc-dl-progress" data-progress-id="${escapeHtml(String(report.id))}"
           data-filename="${escapeHtml(file.file_name)}" style="color:#0369a1;cursor:pointer;">${escapeHtml(file.file_name)}</a>`
-      : `<a href="${escapeHtml(file.file_url || '')}" target="_blank" rel="noopener noreferrer"
-          style="color:#0369a1;overflow-wrap:anywhere;">${escapeHtml(file.file_name || 'Supporting attachment')}</a>`;
+      : /^https:\/\//i.test(String(file.file_url || ''))
+        ? `<a href="${escapeHtml(file.file_url)}" target="_blank" rel="noopener noreferrer"
+            style="color:#0369a1;overflow-wrap:anywhere;">${escapeHtml(file.file_name || 'Supporting attachment')}</a>`
+        : `<span style="overflow-wrap:anywhere;">${escapeHtml(file.file_name || 'Supporting attachment')}</span>`;
     const typeLabel = file.legacy ? '' : ` · ${escapeHtml(_supportingAttachmentTypeLabel(file))}`;
     return `<div style="padding:5px 0;border-top:1px solid #e8edf3;">
       ${link}<span style="font-size:11px;color:#64748b;">${typeLabel} · ${escapeHtml(_wcFmtDate(report.report_date))}</span>
@@ -15269,7 +15274,6 @@ async function _wcHandleSubmitProgressLegacy(taskId, tabKey) {
     const materials  = document.getElementById(`wc-pr-materials-${taskId}`)?.value.trim();
     const issues     = document.getElementById(`wc-pr-issues-${taskId}`)?.value.trim();
     const notes      = document.getElementById(`wc-pr-notes-${taskId}`)?.value.trim();
-    const fileInput  = document.getElementById(`wc-pr-file-${taskId}`);
 
     if (!workDone)   return alert('Please describe the work done.');
     if (!reportDate) return alert('Report date is required.');
@@ -15285,7 +15289,6 @@ async function _wcHandleSubmitProgressLegacy(taskId, tabKey) {
     form.append('materials',   materials || '');
     form.append('issues',      issues || '');
     form.append('notes',       notes || '');
-    if (fileInput?.files?.[0]) form.append('attachment', fileInput.files[0]);
 
     const res  = await _wcFetch(`${API}/work-center-progress`, { method:'POST', body:form });
     if (!res) return;
@@ -15751,8 +15754,6 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
     form.append('delayCause', document.getElementById(`wc-pr-delay-cause-${taskId}`)?.value || '');
     form.append('delayDays', String(_wcReportDelayDays(reportDate, task.end_date)));
     form.append('delayNote', document.getElementById(`wc-pr-delay-note-${taskId}`)?.value.trim() || '');
-    const file = g('file');
-    if (file?.files?.[0]) form.append('attachment', file.files[0]);
     const photoInput = document.getElementById(`wc-pr-photos-${taskId}`);
     const photos = Array.from(photoInput?.files || []);
     if (photos.length > 10) return alert('Choose no more than 10 photos.');
@@ -16845,12 +16846,10 @@ async function _peLoadDetail(recordId, tabKey) {
 window._peSharedEvidenceHtml = function (list, unit) {
   const items = Array.isArray(list) ? { reports: list, supporting_attachments: [] } : (list || {});
   const reports = Array.isArray(items.reports) ? items.reports : [];
-  const supportingAttachments = Array.isArray(items.supporting_attachments) ? items.supporting_attachments
-    : Array.isArray(items.task_attachments) ? items.task_attachments : [];
+  const attachments = Array.isArray(items.supporting_attachments) ? items.supporting_attachments : [];
   const e = (value) => escapeHtml(String(value ?? ''));
   const u = unit ? ` ${e(unit)}` : '';
-  if (!reports.length && !supportingAttachments.length)
-    return '<p style="font-size:12px;color:#64748b;">The contractor shared the evidence, but no approved reports or supporting attachments exist for this request.</p>';
+  if (!reports.length && !attachments.length) return '<p style="font-size:12px;color:#64748b;">The contractor shared the evidence, but no approved reports or supporting attachments exist up to the cut-off date.</p>';
   const row = (r) => {
     const figure = [
       r.quantity_done != null ? `Done ${Number(r.quantity_done)}${u}` : '',
@@ -16873,20 +16872,22 @@ window._peSharedEvidenceHtml = function (list, unit) {
       ${photos ? `<div style="margin-top:5px;">${photos}</div>` : ''}
     </div>`;
   };
-  const attachmentRows = supportingAttachments.map((file) => {
+  const attachmentRows = attachments.map((file) => {
     const url = /^https:\/\//i.test(String(file.file_url || '')) ? e(file.file_url) : '';
-    const name = e(file.file_name || 'Attachment');
+    const name = e(file.file_name || 'Supporting attachment');
+    const title = file.attachment_type === 'other' && file.custom_attachment_type
+      ? `Other: ${e(file.custom_attachment_type)}` : e(_supportingAttachmentTypeLabel(file));
     return `<div style="padding:7px 0;border-top:1px solid #e2e8f0;">
       <strong style="font-size:11px;color:#1e293b;">${e(file.task_title || 'Progress report')}${file.report_date ? ` · ${e(file.report_date)}` : ''}</strong>
       <div style="margin-top:3px;font-size:12px;">${url
         ? `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#0369a1;overflow-wrap:anywhere;">${name}</a>`
         : `<span style="overflow-wrap:anywhere;">${name}</span>`}
-        <span style="font-size:11px;color:#64748b;"> · ${e(_supportingAttachmentTypeLabel(file))}</span></div>
+        <span style="font-size:11px;color:#64748b;"> · ${title}</span></div>
     </div>`;
   }).join('');
   return `<div style="max-height:360px;overflow:auto;">${reports.map(row).join('')}</div>
-    ${supportingAttachments.length ? `<details style="margin-top:10px;border-top:1px solid #e2e8f0;padding-top:8px;">
-      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Report supporting attachments (${supportingAttachments.length})</summary>
+    ${attachments.length ? `<details style="margin-top:10px;border-top:1px solid #e2e8f0;padding-top:8px;">
+      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Supporting attachments (${attachments.length})</summary>
       <div style="max-height:240px;overflow:auto;margin-top:5px;">${attachmentRows}</div>
     </details>` : ''}`;
 };
@@ -17139,7 +17140,7 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
       </label>
       <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:12px;color:#475569;">
         <input type="checkbox" name="shareEvidence" value="true">
-        <span>Share approved reports up to the cut-off date as evidence (work done, quantities, manpower, equipment, materials, issues and photos). Supporting attachments from approved reports are included automatically for the consultant's review. Rejected, pending and voided reports, member identities and private notes are never shared.</span>
+        <span>Share approved report details and photos up to the cut-off date. Supporting attachments from approved reports are included automatically for consultant review. Rejected, pending and voided reports, member identities and private notes are never shared.</span>
       </label>
       <label style="display:block;margin-top:10px;font-size:12px;color:#475569;">Consultant inspectors (optional)
         <select name="inspectorIds" multiple data-pe-inspectors size="3" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;">
@@ -17162,11 +17163,10 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
       String(signer.signer_user_id) === String(window.currentUserId) && signer.status === 'pending');
     const pendingInspectors = signers.some(signer => signer.is_team_member && signer.status === 'pending');
     const sharedEvidence = consultantView && item.shared_evidence
-      && (Array.isArray(item.shared_evidence) || typeof item.shared_evidence === 'object')
-      ? item.shared_evidence : null;
+      && (Array.isArray(item.shared_evidence) || typeof item.shared_evidence === 'object') ? item.shared_evidence : null;
     const consultantEvidenceHtml = sharedEvidence
       ? window._peSharedEvidenceHtml(sharedEvidence, activity.unit)
-      : '<p style="font-size:12px;color:#64748b;">The contractor did not share reports or supporting attachments. Check the work on site.</p>';
+      : '<p style="font-size:12px;color:#64748b;">No approved report supporting attachments are available for this request. Check the work on site.</p>';
     const evidenceHtml = consultantView
       ? `<div style="font-size:12px;color:#475569;">${Number(item.activity_summary?.approved_report_count) || 0} approved reports · ${Number(item.activity_summary?.approved_quantity) || 0} ${escapeHtml(activity.unit || '')} reported</div>${consultantEvidenceHtml}`
       : evidence.length ? evidence.map(report => `
@@ -18802,8 +18802,7 @@ function _pe2Payload(confirmReplace) {
     ...(many ? { weight_pct: t.weight } : {}),
     ...(_pe2.type === 'stages' ? { stages: t.stages.map((s) => ({ title: s.title.trim(), weight_pct: s.weight, is_hold_point: !!s.hold })) } : {}),
   }))));
-  const attachmentFiles = document.getElementById('pe2-attachments')?.files || [];
-  for (const file of attachmentFiles)
+  for (const file of document.getElementById('pe2-attachments')?.files || [])
     form.append('attachments', file);
   if (confirmReplace) form.append('confirm_replace_manual', 'true');
   return form;
@@ -22361,16 +22360,13 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
     };
     const evidenceBlock = (item) => {
       const evidence = item.shared_evidence;
-      if (!evidence
-        || (!Array.isArray(evidence) && typeof evidence !== 'object'))
-        return '<p style="margin:10px 0 0;font-size:12px;color:#64748b;">The contractor did not share reports or supporting attachments. Check the work on site.</p>';
-      const reportCount = Array.isArray(evidence) ? evidence.length
-        : (Array.isArray(evidence.reports) ? evidence.reports.length : 0);
-      const attachmentCount = Array.isArray(evidence.supporting_attachments) ? evidence.supporting_attachments.length
-        : Array.isArray(evidence.task_attachments) ? evidence.task_attachments.length : 0;
-      const html = window._peSharedEvidenceHtml ? window._peSharedEvidenceHtml(evidence, item.activity_unit) : '';
+      if (!evidence || (!Array.isArray(evidence) && typeof evidence !== 'object'))
+        return '<p style="margin:10px 0 0;font-size:12px;color:#64748b;">No approved report supporting attachments are available for this request. Check the work on site.</p>';
+      const reports = Array.isArray(evidence) ? evidence : (Array.isArray(evidence.reports) ? evidence.reports : []);
+      const attachments = Array.isArray(evidence.supporting_attachments) ? evidence.supporting_attachments : [];
+      const html = window._peSharedEvidenceHtml ? window._peSharedEvidenceHtml(item.shared_evidence, item.activity_unit) : '';
       return `<details style="margin-top:10px;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;background:#fff;">
-        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Shared evidence (${reportCount} reports · ${attachmentCount} supporting attachments)</summary>
+        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Shared evidence (${reports.length} reports · ${attachments.length} supporting attachments)</summary>
         <div style="margin-top:6px;">${html}</div></details>`;
     };
     const rowShell = (item, unread, headHtml, bodyHtml) => `<article style="background:#fff;border:1px solid #dbe3ec;border-radius:10px;margin:0 0 10px;overflow:hidden;">
