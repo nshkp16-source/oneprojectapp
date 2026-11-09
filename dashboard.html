@@ -13547,6 +13547,7 @@ bottomContent.addEventListener('click', (e) => {
     'wc-validate','wc-dl-task','wc-dl-progress',
     'wc-query-create','wc-query-answer','wc-query-resolve',
     'wc-task-card-action','wc-capture-report-location',
+    'wc-add-supporting-attachment','wc-remove-supporting-attachment',
   ]);
   if (!WC_ACTIONS.has(action)) return;
 
@@ -13589,6 +13590,16 @@ bottomContent.addEventListener('click', (e) => {
     _wcCaptureReportLocation(actionEl.getAttribute('data-task-id') || recordId);
     return;
   }
+  if (action === 'wc-add-supporting-attachment') {
+    const taskId = actionEl.getAttribute('data-task-id') || recordId;
+    const groups = item?.querySelector(`[data-wc-supporting-groups][data-task-id="${CSS.escape(String(taskId))}"]`);
+    if (groups) groups.insertAdjacentHTML('beforeend', _wcSupportingAttachmentGroupHtml(taskId, groups.children.length, true));
+    return;
+  }
+  if (action === 'wc-remove-supporting-attachment') {
+    actionEl.closest('[data-wc-supporting-group]')?.remove();
+    return;
+  }
   if (action === 'wc-dl-task')
     { _wcDownloadTaskFile(recordId, actionEl.getAttribute('data-filename')); return; }
   if (action === 'wc-dl-progress')
@@ -13596,12 +13607,42 @@ bottomContent.addEventListener('click', (e) => {
 });
 
 bottomContent.addEventListener('change', (event) => {
+  const group = event.target.closest('[data-wc-supporting-group]');
+  if (group && (event.target.matches('[data-supporting-type]') || event.target.matches('[data-supporting-custom]'))) {
+    const typeInput = group.querySelector('[data-supporting-type]');
+    const customInput = group.querySelector('[data-supporting-custom]');
+    const filesInput = group.querySelector('[data-supporting-files]');
+    const selectedType = typeInput.value;
+    if (selectedType !== 'other') customInput.value = '';
+    customInput.disabled = selectedType !== 'other';
+    const customTitle = customInput.value.trim();
+    const nextState = `${selectedType}\n${selectedType === 'other' ? customTitle : ''}`;
+    if (group.dataset.supportingState && group.dataset.supportingState !== nextState) filesInput.value = '';
+    group.dataset.supportingState = nextState;
+    customInput.required = selectedType === 'other';
+    filesInput.disabled = !selectedType || (selectedType === 'other' && !customTitle);
+    return;
+  }
   const dateInput = event.target.closest('input[id^="wc-pr-date-"]');
   if (!dateInput) return;
   const taskId = dateInput.id.slice('wc-pr-date-'.length);
   const task = (recordsCache['work-center'] || []).find((record) => String(record.id) === taskId);
   const delayInput = document.getElementById(`wc-pr-delay-days-${taskId}`);
   if (delayInput) delayInput.value = String(_wcReportDelayDays(dateInput.value, task?.end_date));
+});
+
+bottomContent.addEventListener('input', (event) => {
+  const customInput = event.target.closest('[data-supporting-custom]');
+  if (!customInput) return;
+  const group = customInput.closest('[data-wc-supporting-group]');
+  const typeInput = group?.querySelector('[data-supporting-type]');
+  const filesInput = group?.querySelector('[data-supporting-files]');
+  if (!group || !typeInput || !filesInput || typeInput.value !== 'other') return;
+  const customTitle = customInput.value.trim();
+  const nextState = `other\n${customTitle}`;
+  if (group.dataset.supportingState && group.dataset.supportingState !== nextState) filesInput.value = '';
+  group.dataset.supportingState = nextState;
+  filesInput.disabled = !customTitle;
 });
 
 // ███████████████████████████████████████████████████████████████████████
@@ -14139,13 +14180,6 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
     tablist.querySelector(`[data-wc-tab="${tab.key}"]`).addEventListener('click', () => activate(tab.key));
   }
   if (extraTabs.some((tab) => tab.key === stored)) activate(stored);
-  shell.addEventListener('change', (event) => {
-    const filter = event.target.closest('[data-wc-attachment-filter]');
-    if (!filter) return;
-    const selectedType = filter.value;
-    for (const row of shell.querySelectorAll('[data-wc-task-attachment-row]'))
-      row.style.display = selectedType === 'all' || row.dataset.wcAttachmentType === selectedType ? 'flex' : 'none';
-  });
 }
 
 async function _wcOpenInternalTaskLink(type, targetId) {
@@ -14575,6 +14609,7 @@ function _wcMemberView(task, myEntries) {
             </div>
             ${typeof _wcReportExtraHtml === 'function' ? _wcReportExtraHtml(e) : ''}
             ${e.attachment_name?`<a data-action="wc-dl-progress" data-progress-id="${escapeHtml(String(e.id))}" data-filename="${escapeHtml(e.attachment_name)}" style="display:inline-block;margin-top:8px;font-size:11px;color:#0369a1;">Download attachment: ${escapeHtml(e.attachment_name)}</a>`:''}
+            ${_wcReportSupportingAttachmentsHtml(e)}
             ${(e.validation_notes||e.void_reason)?`
               <div style="margin-top:8px;padding:6px 10px;background:#fffbeb;
                 border:1px solid #fcd34d;border-radius:6px;font-size:12px;color:#92400e;">
@@ -14650,6 +14685,15 @@ function _wcMemberView(task, myEntries) {
           <button type="button" data-action="wc-capture-report-location" data-task-id="${escapeHtml(String(task.id))}"
             style="margin-left:8px;font-size:11px;">Include current location</button>
           <span id="wc-pr-location-status-${task.id}" style="font-size:11px;color:#64748b;"></span>
+        </div>
+        <div style="padding:10px;border:1px solid #dbe3ec;border-radius:8px;">
+          <strong style="font-size:12px;color:#172033;">Supporting attachments (optional)</strong>
+          <p style="font-size:11px;color:#64748b;margin:4px 0;">Choose an evidence title before selecting its files. Add another group for a different title.</p>
+          <div data-wc-supporting-groups data-task-id="${escapeHtml(String(task.id))}">
+            ${_wcSupportingAttachmentGroupHtml(task.id, 0)}
+          </div>
+          <button type="button" data-action="wc-add-supporting-attachment" data-task-id="${escapeHtml(String(task.id))}"
+            style="margin-top:8px;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#334155;cursor:pointer;">Add another evidence title</button>
         </div>
         <div style="padding:10px;border:1px solid #e5e7eb;border-radius:8px;">
           <strong style="font-size:12px;">Resources used</strong>
@@ -14777,7 +14821,7 @@ function _wcPlanRow(label, value) {
   </div>`;
 }
 
-function _cardAttachmentTypeOptions() {
+function _supportingAttachmentTypeOptions() {
   return [
     ['site_photos', 'Site photos / field evidence'],
     ['daily_progress', 'Daily work progress evidence'],
@@ -14791,42 +14835,45 @@ function _cardAttachmentTypeOptions() {
   ];
 }
 
-function _cardAttachmentTypeFields(prefix) {
-  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-top:8px;">
-    <label style="display:block;font-size:11px;color:#526078;">Execution evidence type *
-      <select id="${prefix}-type" style="display:block;width:100%;margin-top:4px;padding:7px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;">
-        <option value="">Select a type</option>${_cardAttachmentTypeOptions().map(([value, label]) =>
-          `<option value="${value}">${label}</option>`).join('')}
-      </select>
-    </label>
-    <label style="display:block;font-size:11px;color:#526078;">Custom execution type (required for Other)
-      <input id="${prefix}-custom" type="text" maxlength="120" placeholder="Name the execution evidence"
-        style="display:block;width:100%;margin-top:4px;padding:7px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;"/>
-    </label>
-  </div>
-  <small style="display:block;margin-top:5px;color:#64748b;">The selected type applies to every selected file. Upload another batch to use a different type.</small>`;
-}
-
-function _cardAttachmentTypeValue(prefix) {
-  const attachmentType = document.getElementById(`${prefix}-type`)?.value || '';
-  const customAttachmentType = document.getElementById(`${prefix}-custom`)?.value.trim() || '';
-  if (!attachmentType) throw new Error('Choose an attachment type.');
-  if (attachmentType === 'other' && !customAttachmentType)
-    throw new Error('Enter a custom attachment type for Other.');
-  return { attachmentType, customAttachmentType: attachmentType === 'other' ? customAttachmentType : '' };
-}
-
-function _appendCardAttachmentType(form, prefix) {
-  const { attachmentType, customAttachmentType } = _cardAttachmentTypeValue(prefix);
-  form.append('attachmentType', attachmentType);
-  form.append('customAttachmentType', customAttachmentType);
-}
-
-function _cardAttachmentTypeLabel(file) {
+function _supportingAttachmentTypeLabel(file) {
   const type = file.attachment_type || 'other';
-  const label = _cardAttachmentTypeOptions().find(([value]) => value === type)?.[1] || 'Other';
+  const label = _supportingAttachmentTypeOptions().find(([value]) => value === type)?.[1] || 'Other';
   return type === 'other' && file.custom_attachment_type
     ? `${label}: ${file.custom_attachment_type}` : label;
+}
+
+function _wcReportSupportingAttachmentsHtml(report) {
+  const files = Array.isArray(report.supporting_attachments) ? report.supporting_attachments : [];
+  return files.map((file) => {
+    const name = escapeHtml(file.file_name || 'Supporting attachment');
+    const url = /^https:\/\//i.test(String(file.file_url || '')) ? escapeHtml(file.file_url) : '';
+    return `<div style="margin-top:5px;font-size:11px;">
+      ${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#0369a1;overflow-wrap:anywhere;">${name}</a>`
+        : `<span style="overflow-wrap:anywhere;">${name}</span>`}
+      <span style="color:#64748b;"> · ${escapeHtml(_supportingAttachmentTypeLabel(file))}</span>
+    </div>`;
+  }).join('');
+}
+
+function _wcSupportingAttachmentGroupHtml(taskId, index, removable = false) {
+  const box = 'width:100%;margin-top:4px;padding:7px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;';
+  return `<div data-wc-supporting-group data-group-index="${index}" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:8px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;">
+    <label style="display:block;font-size:11px;color:#526078;">Evidence title *
+      <select data-supporting-type style="${box}background:#fff;">
+        <option value="">Choose evidence title first</option>${_supportingAttachmentTypeOptions().map(([value, label]) =>
+          `<option value="${value}">${escapeHtml(label)}</option>`).join('')}
+      </select>
+    </label>
+    <label style="display:block;font-size:11px;color:#526078;">Custom title (required for Other)
+      <input data-supporting-custom type="text" maxlength="120" placeholder="Name this evidence" disabled
+        style="${box}"/>
+    </label>
+    <label style="display:block;font-size:11px;color:#526078;">Supporting files
+      <input data-supporting-files type="file" multiple disabled style="${box}"/>
+    </label>
+    ${removable ? `<button type="button" data-action="wc-remove-supporting-attachment"
+      data-task-id="${escapeHtml(String(taskId))}" style="align-self:end;padding:7px;border:1px solid #fecaca;border-radius:6px;background:#fff;color:#b91c1c;cursor:pointer;">Remove batch</button>` : ''}
+  </div>`;
 }
 
 function _wcFilesHtml(task, reports, attachments, leader) {
@@ -14834,42 +14881,40 @@ function _wcFilesHtml(task, reports, attachments, leader) {
     ...(task.linked_file_name ? [{ legacy: true, file_name: task.linked_file_name }] : []),
     ...(Array.isArray(attachments) ? attachments : []),
   ];
-  const taskFileRows = taskFiles.map((file) => {
-    const type = _cardAttachmentTypeOptions().some(([value]) => value === file.attachment_type)
-      ? file.attachment_type : 'other';
-    return `<div data-wc-task-attachment-row data-wc-attachment-type="${type}" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid #e8edf3;">
+  const taskFileRows = taskFiles.map((file) => `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid #e8edf3;">
     ${file.legacy
       ? `<a data-action="wc-dl-task" data-filename="${escapeHtml(file.file_name)}" style="color:#0369a1;cursor:pointer;overflow-wrap:anywhere;">${escapeHtml(file.file_name)}</a>`
       : `<button type="button" data-wc-attachment-preview="${escapeHtml(file.file_url)}"
           data-wc-attachment-name="${escapeHtml(file.file_name)}" data-wc-attachment-mime="${escapeHtml(file.mime_type || '')}"
           style="padding:0;border:0;background:none;color:#0369a1;cursor:pointer;text-align:left;overflow-wrap:anywhere;">${escapeHtml(file.file_name)}</button>
-        <span style="font-size:11px;color:#64748b;">${escapeHtml(_cardAttachmentTypeLabel(file))}</span>
         ${leader ? `<button type="button" data-wc-attachment-delete="${escapeHtml(String(file.id))}"
           style="padding:3px 7px;border:1px solid #fecaca;border-radius:5px;background:#fff;color:#b91c1c;cursor:pointer;">Remove</button>` : ''}`}
-  </div>`;
+  </div>`).join('');
+  const reportFiles = reports.flatMap((report) => [
+    ...(report.attachment_name ? [{ ...report, file_name: report.attachment_name, legacy: true }] : []),
+    ...(Array.isArray(report.supporting_attachments)
+      ? report.supporting_attachments.map((file) => ({ ...file, report })) : []),
+  ]).map((file) => {
+    const report = file.report || file;
+    const link = file.legacy
+      ? `<a data-action="wc-dl-progress" data-progress-id="${escapeHtml(String(report.id))}"
+          data-filename="${escapeHtml(file.file_name)}" style="color:#0369a1;cursor:pointer;">${escapeHtml(file.file_name)}</a>`
+      : `<a href="${escapeHtml(file.file_url || '')}" target="_blank" rel="noopener noreferrer"
+          style="color:#0369a1;overflow-wrap:anywhere;">${escapeHtml(file.file_name || 'Supporting attachment')}</a>`;
+    const typeLabel = file.legacy ? '' : ` · ${escapeHtml(_supportingAttachmentTypeLabel(file))}`;
+    return `<div style="padding:5px 0;border-top:1px solid #e8edf3;">
+      ${link}<span style="font-size:11px;color:#64748b;">${typeLabel} · ${escapeHtml(_wcFmtDate(report.report_date))}</span>
+    </div>`;
   }).join('');
-  const reportFiles = reports.filter((report) => report.attachment_name).map((report) =>
-    `<div style="padding:5px 0;border-top:1px solid #e8edf3;">
-      <a data-action="wc-dl-progress" data-progress-id="${escapeHtml(String(report.id))}"
-        data-filename="${escapeHtml(report.attachment_name)}" style="color:#0369a1;cursor:pointer;">
-        ${escapeHtml(report.attachment_name)}</a>
-      <span style="font-size:11px;color:#64748b;"> · ${escapeHtml(_wcFmtDate(report.report_date))}</span>
-    </div>`).join('');
   return `<section style="padding:10px 0;">
     <div style="font-size:12px;font-weight:600;color:#172033;">Task attachments</div>
-    ${taskFiles.length ? `<label style="display:block;margin-top:7px;font-size:11px;color:#526078;">Filter by evidence type
-      <select data-wc-attachment-filter style="display:block;max-width:260px;width:100%;margin-top:4px;padding:6px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;">
-        <option value="all">All attachment types</option>
-        ${_cardAttachmentTypeOptions().map(([value, label]) => `<option value="${value}">${escapeHtml(label)}</option>`).join('')}
-      </select>
-    </label>` : ''}
     ${taskFileRows || '<div style="padding:7px 0;font-size:12px;color:#64748b;">No task attachments yet.</div>'}
     ${leader ? `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
       <input type="file" data-wc-attachment-input multiple style="font-size:12px;max-width:100%;"/>
       <button type="button" data-wc-attachment-upload
         style="padding:6px 10px;border:0;border-radius:6px;background:#007B8A;color:#fff;font-weight:600;cursor:pointer;">Upload selected files</button>
-    </div>${_cardAttachmentTypeFields('wc-card-attachment-type')}` : ''}
-    <div style="margin-top:14px;font-size:12px;font-weight:600;color:#172033;">Progress report attachments</div>
+    </div>` : ''}
+    <div style="margin-top:14px;font-size:12px;font-weight:600;color:#172033;">Progress report supporting attachments</div>
     ${reportFiles || '<div style="padding:7px 0;color:#64748b;">None attached.</div>'}
   </section>`;
 }
@@ -15045,7 +15090,6 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
       const projectId = await ensureActiveProjectId();
       const body = new FormData();
       body.append('projectId', projectId);
-      _appendCardAttachmentType(body, 'wc-card-attachment-type');
       for (const file of input.files) body.append('attachments', file);
       const response = await _wcFetch(`${API}/work-center/${taskId}/attachments`, { method: 'POST', body });
       const result = response ? await response.json().catch(() => ({})) : {};
@@ -15725,6 +15769,26 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
       });
     }
     form.append('photoMeta', JSON.stringify(photoMetadata));
+    const supportingGroups = [...document.querySelectorAll('[data-wc-supporting-groups]')]
+      .find((group) => group.dataset.taskId === String(taskId));
+    const supportingMetadata = [];
+    for (const group of supportingGroups?.querySelectorAll('[data-wc-supporting-group]') || []) {
+      const attachmentType = group.querySelector('[data-supporting-type]')?.value || '';
+      const customAttachmentType = group.querySelector('[data-supporting-custom]')?.value.trim() || '';
+      const files = Array.from(group.querySelector('[data-supporting-files]')?.files || []);
+      if (!files.length) continue;
+      if (!attachmentType) return alert('Choose an evidence title before selecting supporting files.');
+      if (attachmentType === 'other' && !customAttachmentType)
+        return alert('Enter a custom evidence title for Other before selecting its files.');
+      if (customAttachmentType.length > 120) return alert('Custom evidence titles cannot exceed 120 characters.');
+      for (const supportingFile of files) {
+        form.append('supporting_attachments', supportingFile);
+        supportingMetadata.push({ attachmentType, customAttachmentType });
+      }
+    }
+    if (supportingMetadata.length > 20) return alert('Choose no more than 20 supporting files.');
+    if (supportingMetadata.length)
+      form.append('supportingAttachmentMetadata', JSON.stringify(supportingMetadata));
     form.append('idempotencyKey', (window.crypto?.randomUUID
       ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`));
 
@@ -16034,7 +16098,6 @@ async function _wcOpenCreateForm() {
         <div>
           <label for="wc-cr-attachments" style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px;">Attachments (optional)</label>
           <input id="wc-cr-attachments" type="file" multiple style="font-size:12px;color:#374151;"/>
-          ${_cardAttachmentTypeFields('wc-create-attachment-type')}
         </div>
         <div style="max-width:260px;">
           <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Priority *</label>
@@ -16455,7 +16518,6 @@ async function _wcOpenCreateForm() {
         const body = new FormData();
         body.append('task', JSON.stringify(task));
         if (!isClientSide) body.append('new_task_weight_pct', String(activityTasks.length ? share : 100));
-        if (attachmentFiles.length) _appendCardAttachmentType(body, 'wc-create-attachment-type');
         for (const file of attachmentFiles) body.append('attachments', file);
         const res = await _wcFetch(`${API}/planning-execution/${encodeURIComponent(activityId)}/tasks`, {
           method: 'POST', body,
@@ -16481,7 +16543,6 @@ async function _wcOpenCreateForm() {
         body.append('location_zone', location.zone);
         body.append('location_grid', location.grid);
         body.append('location_drawing', location.drawing);
-        if (attachmentFiles.length) _appendCardAttachmentType(body, 'wc-create-attachment-type');
         for (const file of attachmentFiles) body.append('attachments', file);
         const res = await _wcFetch(`${API}/work-center`, { method: 'POST', body });
         if (!res) throw new Error('Could not create the standalone task.');
@@ -16782,13 +16843,14 @@ async function _peLoadDetail(recordId, tabKey) {
 }
 
 window._peSharedEvidenceHtml = function (list, unit) {
-  const items = Array.isArray(list) ? { reports: list, task_attachments: [] } : (list || {});
+  const items = Array.isArray(list) ? { reports: list, supporting_attachments: [] } : (list || {});
   const reports = Array.isArray(items.reports) ? items.reports : [];
-  const taskAttachments = Array.isArray(items.task_attachments) ? items.task_attachments : [];
+  const supportingAttachments = Array.isArray(items.supporting_attachments) ? items.supporting_attachments
+    : Array.isArray(items.task_attachments) ? items.task_attachments : [];
   const e = (value) => escapeHtml(String(value ?? ''));
   const u = unit ? ` ${e(unit)}` : '';
-  if (!reports.length && !taskAttachments.length)
-    return '<p style="font-size:12px;color:#64748b;">The contractor shared the evidence, but no approved reports or task attachments exist for this request.</p>';
+  if (!reports.length && !supportingAttachments.length)
+    return '<p style="font-size:12px;color:#64748b;">The contractor shared the evidence, but no approved reports or supporting attachments exist for this request.</p>';
   const row = (r) => {
     const figure = [
       r.quantity_done != null ? `Done ${Number(r.quantity_done)}${u}` : '',
@@ -16811,20 +16873,20 @@ window._peSharedEvidenceHtml = function (list, unit) {
       ${photos ? `<div style="margin-top:5px;">${photos}</div>` : ''}
     </div>`;
   };
-  const attachmentRows = taskAttachments.map((file) => {
+  const attachmentRows = supportingAttachments.map((file) => {
     const url = /^https:\/\//i.test(String(file.file_url || '')) ? e(file.file_url) : '';
     const name = e(file.file_name || 'Attachment');
     return `<div style="padding:7px 0;border-top:1px solid #e2e8f0;">
-      <strong style="font-size:11px;color:#1e293b;">${e(file.task_title || 'Task')}</strong>
+      <strong style="font-size:11px;color:#1e293b;">${e(file.task_title || 'Progress report')}${file.report_date ? ` · ${e(file.report_date)}` : ''}</strong>
       <div style="margin-top:3px;font-size:12px;">${url
         ? `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#0369a1;overflow-wrap:anywhere;">${name}</a>`
         : `<span style="overflow-wrap:anywhere;">${name}</span>`}
-        <span style="font-size:11px;color:#64748b;"> · ${e(_cardAttachmentTypeLabel(file))}</span></div>
+        <span style="font-size:11px;color:#64748b;"> · ${e(_supportingAttachmentTypeLabel(file))}</span></div>
     </div>`;
   }).join('');
   return `<div style="max-height:360px;overflow:auto;">${reports.map(row).join('')}</div>
-    ${taskAttachments.length ? `<details style="margin-top:10px;border-top:1px solid #e2e8f0;padding-top:8px;">
-      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Task execution attachments (${taskAttachments.length})</summary>
+    ${supportingAttachments.length ? `<details style="margin-top:10px;border-top:1px solid #e2e8f0;padding-top:8px;">
+      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Report supporting attachments (${supportingAttachments.length})</summary>
       <div style="max-height:240px;overflow:auto;margin-top:5px;">${attachmentRows}</div>
     </details>` : ''}`;
 };
@@ -17077,7 +17139,7 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
       </label>
       <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:12px;color:#475569;">
         <input type="checkbox" name="shareEvidence" value="true">
-        <span>Share approved reports up to the cut-off date as evidence (work done, quantities, manpower, equipment, materials, issues and photos). Task execution attachments are included automatically for the consultant's review. Rejected, pending and voided reports, member identities and private notes are never shared.</span>
+        <span>Share approved reports up to the cut-off date as evidence (work done, quantities, manpower, equipment, materials, issues and photos). Supporting attachments from approved reports are included automatically for the consultant's review. Rejected, pending and voided reports, member identities and private notes are never shared.</span>
       </label>
       <label style="display:block;margin-top:10px;font-size:12px;color:#475569;">Consultant inspectors (optional)
         <select name="inspectorIds" multiple data-pe-inspectors size="3" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;">
@@ -17104,7 +17166,7 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
       ? item.shared_evidence : null;
     const consultantEvidenceHtml = sharedEvidence
       ? window._peSharedEvidenceHtml(sharedEvidence, activity.unit)
-      : '<p style="font-size:12px;color:#64748b;">The contractor did not share reports or task execution attachments. Check the work on site.</p>';
+      : '<p style="font-size:12px;color:#64748b;">The contractor did not share reports or supporting attachments. Check the work on site.</p>';
     const evidenceHtml = consultantView
       ? `<div style="font-size:12px;color:#475569;">${Number(item.activity_summary?.approved_report_count) || 0} approved reports · ${Number(item.activity_summary?.approved_quantity) || 0} ${escapeHtml(activity.unit || '')} reported</div>${consultantEvidenceHtml}`
       : evidence.length ? evidence.map(report => `
@@ -22301,13 +22363,14 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
       const evidence = item.shared_evidence;
       if (!evidence
         || (!Array.isArray(evidence) && typeof evidence !== 'object'))
-        return '<p style="margin:10px 0 0;font-size:12px;color:#64748b;">The contractor did not share reports or task execution attachments. Check the work on site.</p>';
+        return '<p style="margin:10px 0 0;font-size:12px;color:#64748b;">The contractor did not share reports or supporting attachments. Check the work on site.</p>';
       const reportCount = Array.isArray(evidence) ? evidence.length
         : (Array.isArray(evidence.reports) ? evidence.reports.length : 0);
-      const attachmentCount = Array.isArray(evidence.task_attachments) ? evidence.task_attachments.length : 0;
+      const attachmentCount = Array.isArray(evidence.supporting_attachments) ? evidence.supporting_attachments.length
+        : Array.isArray(evidence.task_attachments) ? evidence.task_attachments.length : 0;
       const html = window._peSharedEvidenceHtml ? window._peSharedEvidenceHtml(evidence, item.activity_unit) : '';
       return `<details style="margin-top:10px;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;background:#fff;">
-        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Shared evidence (${reportCount} reports · ${attachmentCount} task attachments)</summary>
+        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Shared evidence (${reportCount} reports · ${attachmentCount} supporting attachments)</summary>
         <div style="margin-top:6px;">${html}</div></details>`;
     };
     const rowShell = (item, unread, headHtml, bodyHtml) => `<article style="background:#fff;border:1px solid #dbe3ec;border-radius:10px;margin:0 0 10px;overflow:hidden;">
