@@ -12759,7 +12759,8 @@ async function _openNotificationTarget(target) {
   const { entityType, entityId, message = '' } = target || {};
   sessionStorage.removeItem(PENDING_NOTIFICATION_KEY);
   if (!entityType || !entityId) return false;
-  collapseGrayPart();
+  // A reviewer opening a verification request stays in the side panel instead of closing and reopening it.
+  if (!(entityType === 'activity_verification' && wcSide(window.currentUserRole) !== 'Contractor')) collapseGrayPart();
 
   let opened = false;
   try {
@@ -12803,17 +12804,17 @@ async function _openNotificationTarget(target) {
     console.error(`Could not open ${entityType} notification:`, err);
   }
 
-  if (!opened) _showNotificationOpenError();
+  if (!opened) _showNotificationOpenError(entityType === 'activity_verification' ? window._activityOpenIssue?.message : '');
   return opened;
 }
 
-function _showNotificationOpenError() {
+function _showNotificationOpenError(message = '') {
   const container = document.getElementById('globalToast');
   if (!container) return;
   const notice = document.createElement('div');
   notice.className = 'toast-item';
   notice.setAttribute('role', 'status');
-  notice.textContent = 'Could not open the notified item. It may have been removed or is no longer available in this project.';
+  notice.textContent = message || 'Could not open the notified item. It may have been removed or is no longer available in this project.';
   container.appendChild(notice);
   setTimeout(() => notice.remove(), 6000);
 }
@@ -12857,53 +12858,79 @@ async function _openTaskQueryNotification(queryId) {
   return true;
 }
 
+function _peShowPanelNotice(activityId, text) {
+  const holder = document.getElementById(`pe-detail-inner-${activityId}`);
+  if (!holder) return;
+  holder.querySelector('[data-pe-notice]')?.remove();
+  holder.insertAdjacentHTML('afterbegin', `<div data-pe-notice role="status" style="margin-bottom:10px;padding:9px 12px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;color:#92400e;font-size:12px;">${escapeHtml(text)}</div>`);
+}
+
 async function _openActivityVerificationNotification(verificationId, resolvedTarget = null) {
+  window._activityOpenIssue = null;
+  const fail = (kind, message) => { window._activityOpenIssue = { kind, message }; return false; };
   const projectId = localStorage.getItem('activeProjectId');
-  if (!projectId) return false;
+  if (!projectId) return fail('no_project', 'No project is selected. Reload the page and try again.');
   let target = resolvedTarget;
   if (!target) {
     const params = new URLSearchParams({
       projectId, entityType: 'activity_verification', entityId: String(verificationId),
     });
-    const response = await authFetch(`${API}/notifications/target?${params}`);
-    if (!response || !response.ok) return false;
-    const data = await response.json();
-    target = data.target;
+    let response;
+    try {
+      response = await authFetch(`${API}/notifications/target?${params}`);
+    } catch (err) {
+      const error = _peClassifyLoadError(err);
+      return fail(error.peKind, error.message);
+    }
+    if (!response) return fail('session', 'Your session has expired. Sign in again to open this request.');
+    if (response.status === 404) return fail('not_found', 'This verification request is no longer available. It may have been withdrawn.');
+    if (!response.ok) return fail('server', `The server could not open this request (error ${response.status}). Try again in a moment.`);
+    target = (await response.json().catch(() => ({}))).target;
   }
   const activityId = target?.recordId;
-  if (!activityId) return false;
+  if (!activityId) return fail('not_found', 'This verification request is no longer linked to an activity.');
   try {
     sessionStorage.setItem(`pe-activity-tab-${activityId}`, 'certification');
     sessionStorage.setItem(`pe-verification-${activityId}`, String(verificationId));
   } catch (err) {
     console.error('Could not retain the verification destination:', err);
   }
-  collapseGrayPart();
-  let opened = await _openRecordNotification('planning_execution', activityId, 2500);
-  if (!opened) opened = await _openActivityCardInPanel(activityId);
-  if (!opened) return false;
-  const tab = await _waitForElement(`#pe-detail-inner-${CSS.escape(String(activityId))} [data-pe-tab="certification"]`);
-  tab?.click();
-  const detail = await _waitForElement(`#pe-verification-${CSS.escape(String(verificationId))}`);
-  detail?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  if (detail) Promise.resolve(window._markVerificationRead?.(verificationId)).then(() => window._refreshPendingBadge?.());
-  return Boolean(detail);
+  const detailSelector = `#pe-detail-inner-${CSS.escape(String(activityId))}`;
+  // Only the contractor has this activity in their own Planning and Execution list. Anyone else (the consultant
+  // leader, an inspector) reads it in the side panel directly, without switching tabs or closing the panel.
+  const inOwnList = wcSide(window.currentUserRole) === 'Contractor';
+  let openedInList = false;
+  if (inOwnList) {
+    collapseGrayPart();
+    openedInList = await _openRecordNotification('planning_execution', activityId, 2500);
+  }
+  if (!openedInList) await _openActivityCardInPanel(activityId);
+  const tab = await _waitForElement(`${detailSelector} [data-pe-tab="certification"]`, openedInList ? 8000 : 1500);
+  if (!tab) {
+    // The card itself shows why it did not load (with a Try again button), so no extra alert is needed.
+    if (document.querySelector(`${detailSelector} [data-pe-retry]`)) return true;
+    return fail('slow', 'The activity is taking longer than usual to load. Wait a moment and open the request again.');
+  }
+  tab.click();
+  const detail = await _waitForElement(`#pe-verification-${CSS.escape(String(verificationId))}`, 3000);
+  if (!detail) {
+    _peShowPanelNotice(activityId, 'Activity opened, but this request is no longer listed. It may have been withdrawn or already decided.');
+    return true;
+  }
+  detail.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  Promise.resolve(window._markVerificationRead?.(verificationId)).then(() => window._refreshPendingBadge?.());
+  return true;
 }
 
 // Opens an activity card in the side panel. Used when the activity belongs to another side (a consultant reviewing a
 // contractor activity), so it is not in the viewer's own Planning and Execution list.
 async function _openActivityCardInPanel(activityId) {
-  try {
-    expandGrayPart(`<section style="padding:18px;overflow:auto;height:100%;box-sizing:border-box;">
+  // The panel appears at once with a loading message, then fills in when the activity arrives.
+  expandGrayPart(`<section style="padding:18px;overflow:auto;height:100%;box-sizing:border-box;">
       <button class="btn" type="button" onclick="collapseGrayPart()">← Back</button>
       <div id="pe-detail-inner-${escapeHtml(String(activityId))}" style="margin-top:12px;">
-        <p style="color:#64748b;font-size:13px;">Loading the activity...</p></div></section>`);
-    await _peLoadDetail(activityId, 'planning-execution');
-    return Boolean(document.getElementById(`pe-detail-inner-${CSS.escape(String(activityId))}`)?.querySelector('[data-pe-tab]'));
-  } catch (err) {
-    console.error('Could not open the activity card in the panel:', err);
-    return false;
-  }
+        <p style="color:#64748b;font-size:13px;" role="status">Loading the activity...</p></div></section>`);
+  return _peLoadDetail(activityId, 'planning-execution');
 }
 
 async function _openRecordNotification(entityType, entityId, waitMs = 6000) {
@@ -14875,15 +14902,7 @@ function _wcSupportingAttachmentGroupHtml(taskId, removable = false) {
 
 function _wcReportSupportingAttachmentsHtml(report) {
   const files = Array.isArray(report.supporting_attachments) ? report.supporting_attachments : [];
-  return files.map((file) => {
-    const name = escapeHtml(file.file_name || 'Supporting attachment');
-    const url = /^https:\/\//i.test(String(file.file_url || '')) ? escapeHtml(file.file_url) : '';
-    return `<div style="margin-top:5px;font-size:11px;">
-      ${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#0369a1;overflow-wrap:anywhere;">${name}</a>`
-        : `<span style="overflow-wrap:anywhere;">${name}</span>`}
-      <span style="color:#64748b;"> · ${escapeHtml(_supportingAttachmentTypeLabel(file))}</span>
-    </div>`;
-  }).join('');
+  return files.map((file) => _evidenceFileRowHtml(file, _supportingAttachmentTypeLabel(file))).join('');
 }
 
 function _wcFilesHtml(task, reports, attachments, leader) {
@@ -14897,6 +14916,8 @@ function _wcFilesHtml(task, reports, attachments, leader) {
       : `<button type="button" data-wc-attachment-preview="${escapeHtml(file.file_url)}"
           data-wc-attachment-name="${escapeHtml(file.file_name)}" data-wc-attachment-mime="${escapeHtml(file.mime_type || '')}"
           style="padding:0;border:0;background:none;color:#0369a1;cursor:pointer;text-align:left;overflow-wrap:anywhere;">${escapeHtml(file.file_name)}</button>
+        <button type="button" data-ev-download data-ev-url="${escapeHtml(file.file_url)}" data-ev-name="${escapeHtml(_fileDisplayName(file))}"
+          style="padding:3px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#334155;cursor:pointer;">Download</button>
         ${leader ? `<button type="button" data-wc-attachment-delete="${escapeHtml(String(file.id))}"
           style="padding:3px 7px;border:1px solid #fecaca;border-radius:5px;background:#fff;color:#b91c1c;cursor:pointer;">Remove</button>` : ''}`}
   </div>`).join('');
@@ -14906,16 +14927,12 @@ function _wcFilesHtml(task, reports, attachments, leader) {
       ? report.supporting_attachments.map((file) => ({ ...file, report })) : []),
   ]).map((file) => {
     const report = file.report || file;
-    const link = file.legacy
-      ? `<a data-action="wc-dl-progress" data-progress-id="${escapeHtml(String(report.id))}"
-          data-filename="${escapeHtml(file.file_name)}" style="color:#0369a1;cursor:pointer;">${escapeHtml(file.file_name)}</a>`
-      : /^https:\/\//i.test(String(file.file_url || ''))
-        ? `<a href="${escapeHtml(file.file_url)}" target="_blank" rel="noopener noreferrer"
-            style="color:#0369a1;overflow-wrap:anywhere;">${escapeHtml(file.file_name || 'Supporting attachment')}</a>`
-        : `<span style="overflow-wrap:anywhere;">${escapeHtml(file.file_name || 'Supporting attachment')}</span>`;
-    const typeLabel = file.legacy ? '' : ` · ${escapeHtml(_supportingAttachmentTypeLabel(file))}`;
+    const when = escapeHtml(_wcFmtDate(report.report_date));
+    if (!file.legacy) return `<div style="padding:2px 0;border-top:1px solid #e8edf3;">${_evidenceFileRowHtml(file, `${_supportingAttachmentTypeLabel(file)} · ${_wcFmtDate(report.report_date)}`)}</div>`;
     return `<div style="padding:5px 0;border-top:1px solid #e8edf3;">
-      ${link}<span style="font-size:11px;color:#64748b;">${typeLabel} · ${escapeHtml(_wcFmtDate(report.report_date))}</span>
+      <a data-action="wc-dl-progress" data-progress-id="${escapeHtml(String(report.id))}"
+        data-filename="${escapeHtml(file.file_name)}" style="color:#0369a1;cursor:pointer;">${escapeHtml(file.file_name)}</a>
+      <span style="font-size:11px;color:#64748b;"> · ${when}</span>
     </div>`;
   }).join('');
   return `<section style="padding:10px 0;">
@@ -15271,58 +15288,6 @@ async function _wcHandleUpdate(taskId, tabKey) {
   } catch (err) { alert('Failed to update task: ' + err.message); }
 }
 
-async function _wcHandleSubmitProgressLegacy(taskId, tabKey) {
-  try {
-    const reportDate = document.getElementById(`wc-pr-date-${taskId}`)?.value;
-    const workDone   = document.getElementById(`wc-pr-work-${taskId}`)?.value.trim();
-    const pct        = document.getElementById(`wc-pr-pct-${taskId}`)?.value;
-    const manpower   = document.getElementById(`wc-pr-manpower-${taskId}`)?.value.trim();
-    const equipment  = document.getElementById(`wc-pr-equipment-${taskId}`)?.value.trim();
-    const materials  = document.getElementById(`wc-pr-materials-${taskId}`)?.value.trim();
-    const issues     = document.getElementById(`wc-pr-issues-${taskId}`)?.value.trim();
-    const notes      = document.getElementById(`wc-pr-notes-${taskId}`)?.value.trim();
-
-    if (!workDone)   return alert('Please describe the work done.');
-    if (!reportDate) return alert('Report date is required.');
-
-    const form = new FormData();
-    form.append('projectId',   localStorage.getItem('activeProjectId'));
-    form.append('taskId',      taskId);
-    form.append('reportDate',  reportDate);
-    form.append('workDone',    workDone);
-    form.append('progressPct', pct || '0');
-    form.append('manpower',    manpower || '');
-    form.append('equipment',   equipment || '');
-    form.append('materials',   materials || '');
-    form.append('issues',      issues || '');
-    form.append('notes',       notes || '');
-
-    const res  = await _wcFetch(`${API}/work-center-progress`, { method:'POST', body:form });
-    if (!res) return;
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || data.message || 'Failed to submit progress');
-    alert('Progress submitted successfully.');
-    delete recordsCache['work-center'];
-    loadWCRecords();
-  } catch (err) { alert('Failed to submit progress: ' + err.message); }
-}
-
-async function _wcHandleValidateLegacy(tabKey, progressId, validateAction) {
-  try {
-    const notes = document.getElementById(`wc-val-notes-${progressId}`)?.value.trim() || '';
-    const body  = { projectId: localStorage.getItem('activeProjectId'), validation_notes: notes };
-    if (validateAction !== 'comment_only') body.validation_status = validateAction;
-    const res  = await _wcFetch(`${API}/work-center-progress/${progressId}/validate`, {
-      method: 'PUT', body: JSON.stringify(body),
-    });
-    if (!res) return;
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || data.message || 'Failed to validate');
-    alert(validateAction==='approved'?'Entry approved ✅':validateAction==='rejected'?'Entry rejected ❌':'Comment saved 💬');
-    delete recordsCache['work-center'];
-    loadWCRecords();
-  } catch (err) { alert('Failed to validate: ' + err.message); }
-}
 
 // ===== Work Center v2: reports per activity type, and the leader's decisions (approve, reject, void) =====
 // Replaces _wcHandleSubmitProgress and _wcHandleValidate, and adds the helpers the member and leader views use.
@@ -15405,10 +15370,12 @@ function _wcReportExtraHtml(entry) {
       ? `${Number(photo.latitude).toFixed(6)}, ${Number(photo.longitude).toFixed(6)}`
       : 'Location unavailable';
     return `<div style="display:flex;flex-direction:column;min-width:0;">
-      <a href="${escapeHtml(photo.file_url)}" target="_blank" rel="noopener noreferrer">
-        <img src="${escapeHtml(photo.file_url)}" alt="${escapeHtml(photo.file_name || 'Report photo')}"
+      <button type="button" data-ev-preview data-ev-url="${escapeHtml(_safeHttpsUrl(photo.file_url))}"
+        data-ev-name="${escapeHtml(_fileDisplayName(photo, 'Report photo'))}" data-ev-mime="image/*"
+        title="Preview ${escapeHtml(_fileDisplayName(photo, 'Report photo'))}" style="padding:0;border:0;background:none;cursor:zoom-in;display:block;width:100%;">
+        <img src="${escapeHtml(_thumbUrl(photo.file_url))}" alt="${escapeHtml(_fileDisplayName(photo, 'Report photo'))}" loading="lazy"
           style="width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:6px;border:1px solid #e5e7eb;display:block;"/>
-      </a>
+      </button>
       <span style="font-size:10px;color:#64748b;margin-top:2px;">${escapeHtml(captured)} \u00b7 ${escapeHtml(coordinates)}</span>
     </div>`;
   }).join('');
@@ -15900,7 +15867,7 @@ function _openAttachmentPreviewModal(url, fileName, title = 'Attachment', mimeTy
       </div>
       <div style="padding:14px;background:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:120px;">${viewer}</div>
       <div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid #e5e7eb;">
-        <a href="${url}" download="${escapeHtml(safeName)}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;justify-content:center;padding:8px 12px;border:1px solid #bfdbfe;border-radius:6px;background:#eff6ff;color:#2563eb;font-weight:600;cursor:pointer;text-decoration:none;">Download</a>
+        <button type="button" data-attachment-download style="display:inline-flex;align-items:center;justify-content:center;padding:8px 12px;border:1px solid #bfdbfe;border-radius:6px;background:#eff6ff;color:#2563eb;font-weight:600;cursor:pointer;">Download</button>
         <button type="button" data-attachment-close-secondary style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#334155;cursor:pointer;">Close</button>
       </div>
     </div>`;
@@ -15908,6 +15875,123 @@ function _openAttachmentPreviewModal(url, fileName, title = 'Attachment', mimeTy
   const close = () => modal.remove();
   modal.querySelectorAll('[data-attachment-close],[data-attachment-close-secondary]').forEach((el) => el.addEventListener('click', close));
   modal.addEventListener('click', (event) => { if (event.target === modal) close(); });
+  modal.querySelector('[data-attachment-download]')?.addEventListener('click', () => _downloadFileWithRealName(url, safeName));
+}
+
+// ===== File evidence helpers: real file names, preview and download =====
+// Files are stored under a generated storage name. These helpers only ever show the uploader's original
+// file name, open files in the preview window, and save downloads under that original name.
+function _safeHttpsUrl(url) {
+  const value = String(url || '');
+  return /^https:\/\//i.test(value) ? value : '';
+}
+
+function _fileDisplayName(file, fallback = 'Attachment') {
+  const name = String((file && (file.file_name || file.attachment_name || file.name)) || '').trim();
+  return name || fallback;
+}
+
+function _thumbUrl(url) {
+  const value = _safeHttpsUrl(url);
+  return value.includes('/image/upload/') && !value.includes('/upload/c_')
+    ? value.replace('/image/upload/', '/image/upload/c_fill,w_220,h_165,q_auto,f_auto/') : value;
+}
+
+async function _downloadFileWithRealName(url, fileName) {
+  const safe = _safeHttpsUrl(url);
+  const name = _fileDisplayName({ file_name: fileName });
+  if (!safe) return;
+  try {
+    const response = await fetch(safe);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const objectUrl = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
+  } catch (err) {
+    // The storage host can serve the file under the real name itself when the browser cannot fetch it.
+    const match = safe.match(/^(https:\/\/[^/]+\/[^/]+\/(image|video|raw)\/upload\/)(.*)$/);
+    const label = match && match[2] !== 'raw' ? name.replace(/\.[^.]+$/, '') : name;
+    const target = match
+      ? `${match[1]}fl_attachment:${encodeURIComponent(label.replace(/[^\w.-]+/g, '_'))}/${match[3]}` : safe;
+    window.open(target, '_blank', 'noopener');
+  }
+}
+
+function _evidenceFileAttrs(file) {
+  return `data-ev-url="${escapeHtml(_safeHttpsUrl(file.file_url))}" data-ev-name="${escapeHtml(_fileDisplayName(file))}"`
+    + ` data-ev-mime="${escapeHtml(file.mime_type || '')}"`;
+}
+
+function _evidenceFileRowHtml(file, label = '') {
+  const name = escapeHtml(_fileDisplayName(file));
+  if (!_safeHttpsUrl(file.file_url)) {
+    return `<div style="padding:4px 0;font-size:12px;overflow-wrap:anywhere;">${name}<span style="color:#94a3b8;"> (file unavailable)</span></div>`;
+  }
+  const attrs = _evidenceFileAttrs(file);
+  return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0;">
+    <button type="button" data-ev-preview ${attrs} title="Preview ${name}"
+      style="padding:0;border:0;background:none;color:#0369a1;cursor:pointer;text-align:left;overflow-wrap:anywhere;font-size:12px;">${name}</button>
+    ${label ? `<span style="font-size:11px;color:#64748b;">${escapeHtml(label)}</span>` : ''}
+    <button type="button" data-ev-download ${attrs}
+      style="padding:3px 8px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#334155;font-size:11px;cursor:pointer;">Download</button>
+  </div>`;
+}
+
+function _evidencePhotosHtml(photos) {
+  const list = (Array.isArray(photos) ? photos : []).filter((photo) => _safeHttpsUrl(photo.file_url));
+  if (!list.length) return '';
+  return `<div style="display:flex;flex-wrap:wrap;gap:8px;">${list.map((photo, index) => {
+    const name = escapeHtml(_fileDisplayName(photo, `Photo ${index + 1}`));
+    return `<div style="width:84px;min-width:0;">
+      <button type="button" data-ev-preview data-ev-url="${escapeHtml(_safeHttpsUrl(photo.file_url))}" data-ev-name="${name}" data-ev-mime="image/*"
+        title="Preview ${name}" style="padding:0;border:0;background:none;cursor:zoom-in;display:block;">
+        <img src="${escapeHtml(_thumbUrl(photo.file_url))}" alt="${name}" loading="lazy"
+          style="width:84px;height:63px;object-fit:cover;border-radius:5px;border:1px solid #e5e7eb;display:block;"/>
+      </button>
+      <span title="${name}" style="display:block;font-size:10px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${name}</span>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+// Photos and supporting files of one approved report, grouped by the evidence title chosen at submission.
+function _evidenceFilesHtml(report) {
+  const photos = (Array.isArray(report && report.photos) ? report.photos : []).filter((photo) => _safeHttpsUrl(photo.file_url));
+  const files = [
+    ...(report && report.attachment_name && _safeHttpsUrl(report.attachment_url)
+      ? [{ file_name: report.attachment_name, file_url: report.attachment_url, mime_type: '', group: 'Attachment' }] : []),
+    ...(Array.isArray(report && report.supporting_attachments) ? report.supporting_attachments : [])
+      .map((file) => ({ ...file, group: _supportingAttachmentTypeLabel(file) })),
+  ];
+  if (!photos.length && !files.length) return '';
+  const groups = new Map();
+  for (const file of files) {
+    if (!groups.has(file.group)) groups.set(file.group, []);
+    groups.get(file.group).push(file);
+  }
+  const groupHtml = [...groups.entries()].map(([title, list]) => `<div>
+      <div style="font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#64748b;">${escapeHtml(title)}</div>
+      ${list.map((file) => _evidenceFileRowHtml(file)).join('')}</div>`).join('');
+  const count = `${photos.length} photo${photos.length === 1 ? '' : 's'}${files.length ? ` · ${files.length} file${files.length === 1 ? '' : 's'}` : ''}`;
+  return `<div style="display:flex;flex-direction:column;gap:6px;">
+    <div style="font-size:11px;color:#64748b;">${count}</div>${_evidencePhotosHtml(photos)}${groupHtml}</div>`;
+}
+
+if (!window.__evidenceClicksBound) {
+  window.__evidenceClicksBound = true;
+  document.addEventListener('click', (event) => {
+    const preview = event.target.closest('[data-ev-preview]');
+    if (preview) {
+      _openAttachmentPreviewModal(preview.dataset.evUrl, preview.dataset.evName, 'Evidence', preview.dataset.evMime || '');
+      return;
+    }
+    const download = event.target.closest('[data-ev-download]');
+    if (download) _downloadFileWithRealName(download.dataset.evUrl, download.dataset.evName);
+  });
 }
 
 async function _wcDownloadProgress(progressId, fileName) {
@@ -16618,16 +16702,6 @@ function _peDeriveStatus(task, trackingEntries) {
   return { label: 'Ongoing', color: '#3b82f6' };
 }
 
-// ── Auto-calculate progress % from actual execution ───────────────────────────
-function _peCalcProgress(task, previousTotalActual, enteredQty, pctOverride) {
-  const plannedQty  = Number(task.planned_quantity) || 1;
-  const totalActual = previousTotalActual + (Number(enteredQty) || 0);
-  const autoPct     = Math.min(100, Math.round((totalActual / plannedQty) * 100));
-  const pct         = (pctOverride !== '' && pctOverride !== null && pctOverride !== undefined)
-    ? Math.min(100, Math.max(0, Number(pctOverride) || 0))
-    : autoPct;
-  return { autoPct, pct, totalActual };
-}
 
 // ── Style helpers ─────────────────────────────────────────────────────────────
 function _peLabelStyle() {
@@ -16806,28 +16880,52 @@ function _peUpdateStatusBadge(task, trackingEntries) {
 }
 
 // ── Async detail loader ───────────────────────────────────────────────────────
+function _peClassifyLoadError(err) {
+  if (err && err.peKind) return err;
+  const text = String((err && err.message) || '');
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+  if (offline || err instanceof TypeError || /failed to fetch|networkerror|load failed|network request failed/i.test(text)) {
+    return { peKind: 'connection', message: 'The server could not be reached. Check your connection and try again.' };
+  }
+  return { peKind: 'server', message: text || 'The activity could not be loaded. Try again in a moment.' };
+}
+
+function _peHttpError(response, body, what) {
+  const detail = body && (body.error || body.message);
+  if (response.status === 404) return { peKind: 'not_found', message: detail || `${what} is no longer available.` };
+  return { peKind: 'server', message: detail || `${what} could not be loaded (server error ${response.status}). Try again in a moment.` };
+}
+
 async function _peLoadDetail(recordId, tabKey) {
   const container = document.getElementById(`pe-detail-inner-${recordId}`);
-  if (!container) return;
+  if (!container) return { ok: false, error: { peKind: 'missing', message: 'The activity panel is not open.' } };
   // The list only holds the viewer's own side. A consultant opening a contractor activity (from a verification
   // request) has no cached record, so the card data from the server is used instead.
   let task = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
+  const projectId = localStorage.getItem('activeProjectId');
+  const startVerifications = () => {
+    const request = _wcFetch(`${API}/activities/${encodeURIComponent(recordId)}/verifications`);
+    request.catch(() => {});
+    return request;
+  };
+  // The card and the verification list do not depend on each other, so they are requested together.
+  const expectsVerifications = wcSide(window.currentUserRole) !== 'Client' && (task ? Boolean(task.drives_milestone) : true);
+  let verificationRequest = expectsVerifications ? startVerifications() : null;
   try {
-    const projectId = localStorage.getItem('activeProjectId');
     const cardResponse = await _wcFetch(
       `${API}/planning-execution/${encodeURIComponent(recordId)}/activity-card?projectId=${encodeURIComponent(projectId)}`
     );
-    if (!cardResponse) throw new Error('Could not load the activity details.');
-    const card = await cardResponse.json();
-    if (!cardResponse.ok) throw new Error(card.error || `HTTP ${cardResponse.status}`);
+    if (!cardResponse) throw { peKind: 'session', message: 'Your session has expired. Sign in again to open this activity.' };
+    const card = await cardResponse.json().catch(() => ({}));
+    if (!cardResponse.ok) throw _peHttpError(cardResponse, card, 'This activity');
     if (!task) task = { ...card.activity };
     let verificationData = { verifications: [], rework: [] };
     if (card.activity.drives_milestone && card.viewer_side !== 'Client') {
-      const verificationResponse = await _wcFetch(`${API}/activities/${encodeURIComponent(recordId)}/verifications`);
-      if (!verificationResponse) throw new Error('Could not load verification details.');
+      if (!verificationRequest) verificationRequest = startVerifications();
+      const verificationResponse = await verificationRequest;
+      if (!verificationResponse) throw { peKind: 'session', message: 'Your session has expired. Sign in again to open this activity.' };
       if (!verificationResponse.ok) {
-        const error = await verificationResponse.json().catch(() => ({}));
-        throw new Error(error.error || `Could not load verification details (HTTP ${verificationResponse.status}).`);
+        throw _peHttpError(verificationResponse, await verificationResponse.json().catch(() => ({})), 'The verification details');
       }
       verificationData = await verificationResponse.json();
     }
@@ -16844,19 +16942,33 @@ async function _peLoadDetail(recordId, tabKey) {
         behavior: 'smooth', block: 'center',
       }), 0);
     }
+    return { ok: true };
   } catch (err) {
     console.error('PE detail load error:', err);
-    container.innerHTML = `<p style="color:#b91c1c;font-size:13px;text-align:center;">Could not load this activity: ${escapeHtml(err.message || 'Please try again.')}</p>`;
+    const error = _peClassifyLoadError(err);
+    container.innerHTML = `<div role="alert" style="text-align:center;padding:18px;">
+      <p style="color:#b91c1c;font-size:13px;margin:0 0 10px;">${escapeHtml(error.message)}</p>
+      <button type="button" class="btn" data-pe-retry>Try again</button></div>`;
+    container.querySelector('[data-pe-retry]')?.addEventListener('click', () => {
+      container.innerHTML = '<p style="color:#64748b;font-size:13px;" role="status">Loading the activity...</p>';
+      _peLoadDetail(recordId, tabKey);
+    });
+    return { ok: false, error };
   }
 }
 
 window._peSharedEvidenceHtml = function (list, unit) {
   const items = Array.isArray(list) ? { reports: list, supporting_attachments: [] } : (list || {});
   const reports = Array.isArray(items.reports) ? items.reports : [];
-  const attachments = Array.isArray(items.supporting_attachments) ? items.supporting_attachments : [];
+  const hasSelection = Array.isArray(items.selected_evidence);
+  const selectedEvidence = hasSelection ? items.selected_evidence : [];
+  const attachments = hasSelection
+    ? selectedEvidence.filter((file) => file.type !== 'photo')
+    : (Array.isArray(items.supporting_attachments) ? items.supporting_attachments : []);
+  const selectedPhotos = hasSelection ? selectedEvidence.filter((file) => file.type === 'photo') : [];
   const e = (value) => escapeHtml(String(value ?? ''));
   const u = unit ? ` ${e(unit)}` : '';
-  if (!reports.length && !attachments.length) return '<p style="font-size:12px;color:#64748b;">The contractor shared the evidence, but no approved reports or supporting attachments exist up to the cut-off date.</p>';
+  if (!reports.length && !attachments.length && !selectedPhotos.length) return '<p style="font-size:12px;color:#64748b;">No report details or evidence files were selected for sharing.</p>';
   const row = (r) => {
     const figure = [
       r.quantity_done != null ? `Done ${Number(r.quantity_done)}${u}` : '',
@@ -16869,8 +16981,7 @@ window._peSharedEvidenceHtml = function (list, unit) {
       .map(([label, value]) => `<div style="margin-top:3px;font-size:11px;color:#64748b;">${label}: ${e(value)}</div>`).join('');
     const resources = (Array.isArray(r.resources) ? r.resources : []).map((x) =>
       `${e(x.name)}${x.quantity != null ? ` x${Number(x.quantity)}` : ''}${x.unit ? ` ${e(x.unit)}` : ''}${x.hours != null ? `, ${Number(x.hours)} h` : ''}`).join('; ');
-    const photos = (Array.isArray(r.photos) ? r.photos : []).filter((ph) => /^https:\/\//i.test(String(ph.file_url || '')))
-      .map((ph, index) => `<a href="${e(ph.file_url)}" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#0369a1;margin-right:10px;">Photo ${index + 1}</a>`).join('');
+    const photos = hasSelection ? '' : _evidencePhotosHtml(r.photos);
     return `<div style="padding:10px 0;border-top:1px solid #e2e8f0;">
       <strong style="font-size:12px;color:#1e293b;">${e(r.task_title || 'Task')} &middot; ${e(r.report_date)}</strong>
       <div style="margin-top:4px;font-size:12px;color:#475569;">${e(r.work_done || 'No work description provided.')}</div>
@@ -16879,25 +16990,60 @@ window._peSharedEvidenceHtml = function (list, unit) {
       ${photos ? `<div style="margin-top:5px;">${photos}</div>` : ''}
     </div>`;
   };
-  const attachmentRows = attachments.map((file) => {
-    const url = /^https:\/\//i.test(String(file.file_url || '')) ? e(file.file_url) : '';
-    const name = e(file.file_name || 'Supporting attachment');
-    const title = file.attachment_type === 'other' && file.custom_attachment_type
-      ? `Other: ${e(file.custom_attachment_type)}` : e(_supportingAttachmentTypeLabel(file));
-    return `<div style="padding:7px 0;border-top:1px solid #e2e8f0;">
-      <strong style="font-size:11px;color:#1e293b;">${e(file.task_title || 'Progress report')}${file.report_date ? ` · ${e(file.report_date)}` : ''}</strong>
-      <div style="margin-top:3px;font-size:12px;">${url
-        ? `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#0369a1;overflow-wrap:anywhere;">${name}</a>`
-        : `<span style="overflow-wrap:anywhere;">${name}</span>`}
-        <span style="font-size:11px;color:#64748b;"> · ${title}</span></div>
-    </div>`;
-  }).join('');
-  return `<div style="max-height:360px;overflow:auto;">${reports.map(row).join('')}</div>
+  const attachmentRows = attachments.map((file) => _evidenceFileRowHtml(file,
+    `${_supportingAttachmentTypeLabel(file)}${file.task_title ? ` · ${file.task_title}` : ''}${file.report_date ? ` · ${String(file.report_date).slice(0, 10)}` : ''}`)).join('');
+  const selectedPhotoHtml = selectedPhotos.length
+    ? `<div style="margin-top:8px;"><div style="font-size:11px;font-weight:600;color:#334155;">Selected photos</div>${_evidencePhotosHtml(selectedPhotos)}</div>` : '';
+  return `${reports.length ? `<div style="max-height:360px;overflow:auto;">${reports.map(row).join('')}</div>` : ''}
+    ${selectedPhotoHtml}
     ${attachments.length ? `<details style="margin-top:10px;border-top:1px solid #e2e8f0;padding-top:8px;">
       <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#334155;">Supporting attachments (${attachments.length})</summary>
       <div style="max-height:240px;overflow:auto;margin-top:5px;">${attachmentRows}</div>
     </details>` : ''}`;
 };
+
+function _peRequestEvidencePickerHtml(reports) {
+  const items = (Array.isArray(reports) ? reports : []).flatMap((report) => {
+    const base = { reportId: String(report.id), taskTitle: report.task_title || 'Task', reportDate: String(report.report_date || '').slice(0, 10) };
+    return [
+      ...(report.attachment_name && _safeHttpsUrl(report.attachment_url) ? [{
+        ...base, type: 'legacy_attachment', id: String(report.id), fileName: report.attachment_name,
+        fileUrl: report.attachment_url, mimeType: '', label: 'Legacy report attachment',
+      }] : []),
+      ...(Array.isArray(report.supporting_attachments) ? report.supporting_attachments
+        .filter((file) => file.id != null && _safeHttpsUrl(file.file_url))
+        .map((file) => ({
+          ...base, type: 'supporting_attachment', id: String(file.id), fileName: file.file_name,
+          fileUrl: file.file_url, mimeType: file.mime_type || '',
+          label: _supportingAttachmentTypeLabel(file),
+        })) : []),
+      ...(Array.isArray(report.photos) ? report.photos
+        .filter((photo) => photo.id != null && _safeHttpsUrl(photo.file_url))
+        .map((photo) => ({
+          ...base, type: 'photo', id: String(photo.id), fileName: photo.file_name,
+          fileUrl: photo.file_url, mimeType: 'image/*', label: 'Photo',
+        })) : []),
+    ];
+  });
+  if (!items.length) return '<div style="margin-top:10px;padding:10px;border:1px solid #e2e8f0;border-radius:7px;font-size:12px;color:#64748b;">No approved report evidence is available up to the selected cut-off date.</div>';
+  return `<fieldset data-pe-evidence-picker style="margin:10px 0 0;padding:10px;border:1px solid #cbd5e1;border-radius:8px;">
+    <legend style="padding:0 4px;font-size:12px;font-weight:600;color:#334155;">Choose evidence to share</legend>
+    <div style="font-size:11px;color:#64748b;margin-bottom:7px;">Only checked items will be shared. Photos have previews. Items after the cut-off date are unavailable.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:7px;max-height:260px;overflow:auto;">
+      ${items.map((item) => `<label data-pe-evidence-item data-evidence-date="${escapeHtml(item.reportDate)}"
+        style="display:flex;align-items:center;gap:8px;padding:7px;border:1px solid #e2e8f0;border-radius:7px;font-size:11px;color:#334155;">
+        <input type="checkbox" name="selectedEvidence" value="${escapeHtml(JSON.stringify({ type: item.type, id: item.id }))}">
+        ${item.type === 'photo'
+          ? `<img src="${escapeHtml(_thumbUrl(item.fileUrl))}" alt="${escapeHtml(item.fileName || 'Report photo')}" loading="lazy"
+              style="width:60px;height:46px;object-fit:cover;border:1px solid #e2e8f0;border-radius:4px;flex:none;">`
+          : `<span aria-hidden="true" style="width:34px;height:34px;display:grid;place-items:center;background:#f1f5f9;border-radius:5px;color:#64748b;flex:none;">FILE</span>`}
+        <span style="min-width:0;overflow-wrap:anywhere;"><strong>${escapeHtml(item.fileName || (item.type === 'photo' ? 'Report photo' : 'Evidence file'))}</strong>
+          <span style="display:block;color:#64748b;">${escapeHtml(item.label)} · ${escapeHtml(item.taskTitle)} · ${escapeHtml(item.reportDate)}</span></span>
+      </label>`).join('')}
+    </div>
+    <div data-pe-evidence-empty hidden style="font-size:11px;color:#64748b;padding:6px 0;">No approved report evidence is available up to the selected cut-off date.</div>
+  </fieldset>`;
+}
 
 function _peActivityCardHtml(card, verificationData = { verifications: [], rework: [] }, selectedTab = 'overview') {
   verificationData = verificationData || { verifications: [], rework: [] };
@@ -16985,6 +17131,8 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
                 data-pe-attachment-name="${escapeHtml(file.file_name)}" data-pe-attachment-mime="${escapeHtml(file.mime_type || '')}"
                 style="padding:0;border:0;background:none;color:#0369a1;cursor:pointer;text-align:left;overflow-wrap:anywhere;">${escapeHtml(file.file_name)}</button>`
             : `<span style="font-size:13px;color:#334155;">${escapeHtml(file.file_name)}</span>`}
+          ${file.file_url ? `<button type="button" data-ev-download data-ev-url="${escapeHtml(file.file_url)}" data-ev-name="${escapeHtml(_fileDisplayName(file))}"
+            style="padding:3px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#334155;cursor:pointer;">Download</button>` : ''}
           ${canEditAttachments && !file.legacy
             ? `<button type="button" data-pe-attachment-delete="${escapeHtml(String(file.id))}"
                 style="padding:3px 7px;border:1px solid #fecaca;border-radius:5px;background:#fff;color:#b91c1c;cursor:pointer;">Remove</button>` : ''}
@@ -17060,18 +17208,29 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
         ? `${runningQuantity} ${escapeHtml(activity.unit || '')}`
         : `${Math.round(runningActivityProgress * 10) / 10}% activity`}</td>
       <td>${escapeHtml(report.work_done || report.notes || '—')}</td>
+      <td style="min-width:200px;">${_evidenceFilesHtml(report) || '<span style="color:#94a3b8;">None</span>'}</td>
     </tr>`;
   }).join('') : '';
+  const consultantContractorView = viewerSide === 'Consultant' && activity.side === 'Contractor';
   const progressPanel = clientView ? `
     <div class="pe-panel">
       <p style="font-size:13px;color:#475569;margin:0;">Task reports and claimed progress are not shown in the client view. Certified progress is shown at the top of this card.</p>
     </div>` : `
+    ${consultantContractorView ? `
+    <div class="pe-panel">
+      <strong style="font-size:13px;color:#334155;">Approved report summary</strong>
+      <p style="font-size:13px;color:#475569;margin:6px 0 0;">
+        ${Number(card.activity_summary?.approved_report_count) || 0} approved reports
+        ${Number(card.activity_summary?.approved_quantity) ? ` · ${Number(card.activity_summary.approved_quantity)} ${escapeHtml(activity.unit || '')} reported` : ''}.
+        Report details and files are private here; review requests show only the details and evidence the contractor selected to share.
+      </p>
+    </div>` : `
     <div class="pe-panel" style="padding:0;overflow:hidden;">
       ${orderedReports.length ? `<div style="overflow:auto;"><table class="pe-table">
-        <thead><tr>${['Date','Task','Reported by','Approved work','Running total','Work done'].map(label => `<th style="color:#475569;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;">${label}</th>`).join('')}</tr></thead>
+        <thead><tr>${['Date','Task','Reported by','Approved work','Running total','Work done','Evidence'].map(label => `<th style="color:#475569;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;">${label}</th>`).join('')}</tr></thead>
         <tbody>${reportRows}</tbody></table></div>` : '<p style="color:#475569;padding:16px;margin:0;">No approved task reports have been recorded yet.</p>'}
     </div>
-    <p style="font-size:12px;color:#475569;margin:10px 0 0;">Only approved reports are listed. Reports waiting for review are on the Tasks tab.</p>`;
+    <p style="font-size:12px;color:#475569;margin:10px 0 0;">Only approved reports are listed. Reports waiting for review are on the Tasks tab.</p>`}`;
   const verificationPanel = canCertify
     ? _peCertificationPanel(activity, tasks, reports, verifications, rework, viewerSide)
     : '';
@@ -17101,10 +17260,6 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
     </div>`;
 }
 
-function _peInfoCell(label, value) {
-  return `<div><div style="font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#64748b;">${escapeHtml(label)}</div>
-    <div style="margin-top:3px;color:#1e293b;font-size:13px;line-height:1.5;overflow-wrap:anywhere;">${escapeHtml(String(value || '—'))}</div></div>`;
-}
 
 function _peCertificationPanel(activity, tasks, reports, verifications, rework, viewerSide) {
   const pending = verifications.filter(item => item.status === 'pending');
@@ -17135,7 +17290,7 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
           </select>
         </label>
         <label style="font-size:12px;color:#475569;">Progress cut-off date
-          <input type="date" name="cutOffDate" value="${new Date().toISOString().slice(0, 10)}" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;">
+          <input type="date" name="cutOffDate" data-pe-evidence-cutoff value="${new Date().toISOString().slice(0, 10)}" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;">
         </label>
       </div>
       <label style="display:block;margin-top:10px;font-size:12px;color:#475569;">Note for the reviewer
@@ -17147,13 +17302,14 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
       </label>
       <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:12px;color:#475569;">
         <input type="checkbox" name="shareEvidence" value="true">
-        <span>Share approved report details and photos up to the cut-off date. Supporting attachments from approved reports are included automatically for consultant review. Rejected, pending and voided reports, member identities and private notes are never shared.</span>
+        <span>Also share approved report details (work description, quantities, manpower, equipment, materials and issues) up to the cut-off date. Photos and files are shared only when individually selected below.</span>
       </label>
+      ${_peRequestEvidencePickerHtml(reports)}
       <label style="display:block;margin-top:10px;font-size:12px;color:#475569;">Consultant inspectors (optional)
         <select name="inspectorIds" multiple data-pe-inspectors size="3" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;">
           <option disabled>Loading inspectors…</option></select>
       </label>
-      <label style="display:block;margin-top:10px;font-size:12px;color:#475569;">Supporting attachment (optional)
+      <label style="display:block;margin-top:10px;font-size:12px;color:#475569;">Additional file attached to this request (visible to the reviewer)
         <input type="file" name="attachment" style="display:block;margin-top:5px;">
       </label>
       <button class="rc-btn rc-btn--approve rc-btn--sm" type="submit" style="margin-top:10px;">Request verification</button>
@@ -17187,6 +17343,7 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
           ${report.progress_pct != null ? ` · ${Number(report.progress_pct)}%` : ''}
         </div>
         ${[['Manpower', report.manpower], ['Equipment', report.equipment], ['Materials', report.materials], ['Issues', report.issues]].filter(([, value]) => value).map(([label, value]) => `<div style="margin-top:3px;font-size:11px;color:#64748b;">${label}: ${escapeHtml(value)}</div>`).join('')}
+        <div style="margin-top:6px;">${_evidenceFilesHtml(report)}</div>
       </div>`).join('') : '<p style="font-size:12px;color:#64748b;">No approved task reports were recorded by this cut-off date.</p>';
     const figureHtml = consultantView ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:10px;">
       ${[
@@ -17433,6 +17590,28 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
     const field = container.querySelector('[data-pe-stage-field]');
     if (field) field.style.display = select.value === 'hold_point' ? 'block' : 'none';
   }));
+  const evidenceCutoff = container.querySelector('[data-pe-evidence-cutoff]');
+  const updateEvidenceAvailability = () => {
+    if (!evidenceCutoff) return;
+    const cutoff = evidenceCutoff.value;
+    let availableCount = 0;
+    container.querySelectorAll('[data-pe-evidence-item]').forEach(item => {
+      const available = Boolean(cutoff && /^\d{4}-\d{2}-\d{2}$/.test(item.dataset.evidenceDate || '')
+        && item.dataset.evidenceDate <= cutoff);
+      item.hidden = !available;
+      item.style.display = available ? 'flex' : 'none';
+      if (available) availableCount += 1;
+      const checkbox = item.querySelector('input[type="checkbox"]');
+      if (checkbox) {
+        checkbox.disabled = !available;
+        if (!available) checkbox.checked = false;
+      }
+    });
+    const empty = container.querySelector('[data-pe-evidence-empty]');
+    if (empty) empty.hidden = availableCount > 0;
+  };
+  evidenceCutoff?.addEventListener('change', updateEvidenceAvailability);
+  updateEvidenceAvailability();
   container.querySelectorAll('[data-pe-decision-status]').forEach(select => select.addEventListener('change', () => {
     const form = select.closest('form');
     const field = form?.querySelector('[data-pe-certified-field]');
@@ -17472,6 +17651,10 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
       if (form.dataset.peForm === 'request') {
         url = `${API}/activities/${encodeURIComponent(recordId)}/verifications`;
         formData.delete('inspectorIds');
+        const selectedEvidence = Array.from(form.querySelectorAll('input[name="selectedEvidence"]:checked'))
+          .map(input => JSON.parse(input.value));
+        formData.delete('selectedEvidence');
+        formData.set('selectedEvidence', JSON.stringify(selectedEvidence));
         const selectedInspectors = Array.from(form.querySelector('[data-pe-inspectors]')?.selectedOptions || []);
         formData.set('signers', JSON.stringify(selectedInspectors
           .map(option => ({ role: 'TeamMember', user_id: option.value }))));
@@ -17627,706 +17810,11 @@ function _peShowActivityNotice(recordId, message, isError = false) {
   notice.textContent = message;
 }
 
-// ── Detail HTML ───────────────────────────────────────────────────────────────
-function _peDetailHtml(task, trackingEntries, canEdit) {
-  const totalActual = trackingEntries.reduce((s, e) => s + (Number(e.actual_quantity) || 0), 0);
-  const plannedQty  = Number(task.planned_quantity) || 0;
-  const latestEntry = trackingEntries.length ? trackingEntries[trackingEntries.length - 1] : null;
-  const latestPct   = latestEntry ? (Number(latestEntry.progress_pct) || 0) : 0;
-  const barColor    = latestPct >= 100 ? '#10b981' : '#3b82f6';
-  const st          = _peDeriveStatus(task, trackingEntries);
-
-  const progressBar = `
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-      <div style="flex:1;background:#e5e7eb;border-radius:999px;height:10px;">
-        <div style="background:${barColor};height:10px;border-radius:999px;
-          width:${latestPct}%;transition:width .4s;"></div>
-      </div>
-      <strong style="font-size:13px;color:${barColor};min-width:38px;text-align:right;">${latestPct}%</strong>
-    </div>
-    <div style="display:flex;justify-content:space-between;font-size:11px;color:#6b7280;">
-      <span>Actual: <strong style="color:#374151;">${totalActual} ${escapeHtml(task.unit||'')}</strong>
-        &nbsp;/&nbsp; Planned: <strong style="color:#374151;">${plannedQty} ${escapeHtml(task.unit||'')}</strong></span>
-      <span style="background:${st.color}20;color:${st.color};border:1px solid ${st.color}60;
-        border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600;">${st.label}</span>
-    </div>`;
-
-  const trackingHtml = trackingEntries.length
-    ? [...trackingEntries].reverse().map(e => {
-        const entryDelayDays = Number(e.delay_days) || 0;
-        return `
-          <details style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;
-            margin-bottom:10px;box-shadow:0 1px 2px rgba(0,0,0,.04);">
-            <summary style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px;cursor:pointer;list-style:none;">
-              <span style="font-size:12px;font-weight:700;color:#1f2937;">📅 ${e.report_date ? new Date(e.report_date).toLocaleDateString() : '—'}</span>
-              <span style="display:flex;align-items:center;gap:8px;">
-                <span style="font-size:11px;color:#6b7280;">Day contribution</span>
-                <strong style="font-size:12px;color:#10b981;">${Number(e.daily_progress_pct ?? ((Number(e.actual_quantity) || 0) / (plannedQty || 1) * 100)).toFixed(1)}%</strong>
-                <span style="font-size:13px;color:#9ca3af;">▾</span>
-              </span>
-            </summary>
-            <div style="padding:0 12px 12px;border-top:1px solid #f3f4f6;">
-            <div style="display:flex;justify-content:space-between;align-items:center;
-              flex-wrap:wrap;gap:6px;margin-bottom:10px;">
-              <div style="font-size:12px;font-weight:700;color:#1f2937;">
-                📅 ${e.report_date ? new Date(e.report_date).toLocaleDateString() : '—'}
-              </div>
-              <div style="display:flex;align-items:center;gap:8px;">
-                ${entryDelayDays > 0
-                  ? `<span style="background:#fff1f2;color:#991b1b;border:1px solid #fca5a5;
-                      border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;">
-                      ⚠️ ${entryDelayDays}d calculated delay</span>` : ''}
-                <div style="display:flex;align-items:center;gap:5px;">
-                  <div style="background:#e5e7eb;border-radius:999px;height:6px;width:70px;">
-                    <div style="background:#10b981;height:6px;border-radius:999px;
-                      width:${Math.min(100, Number(e.daily_progress_pct ?? ((Number(e.actual_quantity) || 0) / (plannedQty || 1) * 100)))}%;"></div>
-                  </div>
-                  <strong style="font-size:12px;color:#10b981;">${Number(e.daily_progress_pct ?? ((Number(e.actual_quantity) || 0) / (plannedQty || 1) * 100)).toFixed(1)}%</strong>
-                </div>
-              </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;color:#374151;">
-              <div><span style="color:#9ca3af;">Actual Qty</span><br>
-                <strong>${escapeHtml(String(e.actual_quantity||'—'))} ${escapeHtml(e.unit||'')}</strong></div>
-              <div><span style="color:#9ca3af;">Manpower</span><br>
-                <strong>${escapeHtml(e.manpower_used||'—')}</strong></div>
-              <div><span style="color:#9ca3af;">Equipment</span><br>
-                <strong>${escapeHtml(e.equipment_used||'—')}</strong></div>
-              <div><span style="color:#9ca3af;">Materials</span><br>
-                <strong>${escapeHtml(e.materials_used||'—')}</strong></div>
-            </div>
-            ${e.day_remark
-              ? `<div style="font-size:12px;color:#374151;margin-top:8px;padding:8px 10px;
-                  background:#fefce8;border:1px solid #fef08a;border-radius:6px;line-height:1.5;">
-                  💬 ${escapeHtml(e.day_remark)}</div>` : ''}
-            ${e.issues
-              ? `<div style="font-size:12px;color:#374151;margin-top:6px;padding:8px 10px;
-                  background:#fff1f2;border:1px solid #fecdd3;border-radius:6px;">
-                  ⚠️ <strong>Issues:</strong> ${escapeHtml(e.issues)}</div>` : ''}
-            ${e.status_change_to_closed
-              ? `<div style="margin-top:6px;padding:5px 8px;background:#f3f4f6;
-                  border:1px solid #d1d5db;border-radius:6px;font-size:12px;color:#6b7280;">
-                  🔒 Activity marked as Closed on this entry</div>` : ''}
-            </div>
-          </details>`;
-      }).join('')
-    : `<div style="text-align:center;padding:20px 0;color:#9ca3af;font-size:12px;">No execution entries yet.</div>`;
-
-  // ── Execution form (canEdit only) ─────────────────────────────────────────
-  // Progress is previewed from quantity; delay is calculated by the server.
-  const execFormHtml = canEdit ? `
-    <details id="pe-entry-editor-${task.id}" style="grid-column:1 / -1;background:#fff;border:1px solid #d1d5db;border-radius:12px;">
-      <summary style="padding:13px 16px;cursor:pointer;font-size:13px;font-weight:700;color:#007B8A;">📝 Report Entry <span style="font-size:11px;font-weight:400;color:#6b7280;">(click to expand)</span></summary>
-    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;
-      padding:16px;display:flex;flex-direction:column;gap:12px;margin-bottom:14px;">
-
-      <div style="font-size:13px;font-weight:700;color:#007B8A;padding-bottom:10px;
-        border-bottom:1px solid #e5e7eb;">
-        ➕ Log Execution Entry
-      </div>
-
-      <!-- Row 1: date + actual qty -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-        <div>
-          <label style="${_peLabelStyle()}">Report Date *</label>
-          <input id="pe-rep-date-${task.id}" type="date"
-            value="${new Date().toISOString().slice(0,10)}"
-            style="${_peInputStyle()}" oninput="_peRecalc_${task.id}()"/>
-        </div>
-        <div>
-          <label style="${_peLabelStyle()}">Actual Qty * <span style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;color:#9ca3af;">(${escapeHtml(task.unit||'')})</span></label>
-          <input id="pe-act-qty-${task.id}" type="number" min="0"
-            placeholder="e.g. 120"
-            style="${_peInputStyle()}" oninput="_peRecalc_${task.id}()"/>
-        </div>
-      </div>
-
-      <!-- Resources -->
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
-        <div>
-          <label style="${_peLabelStyle()}">Manpower Used</label>
-          <input id="pe-act-manpower-${task.id}" type="text"
-            placeholder="e.g. 12 workers" style="${_peInputStyle()}"/>
-        </div>
-        <div>
-          <label style="${_peLabelStyle()}">Equipment Used</label>
-          <input id="pe-act-equipment-${task.id}" type="text"
-            placeholder="e.g. 2 excavators" style="${_peInputStyle()}"/>
-        </div>
-        <div>
-          <label style="${_peLabelStyle()}">Materials Used</label>
-          <input id="pe-act-materials-${task.id}" type="text"
-            placeholder="e.g. Steel rebar" style="${_peInputStyle()}"/>
-        </div>
-      </div>
-
-      <!-- Remark + Issues -->
-      <div>
-        <label style="${_peLabelStyle()}">Day Remark *</label>
-        <textarea id="pe-act-remark-${task.id}"
-          placeholder="Describe what happened on site today…"
-          style="width:100%;min-height:64px;padding:9px 10px;border:1px solid #d1d5db;
-          border-radius:8px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
-      </div>
-      <div>
-        <label style="${_peLabelStyle()}">Issues</label>
-        <textarea id="pe-act-issues-${task.id}"
-          style="width:100%;min-height:46px;padding:9px 10px;border:1px solid #d1d5db;
-          border-radius:8px;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
-      </div>
-
-      <!-- Close toggle -->
-      <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
-        background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;cursor:pointer;"
-        onclick="document.getElementById('pe-close-activity-${task.id}').click()">
-        <input type="checkbox" id="pe-close-activity-${task.id}"
-          onclick="event.stopPropagation()"
-          style="width:16px;height:16px;margin-top:2px;accent-color:#007B8A;cursor:pointer;flex-shrink:0;"/>
-        <div>
-          <div style="font-size:13px;font-weight:600;color:#374151;">
-            🔒 Mark activity as Closed with this entry</div>
-          <div style="font-size:11px;color:#9ca3af;margin-top:2px;">
-            Use when the activity is fully finished or formally abandoned.</div>
-        </div>
-      </div>
-
-      <!-- Attachment -->
-      <div>
-        <label style="${_peLabelStyle()}">Attachment</label>
-        <input id="pe-act-file-${task.id}" type="file" style="font-size:12px;color:#374151;"/>
-      </div>
-
-      <button data-action="pe-save-actual" data-task-id="${escapeHtml(String(task.id))}"
-        style="width:100%;padding:11px 14px;font-size:13px;font-weight:700;
-        background:#007B8A;color:#fff;border:none;border-radius:10px;cursor:pointer;
-        transition:opacity .15s;"
-        onmouseover="this.style.opacity='.88'" onmouseout="this.style.opacity='1'">
-        ✅ Save Execution Entry</button>
-    </div></details>` : `
-    <div style="padding:10px 12px;background:#f0fdf4;border:1px solid #bbf7d0;
-      border-radius:8px;font-size:12px;color:#166534;margin-bottom:14px;">
-      ✅ Execution history shown below. Only the creating leader can log entries.
-    </div>`;
-
-  return `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-
-      <!-- LEFT: Planned Activity -->
-      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;">
-        <div style="font-size:13px;font-weight:700;color:#007B8A;margin-bottom:14px;
-          padding-bottom:8px;border-bottom:2px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;">
-          <span>📋 Section A — Planned Activity</span>
-          ${canEdit
-            ? `<button data-action="pe-open-edit" data-task-id="${escapeHtml(String(task.id))}"
-                style="padding:4px 12px;font-size:11px;font-weight:600;
-                background:#f3f4f6;color:#374151;border:1px solid #d1d5db;
-                border-radius:6px;cursor:pointer;">✏️ Edit</button>` : ''}
-        </div>
-        <div style="font-size:12px;color:#374151;display:flex;flex-direction:column;gap:10px;">
-          ${task.milestone_name
-            ? `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;
-                padding:7px 10px;font-size:12px;color:#166534;font-weight:600;">
-                🏁 ${escapeHtml(task.milestone_name)}</div>` : ''}
-          <div>
-            <div style="${_peLabelStyle()}">Title</div>
-            <div style="font-size:13px;font-weight:600;color:#1f2937;">${escapeHtml(task.title||'—')}</div>
-          </div>
-          ${task.description ? `
-          <div>
-            <div style="${_peLabelStyle()}">Description</div>
-            <div style="line-height:1.6;color:#374151;">${escapeHtml(task.description)}</div>
-          </div>` : ''}
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-            <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:8px;">
-              <div style="${_peLabelStyle()}">Start Date</div>
-              <div style="font-weight:600;color:#1f2937;">${task.start_date ? new Date(task.start_date).toLocaleDateString() : '—'}</div>
-            </div>
-            <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:8px;">
-              <div style="${_peLabelStyle()}">End Date</div>
-              <div style="font-weight:600;color:#1f2937;">${task.end_date ? new Date(task.end_date).toLocaleDateString() : '—'}</div>
-            </div>
-            <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:8px;">
-              <div style="${_peLabelStyle()}">Planned Qty</div>
-              <div style="font-weight:600;color:#1f2937;">${escapeHtml(String(task.planned_quantity||'—'))} ${escapeHtml(task.unit||'')}</div>
-            </div>
-            <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:8px;">
-              <div style="${_peLabelStyle()}">Status</div>
-              <span style="background:${st.color}20;color:${st.color};border:1px solid ${st.color}60;
-                border-radius:10px;padding:2px 8px;font-size:11px;font-weight:600;">${st.label}</span>
-            </div>
-          </div>
-          ${task.planned_work      ? `<div><div style="${_peLabelStyle()}">Planned Work</div><div>${escapeHtml(task.planned_work)}</div></div>` : ''}
-          ${task.planned_manpower  ? `<div><div style="${_peLabelStyle()}">Planned Manpower</div><div>${escapeHtml(task.planned_manpower)}</div></div>` : ''}
-          ${task.planned_equipment ? `<div><div style="${_peLabelStyle()}">Planned Equipment</div><div>${escapeHtml(task.planned_equipment)}</div></div>` : ''}
-          ${task.planned_materials ? `<div><div style="${_peLabelStyle()}">Planned Materials</div><div>${escapeHtml(task.planned_materials)}</div></div>` : ''}
-          ${task.linked_file_name  ? `
-            <div>
-              <div style="${_peLabelStyle()}">Attachment</div>
-              <a data-action="pe-dl-task" data-task-id="${escapeHtml(String(task.id))}"
-                data-filename="${escapeHtml(task.linked_file_name)}"
-                style="display:inline-flex;align-items:center;gap:5px;
-                background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;
-                border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;">
-                ⬇️ ${escapeHtml(task.linked_file_name)}</a>
-            </div>` : ''}
-        </div>
-        ${canEdit ? `
-          <div style="margin-top:16px;padding-top:12px;border-top:1px solid #e5e7eb;">
-            <button data-action="pe-delete" data-task-id="${escapeHtml(String(task.id))}"
-              style="width:100%;padding:9px 14px;font-size:12px;font-weight:600;
-              background:#fff1f2;color:#991b1b;border:1px solid #fca5a5;
-              border-radius:8px;cursor:pointer;">🗑️ Delete Activity</button>
-          </div>` : ''}
-      </div>
-
-      <!-- RIGHT: Actual Execution -->
-      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;
-        display:flex;flex-direction:column;gap:12px;">
-        <div style="font-size:13px;font-weight:700;color:#007B8A;padding-bottom:8px;
-          border-bottom:2px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;">
-          <span>📊 Section B — Actual Execution</span>
-          <span style="font-size:11px;font-weight:400;color:#6b7280;">
-            ${trackingEntries.length} entr${trackingEntries.length === 1 ? 'y' : 'ies'}</span>
-        </div>
-        <div style="padding:12px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;">
-          ${progressBar}
-        </div>
-        <div>
-          <div style="font-size:12px;font-weight:700;color:#6b7280;margin-bottom:8px;">
-            Execution History</div>
-          <div style="max-height:320px;overflow-y:auto;">${trackingHtml}</div>
-        </div>
-      </div>
-    </div>
-    ${execFormHtml}`;
-}
-
-// ── Wire detail buttons + live recalc ─────────────────────────────────────────
-function _peWireDetailButtons(recordId, task, trackingEntries, canEdit) {
-  const container = document.getElementById(`pe-detail-inner-${recordId}`);
-  if (!container) return;
-
-  // Live recalc function — registered globally so oninput can call it
-  if (canEdit) {
-    const previousTotalActual = trackingEntries.reduce((s, e) => s + (Number(e.actual_quantity) || 0), 0);
-
-    window[`_peRecalc_${recordId}`] = function() {
-      const enteredQty    = parseFloat(document.getElementById(`pe-act-qty-${recordId}`)?.value) || 0;
-      const pctOverride   = null;
-      const calc = _peCalcProgress(task, previousTotalActual, enteredQty, pctOverride);
-
-      // Update progress display
-      const pctDisplay  = document.getElementById(`pe-pct-display-${recordId}`);
-      const pctBar      = document.getElementById(`pe-pct-bar-${recordId}`);
-      const totalDisp   = document.getElementById(`pe-total-display-${recordId}`);
-      const pctSource   = document.getElementById(`pe-pct-source-${recordId}`);
-      if (pctDisplay)  pctDisplay.textContent = calc.pct + '%';
-      if (pctBar)      { pctBar.style.width = calc.pct + '%'; pctBar.style.background = calc.pct >= 100 ? '#059669' : '#3b82f6'; }
-      if (totalDisp)   totalDisp.textContent = calc.totalActual + ' ' + (task.unit || '');
-      if (pctSource)   pctSource.textContent = pctOverride !== null ? 'manually overridden' : 'auto from quantity';
-
-    };
-
-    // Run once on load to init displays
-    window[`_peRecalc_${recordId}`]();
-  }
-
-  container.querySelector(`[data-action="pe-save-actual"]`)
-    ?.addEventListener('click', () => _peHandleSaveActual(recordId, task, trackingEntries));
-  container.querySelector(`[data-action="pe-open-edit"]`)
-    ?.addEventListener('click', () => _peOpenEditForm(recordId));
-  container.querySelector(`[data-action="pe-delete"]`)
-    ?.addEventListener('click', () => _peHandleDelete(recordId));
-  container.querySelector(`[data-action="pe-dl-task"]`)
-    ?.addEventListener('click', e => {
-      const btn = e.currentTarget;
-      _peDownloadTaskFile(btn.dataset.taskId, btn.dataset.filename);
-    });
-}
-
-// ── Save execution entry ──────────────────────────────────────────────────────
-// Progress is computed here; delay is calculated by the server from the activity dates.
-async function _peHandleSaveActual(recordId, task, trackingEntries) {
-  window._peSavingEntries = window._peSavingEntries || new Set();
-  if (window._peSavingEntries.has(String(recordId))) return;
-  const saveButton = document.querySelector(`[data-action="pe-save-actual"][data-task-id="${recordId}"]`);
-  window._peSavingEntries.add(String(recordId));
-  if (saveButton) { saveButton.disabled = true; saveButton.textContent = 'Saving…'; saveButton.style.opacity = '.65'; }
-  try {
-    const projectId   = localStorage.getItem('activeProjectId');
-    const reportDate  = document.getElementById(`pe-rep-date-${recordId}`)?.value;
-    const qty         = document.getElementById(`pe-act-qty-${recordId}`)?.value;
-    const manpower    = document.getElementById(`pe-act-manpower-${recordId}`)?.value.trim();
-    const equipment   = document.getElementById(`pe-act-equipment-${recordId}`)?.value.trim();
-    const materials   = document.getElementById(`pe-act-materials-${recordId}`)?.value.trim();
-    const remark      = document.getElementById(`pe-act-remark-${recordId}`)?.value.trim();
-    const issues      = document.getElementById(`pe-act-issues-${recordId}`)?.value.trim();
-    const pctOverride = null;
-    const closeCb     = document.getElementById(`pe-close-activity-${recordId}`);
-    const markClosed  = closeCb?.checked || false;
-    const fileInput   = document.getElementById(`pe-act-file-${recordId}`);
-
-    if (!reportDate) return alert('Report date is required.');
-    if (!qty)        return alert('Actual quantity is required.');
-    if (!remark)     return alert('Day remark is required — please describe what happened today.');
-
-    // Compute the progress figure from actual quantity; the server calculates delay.
-    const previousTotalActual = trackingEntries.reduce((s, e) => s + (Number(e.actual_quantity) || 0), 0);
-    const calc = _peCalcProgress(task, previousTotalActual, qty, pctOverride);
-
-    const form = new FormData();
-    form.append('projectId',               projectId);
-    form.append('activity_id',             recordId);
-    form.append('report_date',             reportDate);
-    form.append('actual_quantity',         qty);
-    form.append('unit',                    task.unit || '');
-    form.append('manpower_used',           manpower || '');
-    form.append('equipment_used',          equipment || '');
-    form.append('materials_used',          materials || '');
-    form.append('progress_pct',            String(calc.pct));        // computed
-    form.append('day_remark',              remark);
-    form.append('issues',                  issues || '');
-    form.append('status_change_to_closed', markClosed ? '1' : '0');
-    if (fileInput?.files?.[0]) form.append('attachment', fileInput.files[0]);
-
-    const res  = await _wcFetch(`${API}/planning-execution-tracking`, { method: 'POST', body: form });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.message || data.error || 'Unable to save execution entry');
-
-    alert('✓ Execution entry saved.');
-    delete recordsCache['planning-execution'];
-    await loadPERecords();
-    const detailEl = document.getElementById(`pe-detail-${recordId}`);
-    if (detailEl && detailEl.style.display !== 'none') {
-      const inner = document.getElementById(`pe-detail-inner-${recordId}`);
-      if (inner) inner.innerHTML = `<p style="color:#9ca3af;font-size:13px;text-align:center;padding:24px 0;">⏳ Refreshing…</p>`;
-      _peLoadDetail(recordId, 'planning-execution');
-    }
-  } catch (err) {
-    console.error('PE save actual error:', err);
-    alert('Failed to save execution entry: ' + err.message);
-  } finally {
-    window._peSavingEntries.delete(String(recordId));
-    if (saveButton) { saveButton.disabled = false; saveButton.textContent = '✅ Save Execution Entry'; saveButton.style.opacity = '1'; }
-  }
-}
-
-// ── Delete activity ───────────────────────────────────────────────────────────
-async function _peHandleDelete(recordId) {
-  if (!confirm('Delete this activity? All execution entries will also be deleted. Cannot be undone.')) return;
-  try {
-    const projectId = localStorage.getItem('activeProjectId');
-    const res  = await _wcFetch(`${API}/planning-execution/${recordId}`, {
-      method: 'DELETE',
-      body: JSON.stringify({ projectId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.message || 'Failed to delete');
-    alert('Activity deleted.');
-    delete recordsCache['planning-execution'];
-    loadPERecords();
-  } catch (err) { alert('Failed to delete: ' + err.message); }
-}
-
-// ── Download task file ────────────────────────────────────────────────────────
-async function _peDownloadTaskFile(taskId, fileName) {
-  try {
-    const projectId = localStorage.getItem('activeProjectId');
-    const res = await _wcFetch(
-      `${API}/planning-execution/${taskId}/download?projectId=${encodeURIComponent(projectId)}`
-    );
-    if (!res || !res.ok) { alert('Failed to download file.'); return; }
-    const data = await res.json();
-    if (data.url) {
-      _openAttachmentPreviewModal(data.url, fileName || data.filename || 'task-file', 'Task attachment');
-    } else alert(data.error || 'File not available.');
-  } catch (err) { alert('Failed to download file.'); }
-}
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  ADD / EDIT FORM (gray panel)
 // ══════════════════════════════════════════════════════════════════════════════
 
-async function _peOpenAddFormLegacy() {
-  if (projectLifecycleReadOnly) {
-    showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
-    return;
-  }
-  if (!isWCLeader(window.currentUserRole)) {
-    alert('Only side leaders can add activities.'); return;
-  }
-  const milestoneNames = await _peFetchMilestoneNames();
-  expandGrayPart(_pePlanFormHtml(null, milestoneNames, true));
-  _pePlanFormWire(null, milestoneNames, true);
-}
-
-async function _peOpenEditForm(recordId) {
-  if (projectLifecycleReadOnly) {
-    showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
-    return;
-  }
-  const tabKey = 'planning-execution';
-  const cached = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
-  if (!cached) return alert('Activity not found in cache. Please refresh.');
-  const milestoneNames = await _peFetchMilestoneNames();
-  expandGrayPart(_pePlanFormHtml(cached, milestoneNames, false));
-  _pePlanFormWire(cached, milestoneNames, false);
-}
-
-async function _peFetchMilestoneNames() {
-  const projectId = localStorage.getItem('activeProjectId');
-  try {
-    const res = await _wcFetch(
-      `${API}/project-milestones?projectId=${encodeURIComponent(projectId)}`
-    );
-    if (res && res.ok) {
-      const d    = await res.json();
-      const list = d.milestones || d || [];
-      return [...new Set(list.map(m => m.title || m.name || '').filter(Boolean))];
-    }
-  } catch (e) { /* non-fatal */ }
-  return [];
-}
-
-// ── Plan form HTML ────────────────────────────────────────────────────────────
-function _pePlanFormHtml(cached, milestoneNames, isNew) {
-  const v = f => escapeHtml(String(cached?.[f] ?? ''));
-
-  const suggestionRows = milestoneNames.map(name => `
-    <div onclick="_pePickMilestoneName(${JSON.stringify(name)})"
-      style="padding:9px 14px;cursor:pointer;font-size:13px;color:#374151;
-      border-bottom:1px solid #f3f4f6;"
-      onmouseover="this.style.background='#eff6ff'"
-      onmouseout="this.style.background='#fff'">
-      🏁 ${escapeHtml(name)}
-    </div>`).join('');
-
-  return `
-    <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
-      <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
-        <h3 style="margin:0;color:#1f2937;font-size:18px;font-weight:700;">
-          ${isNew ? '📊 Add Activity' : '✏️ Edit Activity'}</h3>
-        <p style="margin:4px 0 0;font-size:12px;color:#6b7280;">
-          Fill the planned activity details. Execution is logged from the activity card.</p>
-      </div>
-
-      <div style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
-
-        <div>
-          <label style="${_peLabelStyle()}">Milestone Name
-            <span style="font-weight:400;text-transform:none;font-size:11px;color:#9ca3af;">
-              — type or pick from your schedule</span>
-          </label>
-          <div style="position:relative;">
-            <input id="pe-milestone-name" type="text"
-              value="${v('milestone_name')}"
-              placeholder="e.g. M-03 Foundation Works"
-              autocomplete="off"
-              oninput="_peMilestoneNameInput()"
-              onfocus="_peMilestoneNameInput()"
-              style="${_peInputStyle()} padding:10px 12px;"/>
-            <div id="pe-milestone-suggestions"
-              style="display:none;position:absolute;z-index:200;top:100%;left:0;right:0;
-              background:#fff;border:1px solid #d1d5db;border-radius:8px;
-              box-shadow:0 4px 16px rgba(0,0,0,.12);max-height:200px;overflow-y:auto;margin-top:2px;">
-              ${milestoneNames.length
-                ? suggestionRows
-                : `<div style="padding:12px;font-size:12px;color:#9ca3af;text-align:center;">
-                    No milestones found — type a name manually.</div>`}
-            </div>
-          </div>
-          <p style="font-size:11px;color:#9ca3af;margin:3px 0 0;">
-            Reference label only — no database link to the schedule.</p>
-        </div>
-
-        <div>
-          <label style="${_peLabelStyle()}">Activity Title *</label>
-          <input id="pe-title" type="text" value="${v('title')}"
-            placeholder="e.g. Excavation of Grid B foundation"
-            style="${_peInputStyle()} padding:10px 12px;font-size:14px;"/>
-        </div>
-
-        <div>
-          <label style="${_peLabelStyle()}">Description</label>
-          <textarea id="pe-desc" placeholder="Scope and objectives…"
-            style="width:100%;min-height:80px;padding:10px 12px;border:1px solid #d1d5db;
-            border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box;">${v('description')}</textarea>
-        </div>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div>
-            <label style="${_peLabelStyle()}">Start Date *</label>
-            <input id="pe-start" type="date" value="${v('start_date')}"
-              style="${_peInputStyle()} padding:10px;"/>
-          </div>
-          <div>
-            <label style="${_peLabelStyle()}">End Date *</label>
-            <input id="pe-end" type="date" value="${v('end_date')}"
-              style="${_peInputStyle()} padding:10px;"/>
-          </div>
-        </div>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div>
-            <label style="${_peLabelStyle()}">Planned Quantity *</label>
-            <input id="pe-qty" type="number" value="${v('planned_quantity')}"
-              style="${_peInputStyle()} padding:10px;"/>
-          </div>
-          <div>
-            <label style="${_peLabelStyle()}">Unit *</label>
-            <select id="pe-unit"
-              style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;
-              font-size:13px;box-sizing:border-box;background:#fff;cursor:pointer;">
-              <option value="">— select unit —</option>
-              ${_peUnitOptions(cached?.unit || '')}
-            </select>
-          </div>
-        </div>
-
-        <div>
-          <label style="${_peLabelStyle()}">Planned Work</label>
-          <textarea id="pe-work"
-            style="width:100%;min-height:60px;padding:10px 12px;border:1px solid #d1d5db;
-            border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box;">${v('planned_work')}</textarea>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div>
-            <label style="${_peLabelStyle()}">Planned Manpower</label>
-            <input id="pe-manpower" type="text" value="${v('planned_manpower')}"
-              style="${_peInputStyle()} padding:10px;"/>
-          </div>
-          <div>
-            <label style="${_peLabelStyle()}">Planned Equipment</label>
-            <input id="pe-equipment" type="text" value="${v('planned_equipment')}"
-              style="${_peInputStyle()} padding:10px;"/>
-          </div>
-        </div>
-        <div>
-          <label style="${_peLabelStyle()}">Planned Materials</label>
-          <input id="pe-materials" type="text" value="${v('planned_materials')}"
-            style="${_peInputStyle()} padding:10px;"/>
-        </div>
-
-        <div>
-          <label style="${_peLabelStyle()}">Attachment (optional)</label>
-          <input id="pe-file" type="file" accept="*/*" style="font-size:13px;color:#374151;"/>
-          ${cached?.linked_file_name
-            ? `<div style="font-size:11px;color:#6b7280;margin-top:4px;">
-                Current: <strong>${escapeHtml(cached.linked_file_name)}</strong></div>` : ''}
-        </div>
-      </div>
-
-      <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
-        background:#fff;display:flex;gap:12px;">
-        <button type="button" id="pe-save-plan"
-          style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#007B8A;
-          color:#fff;border:none;border-radius:8px;cursor:pointer;">
-          ${isNew ? '✓ Create Activity' : '💾 Update Activity'}</button>
-        <button type="button" onclick="collapseGrayPart()"
-          style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#f5f5f5;
-          color:#333;border:1px solid #ddd;border-radius:8px;cursor:pointer;">
-          ✕ Cancel</button>
-      </div>
-    </div>`;
-}
-
-// ── Plan form wiring ──────────────────────────────────────────────────────────
-function _pePlanFormWire(cached, milestoneNames, isNew) {
-  const projectId = localStorage.getItem('activeProjectId');
-
-  window._peMilestoneNameInput = function() {
-    const input    = document.getElementById('pe-milestone-name');
-    const dd       = document.getElementById('pe-milestone-suggestions');
-    if (!input || !dd) return;
-    const query    = input.value.toLowerCase().trim();
-    const filtered = milestoneNames.filter(n => !query || n.toLowerCase().includes(query));
-    if (!filtered.length) { dd.style.display = 'none'; return; }
-    dd.innerHTML = filtered.map(name => `
-      <div onclick="_pePickMilestoneName(${JSON.stringify(name)})"
-        style="padding:9px 14px;cursor:pointer;font-size:13px;color:#374151;
-        border-bottom:1px solid #f3f4f6;"
-        onmouseover="this.style.background='#eff6ff'"
-        onmouseout="this.style.background='#fff'">
-        🏁 ${escapeHtml(name)}
-      </div>`).join('');
-    dd.style.display = 'block';
-  };
-
-  window._pePickMilestoneName = function(name) {
-    const input = document.getElementById('pe-milestone-name');
-    const dd    = document.getElementById('pe-milestone-suggestions');
-    if (input) input.value = name;
-    if (dd)    dd.style.display = 'none';
-  };
-
-  const _closeSuggest = e => {
-    const dd = document.getElementById('pe-milestone-suggestions');
-    if (dd && !e.target.closest('#pe-milestone-name') && !e.target.closest('#pe-milestone-suggestions'))
-      dd.style.display = 'none';
-    if (!document.getElementById('pe-milestone-suggestions'))
-      document.removeEventListener('click', _closeSuggest);
-  };
-  document.addEventListener('click', _closeSuggest);
-
-  document.getElementById('pe-save-plan')?.addEventListener('click', async () => {
-    try {
-      const milestoneName = document.getElementById('pe-milestone-name')?.value.trim() || '';
-      const title         = document.getElementById('pe-title')?.value.trim();
-      const desc          = document.getElementById('pe-desc')?.value.trim();
-      const start         = document.getElementById('pe-start')?.value;
-      const end           = document.getElementById('pe-end')?.value;
-      const qty           = document.getElementById('pe-qty')?.value;
-      const unit          = document.getElementById('pe-unit')?.value;
-      const work          = document.getElementById('pe-work')?.value.trim();
-      const manpower      = document.getElementById('pe-manpower')?.value.trim();
-      const equip         = document.getElementById('pe-equipment')?.value.trim();
-      const mats          = document.getElementById('pe-materials')?.value.trim();
-      const fileInput     = document.getElementById('pe-file');
-
-      if (!title)         return alert('Activity title is required.');
-      if (!start || !end) return alert('Start and end dates are required.');
-      if (new Date(end) <= new Date(start)) return alert('End date must be after start date.');
-      if (!qty)           return alert('Planned quantity is required.');
-      if (!unit)          return alert('Please select a unit from the dropdown.');
-
-      const form = new FormData();
-      form.append('projectId',         projectId);
-      form.append('milestone_name',    milestoneName);
-      form.append('title',             title);
-      form.append('description',       desc || '');
-      form.append('start_date',        start);
-      form.append('end_date',          end);
-      form.append('planned_quantity',  qty);
-      form.append('unit',              unit);
-      form.append('planned_work',      work || '');
-      form.append('planned_manpower',  manpower || '');
-      form.append('planned_equipment', equip || '');
-      form.append('planned_materials', mats || '');
-      if (!isNew) form.append('id', cached.id);
-      if (fileInput?.files?.[0]) form.append('linked_file', fileInput.files[0]);
-
-      const btn = document.getElementById('pe-save-plan');
-      if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-
-      const endpoint = isNew
-        ? `${API}/planning-execution/create`
-        : `${API}/planning-execution`;
-      const res  = await _wcFetch(endpoint, { method: isNew ? 'POST' : 'PUT', body: form });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
-
-      alert(isNew ? '✓ Activity created.' : '✓ Activity updated.');
-      delete recordsCache['planning-execution'];
-      collapseGrayPart();
-      loadPERecords();
-    } catch (err) {
-      console.error('PE save plan error:', err);
-      alert('Failed to save: ' + err.message);
-      const btn = document.getElementById('pe-save-plan');
-      if (btn) { btn.disabled = false; btn.textContent = isNew ? '✓ Create Activity' : '💾 Update Activity'; }
-    }
-  });
-}
 
 // ===== Activity form v2: an activity with its tasks, weights, stages and a real milestone link =====
 // Replaces the "Add Activity" form. It posts to POST /api/planning-execution/create-with-tasks.
@@ -18401,7 +17889,7 @@ async function _peOpenAddForm() {
     _pe2Fetch(`/work-center/team-members?projectId=${encodeURIComponent(projectId)}`),
   ]);
   _pe2 = { projectId, type: _pe2DefaultType(), milestones: (ms && ms.milestones) || [], members: (tm && tm.members) || [],
-           tasks: [_pe2NewTask()], weightsEdited: false };
+           tasks: [_pe2NewTask()], weightsEdited: false, files: [] };
   expandGrayPart(_pe2FormHtml());
   _pe2Wire();
 }
@@ -18481,6 +17969,7 @@ function _pe2FormHtml() {
       <div>
         <label style="${_peLabelStyle()}">Attachments (optional)</label>
         <input id="pe2-attachments" type="file" multiple style="font-size:13px;color:#374151;"/>
+        <div id="pe2-files" style="margin-top:6px;"></div>
       </div>
 
       <div style="border-top:1px solid #e5e7eb;padding-top:12px;">
@@ -18664,7 +18153,40 @@ function _pe2ApplyDateBounds() {
   });
 }
 
+const PE2_MAX_FILES = 20;
+
+function _pe2RenderFiles() {
+  const list = document.getElementById('pe2-files');
+  if (!list) return;
+  const size = (bytes) => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  list.innerHTML = (_pe2.files || []).map((file, index) => `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #e5e7eb;font-size:12px;">
+      <span style="flex:1;min-width:0;overflow-wrap:anywhere;color:#1f2937;">${escapeHtml(file.name)}</span>
+      <span style="color:#6b7280;white-space:nowrap;">${size(file.size)}</span>
+      <button type="button" data-pe2-file-remove="${index}" style="padding:3px 7px;border:1px solid #fecaca;border-radius:5px;background:#fff;color:#b91c1c;cursor:pointer;">Remove</button>
+    </div>`).join('');
+}
+
 function _pe2Wire() {
+  const fileInput = document.getElementById('pe2-attachments');
+  fileInput?.addEventListener('change', () => {
+    _pe2.files = _pe2.files || [];
+    const known = new Set(_pe2.files.map((file) => `${file.name}|${file.size}|${file.lastModified}`));
+    for (const file of Array.from(fileInput.files || [])) {
+      const key = `${file.name}|${file.size}|${file.lastModified}`;
+      if (known.has(key)) continue;
+      if (_pe2.files.length >= PE2_MAX_FILES) { alert(`An activity can have at most ${PE2_MAX_FILES} attachments.`); break; }
+      known.add(key);
+      _pe2.files.push(file);
+    }
+    fileInput.value = '';
+    _pe2RenderFiles();
+  });
+  document.getElementById('pe2-files')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-pe2-file-remove]');
+    if (!button) return;
+    _pe2.files.splice(Number(button.dataset.pe2FileRemove), 1);
+    _pe2RenderFiles();
+  });
   const $ = (id) => document.getElementById(id);
   _pe2RenderMeasure();
   _pe2RenderTasks();
@@ -18809,8 +18331,7 @@ function _pe2Payload(confirmReplace) {
     ...(many ? { weight_pct: t.weight } : {}),
     ...(_pe2.type === 'stages' ? { stages: t.stages.map((s) => ({ title: s.title.trim(), weight_pct: s.weight, is_hold_point: !!s.hold })) } : {}),
   }))));
-  for (const file of document.getElementById('pe2-attachments')?.files || [])
-    form.append('attachments', file);
+  for (const file of _pe2.files || []) form.append('attachments', file, file.name);
   if (confirmReplace) form.append('confirm_replace_manual', 'true');
   return form;
 }
@@ -19726,10 +19247,6 @@ function _dcDate(v) {
   const d = new Date(v);
   return isNaN(d) ? '—' : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
-function _dcWho(name, role) {
-  const r = String(role || '').replace(/([a-z])([A-Z])/g, '$1 $2');
-  return name ? `<strong>${escapeHtml(name)}</strong>${r ? ` <span style="color:#6b7280;">(${escapeHtml(r)})</span>` : ''}` : `<strong>${escapeHtml(r || 'Unknown')}</strong>`;
-}
 function _dcIsLeaderOf(doc) {
   const s = wcSide(window.currentUserRole);
   return s !== null && String(s).toLowerCase() === String(doc.side || '').toLowerCase();
@@ -20212,32 +19729,6 @@ async function _daShare(docId) {
   if (!confirm('Share this signed document to Control & Reports? Everyone on your side will be able to read it and comment.')) return;
   const ok = await _dcPost(`/document-approval/${docId}/share`, { projectId }, '📤 Document shared to Control & Reports.');
   if (ok) { delete recordsCache['document-approval']; delete recordsCache['control-reports']; _daLoadRecords(); }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  DOCUMENT & APPROVAL — API: Submit for approval
-// ═══════════════════════════════════════════════════════════════════════
-async function _daSubmitForApproval(docId) {
-  const projectId = localStorage.getItem('activeProjectId');
-  if (!projectId) { alert('No project selected.'); return; }
-
-  if (!confirm('Submit this document for approval?')) return;
-
-  try {
-    const res = await _daAuthFetch(`${API}/document-approval/${docId}/submit`, {
-      method: 'POST',
-      body:   { projectId },
-    });
-    if (!res) return;
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || 'Failed to submit');
-    alert('📤 Document submitted for approval.');
-    delete recordsCache['document-approval'];
-    _daLoadRecords();
-  } catch (err) {
-    console.error('DA submit error:', err);
-    alert('Error: ' + err.message);
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -21920,7 +21411,6 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
         ${input('Planned equipment', 'planned_equipment', activity.planned_equipment || '')}
         ${input('Planned materials', 'planned_materials', activity.planned_materials || '')}
         <label style="grid-column:1/-1;">Description<textarea name="description" rows="2" style="${inputStyle}">${esc(activity.description || '')}</textarea></label>
-        <label style="grid-column:1/-1;">Replace plan attachment<input name="linked_file" type="file"></label>
       </div>
       <p data-wf-edit-error style="color:#b91c1c;font-size:12px;margin:6px 0;"></p>
       <button type="button" data-wf-save-plan style="margin-top:8px;">Save activity plan</button>
@@ -22022,7 +21512,8 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
             <label>End date<input name="end_date" type="date" required value="${esc(String(card.activity.end_date).slice(0, 10))}" style="${inputStyle}"></label>
           </div>
           <label style="display:block;margin-top:8px;">Priority<select name="priority" style="${inputStyle}"><option>normal</option><option>low</option><option>high</option></select></label>
-          <label style="display:block;margin-top:8px;">Attachment (optional)<input name="linked_file" type="file" accept="*/*" style="${inputStyle}"></label>
+          <label style="display:block;margin-top:8px;">Attachments (optional)<input name="attachments" type="file" multiple accept="*/*" style="${inputStyle}"></label>
+          <ul data-wf-file-list style="margin:4px 0 0;padding-left:18px;font-size:12px;color:#334155;overflow-wrap:anywhere;"></ul>
           <label style="display:block;margin-top:8px;">Assign team members<select name="members" multiple size="4" style="${inputStyle}">${memberOptions}</select></label>
           ${isStages ? `<div data-wf-stage-list style="margin-top:8px;"><strong>Stages (weights must total 100%)</strong>
             <div data-wf-stage-row style="display:flex;gap:6px;margin-top:5px;"><input data-stage-title placeholder="Stage title" style="${inputStyle}"><input data-stage-weight type="number" min="0.01" step="0.01" value="100" style="width:82px;"><label><input data-stage-hold type="checkbox"> Hold</label></div>
@@ -22031,6 +21522,11 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
           <button type="submit">Preview and add task</button><button type="button" data-wf-cancel-add>Cancel</button>
         </form>`;
         const form = formContainer.querySelector('[data-wf-add-task]');
+        form.elements.attachments?.addEventListener('change', (event) => {
+          // Show each chosen file by its real name.
+          form.querySelector('[data-wf-file-list]').innerHTML = Array.from(event.target.files || [])
+            .map((file) => `<li>${esc(file.name)}</li>`).join('');
+        });
         formContainer.querySelector('[data-wf-cancel-add]').addEventListener('click', () => {
           formContainer.style.display = 'none';
           formContainer.innerHTML = '';
@@ -22079,11 +21575,10 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
             ));
             const weightSummary = (preview.weights || []).map((item) => `${item.title}: ${item.after}%`).join('\n');
             if (!confirm(`Add this task and apply the following shares?\n${weightSummary}\nActivity progress: ${preview.progress_before}% → ${preview.progress_after}%.`)) return;
-            const fileInput = form.elements.linked_file;
             const createForm = new FormData();
             createForm.append('projectId', projectId);
             createForm.append('task', JSON.stringify(task));
-            if (fileInput?.files?.[0]) createForm.append('linked_file', fileInput.files[0]);
+            for (const file of Array.from(form.elements.attachments?.files || []).slice(0, 20)) createForm.append('attachments', file, file.name);
             await responseData(await _wcFetch(
               `${API}/planning-execution/${encodeURIComponent(activityId)}/tasks`,
               { method: 'POST', body: createForm },
@@ -22111,11 +21606,7 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
     if (['quantity', 'count'].includes(data.activity_type) && (!(Number(data.planned_quantity) > 0) || !String(data.unit || '').trim()))
       return showErrorIn(formElement, 'Quantity and count activities need a planned amount above zero and a unit.');
     form.append('projectId', projectId);
-    for (const [key, value] of Object.entries(data)) {
-      if (key !== 'linked_file') form.append(key, value);
-    }
-    const file = formElement.querySelector('[name="linked_file"]')?.files?.[0];
-    if (file) form.append('linked_file', file);
+    for (const [key, value] of Object.entries(data)) form.append(key, value);
     try {
       await responseData(await _wcFetch(`${API}/planning-execution/${encodeURIComponent(activityId)}/plan`, { method: 'PUT', body: form }));
       alert('Activity plan updated.');
@@ -22542,9 +22033,8 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
       }
       const open = event.target.closest('[data-wf-open-verification]');
       if (open) {
-        collapseGrayPart();
         const opened = await window._openActivityVerificationNotification?.(open.dataset.wfOpenVerification);
-        if (!opened) alert('The activity could not be opened. Check your connection and try again. If it keeps failing, reload the page and open the request from the list again.');
+        if (!opened) alert(window._activityOpenIssue?.message || 'The activity could not be opened. Reload the page and open the request from the list again.');
         return;
       }
       if (event.target.closest('[data-wf-load-more]')) loadHistory(true);
