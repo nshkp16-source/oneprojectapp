@@ -2354,8 +2354,7 @@
       <div class="modal-actions">
         <button id="errCancelBtn">Cancel</button>
         <button id="errSubmitBtn" class="primary">Send Report</button>
-      </div>
-    </div>
+    </section>
   </div>
 
   <div class="layout">
@@ -17135,6 +17134,39 @@ function _peActivityReportHtml(report) {
   const variance = Number(progress.variance_pct) || 0;
   const unit = quantities.unit || activity.unit || '';
   const amount = (value) => value == null ? '—' : `${value}${unit ? ` ${unit}` : ''}`;
+  const dateLabel = (value) => {
+    if (!value) return '—';
+    const [year, month, day] = String(value).slice(0, 10).split('-');
+    return year && month && day ? `${Number(day)} ${new Date(Number(year), Number(month) - 1).toLocaleString('en', { month: 'short' })} ${year}` : String(value);
+  };
+  const dateRange = activity.start_date && activity.end_date
+    ? `${dateLabel(activity.start_date)} – ${dateLabel(activity.end_date)}` : 'Reporting period not set';
+  const kpi = (label, value, note, color = '#0f766e') => `<div style="min-width:0;padding:10px 11px;background:#f8fafc;border:1px solid #dbe3ec;">
+    <div style="font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#64748b;">${escapeHtml(label)}</div>
+    <div style="margin-top:5px;font-size:21px;line-height:1.1;font-weight:700;color:${color};">${escapeHtml(value)}</div>
+    ${note ? `<div style="margin-top:3px;font-size:10px;color:#64748b;">${escapeHtml(note)}</div>` : ''}
+  </div>`;
+  const progressLine = (label, value, color) => {
+    const pct = Math.max(0, Math.min(100, Number(value) || 0));
+    return `<div style="display:grid;grid-template-columns:92px minmax(0,1fr) 44px;align-items:center;gap:8px;margin-top:8px;font-size:11px;color:#334155;">
+      <span>${escapeHtml(label)}</span>
+      <span aria-hidden="true" style="height:10px;background:#eef2f7;overflow:hidden;"><span style="display:block;width:${pct}%;height:100%;background:${color};"></span></span>
+      <strong style="text-align:right;">${pct}%</strong>
+    </div>`;
+  };
+  const pdfLikeHeader = (title, subtitle) => `<div style="overflow:hidden;border:1px solid #dbe3ec;background:#fff;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 12px;background:#0f7f89;color:#fff;font-size:10px;font-weight:600;">
+      <span>OneProjectApp&nbsp; | &nbsp;Activity Report</span><span style="font-weight:400;">${escapeHtml(report.as_of_date || '')}</span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 16px 10px;">
+      <div style="min-width:0;flex:1;">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.06em;color:#64748b;">ACTIVITY PROGRESS REPORT</div>
+        <div style="margin-top:4px;font-size:19px;line-height:1.25;font-weight:700;color:#0f172a;overflow-wrap:anywhere;">${escapeHtml(title || 'Activity')}</div>
+        <div style="margin-top:4px;font-size:11px;color:#64748b;line-height:1.5;">${escapeHtml(subtitle)}</div>
+      </div>
+      <button type="button" class="rc-btn" data-pe-download-report>Download PDF</button>
+    </div>
+  </div>`;
   const compactList = (rows, render, limit = 5) => {
     const first = rows.slice(0, limit).map(render).join('');
     const remaining = rows.slice(limit);
@@ -17142,10 +17174,10 @@ function _peActivityReportHtml(report) {
       ? `<details style="margin-top:5px;"><summary style="cursor:pointer;font-size:12px;color:#0369a1;">Show ${remaining.length} more</summary>${remaining.map(render).join('')}</details>`
       : '');
   };
-  const section = (title, body, open = false) => `<details class="pe-panel pe-fold"${open ? ' open' : ''}>
-    <summary style="cursor:pointer;"><span class="pe-label">${escapeHtml(title)}</span><span class="pe-fold-hint" aria-hidden="true"></span></summary>
+  const section = (title, body) => `<section style="padding:10px 0;border-top:1px solid #dbe3ec;">
+    <div class="pe-label" style="color:#0f7f89;">${escapeHtml(title)}</div>
     <div style="margin-top:10px;">${body}</div>
-  </details>`;
+  </section>`;
   const pendingBlock = !clientView && (viewer.side === 'Consultant' || viewer.mode === 'own') && pendingVerification.report_ids?.length
     ? `<div class="pe-panel" style="border-color:#f59e0b;background:#fffbeb;">
         <strong style="font-size:13px;color:#92400e;">Work still needing verification</strong>
@@ -17163,19 +17195,21 @@ function _peActivityReportHtml(report) {
         </div>`)
       : '<p style="margin:0;color:#64748b;font-size:12px;">No site photos.</p>';
     return `<div style="display:grid;gap:12px;">
-      <div class="pe-panel" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-        <div><div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#64748b;">Activity report</div>
-          <strong style="font-size:18px;color:#0f172a;display:block;margin-top:3px;">${escapeHtml(activity.title || 'Activity')}</strong></div>
-        <button type="button" class="rc-btn" data-pe-download-report>Download PDF</button>
-      </div>
-      <div class="pe-panel" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;">
-        ${_peReportPanelLine('Certified progress', `${certifiedPct}%`)}
-        ${_peReportPanelLine('Certified quantity', amount(quantities.certified))}
-        ${_peReportPanelLine('Planned quantity', amount(quantities.planned))}
-        ${_peReportPanelLine('Dates', activity.start_date && activity.end_date ? `${activity.start_date} to ${activity.end_date}` : '—')}
+      ${pdfLikeHeader(activity.title || 'Activity', `${activity.milestone?.title || 'Milestone not linked'}  |  ${dateRange}`)}
+      <section class="pe-panel" style="padding:12px;">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:6px;">
+          ${kpi('Certified', `${certifiedPct}%`, `${amount(quantities.certified)} verified`)}
+          ${kpi('Planned quantity', amount(quantities.planned), '')}
+        </div>
+        ${progressLine('Certified', certifiedPct, '#0f766e')}
+      </section>
+      ${section('Activity details', `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px 18px;">
+        ${_peReportPanelLine('Status', activity.status || '—')}
+        ${_peReportPanelLine('Measure', activity.activity_type || '—')}
         ${_peReportPanelLine('Milestone', activity.milestone?.title || '—')}
-      </div>
-      ${section('Site photos', clientPhotoHtml, true)}
+        ${_peReportPanelLine('Planned dates', dateRange)}
+      </div>`)}
+      ${section('Site photos', clientPhotoHtml)}
       ${section('Certificates', certificates.length ? compactList(certificates, (row) => `<div style="padding:8px 0;border-top:1px solid #e2e8f0;">
         <strong style="font-size:12px;color:#1e293b;">${escapeHtml(row.certificate_no || 'Certificate')}</strong>
         <div style="font-size:11px;color:#64748b;">${escapeHtml(row.status || 'Issued')} · ${escapeHtml(String(row.decided_at || '').slice(0, 10))}</div>
@@ -17271,36 +17305,43 @@ function _peActivityReportHtml(report) {
   </div>`;
   return `
     <div style="display:grid;gap:14px;">
-      <div class="pe-panel" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-        <div>
-          <div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#64748b;">Activity report</div>
-          <strong style="font-size:18px;color:#0f172a;display:block;margin-top:3px;">${escapeHtml(activity.title || 'Activity')}</strong>
-        </div>
-        <button type="button" class="rc-btn" data-pe-download-report>Download PDF</button>
-      </div>
+      ${pdfLikeHeader(activity.title || 'Activity', `${activity.milestone?.title || 'Milestone not linked'}  |  ${dateRange}`)}
       ${pendingBlock}
-      <div class="pe-panel" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
-        ${_peReportPanelLine('Claimed', `${claimedPct}%`)}
-        ${_peReportPanelLine('Certified', `${certifiedPct}%`)}
-        ${_peReportPanelLine('Variance', `${variance > 0 ? '+' : ''}${variance}%`)}
-        ${_peReportPanelLine('Planned quantity', `${quantities.planned != null ? `${quantities.planned} ${escapeHtml(activity.unit || '')}` : '—'}`)}
-      </div>
-      <div class="pe-panel" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
-        ${_peReportPanelLine('Scope', activity.description || 'No scope description provided.')}
-        ${_peReportPanelLine('Finished when', activity.done_when || 'No completion condition provided.')}
-        ${_peReportPanelLine('Dates', activity.start_date && activity.end_date ? `${activity.start_date} to ${activity.end_date}` : '—')}
-        ${_peReportPanelLine('Milestone', activity.milestone ? `${activity.milestone.title || 'Milestone'}${activity.milestone.id ? ` (${activity.milestone.id})` : ''}` : '—')}
-      </div>
-      <div class="pe-panel">
-        <div class="pe-label">Plan details</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px;margin-top:12px;">
+      <section class="pe-panel" style="padding:12px;">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:6px;">
+          ${kpi('Claimed', `${claimedPct}%`, `${amount(quantities.claimed)} reported`)}
+          ${kpi('Certified', `${certifiedPct}%`, `${amount(quantities.certified)} verified`)}
+          ${kpi('Planned today', `${Number(progress.planned_today_pct) || 0}%`, `As of ${dateLabel(report.as_of_date)}`, '#64748b')}
+          ${kpi('Variance', `${variance > 0 ? '+' : ''}${variance}%`, variance < 0 ? 'Behind plan' : 'Against plan', variance < 0 ? '#b91c1c' : '#0f766e')}
+        </div>
+        ${progressLine('Planned today', progress.planned_today_pct, '#94a3b8')}
+        ${progressLine('Claimed', claimedPct, '#0f766e')}
+        ${progressLine('Certified', certifiedPct, '#0d9488')}
+      </section>
+      ${section('Summary', `<p style="margin:0;font-size:12px;line-height:1.6;color:#334155;">
+          ${escapeHtml(activity.title || 'Activity')} is ${variance < 0 ? `behind plan by ${Math.abs(variance)} points` : 'being measured against the planned progress'}.
+          ${dailyLog.length} approved task report${dailyLog.length === 1 ? '' : 's'} record ${amount(quantities.claimed)} claimed work.
+          ${pendingVerification.report_ids?.length ? `${escapeHtml(String(pendingVerification.claimed_quantity_since ?? 0))}${unit ? ` ${escapeHtml(unit)}` : ''} of claimed work still needs verification.` : `${amount(quantities.certified)} is certified.`}
+          ${progress.days_left != null ? `${Number(progress.days_left)} working day${Number(progress.days_left) === 1 ? '' : 's'} remain.` : ''}
+        </p>
+        ${activity.description ? `<p style="margin:6px 0 0;font-size:12px;line-height:1.6;color:#334155;">${escapeHtml(activity.description)}</p>` : ''}`)}
+      ${section('Activity details', `<div>
+          ${[
+            [['Milestone', activity.milestone?.title || '—'], ['Status', activity.status || '—']],
+            [['Planned dates', dateRange], ['Measure', activity.activity_type || '—']],
+            [['Planned quantity', amount(quantities.planned)], ['Weight in milestone', activity.milestone_weight_pct == null ? '—' : `${activity.milestone_weight_pct}%`]],
+          ].map((row) => `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;padding:8px 0;border-bottom:1px solid #e2e8f0;">
+            ${row.map(([label, value]) => `<div>${_peReportPanelLine(label, value)}</div>`).join('')}
+          </div>`).join('')}
+        </div>`)}
+      ${activity.done_when ? section('Finished when', `<div style="font-size:12px;line-height:1.6;color:#334155;">${escapeHtml(activity.done_when)}</div>`) : ''}
+      ${section('Plan details', `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 18px;">
           ${_peReportPanelLine('Work', activity.legacy_planned?.work || '—')}
           ${_peReportPanelLine('Manpower', activity.legacy_planned?.manpower || '—')}
           ${_peReportPanelLine('Equipment', activity.legacy_planned?.equipment || '—')}
           ${_peReportPanelLine('Materials', activity.legacy_planned?.materials || '—')}
-        </div>
-      </div>
-      ${section('Progress against plan', taskProgressHtml + progressBar, true)}
+        </div>`)}
+      ${section('Progress against plan', taskProgressHtml + progressBar)}
       ${section('Quantities', quantityHtml)}
       ${section('Daily log', dailyLogHtml)}
       ${section('Planned versus used resources', resourceHtml)}
