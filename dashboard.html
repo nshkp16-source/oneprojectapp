@@ -1027,6 +1027,31 @@
       margin-left: 4px; padding: 2px 7px; border-radius: var(--chip-radius);
       background: #eef2f7; font-size: 11px;
     }
+    .pe-rep { border-bottom:1px solid #e2e8f0; background:#fff; }
+    .pe-rep > summary { display:grid; grid-template-columns:78px minmax(0,1fr) auto 18px; gap:10px; align-items:center; padding:10px 14px; cursor:pointer; list-style:none; min-height:44px; }
+    .pe-rep > summary::-webkit-details-marker { display:none; }
+    .pe-rep-main, .pe-rep-num { display:flex; flex-direction:column; min-width:0; font-size:13px; }
+    .pe-rep-main strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .pe-rep-num { text-align:right; white-space:nowrap; }
+    .pe-rep-date { font-size:12px; color:#475569; }
+    .pe-rep-sub { font-size:11px; color:#64748b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .pe-rep-chev::before { content:'\25be'; color:#64748b; font-size:14px; }
+    .pe-rep[open] .pe-rep-chev::before { content:'\25b4'; }
+    .pe-rep-body { padding:2px 14px 14px 14px; background:#f8fafc; border-top:1px solid #eef2f7; }
+    .pe-rep-more > summary { padding:12px 14px; cursor:pointer; font-size:13px; font-weight:600; color:#0369a1; list-style:none; min-height:44px; box-sizing:border-box; }
+    .pe-rep-more > summary::-webkit-details-marker { display:none; }
+    @media (max-width: 640px) { .pe-rep > summary { grid-template-columns:minmax(0,1fr) auto 18px; } .pe-rep-date { grid-column:1 / -1; } }
+    /* Short screens: keep the tab bar in view while the card scrolls and trim vertical padding. */
+    @media (max-height: 820px) {
+      .detail-tab-list { position: sticky; top: 0; z-index: 4; }
+      .pe-kpi { padding: 8px 14px; }
+      .pe-crumbs { padding-top: 6px; }
+    }
+    .pe-more-figs { background:#fff; border-bottom:1px solid #e2e8f0; }
+    .pe-more-figs > summary { padding:8px 20px; cursor:pointer; font-size:12px; font-weight:600; color:#0f766e; list-style:none; }
+    .pe-more-figs > summary::-webkit-details-marker { display:none; }
+    .pe-primary-bar { position:sticky; bottom:0; z-index:4; display:flex; justify-content:flex-end; padding:10px 16px; background:rgba(255,255,255,.96); border-top:1px solid #e2e8f0; }
+    .pe-primary-bar .rc-btn { min-height:44px; padding:0 20px; font-weight:700; }
     .pe-crumbs { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:10px 16px 0; font-size:12px; color:#475569; }
     .pe-crumb { padding:0; border:0; background:none; font:inherit; color:#0369a1; cursor:pointer; text-align:left; overflow-wrap:anywhere; }
     .pe-crumb:hover { text-decoration:underline; }
@@ -13995,10 +14020,13 @@ function _wcCardTilesHtml(task, entries, checklists) {
     const doneStages = new Set(approved.map((entry) => String(entry.stage_id)).filter(Boolean));
     tiles.push(tile('Stages done', String(stages.filter((stage) => stage.completed_at || doneStages.has(String(stage.id))).length), `of ${stages.length}`));
   }
-  if (task.activity_id && task.weight_pct != null) tiles.push(tile('Share of activity', `${Number(task.weight_pct)}%`));
-  const reportCount = Number(task.total_report_count ?? entries.length);
-  tiles.push(tile('Reports', String(reportCount), pending ? `${pending} pending` : ''));
-  return `<div data-wc-card-tiles style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:12px;">${tiles.join('')}</div>`;
+  const grid = (items) => `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;">${items.join('')}</div>`;
+  const extra = [];
+  if (task.activity_id && task.weight_pct != null) extra.push(tile('Share of activity', `${Number(task.weight_pct)}%`));
+  extra.push(tile('Reports', String(Number(task.total_report_count ?? entries.length)), pending ? `${pending} pending` : ''));
+  return `<div data-wc-card-tiles style="margin-bottom:12px;">${grid(tiles)}
+    <details style="margin-top:8px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;color:#0f766e;">More figures</summary>
+      <div style="margin-top:8px;">${grid(extra)}</div></details></div>`;
 }
 
 async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
@@ -14154,6 +14182,23 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
       <span class="pe-crumb pe-crumb--here" aria-current="page">${escapeHtml(task.title || 'Task')}</span>
     </nav>`;
   shell.insertAdjacentHTML('afterbegin', crumbs + _wcCardHeaderHtml(task, location) + _wcCardTilesHtml(task, entries, checklistData));
+  {
+    const pendingCount = Number(task.pending_report_count ?? entries.filter((entry) => entry.validation_status === 'pending').length);
+    const canReport = !leader && !['closed', 'completed'].includes(task.status);
+    const label = leader ? (pendingCount ? `Review ${pendingCount} pending report${pendingCount === 1 ? '' : 's'}` : '') : (canReport ? 'Add report' : '');
+    if (label) {
+      const bar = document.createElement('div');
+      bar.className = 'pe-primary-bar';
+      bar.setAttribute('data-wc-primary-bar', '');
+      bar.innerHTML = `<button type="button" class="rc-btn" style="min-height:44px;padding:0 20px;font-weight:700;">${escapeHtml(label)}</button>`;
+      shell.appendChild(bar);
+      bar.querySelector('button').addEventListener('click', () => {
+        shell.querySelector(`[data-wc-tab="${leader ? 'reports' : 'progress'}"]`)?.click();
+        if (leader) shell.querySelector('[data-report-filter="pending"]')?.click();
+        shell.querySelector('[role="tablist"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+  }
   shell.querySelector('[data-wc-crumb-activity]')?.addEventListener('click', (event) => {
     _openActivityCardInPanel(event.currentTarget.getAttribute('data-wc-crumb-activity'));
   });
@@ -14243,6 +14288,8 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   for (const tab of extraTabs) {
     tablist.querySelector(`[data-wc-tab="${tab.key}"]`).addEventListener('click', () => activate(tab.key));
   }
+  const primaryBarEl = shell.querySelector('[data-wc-primary-bar]');
+  if (primaryBarEl) shell.appendChild(primaryBarEl); // keep it after the late-added panes
   if (extraTabs.some((tab) => tab.key === stored) || stored === 'history') activate(stored);
 }
 
@@ -17289,16 +17336,25 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
         : activity.activity_type === 'stages'
           ? (tasks.flatMap(item => item.stages || []).find(stage => String(stage.id) === String(report.stage_id))?.title || 'Stage report')
           : `${Number(report.progress_pct) || 0}%`;
-    return `<tr>
-      <td>${escapeHtml(dateText(report.report_date))}</td><td>${escapeHtml(report.task_title || 'Task')}</td>
-      <td>${escapeHtml(report.member_email || 'Team member')}</td><td>${escapeHtml(result)}</td>
-      <td>${['quantity', 'count'].includes(activity.activity_type)
-        ? `${runningQuantity} ${escapeHtml(activity.unit || '')}`
-        : `${Math.round(runningActivityProgress * 10) / 10}% activity`}</td>
-      <td>${escapeHtml(report.work_done || report.notes || '—')}</td>
-      <td style="min-width:200px;">${_evidenceFilesHtml(report) || '<span style="color:#94a3b8;">None</span>'}</td>
-    </tr>`;
-  }).join('') : '';
+    const running = ['quantity', 'count'].includes(activity.activity_type)
+      ? `${runningQuantity} ${activity.unit || ''}`.trim()
+      : `${Math.round(runningActivityProgress * 10) / 10}% activity`;
+    const reporter = String(report.member_name || report.member_email || 'Team member').split('@')[0];
+    const files = _evidenceFilesHtml(report);
+    return `<details class="pe-rep">
+      <summary>
+        <span class="pe-rep-date">${escapeHtml(dateText(report.report_date))}</span>
+        <span class="pe-rep-main"><strong>${escapeHtml(report.task_title || 'Task')}</strong><span class="pe-rep-sub">${escapeHtml(reporter)}</span></span>
+        <span class="pe-rep-num"><strong>${escapeHtml(result)}</strong><span class="pe-rep-sub">Total ${escapeHtml(running)}</span></span>
+        <span class="pe-rep-chev" aria-hidden="true"></span>
+      </summary>
+      <div class="pe-rep-body">
+        <div class="pe-label">Work done</div>
+        <div class="pe-text">${escapeHtml(report.work_done || report.notes || 'No description.')}</div>
+        ${files ? `<div class="pe-label" style="margin-top:10px;">Evidence</div>${files}` : ''}
+      </div>
+    </details>`;
+  }).reverse() : [];
   const consultantContractorView = viewerSide === 'Consultant' && activity.side === 'Contractor';
   const progressPanel = clientView ? `
     <div class="pe-panel">
@@ -17315,9 +17371,9 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
     </div>
     ${_peWorkByTaskHtml(card.work_by_task, activity.unit, 'Approved work by task (current)', 'This activity has no tasks yet.')}` : `
     <div class="pe-panel" style="padding:0;overflow:hidden;">
-      ${orderedReports.length ? `<div style="overflow:auto;"><table class="pe-table">
-        <thead><tr>${['Date','Task','Reported by','Approved work','Running total','Work done','Evidence'].map(label => `<th style="color:#475569;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;">${label}</th>`).join('')}</tr></thead>
-        <tbody>${reportRows}</tbody></table></div>` : '<p style="color:#475569;padding:16px;margin:0;">No approved task reports have been recorded yet.</p>'}
+      ${reportRows.length ? `${reportRows.slice(0, 5).join('')}${reportRows.length > 5
+        ? `<details class="pe-rep-more"><summary>Show ${reportRows.length - 5} earlier report${reportRows.length - 5 === 1 ? '' : 's'}</summary>${reportRows.slice(5).join('')}</details>` : ''}`
+        : '<p style="color:#475569;padding:16px;margin:0;">No approved task reports have been recorded yet.</p>'}
     </div>
     <p style="font-size:12px;color:#475569;margin:10px 0 0;">Only approved reports are listed. Reports waiting for review are on the task rows above.</p>`}`;
   const verificationPanel = canCertify
@@ -17328,6 +17384,13 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
     ${hideTasksTab ? '' : `<div class="pe-label" style="margin:0 0 8px;">Tasks</div>${taskPane}`}
     <div class="pe-label" style="margin:${hideTasksTab ? '0' : '18px'} 0 8px;">${clientView ? 'Certified progress' : 'Approved reports'}</div>
     ${progressPanel}`;
+  const pendingReviews = verifications.filter(item => item.status === 'pending').length;
+  const primaryBar = (() => {
+    if (canCertify && pendingReviews) return `<div class="pe-primary-bar"><button type="button" class="rc-btn" data-pe-goto="certification">Review requests (${pendingReviews})</button></div>`;
+    if (!hideTasksTab && card.can_add_task) return `<div class="pe-primary-bar"><button type="button" class="rc-btn" data-pe-action="add-task" data-activity-id="${escapeHtml(String(activity.id))}">Add task</button></div>`;
+    if (canCertify) return `<div class="pe-primary-bar"><button type="button" class="rc-btn" data-pe-goto="certification">Request review</button></div>`;
+    return '';
+  })();
   const panes = {
     overview,
     work: workPane,
@@ -17335,7 +17398,7 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
     certification: verificationPanel,
   };
   return `
-    <div style="background:var(--section-bg);border:1px solid var(--section-border);border-radius:var(--section-radius);overflow:hidden;">
+    <div style="background:var(--section-bg);border:1px solid var(--section-border);border-radius:var(--section-radius);overflow:clip;">
       <nav aria-label="Where you are" class="pe-crumbs">
         ${milestoneTitle ? `<button type="button" class="pe-crumb" data-pe-action="open-milestone"
           data-milestone-kind="${activity.baseline_milestone_id ? 'baseline' : 'additional'}"
@@ -17345,18 +17408,28 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
       </nav>
       <div class="pe-kpis">
         ${(() => {
-          const variance = Math.round((progress - plannedToday) * 10) / 10;
           const kpi = (label, value, color) => `<div class="pe-kpi"><div class="pe-kpi-l">${label}</div><div class="pe-kpi-v"${color ? ` style="color:${color};"` : ''}>${value}</div></div>`;
-          return [
-            kpi('Planned today', `${plannedToday}%`),
-            kpi(clientView ? 'Certified' : 'Actual', `${progress}%`),
-            kpi('Variance', `${variance > 0 ? '+' : variance < 0 ? '−' : ''}${Math.abs(variance)}%`, variance < 0 ? '#b91c1c' : variance > 0 ? '#15803d' : ''),
-            ...(activity.drives_milestone && !clientView ? [kpi('Certified', `${certified}%`, '#0f766e')] : []),
-          ].join('');
+          if (clientView) return kpi('Certified', `${certified}%`, '#0f766e');
+          return kpi('Claimed', `${progress}%`) + (activity.drives_milestone ? kpi('Certified', `${certified}%`, '#0f766e') : '');
         })()}
       </div>
+      ${clientView ? '' : `<details class="pe-more-figs">
+        <summary>More figures</summary>
+        <div class="pe-kpis">
+          ${(() => {
+            const variance = Math.round((progress - plannedToday) * 10) / 10;
+            const kpi = (label, value, color) => `<div class="pe-kpi"><div class="pe-kpi-l">${label}</div><div class="pe-kpi-v"${color ? ` style="color:${color};"` : ''}>${value}</div></div>`;
+            return [
+              kpi('Planned today', `${plannedToday}%`),
+              kpi('Variance', `${variance > 0 ? '+' : variance < 0 ? '−' : ''}${Math.abs(variance)}%`, variance < 0 ? '#b91c1c' : variance > 0 ? '#15803d' : ''),
+              kpi('Reported work', actual),
+            ].join('');
+          })()}
+        </div>
+      </details>`}
       <nav aria-label="Activity details" class="detail-tab-list">${tabButtons}</nav>
       <div style="padding:16px;background:#f8fafc;">${tabs.map(([id]) => `<div data-pe-pane="${id}" style="display:${id === activeTab ? 'block' : 'none'};">${panes[id] || ''}</div>`).join('')}</div>
+      ${primaryBar}
     </div>`;
 }
 
@@ -17635,6 +17708,10 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
     container.querySelectorAll('[data-pe-pane]').forEach(pane => {
       pane.style.display = pane.getAttribute('data-pe-pane') === tab ? 'block' : 'none';
     });
+  }));
+  container.querySelectorAll('[data-pe-goto]').forEach(button => button.addEventListener('click', () => {
+    container.querySelector(`[data-pe-tab="${button.getAttribute('data-pe-goto')}"]`)?.click();
+    container.querySelector('.detail-tab-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }));
   container.querySelectorAll('[data-pe-attachment-preview]').forEach(button => {
     button.addEventListener('click', () => _openAttachmentPreviewModal(
