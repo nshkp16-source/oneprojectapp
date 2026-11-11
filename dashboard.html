@@ -51,6 +51,12 @@
       --c-mustard:     #f5deb3;
       --c-panel-white: #ffffff;
     }
+    const resources = _pe2ReadResources(document.getElementById('pe2-resource-rows'), {
+      row: '[data-pe2-resource-row]', type: '[data-pe2-resource-type]', name: '[data-pe2-resource-name]',
+      quantity: '[data-pe2-resource-quantity]', unit: '[data-pe2-resource-unit]', hours: '[data-pe2-resource-hours]',
+    });
+    if (resources.some((row) => !row.name && (row.planned_quantity || row.unit || row.planned_hours)))
+      return 'Give each planned resource a name, or remove the empty row.';
 
     /* ══════════════════════════════════════════════
        RESET
@@ -7643,9 +7649,9 @@ function openActualProgressPage(savedSchedule) {
                   <span>${Number(e.derived_progress_pct) || 0}% certified milestone progress</span>
                 </div>
                 ${(e.contributions || []).filter(item => Number(item.certified_progress_pct) > 0).map(item => `
-                  <div style="margin-top:6px;padding-left:10px;color:#475569;font-size:12px;">
+                  <button type="button" data-p3-open-activity-report="${escapeHtml(String(item.activity_id))}" style="display:block;margin-top:6px;padding:0 0 0 10px;border:0;background:transparent;color:#0369a1;font:inherit;font-size:12px;text-align:left;text-decoration:underline;cursor:pointer;">
                     ${escapeHtml(item.title || `Activity ${item.activity_id}`)} · ${Number(item.weight_pct) || 0}% share · ${Number(item.certified_progress_pct) || 0}% certified
-                  </div>`).join('') || '<div style="margin-top:6px;color:#64748b;font-size:12px;">No activity progress had been certified at this point.</div>'}
+                  </button>`).join('') || '<div style="margin-top:6px;color:#64748b;font-size:12px;">No activity progress had been certified at this point.</div>'}
               </div>`
             : `<div class="p3-log-row" style="display:flex;align-items:center;gap:12px;padding:10px 20px;border-bottom:1px solid #f0f5f4;min-width:max-content;">
                 <div style="font-size:11px;font-family:var(--font-mono);color:${accentColor};font-weight:500;min-width:90px;">${e.date}</div>
@@ -7653,7 +7659,7 @@ function openActualProgressPage(savedSchedule) {
                 <div style="font-size:12px;color:#6b8f8a;min-width:200px;">${e.remarks || '—'}</div>
                 <div style="font-size:11px;font-family:var(--font-mono);color:var(--c-faint);min-width:120px;">${e.cumulative} ${ms.unit || ''} total</div>
                 ${AppState.canWrite && !completed && !contractorManualProgressBlocked ? `<div style="display:flex;gap:6px;margin-left:auto;"><button class="sc-btn sc-btn-ghost p3-entry-edit" data-entry-id="${e.id}" style="padding:4px 8px;font-size:11px;">Edit</button><button class="sc-btn sc-btn-danger p3-entry-delete" data-entry-id="${e.id}" style="padding:4px 8px;font-size:11px;">Delete</button></div>` : ''}
-              </div>`).join('')
+              </div>`)
         }
       </div>
     </div>
@@ -7661,6 +7667,9 @@ function openActualProgressPage(savedSchedule) {
     <!-- PROGRESS ENTRY: kept last so the current milestone and history are visible first -->
     ${progressEntryHTML(ms, planned, exec, completed, accentColor)}`;
 
+    el.querySelectorAll('[data-p3-open-activity-report]').forEach((button) => {
+      button.addEventListener('click', () => window._openMilestoneActivityReport(button.dataset.p3OpenActivityReport));
+    });
     if (ms.progress_source === 'activities') loadActivityMilestoneDetail(ms, token, isExtMs);
 
     if (AppState.canWrite && !completed) {
@@ -12919,8 +12928,9 @@ async function _openActivityVerificationNotification(verificationId, resolvedTar
   }
   const activityId = target?.recordId;
   if (!activityId) return fail('not_found', 'This verification request is no longer linked to an activity.');
+  const reviewTabKey = wcSide(window.currentUserRole) === 'Consultant' ? 'verify-work' : 'certification';
   try {
-    sessionStorage.setItem(`pe-activity-tab-${activityId}`, 'certification');
+    sessionStorage.setItem(`pe-activity-tab-${activityId}`, reviewTabKey);
     sessionStorage.setItem(`pe-verification-${activityId}`, String(verificationId));
   } catch (err) {
     console.error('Could not retain the verification destination:', err);
@@ -12935,7 +12945,7 @@ async function _openActivityVerificationNotification(verificationId, resolvedTar
     openedInList = await _openRecordNotification('planning_execution', activityId, 2500);
   }
   if (!openedInList) await _openActivityCardInPanel(activityId);
-  const tab = await _waitForElement(`${detailSelector} [data-pe-tab="certification"]`, openedInList ? 8000 : 1500);
+  const tab = await _waitForElement(`${detailSelector} [data-pe-tab="${reviewTabKey}"]`, openedInList ? 8000 : 1500);
   if (!tab) {
     // The card itself shows why it did not load (with a Try again button), so no extra alert is needed.
     if (document.querySelector(`${detailSelector} [data-pe-retry]`)) return true;
@@ -12957,7 +12967,7 @@ async function _openActivityVerificationNotification(verificationId, resolvedTar
 async function _openActivityCardInPanel(activityId) {
   // The panel appears at once with a loading message, then fills in when the activity arrives.
   expandGrayPart(`<section style="padding:18px;overflow:auto;height:100%;box-sizing:border-box;">
-      <button class="btn" type="button" onclick="collapseGrayPart()">← Back</button>
+      <button class="btn" type="button" onclick="collapseGrayPart()">← Back to list</button>
       <div id="pe-detail-inner-${escapeHtml(String(activityId))}" style="margin-top:12px;">
         <p style="color:#64748b;font-size:13px;" role="status">Loading the activity...</p></div></section>`);
   return _peLoadDetail(activityId, 'planning-execution');
@@ -14810,7 +14820,12 @@ function _wcMemberView(task, myEntries) {
         <div style="padding:10px;border:1px solid #e5e7eb;border-radius:8px;">
           <strong style="font-size:12px;">Resources used</strong>
           ${['manpower','equipment','material'].map((type) => `
-            <div style="display:grid;grid-template-columns:1.3fr .8fr .7fr .8fr 1.1fr;gap:6px;margin-top:7px;">
+            <div style="display:grid;grid-template-columns:1fr .8fr .7fr .8fr 1.1fr;gap:6px;margin-top:7px;">
+              <select id="wc-pr-resource-plan-${type}-${task.id}" aria-label="Planned ${type} resource" style="grid-column:1/-1;padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;">
+                <option value="">Other / unplanned</option>${(Array.isArray(task.planned_resources) ? task.planned_resources : [])
+                  .filter((resource) => resource.type === type).map((resource) =>
+                    `<option value="${escapeHtml(String(resource.id))}">${escapeHtml(resource.name)}${resource.planned_quantity != null ? ` · ${escapeHtml(String(resource.planned_quantity))}${resource.unit ? ` ${escapeHtml(resource.unit)}` : ''} planned` : ''}</option>`).join('')}
+              </select>
               <input id="wc-pr-resource-name-${type}-${task.id}" placeholder="${type[0].toUpperCase()+type.slice(1)} name" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
               <input id="wc-pr-resource-qty-${type}-${task.id}" type="number" min="0" step="any" placeholder="Quantity" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
               <input id="wc-pr-resource-unit-${type}-${task.id}" placeholder="Unit" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
@@ -14821,6 +14836,17 @@ function _wcMemberView(task, myEntries) {
               </select>
             </div>`).join('')}
         </div>
+        <details style="padding:10px;border:1px solid #e5e7eb;border-radius:8px;">
+          <summary style="cursor:pointer;font-size:12px;font-weight:700;">Site conditions (optional)</summary>
+          <div style="display:grid;gap:8px;margin-top:10px;">
+            <div>${_wcLabel('Weather')}<input id="wc-pr-weather-${task.id}" maxlength="100" placeholder="e.g. Light rain, 18°C"
+              style="width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box;"/></div>
+            <div>${_wcLabel('Safety note')}<textarea id="wc-pr-safety-${task.id}" maxlength="1000"
+              style="width:100%;min-height:50px;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box;"></textarea></div>
+            <div>${_wcLabel('Plan for tomorrow')}<textarea id="wc-pr-next-plan-${task.id}" maxlength="1000"
+              style="width:100%;min-height:50px;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box;"></textarea></div>
+          </div>
+        </details>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
           <div>${_wcLabel('Delay cause')}
             <select id="wc-pr-delay-cause-${task.id}" style="width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;">
@@ -15822,11 +15848,15 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
       unit: document.getElementById(`wc-pr-resource-unit-${type}-${taskId}`)?.value.trim() || '',
       hours: document.getElementById(`wc-pr-resource-hours-${type}-${taskId}`)?.value || '',
       assignedMemberId: document.getElementById(`wc-pr-resource-member-${type}-${taskId}`)?.value || null,
-    })).filter((resource) => resource.name);
+      plannedResourceId: document.getElementById(`wc-pr-resource-plan-${type}-${taskId}`)?.value || null,
+    })).filter((resource) => resource.name || resource.plannedResourceId);
     form.append('resources', JSON.stringify(resources));
     form.append('delayCause', document.getElementById(`wc-pr-delay-cause-${taskId}`)?.value || '');
     form.append('delayDays', String(_wcReportDelayDays(reportDate, task.end_date)));
     form.append('delayNote', document.getElementById(`wc-pr-delay-note-${taskId}`)?.value.trim() || '');
+    form.append('weather', document.getElementById(`wc-pr-weather-${taskId}`)?.value.trim() || '');
+    form.append('safetyNote', document.getElementById(`wc-pr-safety-${taskId}`)?.value.trim() || '');
+    form.append('nextPlan', document.getElementById(`wc-pr-next-plan-${taskId}`)?.value.trim() || '');
     const photoInput = document.getElementById(`wc-pr-photos-${taskId}`);
     const photos = Array.from(photoInput?.files || []);
     if (photos.length > 10) return alert('Choose no more than 10 photos.');
@@ -17030,6 +17060,13 @@ async function _peLoadDetail(recordId, tabKey) {
     }
     const selectedTab = sessionStorage.getItem(`pe-activity-tab-${recordId}`) || 'overview';
     const verificationId = sessionStorage.getItem(`pe-verification-${recordId}`);
+    try {
+      const report = await _peFetchActivityReport(recordId, projectId, verificationId || null);
+      card.report = report;
+    } catch (reportError) {
+      console.warn('Activity report could not be loaded for overview:', reportError);
+      card.report = null;
+    }
     container.innerHTML = _peActivityCardHtml(card, verificationData, selectedTab);
     _peWireActivityCard(recordId, card, task, verificationData);
     _peUpdateStatusBadge({ ...task, ...card.activity });
@@ -17054,6 +17091,388 @@ async function _peLoadDetail(recordId, tabKey) {
     });
     return { ok: false, error };
   }
+}
+
+async function _peFetchActivityReport(activityId, projectId, verificationId = null) {
+  const params = new URLSearchParams({ projectId: String(projectId) });
+  if (verificationId) params.set('verificationId', String(verificationId));
+  const response = await _wcFetch(`${API}/planning-execution/${encodeURIComponent(activityId)}/activity-report?${params.toString()}`);
+  if (!response) throw new Error('Your session could not be refreshed. Please sign in again.');
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+function _peReportPanelLine(label, value) {
+  const text = value == null || value === '' || value === '—' ? '—' : String(value);
+  return `<div><div style="font-size:11px;color:#475569;">${escapeHtml(label)}</div><div style="margin-top:2px;font-size:13px;line-height:1.5;overflow-wrap:anywhere;">${escapeHtml(text)}</div></div>`;
+}
+
+function _peActivityReportHtml(report) {
+  if (!report || typeof report !== 'object') return '<div class="pe-panel"><p style="margin:0;color:#64748b;">No report data is available for this activity yet.</p></div>';
+  const activity = report.activity || {};
+  const progress = report.progress || {};
+  const quantities = report.quantities || {};
+  const viewer = report.viewer || {};
+  const clientView = viewer.mode === 'client' || viewer.side === 'Client';
+  const sitePhotos = Array.isArray(report.site_photos) ? report.site_photos : [];
+  const pendingVerification = report.needs_verification || {};
+  const taskRows = Array.isArray(report.tasks) ? report.tasks : [];
+  const dailyLog = Array.isArray(report.daily_log) ? report.daily_log : [];
+  const resourceRows = Array.isArray(report.resources && report.resources.rows) ? report.resources.rows : [];
+  const photos = Array.isArray(report.photos) ? report.photos : [];
+  const attachments = Array.isArray(report.attachments) ? report.attachments : [];
+  const certificates = Array.isArray(report.certificates) ? report.certificates : [];
+  const delayRows = Array.isArray(report.delays) ? report.delays : [];
+  const safety = Array.isArray(report.safety) ? report.safety : [];
+  const nextPlan = report.next_period && report.next_period.text ? report.next_period.text : '';
+  const quality = report.quality || {};
+  const checklists = Array.isArray(quality.checklists) ? quality.checklists : [];
+  const holdPoints = Array.isArray(quality.hold_points) ? quality.hold_points : [];
+  const rework = Array.isArray(quality.rework) ? quality.rework : [];
+  const claimedPct = Number(progress.claimed_pct) || 0;
+  const certifiedPct = Number(progress.certified_pct) || 0;
+  const variance = Number(progress.variance_pct) || 0;
+  const unit = quantities.unit || activity.unit || '';
+  const amount = (value) => value == null ? '—' : `${value}${unit ? ` ${unit}` : ''}`;
+  const compactList = (rows, render, limit = 5) => {
+    const first = rows.slice(0, limit).map(render).join('');
+    const remaining = rows.slice(limit);
+    return first + (remaining.length
+      ? `<details style="margin-top:5px;"><summary style="cursor:pointer;font-size:12px;color:#0369a1;">Show ${remaining.length} more</summary>${remaining.map(render).join('')}</details>`
+      : '');
+  };
+  const section = (title, body, open = false) => `<details class="pe-panel pe-fold"${open ? ' open' : ''}>
+    <summary style="cursor:pointer;"><span class="pe-label">${escapeHtml(title)}</span><span class="pe-fold-hint" aria-hidden="true"></span></summary>
+    <div style="margin-top:10px;">${body}</div>
+  </details>`;
+  const pendingBlock = !clientView && (viewer.side === 'Consultant' || viewer.mode === 'own') && pendingVerification.report_ids?.length
+    ? `<div class="pe-panel" style="border-color:#f59e0b;background:#fffbeb;">
+        <strong style="font-size:13px;color:#92400e;">Work still needing verification</strong>
+        <div style="font-size:12px;color:#78350f;margin-top:4px;">
+          ${escapeHtml(String(pendingVerification.claimed_quantity_since ?? 0))}${unit ? ` ${escapeHtml(unit)}` : ''} claimed since
+          ${escapeHtml(pendingVerification.since_certificate_no || 'the last certificate')}.
+          ${pendingVerification.open_request_id ? 'A verification request is open.' : 'No verification request is open.'}
+        </div>
+      </div>` : '';
+  if (clientView) {
+    const clientPhotoHtml = sitePhotos.length
+      ? compactList(sitePhotos, (photo) => `<div style="display:inline-flex;flex-direction:column;vertical-align:top;margin:0 8px 8px 0;width:120px;">
+          ${photo.file_url ? `<img src="${escapeHtml(_thumbUrl(photo.file_url))}" alt="${escapeHtml(photo.file_name || 'Site photo')}" loading="lazy" style="width:120px;height:90px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0;">` : ''}
+          <span style="font-size:10px;color:#64748b;overflow-wrap:anywhere;">${escapeHtml(photo.file_name || 'Site photo')} · ${escapeHtml(photo.uploaded_at || '')}</span>
+        </div>`)
+      : '<p style="margin:0;color:#64748b;font-size:12px;">No site photos.</p>';
+    return `<div style="display:grid;gap:12px;">
+      <div class="pe-panel" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <div><div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#64748b;">Activity report</div>
+          <strong style="font-size:18px;color:#0f172a;display:block;margin-top:3px;">${escapeHtml(activity.title || 'Activity')}</strong></div>
+        <button type="button" class="rc-btn" data-pe-download-report>Download PDF</button>
+      </div>
+      <div class="pe-panel" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;">
+        ${_peReportPanelLine('Certified progress', `${certifiedPct}%`)}
+        ${_peReportPanelLine('Certified quantity', amount(quantities.certified))}
+        ${_peReportPanelLine('Planned quantity', amount(quantities.planned))}
+        ${_peReportPanelLine('Dates', activity.start_date && activity.end_date ? `${activity.start_date} to ${activity.end_date}` : '—')}
+        ${_peReportPanelLine('Milestone', activity.milestone?.title || '—')}
+      </div>
+      ${section('Site photos', clientPhotoHtml, true)}
+      ${section('Certificates', certificates.length ? compactList(certificates, (row) => `<div style="padding:8px 0;border-top:1px solid #e2e8f0;">
+        <strong style="font-size:12px;color:#1e293b;">${escapeHtml(row.certificate_no || 'Certificate')}</strong>
+        <div style="font-size:11px;color:#64748b;">${escapeHtml(row.status || 'Issued')} · ${escapeHtml(String(row.decided_at || '').slice(0, 10))}</div>
+        ${row.note ? `<div style="font-size:12px;color:#334155;margin-top:3px;">${escapeHtml(row.note)}</div>` : ''}
+      </div>`) : '<p style="margin:0;color:#64748b;font-size:12px;">No certificates yet.</p>')}
+    </div>`;
+  }
+  const dailyLogHtml = dailyLog.length
+    ? compactList(dailyLog, (entry) => `
+        <div style="padding:10px 0;border-top:1px solid #e2e8f0;">
+          <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:#475569;">
+            <strong style="color:#1e293b;">${escapeHtml(entry.date || 'Date')}</strong>
+            <span>${escapeHtml(entry.task_title || 'Task')} · ${escapeHtml(entry.reported_by_name || 'Team member')}</span>
+          </div>
+          <div style="margin-top:5px;font-size:12px;color:#334155;">${escapeHtml(entry.work_done || 'No task commentary recorded.')}</div>
+          ${entry.quantity != null ? `<div style="margin-top:4px;font-size:11px;color:#64748b;">Completed ${escapeHtml(String(entry.quantity))}${unit ? ` ${escapeHtml(unit)}` : ''} · Running total ${escapeHtml(String(entry.running_total ?? 0))}${unit ? ` ${escapeHtml(unit)}` : ''}</div>` : ''}
+          ${entry.weather ? `<div style="margin-top:3px;font-size:11px;color:#64748b;">Weather: ${escapeHtml(entry.weather)}</div>` : ''}
+        </div>`)
+    : '<div style="padding:10px 0;color:#64748b;">No approved work has been logged yet.</div>';
+  const resourceHtml = resourceRows.length
+    ? compactList(resourceRows, (row) => `
+        <div style="padding:8px 0;border-top:1px solid #e2e8f0;">
+          <div style="font-size:12px;font-weight:600;color:#1e293b;">${escapeHtml(row.name || row.type || 'Resource')}</div>
+          <div style="font-size:11px;color:#64748b;">${escapeHtml(row.type || 'resource')} · Planned ${row.planned_quantity != null ? `${escapeHtml(String(row.planned_quantity))} ${escapeHtml(row.unit || '')}` : '—'} · Used ${escapeHtml(String(row.used_quantity ?? 0))} ${escapeHtml(row.unit || '')}${row.planned_hours != null || row.used_hours != null ? ` · Hours ${row.used_hours == null ? '0' : escapeHtml(String(row.used_hours))} used${row.planned_hours != null ? ` of ${escapeHtml(String(row.planned_hours))} planned` : ''}` : ''}${row.linked === false ? ' · Unplanned' : ''}</div>
+        </div>`)
+    : '<div style="padding:8px 0;color:#64748b;">No planned resources recorded.</div>';
+  const attachmentGroups = [
+    { title: 'Activity planning attachments', rows: attachments.filter((file) => file.scope === 'activity') },
+    ...[...new Set(attachments.filter((file) => file.scope !== 'activity').map((file) => file.task_title || 'Task'))]
+      .map((taskTitle) => ({ title: `Task: ${taskTitle}`, rows: attachments.filter((file) => file.scope !== 'activity' && (file.task_title || 'Task') === taskTitle) })),
+  ].filter((group) => group.rows.length);
+  const attachmentHtml = attachmentGroups.length
+    ? attachmentGroups.map((group) => `<div style="margin-bottom:10px;"><strong style="font-size:12px;color:#334155;">${escapeHtml(group.title)}</strong>
+        ${compactList(group.rows, (file) => `<div style="padding:6px 0;border-top:1px solid #e2e8f0;overflow-wrap:anywhere;color:#334155;font-size:12px;">
+          ${escapeHtml(file.file_name || file.name || 'Attachment')}${file.date ? ` · ${escapeHtml(file.date)}` : ''}${file.type ? ` · ${escapeHtml(file.type)}` : ''}
+        </div>`)}</div>`).join('')
+    : '<div style="padding:8px 0;color:#64748b;">No activity attachments.</div>';
+  const qualityHtml = [
+    ...checklists.map((item) => `<div style="padding:6px 0;border-top:1px solid #e2e8f0;"><strong style="font-size:12px;color:#1e293b;">${escapeHtml(item.task_title || 'Task')}</strong><div style="font-size:12px;color:#475569;">${escapeHtml(item.title || 'Checklist')} — ${escapeHtml(String(item.done ?? 0))}/${escapeHtml(String(item.items ?? 0))}</div></div>`),
+    ...holdPoints.map((item) => `<div style="padding:6px 0;border-top:1px solid #e2e8f0;"><strong style="font-size:12px;color:#1e293b;">${escapeHtml(item.task_title || 'Task')}</strong><div style="font-size:12px;color:#475569;">${escapeHtml(item.title || 'Hold point')}${item.verified_at ? ` · Verified ${escapeHtml(item.verified_at)}` : ' · Pending verification'}</div></div>`),
+    ...rework.map((item) => `<div style="padding:6px 0;border-top:1px solid #e2e8f0;"><div style="font-size:12px;color:#1e293b;">${escapeHtml(item.kind || 'Rework')} · ${escapeHtml(item.status || 'Open')}</div><div style="font-size:12px;color:#475569;">${escapeHtml(item.reason || 'No reason recorded.')}</div></div>`),
+  ].join('') || '<p style="margin:0;color:#64748b;font-size:12px;">No quality items or hold points recorded.</p>';
+  const delayHtml = delayRows.length
+    ? compactList(delayRows, (row) => `<div style="padding:8px 0;border-top:1px solid #e2e8f0;"><div style="font-size:12px;font-weight:600;color:#1e293b;">${escapeHtml(row.cause || 'Delay')} · ${escapeHtml(row.date || '')}</div><div style="font-size:12px;color:#475569;">${escapeHtml(row.text || 'No notes available.')}${row.days != null ? ` · ${escapeHtml(String(row.days))} day(s)` : ''}</div></div>`)
+    : '<div style="padding:8px 0;color:#64748b;">No delays recorded.</div>';
+  const safetyHtml = safety.length
+    ? compactList(safety, (row) => `<div style="padding:8px 0;border-top:1px solid #e2e8f0;"><div style="font-size:12px;color:#475569;">${escapeHtml(row.date || '')} · ${escapeHtml(row.note || 'Safety note')}</div></div>`)
+    : '<div style="padding:8px 0;color:#64748b;">No safety notes recorded.</div>';
+  const taskProgressHtml = taskRows.length
+    ? `<div style="display:grid;gap:7px;">${compactList(taskRows, (task) => `<div style="padding:8px 0;border-top:1px solid #e2e8f0;">
+        <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;"><strong>${escapeHtml(task.title || 'Task')}</strong><span>${Number(task.progress_pct) || 0}% · ${Number(task.weight_pct) || 0}% share</span></div>
+        ${task.target_quantity != null ? `<div style="font-size:11px;color:#64748b;margin-top:3px;">Target ${escapeHtml(String(task.target_quantity))}${unit ? ` ${escapeHtml(unit)}` : ''}</div>` : ''}
+      </div>`)}</div>`
+    : '<p style="margin:0;color:#64748b;font-size:12px;">No task progress breakdown is available.</p>';
+  const photoGroups = new Map();
+  for (const photo of photos) {
+    const key = `${photo.task_title || 'Task'}|${photo.date || ''}`;
+    if (!photoGroups.has(key)) photoGroups.set(key, { task_title: photo.task_title || 'Task', date: photo.date || '', photos: [] });
+    photoGroups.get(key).photos.push(photo);
+  }
+  const photoRows = [...photoGroups.values()];
+  const photoHtml = photoRows.length
+    ? compactList(photoRows, (group) => `<div style="padding:8px 0;border-top:1px solid #e2e8f0;">
+        <strong style="font-size:12px;color:#334155;">${escapeHtml(group.task_title)} · ${escapeHtml(group.date || 'Date not recorded')}</strong>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">${group.photos.map((photo) => {
+          const safeUrl = _safeHttpsUrl(photo.file_url);
+          return `<div style="width:92px;min-width:0;">${safeUrl ? `<img src="${escapeHtml(_thumbUrl(safeUrl))}" alt="${escapeHtml(photo.file_name || 'Site photo')}" loading="lazy" style="width:92px;height:70px;object-fit:cover;border:1px solid #e5e7eb;border-radius:6px;display:block;">` : ''}
+            <div style="margin-top:4px;font-size:10px;color:#64748b;overflow-wrap:anywhere;">${escapeHtml(photo.file_name || 'Site photo')}</div></div>`;
+        }).join('')}</div>
+      </div>`)
+    : '<div style="padding:8px 0;color:#64748b;">No site photos.</div>';
+  const certHtml = certificates.length
+    ? compactList(certificates, (row) => `<div style="padding:10px 0;border-top:1px solid #e2e8f0;">
+        <div style="font-size:12px;font-weight:600;color:#1e293b;">${escapeHtml(row.certificate_no || row.kind || 'Certificate')}</div>
+        <div style="font-size:11px;color:#64748b;">${escapeHtml(row.status || 'Issued')} · ${escapeHtml(row.decided_at ? String(row.decided_at).slice(0, 10) : 'Date not set')}</div>
+        ${row.note ? `<div style="margin-top:4px;font-size:12px;color:#334155;">${escapeHtml(row.note)}</div>` : ''}
+        ${row.reason ? `<div style="margin-top:4px;font-size:12px;color:#64748b;">${escapeHtml(row.reason)}</div>` : ''}
+      </div>`)
+    : '<div style="padding:8px 0;color:#64748b;">No past certificates yet.</div>';
+  const progressBar = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;">
+    ${_peReportPanelLine('Planned today', `${Number(progress.planned_today_pct) || 0}%`)}
+    ${_peReportPanelLine('Variance', `${variance > 0 ? '+' : ''}${variance}%`)}
+    ${_peReportPanelLine('Required pace', progress.required_pace == null ? '—' : `${progress.required_pace}${unit ? ` ${unit}` : ''}/day`)}
+    ${_peReportPanelLine('Achieved pace', progress.achieved_pace == null ? '—' : `${progress.achieved_pace}${unit ? ` ${unit}` : ''}/day`)}
+    ${_peReportPanelLine('Days left', progress.days_left == null ? '—' : progress.days_left)}
+    </div><div style="height:8px;margin-top:10px;background:#e2e8f0;border-radius:99px;overflow:hidden;"><div style="height:100%;width:${Math.max(0, Math.min(100, claimedPct))}%;background:#0f766e;"></div></div>`;
+  const quantityHtml = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;">
+    ${_peReportPanelLine('Claimed', amount(quantities.claimed))}
+    ${_peReportPanelLine('Certified', amount(quantities.certified))}
+    ${_peReportPanelLine('Claimed not certified', amount(quantities.claimed_not_certified))}
+    ${_peReportPanelLine('Planned', amount(quantities.planned))}
+    ${_peReportPanelLine('Remaining', amount(quantities.remaining))}
+  </div>`;
+  return `
+    <div style="display:grid;gap:14px;">
+      <div class="pe-panel" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#64748b;">Activity report</div>
+          <strong style="font-size:18px;color:#0f172a;display:block;margin-top:3px;">${escapeHtml(activity.title || 'Activity')}</strong>
+        </div>
+        <button type="button" class="rc-btn" data-pe-download-report>Download PDF</button>
+      </div>
+      ${pendingBlock}
+      <div class="pe-panel" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
+        ${_peReportPanelLine('Claimed', `${claimedPct}%`)}
+        ${_peReportPanelLine('Certified', `${certifiedPct}%`)}
+        ${_peReportPanelLine('Variance', `${variance > 0 ? '+' : ''}${variance}%`)}
+        ${_peReportPanelLine('Planned quantity', `${quantities.planned != null ? `${quantities.planned} ${escapeHtml(activity.unit || '')}` : '—'}`)}
+      </div>
+      <div class="pe-panel" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
+        ${_peReportPanelLine('Scope', activity.description || 'No scope description provided.')}
+        ${_peReportPanelLine('Finished when', activity.done_when || 'No completion condition provided.')}
+        ${_peReportPanelLine('Dates', activity.start_date && activity.end_date ? `${activity.start_date} to ${activity.end_date}` : '—')}
+        ${_peReportPanelLine('Milestone', activity.milestone ? `${activity.milestone.title || 'Milestone'}${activity.milestone.id ? ` (${activity.milestone.id})` : ''}` : '—')}
+      </div>
+      <div class="pe-panel">
+        <div class="pe-label">Plan details</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px;margin-top:12px;">
+          ${_peReportPanelLine('Work', activity.legacy_planned?.work || '—')}
+          ${_peReportPanelLine('Manpower', activity.legacy_planned?.manpower || '—')}
+          ${_peReportPanelLine('Equipment', activity.legacy_planned?.equipment || '—')}
+          ${_peReportPanelLine('Materials', activity.legacy_planned?.materials || '—')}
+        </div>
+      </div>
+      ${section('Progress against plan', taskProgressHtml + progressBar, true)}
+      ${section('Quantities', quantityHtml)}
+      ${section('Daily log', dailyLogHtml)}
+      ${section('Planned versus used resources', resourceHtml)}
+      ${section('Quality / checks', qualityHtml)}
+      ${section('Delays', delayHtml)}
+      ${section('Safety', safetyHtml)}
+      ${section('Photos', photoHtml)}
+      ${section('Attachments', attachmentHtml)}
+      ${section('Next period', nextPlan ? `<div style="font-size:12px;color:#334155;line-height:1.6;">${escapeHtml(nextPlan)}</div>` : '<p style="margin:0;color:#64748b;font-size:12px;">No next-period plan recorded.</p>')}
+      ${section('Certificates', certHtml)}
+    </div>`;
+}
+
+async function _peDownloadActivityReportPdf(report) {
+  if (!window.PDFLib) throw new Error('The PDF library is unavailable. Reload the page and try again.');
+  const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
+  const activity = (report && report.activity) || {};
+  const clientView = report?.viewer?.mode === 'client' || report?.viewer?.side === 'Client';
+  const unit = report?.quantities?.unit || activity.unit || '';
+  const pdfDoc = await PDFDocument.create();
+  const pageSize = [595.28, 841.89];
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const ink = rgb(0.12, 0.18, 0.24);
+  const muted = rgb(0.35, 0.4, 0.45);
+  const plain = (value) => String(value ?? '').normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7e]/g, '-');
+  const pages = [];
+  let page, y;
+  const addPage = () => {
+    page = pdfDoc.addPage(pageSize);
+    pages.push(page);
+    y = 795;
+    page.drawText('ONEPROJECTAPP  |  ACTIVITY REPORT', { x: 42, y: 814, size: 8, font: bold, color: muted });
+    page.drawLine({ start: { x: 42, y: 806 }, end: { x: 553, y: 806 }, thickness: 0.7, color: rgb(0.82, 0.86, 0.89) });
+  };
+  const wrap = (text, size, face, maxWidth) => {
+    const words = plain(text).split(/\s+/);
+    const lines = [];
+    let line = '';
+    for (const word of words) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (line && face.widthOfTextAtSize(candidate, size) > maxWidth) {
+        lines.push(line);
+        line = word;
+      } else line = candidate;
+    }
+    if (line) lines.push(line);
+    return lines;
+  };
+  const write = (text, { size = 9, face = font, indent = 0, gap = 3, color = ink } = {}) => {
+    for (const line of wrap(text, size, face, 511 - indent)) {
+      if (y < 58) addPage();
+      page.drawText(line, { x: 42 + indent, y, size, font: face, color });
+      y -= size + gap;
+    }
+  };
+  const heading = (title) => {
+    y -= 6;
+    if (y < 75) addPage();
+    write(title.toUpperCase(), { size: 10, face: bold, color: rgb(0.02, 0.37, 0.42), gap: 5 });
+  };
+  addPage();
+  write(activity.title || 'Activity report', { size: 19, face: bold, gap: 8 });
+  write(`As of ${report?.as_of_date || 'today'}`, { size: 9, color: muted });
+  const progress = report?.progress || {};
+  const quantities = report?.quantities || {};
+  const qtyText = (value) => value == null ? '—' : `${value}${unit ? ` ${unit}` : ''}`;
+  if (clientView) {
+    heading('Summary');
+    write(`Certified progress: ${Number(progress.certified_pct) || 0}%`);
+    write(`Certified quantity: ${qtyText(quantities.certified)}  |  Planned quantity: ${qtyText(quantities.planned)}`);
+    write(`Dates: ${activity.start_date || '—'} to ${activity.end_date || '—'}`);
+    write(`Milestone: ${activity.milestone?.title || '—'}`);
+  } else {
+    heading('Summary and numbers');
+    write(`Claimed: ${Number(progress.claimed_pct) || 0}%  |  Certified: ${Number(progress.certified_pct) || 0}%  |  Variance: ${Number(progress.variance_pct) || 0}%`);
+    write(`Dates: ${activity.start_date || '—'} to ${activity.end_date || '—'}  |  Status: ${activity.status || '—'}`);
+    write(`Milestone: ${activity.milestone?.title || '—'}  |  Scope: ${activity.description || 'No scope description provided.'}`);
+    const needs = report?.needs_verification;
+    if (needs?.report_ids?.length) write(`Work still needing verification: ${needs.claimed_quantity_since ?? 0}${unit ? ` ${unit}` : ''} since ${needs.since_certificate_no || 'the last certificate'}.`);
+    heading('Plan details');
+    write(`Finished when: ${activity.done_when || '—'}`);
+    write(`Planned work: ${activity.legacy_planned?.work || '—'}  |  Manpower: ${activity.legacy_planned?.manpower || '—'}`);
+    write(`Equipment: ${activity.legacy_planned?.equipment || '—'}  |  Materials: ${activity.legacy_planned?.materials || '—'}`);
+    heading('Progress against plan');
+    write(`Planned today: ${Number(progress.planned_today_pct) || 0}%  |  Claimed: ${Number(progress.claimed_pct) || 0}%  |  Variance: ${Number(progress.variance_pct) || 0}%`);
+    write(`Required pace: ${progress.required_pace ?? '—'}${unit ? ` ${unit}` : ''}/day  |  Achieved pace: ${progress.achieved_pace ?? '—'}${unit ? ` ${unit}` : ''}/day  |  Days left: ${progress.days_left ?? '—'}`);
+    for (const task of report?.tasks || [])
+      write(`${task.title || 'Task'}: ${Number(task.progress_pct) || 0}% progress, ${Number(task.weight_pct) || 0}% share${task.target_quantity != null ? `, target ${task.target_quantity}${unit ? ` ${unit}` : ''}` : ''}`, { indent: 8 });
+    heading('Quantities');
+    write(`Claimed: ${qtyText(quantities.claimed)}  |  Certified: ${qtyText(quantities.certified)}  |  Claimed not certified: ${qtyText(quantities.claimed_not_certified)}`);
+    write(`Planned: ${qtyText(quantities.planned)}  |  Remaining: ${qtyText(quantities.remaining)}`);
+    heading('Daily log');
+    for (const entry of report?.daily_log || [])
+      write(`${entry.date || 'Date'} · ${entry.task_title || 'Task'} · ${entry.reported_by_name || 'Team member'}: ${entry.work_done || 'No work details'}${entry.quantity != null ? `; completed ${entry.quantity}${unit ? ` ${unit}` : ''}, running total ${entry.running_total ?? 0}${unit ? ` ${unit}` : ''}` : ''}`, { indent: 8 });
+    heading('Planned versus used resources');
+    for (const row of report?.resources?.rows || [])
+      write(`${row.type || 'Resource'} — ${row.name || ''}: planned ${row.planned_quantity ?? '—'} ${row.unit || ''}, used ${row.used_quantity ?? 0} ${row.unit || ''}${row.planned_hours != null || row.used_hours != null ? `; hours ${row.used_hours ?? 0} used of ${row.planned_hours ?? '—'} planned` : ''}${row.linked === false ? ' (unplanned)' : ''}`, { indent: 8 });
+    heading('Quality / checks');
+    for (const item of report?.quality?.checklists || [])
+      write(`${item.task_title || 'Task'} — ${item.title || 'Checklist'}: ${item.done ?? 0} of ${item.items ?? 0} items done`, { indent: 8 });
+    for (const item of report?.quality?.hold_points || [])
+      write(`${item.task_title || 'Task'} — hold point ${item.title || ''}: ${item.verified_at ? `verified ${item.verified_at}` : 'pending verification'}`, { indent: 8 });
+    for (const item of report?.quality?.rework || [])
+      write(`${item.kind || 'Rework'} · ${item.status || 'Open'}: ${item.reason || 'No reason recorded.'}`, { indent: 8 });
+    heading('Delays');
+    for (const item of report?.delays || [])
+      write(`${item.date || 'Date'} · ${item.cause || 'Delay'}${item.days ? ` · ${item.days} day(s)` : ''}: ${item.text || 'No notes recorded.'}`, { indent: 8 });
+    heading('Safety');
+    for (const item of report?.safety || []) write(`${item.date || 'Date'}: ${item.note || 'Safety note'}`, { indent: 8 });
+  }
+  heading(clientView ? 'Site photos' : 'Photos');
+  const photos = clientView ? (report?.site_photos || []) : (report?.photos || []);
+  const embeddedLimit = Math.min(12, photos.length);
+  for (let index = 0; index < photos.length; index++) {
+    const photo = photos[index];
+    const label = `${photo.task_title ? `${photo.task_title} · ` : ''}${photo.date || photo.uploaded_at || ''} · ${photo.file_name || 'Site photo'}`;
+    if (index >= embeddedLimit) { write(label, { indent: 8, color: muted }); continue; }
+    const safeUrl = _safeHttpsUrl(photo.file_url);
+    if (!safeUrl) { write(`${label} (image unavailable)`, { indent: 8, color: muted }); continue; }
+    try {
+      const response = await fetch(safeUrl, { mode: 'cors' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const bitmap = await createImageBitmap(await response.blob());
+      const scale = Math.min(1, 1000 / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+      const jpeg = await new Promise((resolve, reject) => canvas.toBlob((blob) =>
+        blob ? resolve(blob) : reject(new Error('Photo could not be resized.')), 'image/jpeg', 0.82));
+      const image = await pdfDoc.embedJpg(await jpeg.arrayBuffer());
+      const dimensions = image.scale(Math.min(128 / image.width, 78 / image.height));
+      if (y < 150) addPage();
+      page.drawImage(image, { x: 50, y: y - dimensions.height, width: dimensions.width, height: dimensions.height });
+      page.drawText(plain(label).slice(0, 90), { x: 190, y: y - 12, size: 8, font, color: muted });
+      y -= dimensions.height + 8;
+    } catch (error) {
+      console.warn('Activity report photo could not be embedded in the PDF:', photo.file_name, error);
+      write(`${label} (photo could not be embedded)`, { indent: 8, color: muted });
+    }
+  }
+  if (!clientView) {
+    heading('Attachments');
+    for (const file of report?.attachments || [])
+      write(`${file.scope === 'activity' ? 'Activity' : file.task_title || 'Task'} · ${file.date || ''} · ${file.file_name || 'Attachment'}${file.type ? ` · ${file.type}` : ''}`, { indent: 8 });
+    heading('Next period');
+    write(report?.next_period?.text || 'No next-period plan recorded.', { indent: 8 });
+  }
+  heading('Certificates');
+  for (const row of report?.certificates || [])
+    write(`${row.certificate_no || 'Certificate'} · ${row.status || 'Issued'} · ${String(row.decided_at || '').slice(0, 10)}${row.note ? `: ${row.note}` : ''}${row.reason ? `; ${row.reason}` : ''}`, { indent: 8 });
+
+  pages.forEach((currentPage, index) => {
+    currentPage.drawLine({ start: { x: 42, y: 38 }, end: { x: 553, y: 38 }, thickness: 0.7, color: rgb(0.82, 0.86, 0.89) });
+    currentPage.drawText(`${index + 1} / ${pages.length}`, { x: 500, y: 24, size: 8, font, color: muted });
+    currentPage.drawText(`Generated ${report?.generated_at ? String(report.generated_at).slice(0, 10) : new Date().toISOString().slice(0, 10)}`, { x: 42, y: 24, size: 8, font, color: muted });
+  });
+  const bytes = await pdfDoc.save();
+  const blob = new Blob([bytes], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const code = plain(activity.code || activity.id || 'Activity').replace(/[^a-z0-9-_]+/gi, '-');
+  const reportDate = plain(report?.as_of_date || new Date().toISOString().slice(0, 10));
+  a.download = `Activity_Report_${code}_${reportDate}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
 window._peSharedEvidenceHtml = function (list, unit) {
@@ -17188,18 +17607,25 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
   const rework = verificationData.rework || [];
   const viewerSide = card.viewer_side;
   const clientView = viewerSide === 'Client';
+  const reportFiles = clientView ? [] : (Array.isArray(card.report?.attachments) ? card.report.attachments : []);
   // Tasks are the contractor's internal breakdown. The client and the consultant (viewing a contractor activity) do not get this tab.
   const hideTasksTab = clientView || (viewerSide === 'Consultant' && activity.side === 'Contractor');
   const canEditAttachments = Boolean(card.can_edit_activity);
-  const canCertify = Boolean(activity.drives_milestone && activity.side === 'Contractor' && viewerSide !== 'Client');
+  const pendingReviewCount = verifications.filter(item => item.status === 'pending').length;
+  const canCertify = Boolean(activity.drives_milestone && activity.side === 'Contractor' && viewerSide !== 'Client'
+    && (viewerSide !== 'Consultant' || pendingReviewCount > 0));
   const tabs = [
     ['overview', 'Overview'],
     ['work', 'Work', hideTasksTab ? 0 : tasks.length],
-    ...(canCertify ? [['certification', 'Review', verifications.filter(item => item.status === 'pending').length, true]] : []),
-    ['attachments', 'Files', attachments.length + (activity.linked_file_name ? 1 : 0)],
+    ...(canCertify ? [[viewerSide === 'Consultant' ? 'verify-work' : 'certification',
+      viewerSide === 'Consultant' ? 'Verify' : 'Review', pendingReviewCount, true]] : []),
+    ...(!clientView ? [['attachments', 'Files', reportFiles.length || attachments.length + (activity.linked_file_name ? 1 : 0)]] : []),
   ];
   // Older saved tab keys (tasks, progress) now live inside the Work tab.
-  const legacyTabKeys = { tasks: 'work', progress: 'work' };
+  const legacyTabKeys = {
+    tasks: 'work', progress: 'work',
+    certification: viewerSide === 'Consultant' ? 'verify-work' : 'certification',
+  };
   const requestedTab = legacyTabKeys[selectedTab] || selectedTab;
   const activeTab = tabs.some(([id]) => id === requestedTab) ? requestedTab : 'overview';
   const certified = Math.max(0, Math.min(100, Number(activity.certified_progress_pct) || 0));
@@ -17232,7 +17658,7 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
     <button class="detail-tab" type="button"
       data-pe-tab="${id}" aria-selected="${id === activeTab ? 'true' : 'false'}">${escapeHtml(label)}${count ? ` <span class="detail-tab-count${warn ? ' pe-tab-count--warn' : ''}">${count}</span>` : ''}</button>`).join('');
   const resCell = (label, value) => `<div><div style="font-size:11px;color:#475569;">${label}</div><div style="margin-top:2px;font-size:13px;line-height:1.5;overflow-wrap:anywhere;">${escapeHtml(String(value || '—'))}</div></div>`;
-  const overview = `
+  const overview = card.report ? _peActivityReportHtml(card.report) : `
     <section style="display:grid;gap:14px;">
       <div class="pe-panel" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:24px;">
         <div><div class="pe-label">Scope</div><div class="pe-text">${escapeHtml(activity.description || 'No scope description provided.')}</div></div>
@@ -17250,28 +17676,45 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
         ${activity.linked_file_name ? `Plan file: ${escapeHtml(activity.linked_file_name)} · ` : ''}Created ${escapeHtml(dateText(activity.created_at))}${activity.creator_role ? ` by ${escapeHtml(activity.creator_role)}` : ''}
       </div>
     </section>`;
+  const activityAttachmentIds = new Map(attachments.map((file) => [`${file.file_name}|${file.file_url}`, file.id]));
   const attachmentItems = [
-    ...(activity.linked_file_name ? [{
-      legacy: true, file_name: activity.linked_file_name, file_url: activity.linked_file_url,
+    ...(activity.linked_file_name && !reportFiles.some((file) => file.file_url === activity.linked_file_url) ? [{
+      legacy: true, scope: 'activity', file_name: activity.linked_file_name, file_url: activity.linked_file_url,
       mime_type: '',
     }] : []),
-    ...attachments,
-  ];
+    ...reportFiles.map((file) => ({
+      ...file,
+      id: file.scope === 'activity' ? activityAttachmentIds.get(`${file.file_name}|${file.file_url}`) : null,
+      legacy: file.scope === 'activity' && !activityAttachmentIds.has(`${file.file_name}|${file.file_url}`),
+    })),
+    ...(!reportFiles.length ? attachments.map((file) => ({ ...file, scope: 'activity' })) : []),
+  ].sort((a, b) => String(a.date || a.created_at || '').localeCompare(String(b.date || b.created_at || '')));
+  const fileGroups = [
+    { title: 'Activity planning attachments', files: attachmentItems.filter((file) => file.scope === 'activity') },
+    ...[...new Set(attachmentItems.filter((file) => file.scope !== 'activity').map((file) => file.task_title || 'Task'))]
+      .map((taskTitle) => ({ title: `Task: ${taskTitle}`, files: attachmentItems.filter((file) => file.scope !== 'activity' && (file.task_title || 'Task') === taskTitle) })),
+  ].filter((group) => group.files.length);
   const attachmentPanel = `
     <section class="pe-panel">
-      ${attachmentItems.length ? attachmentItems.map(file => `
-        <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #e2e8f0;">
-          ${file.file_url
-            ? `<button type="button" data-pe-attachment-preview="${escapeHtml(file.file_url)}"
-                data-pe-attachment-name="${escapeHtml(file.file_name)}" data-pe-attachment-mime="${escapeHtml(file.mime_type || '')}"
-                style="padding:0;border:0;background:none;color:#0369a1;cursor:pointer;text-align:left;overflow-wrap:anywhere;">${escapeHtml(file.file_name)}</button>`
-            : `<span style="font-size:13px;color:#334155;">${escapeHtml(file.file_name)}</span>`}
-          ${file.file_url ? `<button type="button" data-ev-download data-ev-url="${escapeHtml(file.file_url)}" data-ev-name="${escapeHtml(_fileDisplayName(file))}"
-            style="padding:3px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#334155;cursor:pointer;">Download</button>` : ''}
-          ${canEditAttachments && !file.legacy
-            ? `<button type="button" data-pe-attachment-delete="${escapeHtml(String(file.id))}"
-                style="padding:3px 7px;border:1px solid #fecaca;border-radius:5px;background:#fff;color:#b91c1c;cursor:pointer;">Remove</button>` : ''}
-        </div>`).join('') : '<p style="font-size:13px;color:#64748b;margin:0;">No attachments yet.</p>'}
+      ${fileGroups.length ? fileGroups.map((group) => `<div style="margin-bottom:14px;">
+        <strong style="font-size:12px;color:#334155;">${escapeHtml(group.title)}</strong>
+        ${group.files.map((file) => {
+          const safeUrl = _safeHttpsUrl(file.file_url);
+          return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #e2e8f0;flex-wrap:wrap;">
+            ${safeUrl
+              ? `<button type="button" data-pe-attachment-preview="${escapeHtml(safeUrl)}"
+                  data-pe-attachment-name="${escapeHtml(file.file_name)}" data-pe-attachment-mime="${escapeHtml(file.mime_type || '')}"
+                  style="padding:0;border:0;background:none;color:#0369a1;cursor:pointer;text-align:left;overflow-wrap:anywhere;">${escapeHtml(file.file_name)}</button>`
+              : `<span style="font-size:13px;color:#334155;">${escapeHtml(file.file_name)}</span>`}
+            <span style="font-size:11px;color:#64748b;">${escapeHtml(file.date || '')}${file.type ? ` · ${escapeHtml(file.type)}` : ''}</span>
+            ${safeUrl ? `<button type="button" data-ev-download data-ev-url="${escapeHtml(safeUrl)}" data-ev-name="${escapeHtml(_fileDisplayName(file))}"
+              style="padding:3px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#334155;cursor:pointer;">Download</button>` : ''}
+            ${canEditAttachments && file.scope === 'activity' && file.id
+              ? `<button type="button" data-pe-attachment-delete="${escapeHtml(String(file.id))}"
+                  style="padding:3px 7px;border:1px solid #fecaca;border-radius:5px;background:#fff;color:#b91c1c;cursor:pointer;">Remove</button>` : ''}
+          </div>`;
+        }).join('')}
+      </div>`).join('') : '<p style="font-size:13px;color:#64748b;margin:0;">No attachments yet.</p>'}
       ${canEditAttachments ? `<div style="display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap;">
         <input type="file" data-pe-attachment-input multiple style="font-size:12px;max-width:100%;"/>
         <button type="button" data-pe-attachment-upload
@@ -17351,7 +17794,7 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
       <div class="pe-rep-body">
         <div class="pe-label">Work done</div>
         <div class="pe-text">${escapeHtml(report.work_done || report.notes || 'No description.')}</div>
-        ${files ? `<div class="pe-label" style="margin-top:10px;">Evidence</div>${files}` : ''}
+        <div class="pe-label" style="margin-top:10px;">Evidence</div>${files || '<span style="color:#94a3b8;">None</span>'}
       </div>
     </details>`;
   }).reverse() : [];
@@ -17384,11 +17827,12 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
     ${hideTasksTab ? '' : `<div class="pe-label" style="margin:0 0 8px;">Tasks</div>${taskPane}`}
     <div class="pe-label" style="margin:${hideTasksTab ? '0' : '18px'} 0 8px;">${clientView ? 'Certified progress' : 'Approved reports'}</div>
     ${progressPanel}`;
-  const pendingReviews = verifications.filter(item => item.status === 'pending').length;
+  const pendingReviews = pendingReviewCount;
+  const reviewTabKey = viewerSide === 'Consultant' ? 'verify-work' : 'certification';
   const primaryBar = (() => {
-    if (canCertify && pendingReviews) return `<div class="pe-primary-bar"><button type="button" class="rc-btn" data-pe-goto="certification">Review requests (${pendingReviews})</button></div>`;
+    if (canCertify && pendingReviews) return `<div class="pe-primary-bar"><button type="button" class="rc-btn" data-pe-goto="${reviewTabKey}">Review requests (${pendingReviews})</button></div>`;
     if (!hideTasksTab && card.can_add_task) return `<div class="pe-primary-bar"><button type="button" class="rc-btn" data-pe-action="add-task" data-activity-id="${escapeHtml(String(activity.id))}">Add task</button></div>`;
-    if (canCertify) return `<div class="pe-primary-bar"><button type="button" class="rc-btn" data-pe-goto="certification">Request review</button></div>`;
+    if (canCertify) return `<div class="pe-primary-bar"><button type="button" class="rc-btn" data-pe-goto="${reviewTabKey}">Request review</button></div>`;
     return '';
   })();
   const panes = {
@@ -17396,6 +17840,7 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
     work: workPane,
     attachments: attachmentPanel,
     certification: verificationPanel,
+    'verify-work': verificationPanel,
   };
   return `
     <div style="background:var(--section-bg);border:1px solid var(--section-border);border-radius:var(--section-radius);overflow:clip;">
@@ -17565,14 +18010,23 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
         <button class="rc-btn rc-btn--sm" type="submit" style="margin-top:8px;">Send recommendation</button>
       </form>` : '';
     const decisionForm = item.status === 'pending' && consultantLeader ? `
-      <form data-pe-form="decision" data-verification-id="${escapeHtml(String(item.id))}" data-pending-inspectors="${pendingInspectors}" style="margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0;">
+      <form data-pe-form="decision" data-verification-id="${escapeHtml(String(item.id))}" data-pending-inspectors="${pendingInspectors}" data-pe-cert-note-required="${item.kind !== 'hold_point'}" style="margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0;">
+        <label style="display:block;margin-top:8px;font-size:12px;color:#475569;">Short certification note <span style="color:#b91c1c;">${item.kind === 'hold_point' ? '(optional)' : '(required for Verify or Verify with changes)'}</span>
+          <textarea name="certification_note" data-pe-certification-note rows="2" maxlength="500" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></textarea>
+          <span data-pe-note-count style="display:block;text-align:right;font-size:11px;color:#64748b;">0 / 500</span>
+        </label>
+        <label style="display:block;margin-top:8px;font-size:12px;color:#475569;">Add photos (optional, up to 10)
+          <input type="file" name="photos" data-pe-decision-photos accept="image/*" multiple style="display:block;margin-top:5px;">
+        </label>
+        <div data-pe-decision-photo-preview style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;"></div>
+        <div data-pe-decision-error role="alert" style="display:none;color:#b91c1c;font-size:12px;margin-top:6px;"></div>
         <label style="font-size:12px;color:#475569;">Decision
           <select name="status" data-pe-decision-status style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;">
-            <option value="verified">Verify</option><option value="verified_with_changes">Verify with changes</option><option value="rejected">Reject</option>
+            <option value="verified">Verify</option>${item.kind === 'progress' ? '<option value="verified_with_changes">Verify with changes</option>' : ''}<option value="rejected">Reject</option>
           </select></label>
         <label data-pe-certified-field style="display:none;margin-top:8px;font-size:12px;color:#475569;">Certified progress (%)
           <input name="certified_progress_pct" type="number" min="0" max="${Number(item.claimed_progress_pct) || 100}" step="0.1" value="${Number(item.claimed_progress_pct) || 0}" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></label>
-        <label style="display:block;margin-top:8px;font-size:12px;color:#475569;">Decision reason or notes
+        <label style="display:block;margin-top:8px;font-size:12px;color:#475569;">Decision reason (required for Verify with changes or Reject)
           <textarea name="reason" rows="2" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></textarea></label>
         ${item.kind === 'completion' ? `<div data-pe-snag-fields style="display:none;margin-top:10px;padding:10px;border:1px solid #fbbf24;border-radius:8px;background:#fffbeb;">
           <strong style="font-size:12px;color:#92400e;">Optional snag</strong>
@@ -17582,7 +18036,7 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
             <input name="snag_certified_progress_pct" type="number" min="0" max="99.9" step="0.1" value="95" style="display:block;width:100%;margin-top:5px;padding:8px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;"></label>
         </div>` : ''}
         ${pendingInspectors ? `<label style="display:block;margin-top:8px;font-size:12px;color:#92400e;"><input type="checkbox" name="skip_inspectors" value="true"> Decide without the pending inspector recommendation</label>` : ''}
-        <button class="rc-btn rc-btn--approve rc-btn--sm" type="submit" style="margin-top:10px;">Submit decision</button>
+        <button class="rc-btn rc-btn--approve rc-btn--sm" data-pe-decision-submit type="submit" style="margin-top:10px;" disabled>Submit decision</button>
       </form>` : '';
     const revisions = Array.isArray(item.decision_revisions) ? item.decision_revisions : [];
     const latestRevision = revisions[revisions.length - 1];
@@ -17795,7 +18249,49 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
     if (field) field.style.display = select.value === 'verified_with_changes' ? 'block' : 'none';
     const snagFields = form?.querySelector('[data-pe-snag-fields]');
     if (snagFields) snagFields.style.display = select.value === 'verified' ? 'block' : 'none';
+    if (form) updateDecisionFormState(form);
   }));
+  const updateDecisionFormState = (form) => {
+    const note = form.querySelector('[data-pe-certification-note]')?.value.trim() || '';
+    const status = form.querySelector('[data-pe-decision-status]')?.value || '';
+    const reason = form.elements.reason?.value.trim() || '';
+    const photos = Array.from(form.querySelector('[data-pe-decision-photos]')?.files || []);
+    const invalidPhotos = photos.length > 10 || photos.some((file) => !/^image\//i.test(file.type || ''));
+    const noteRequired = form.dataset.peCertNoteRequired === 'true' && ['verified', 'verified_with_changes'].includes(status);
+    const invalidNote = noteRequired && (note.length < 3 || note.length > 500);
+    const invalidReason = status !== 'verified' && !reason;
+    const submit = form.querySelector('[data-pe-decision-submit]');
+    if (submit) submit.disabled = invalidPhotos || invalidNote || invalidReason;
+    const error = form.querySelector('[data-pe-decision-error]');
+    if (error) {
+      const message = invalidPhotos
+        ? (photos.length > 10 ? 'Choose no more than 10 photos.' : 'Only image files can be attached as certification photos.')
+        : invalidNote ? 'Enter a short certification note of at least 3 characters.'
+          : invalidReason ? 'Enter a decision reason for Verify with changes or Reject.' : '';
+      error.textContent = message;
+      error.style.display = message ? 'block' : 'none';
+    }
+    const count = form.querySelector('[data-pe-note-count]');
+    if (count) count.textContent = `${note.length} / 500`;
+  };
+  container.querySelectorAll('[data-pe-form="decision"]').forEach((form) => {
+    form.querySelector('[data-pe-certification-note]')?.addEventListener('input', () => updateDecisionFormState(form));
+    form.elements.reason?.addEventListener('input', () => updateDecisionFormState(form));
+    form.querySelector('[data-pe-decision-photos]')?.addEventListener('change', (event) => {
+      for (const url of form._peDecisionPhotoUrls || []) URL.revokeObjectURL(url);
+      form._peDecisionPhotoUrls = [];
+      const preview = form.querySelector('[data-pe-decision-photo-preview]');
+      const files = Array.from(event.target.files || []);
+      if (preview) preview.innerHTML = files.slice(0, 10).map((file) => {
+        if (!/^image\//i.test(file.type || '')) return `<span style="font-size:11px;color:#b91c1c;">${escapeHtml(file.name)} is not an image.</span>`;
+        const url = URL.createObjectURL(file);
+        form._peDecisionPhotoUrls.push(url);
+        return `<img src="${escapeHtml(url)}" alt="${escapeHtml(file.name)}" title="${escapeHtml(file.name)}" style="width:72px;height:56px;object-fit:cover;border:1px solid #cbd5e1;border-radius:5px;">`;
+      }).join('');
+      updateDecisionFormState(form);
+    });
+    updateDecisionFormState(form);
+  });
   container.querySelectorAll('[data-pe-rework-kind]').forEach(select => select.addEventListener('change', () => {
     const field = select.closest('form')?.querySelector('[data-pe-raised-snag-percent]');
     if (field) field.style.display = select.value === 'snag' ? 'block' : 'none';
@@ -17841,14 +18337,14 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
         body = values;
       } else if (form.dataset.peForm === 'decision') {
         url = `${API}/verifications/${encodeURIComponent(form.dataset.verificationId)}/decide`;
-        body = {
-          ...values,
-          rework: values.snag_reason ? [{
-            reason: values.snag_reason,
-            certified_progress_pct: values.snag_certified_progress_pct,
-          }] : [],
-          skip_inspectors: form.elements.skip_inspectors?.checked ? 'true' : 'false',
-        };
+        const decisionForm = new FormData(form);
+        const photos = Array.from(form.querySelector('[data-pe-decision-photos]')?.files || []);
+        if (photos.length > 10) throw new Error('Choose no more than 10 certification photos.');
+        for (const photo of photos) {
+          if (!/^image\//i.test(photo.type || '')) throw new Error('Only image files can be attached as certification photos.');
+        }
+        decisionForm.set('skip_inspectors', form.elements.skip_inspectors?.checked ? 'true' : 'false');
+        body = decisionForm;
       } else if (form.dataset.peForm === 'revise') {
         url = `${API}/verifications/${encodeURIComponent(form.dataset.verificationId)}/revise`;
         body = values;
@@ -17864,6 +18360,7 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
       if (!response) throw new Error('Your session could not be refreshed. Please sign in again.');
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      for (const photoUrl of form._peDecisionPhotoUrls || []) URL.revokeObjectURL(photoUrl);
       sessionStorage.setItem(`pe-activity-tab-${recordId}`, selectedTab());
       await _peLoadDetail(recordId, 'planning-execution');
       delete recordsCache['planning-execution'];
@@ -17953,6 +18450,16 @@ function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
   }));
   container.querySelectorAll('[data-pe-csec-back]').forEach(button => button.addEventListener('click', () => {
     closeSections(button.closest('[data-pe-csec-root]'));
+  }));
+  container.querySelectorAll('[data-pe-download-report]').forEach(button => button.addEventListener('click', async () => {
+    try {
+      const report = (card.report && typeof card.report === 'object') ? card.report : null;
+      if (!report) { _peShowActivityNotice(recordId, 'The activity report is not available yet.', true); return; }
+      await _peDownloadActivityReportPdf(report);
+    } catch (err) {
+      console.error('Report PDF export failed:', err);
+      _peShowActivityNotice(recordId, 'Could not download the PDF for this activity.', true);
+    }
   }));
   container.querySelectorAll('[data-pe-open-task]').forEach(button => button.addEventListener('click', async () => {
     const opened = await _openRecordNotification('work_center_task', button.getAttribute('data-pe-open-task'));
@@ -18140,6 +18647,12 @@ function _pe2FormHtml() {
           <input id="pe2-manpower" type="text" placeholder="Planned manpower" style="${_peInputStyle()}"/>
           <input id="pe2-equipment" type="text" placeholder="Planned equipment" style="${_peInputStyle()}"/>
           <input id="pe2-materials" type="text" placeholder="Planned materials" style="${_peInputStyle()}"/>
+          <div style="border-top:1px solid #e5e7eb;padding-top:10px;">
+            <strong style="font-size:12px;color:#374151;">Structured resources</strong>
+            <p style="font-size:11px;color:#64748b;margin:4px 0 8px;">These quantities are compared with resources used in approved task reports.</p>
+            <div id="pe2-resource-rows" style="display:grid;gap:7px;"></div>
+            <button type="button" id="pe2-add-resource" style="margin-top:8px;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;">+ Add planned resource</button>
+          </div>
         </div>
       </details>
 
@@ -18332,6 +18845,29 @@ function _pe2ApplyDateBounds() {
 
 const PE2_MAX_FILES = 20;
 
+function _pe2ResourceRowHtml(resource = {}) {
+  return `<div data-pe2-resource-row style="display:grid;grid-template-columns:1fr 1.4fr .8fr .8fr .8fr auto;gap:6px;align-items:center;">
+    <select data-pe2-resource-type aria-label="Resource type" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;">
+      ${['manpower','equipment','material'].map((type) => `<option value="${type}"${resource.type === type ? ' selected' : ''}>${type[0].toUpperCase()}${type.slice(1)}</option>`).join('')}
+    </select>
+    <input data-pe2-resource-name value="${escapeHtml(resource.name || '')}" placeholder="Resource name" aria-label="Resource name" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
+    <input data-pe2-resource-quantity type="number" min="0" step="any" value="${escapeHtml(resource.planned_quantity ?? '')}" placeholder="Quantity" aria-label="Planned quantity" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
+    <input data-pe2-resource-unit value="${escapeHtml(resource.unit || '')}" placeholder="Unit" aria-label="Resource unit" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
+    <input data-pe2-resource-hours type="number" min="0" step="any" value="${escapeHtml(resource.planned_hours ?? '')}" placeholder="Hours" aria-label="Planned hours" style="padding:7px;border:1px solid #d1d5db;border-radius:6px;min-width:0;"/>
+    <button type="button" data-pe2-resource-remove aria-label="Remove resource" style="padding:5px 8px;border:1px solid #fecaca;border-radius:6px;background:#fff;color:#b91c1c;cursor:pointer;">×</button>
+  </div>`;
+}
+
+function _pe2ReadResources(container, selectors) {
+  return [...container.querySelectorAll(selectors.row)].map((row) => ({
+    type: row.querySelector(selectors.type)?.value || '',
+    name: row.querySelector(selectors.name)?.value.trim() || '',
+    planned_quantity: row.querySelector(selectors.quantity)?.value || '',
+    unit: row.querySelector(selectors.unit)?.value.trim() || '',
+    planned_hours: row.querySelector(selectors.hours)?.value || '',
+  }));
+}
+
 function _pe2RenderFiles() {
   const list = document.getElementById('pe2-files');
   if (!list) return;
@@ -18368,6 +18904,12 @@ function _pe2Wire() {
   _pe2RenderMeasure();
   _pe2RenderTasks();
   _pe2MilestoneNote();
+
+  const resourceRows = $('pe2-resource-rows');
+  $('pe2-add-resource').addEventListener('click', () => resourceRows.insertAdjacentHTML('beforeend', _pe2ResourceRowHtml()));
+  resourceRows.addEventListener('click', (event) => {
+    if (event.target.closest('[data-pe2-resource-remove]')) event.target.closest('[data-pe2-resource-row]')?.remove();
+  });
 
   $('pe2-milestone').addEventListener('change', _pe2MilestoneNote);
   $('pe2-start').addEventListener('change', () => { _pe2ApplyDateBounds(); _pe2RenderTasks(); });
@@ -18494,6 +19036,10 @@ function _pe2Payload(confirmReplace) {
   form.append('planned_manpower', v('pe2-manpower'));
   form.append('planned_equipment', v('pe2-equipment'));
   form.append('planned_materials', v('pe2-materials'));
+  form.append('planned_resources', JSON.stringify(_pe2ReadResources(document.getElementById('pe2-resource-rows'), {
+    row: '[data-pe2-resource-row]', type: '[data-pe2-resource-type]', name: '[data-pe2-resource-name]',
+    quantity: '[data-pe2-resource-quantity]', unit: '[data-pe2-resource-unit]', hours: '[data-pe2-resource-hours]',
+  }).filter((row) => row.name)));
   const sel = document.getElementById('pe2-milestone')?.value || '';
   if (sel.startsWith('b:')) form.append('baseline_milestone_id', sel.slice(2));
   else if (sel.startsWith('a:')) form.append('additional_milestone_id', sel.slice(2));
@@ -21564,12 +22110,24 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
     </section>`;
   }
 
-  function activityEditHtml(activity) {
+  function activityEditHtml(activity, plannedResources = []) {
     const date = (value) => esc(String(value || '').slice(0, 10));
     const milestoneStart = activity.baseline_milestone_start || activity.additional_milestone_start || '';
     const milestoneEnd = activity.baseline_milestone_end || activity.additional_milestone_end || '';
     const input = (label, name, value = '', type = 'text', bounds = '') => `<label>${label}<input name="${name}" type="${type}" value="${esc(value)}" style="${inputStyle}"${bounds}${['title', 'start_date', 'end_date'].includes(name) ? ' required' : ''}></label>`;
     const measured = ['quantity', 'count'].includes(activity.activity_type);
+    const activityResources = (plannedResources || []).filter((resource) => resource.task_id == null);
+    const resourceRows = activityResources.map((resource) => `<div data-wf-resource-row data-resource-id="${esc(resource.id)}"
+      style="display:grid;grid-template-columns:1fr 1.4fr .8fr .8fr .8fr auto;gap:6px;align-items:center;margin-top:7px;">
+      <select data-wf-resource-type aria-label="Resource type" style="${inputStyle}">
+        ${['manpower','equipment','material'].map((type) => `<option value="${type}"${resource.type === type ? ' selected' : ''}>${type[0].toUpperCase()}${type.slice(1)}</option>`).join('')}
+      </select>
+      <input data-wf-resource-name aria-label="Resource name" value="${esc(resource.name || '')}" placeholder="Resource name" style="${inputStyle}">
+      <input data-wf-resource-quantity aria-label="Planned quantity" type="number" min="0" step="any" value="${esc(resource.planned_quantity ?? '')}" placeholder="Quantity" style="${inputStyle}">
+      <input data-wf-resource-unit aria-label="Unit" value="${esc(resource.unit || '')}" placeholder="Unit" style="${inputStyle}">
+      <input data-wf-resource-hours aria-label="Planned hours" type="number" min="0" step="any" value="${esc(resource.planned_hours ?? '')}" placeholder="Hours" style="${inputStyle}">
+      <button type="button" data-wf-resource-remove aria-label="Remove resource">×</button>
+    </div>`).join('');
     return `<details data-wf-edit-plan style="${panelStyle};margin-top:12px;">
       <summary style="cursor:pointer;font-weight:700;">Edit activity plan</summary>
       <form data-wf-edit-form>
@@ -21588,6 +22146,11 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
         ${input('Planned equipment', 'planned_equipment', activity.planned_equipment || '')}
         ${input('Planned materials', 'planned_materials', activity.planned_materials || '')}
         <label style="grid-column:1/-1;">Description<textarea name="description" rows="2" style="${inputStyle}">${esc(activity.description || '')}</textarea></label>
+      </div>
+      <div style="margin-top:10px;">
+        <strong style="font-size:12px;">Structured planned resources</strong>
+        <div data-wf-resource-rows>${resourceRows}</div>
+        <button type="button" data-wf-resource-add style="margin-top:7px;">+ Add planned resource</button>
       </div>
       <p data-wf-edit-error style="color:#b91c1c;font-size:12px;margin:6px 0;"></p>
       <button type="button" data-wf-save-plan style="margin-top:8px;">Save activity plan</button>
@@ -21609,7 +22172,7 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
       : activityBaseHtml(card);
     if (!card?.can_edit_activity || typeof originalActivityHtml !== 'function') return html;
     return html.replace(/<div data-pe-pane="overview"[^>]*>/,
-      openingTag => `${openingTag}${activityEditHtml(card.activity)}`);
+      openingTag => `${openingTag}${activityEditHtml(card.activity, card.planned_resources || [])}`);
   };
 
   window._peUpdateStatusBadge = function (activity, entries) {
@@ -21632,6 +22195,23 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
       originalActivityWire(recordId, card, cachedRecord, verificationData);
     const detail = document.getElementById(`pe-detail-inner-${recordId}`);
     detail?.querySelector('[data-wf-save-plan]')?.addEventListener('click', () => saveActivityPlan(recordId, detail));
+    detail?.querySelector('[data-wf-resource-rows]')?.addEventListener('click', (event) => {
+      if (event.target.closest('[data-wf-resource-remove]')) event.target.closest('[data-wf-resource-row]')?.remove();
+    });
+    detail?.querySelector('[data-wf-resource-add]')?.addEventListener('click', () => {
+      const rows = detail.querySelector('[data-wf-resource-rows]');
+      rows?.insertAdjacentHTML('beforeend', `<div data-wf-resource-row data-resource-id=""
+        style="display:grid;grid-template-columns:1fr 1.4fr .8fr .8fr .8fr auto;gap:6px;align-items:center;margin-top:7px;">
+        <select data-wf-resource-type aria-label="Resource type" style="${inputStyle}">
+          <option value="manpower">Manpower</option><option value="equipment">Equipment</option><option value="material">Material</option>
+        </select>
+        <input data-wf-resource-name aria-label="Resource name" placeholder="Resource name" style="${inputStyle}">
+        <input data-wf-resource-quantity aria-label="Planned quantity" type="number" min="0" step="any" placeholder="Quantity" style="${inputStyle}">
+        <input data-wf-resource-unit aria-label="Unit" placeholder="Unit" style="${inputStyle}">
+        <input data-wf-resource-hours aria-label="Planned hours" type="number" min="0" step="any" placeholder="Hours" style="${inputStyle}">
+        <button type="button" data-wf-resource-remove aria-label="Remove resource">×</button>
+      </div>`);
+    });
   };
 
   if (typeof originalRenderPEShell === 'function') {
@@ -21691,6 +22271,10 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
           <label style="display:block;margin-top:8px;">Priority<select name="priority" style="${inputStyle}"><option>normal</option><option>low</option><option>high</option></select></label>
           <label style="display:block;margin-top:8px;">Attachments (optional)<input name="attachments" type="file" multiple accept="*/*" style="${inputStyle}"></label>
           <ul data-wf-file-list style="margin:4px 0 0;padding-left:18px;font-size:12px;color:#334155;overflow-wrap:anywhere;"></ul>
+          <div style="margin-top:8px;"><strong>Planned resources (optional)</strong>
+            <div data-wf-new-resource-rows></div>
+            <button type="button" data-wf-new-resource-add style="margin-top:6px;">+ Add planned resource</button>
+          </div>
           <label style="display:block;margin-top:8px;">Assign team members<select name="members" multiple size="4" style="${inputStyle}">${memberOptions}</select></label>
           ${isStages ? `<div data-wf-stage-list style="margin-top:8px;"><strong>Stages (weights must total 100%)</strong>
             <div data-wf-stage-row style="display:flex;gap:6px;margin-top:5px;"><input data-stage-title placeholder="Stage title" style="${inputStyle}"><input data-stage-weight type="number" min="0.01" step="0.01" value="100" style="width:82px;"><label><input data-stage-hold type="checkbox"> Hold</label></div>
@@ -21699,6 +22283,12 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
           <button type="submit">Preview and add task</button><button type="button" data-wf-cancel-add>Cancel</button>
         </form>`;
         const form = formContainer.querySelector('[data-wf-add-task]');
+        form.querySelector('[data-wf-new-resource-add]')?.addEventListener('click', () => {
+          form.querySelector('[data-wf-new-resource-rows]')?.insertAdjacentHTML('beforeend', _pe2ResourceRowHtml());
+        });
+        form.querySelector('[data-wf-new-resource-rows]')?.addEventListener('click', (event) => {
+          if (event.target.closest('[data-pe2-resource-remove]')) event.target.closest('[data-pe2-resource-row]')?.remove();
+        });
         form.elements.attachments?.addEventListener('change', (event) => {
           // Show each chosen file by its real name.
           form.querySelector('[data-wf-file-list]').innerHTML = Array.from(event.target.files || [])
@@ -21732,6 +22322,10 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
               const member = (membersData.members || []).find((item) => String(item.id) === option.value);
               return { id: member.id, title: member.title, email: member.email, position: member.position };
             }),
+            planned_resources: _pe2ReadResources(form, {
+              row: '[data-pe2-resource-row]', type: '[data-pe2-resource-type]', name: '[data-pe2-resource-name]',
+              quantity: '[data-pe2-resource-quantity]', unit: '[data-pe2-resource-unit]', hours: '[data-pe2-resource-hours]',
+            }).filter((resource) => resource.name),
           };
           if (isStages) {
             task.stages = [...formContainer.querySelectorAll('[data-wf-stage-row]')].map((row, index) => ({
@@ -21782,8 +22376,19 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
       return showErrorIn(formElement, 'Enter valid dates with the end date on or after the start date.');
     if (['quantity', 'count'].includes(data.activity_type) && (!(Number(data.planned_quantity) > 0) || !String(data.unit || '').trim()))
       return showErrorIn(formElement, 'Quantity and count activities need a planned amount above zero and a unit.');
+    const resourceRows = [...formElement.querySelectorAll('[data-wf-resource-row]')].map((row) => ({
+      id: row.dataset.resourceId || null,
+      type: row.querySelector('[data-wf-resource-type]').value,
+      name: row.querySelector('[data-wf-resource-name]').value.trim(),
+      planned_quantity: row.querySelector('[data-wf-resource-quantity]').value,
+      unit: row.querySelector('[data-wf-resource-unit]').value.trim(),
+      planned_hours: row.querySelector('[data-wf-resource-hours]').value,
+    }));
+    if (resourceRows.some((row) => !row.name && (row.planned_quantity || row.unit || row.planned_hours)))
+      return showErrorIn(formElement, 'Give each planned resource a name, or remove the empty row.');
     form.append('projectId', projectId);
     for (const [key, value] of Object.entries(data)) form.append(key, value);
+    form.append('planned_resources', JSON.stringify(resourceRows.filter((row) => row.name)));
     try {
       await responseData(await _wcFetch(`${API}/planning-execution/${encodeURIComponent(activityId)}/plan`, { method: 'PUT', body: form }));
       alert('Activity plan updated.');
@@ -22246,6 +22851,24 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
     }
   };
 
+  window._openMilestoneActivityReport = async function (activityId) {
+    const id = String(activityId || '');
+    if (!/^\d+$/.test(id)) return false;
+    try {
+      sessionStorage.setItem(`pe-activity-tab-${id}`, 'overview');
+      sessionStorage.removeItem(`pe-verification-${id}`);
+      collapseGrayPart();
+      await _openActivityCardInPanel(id);
+      const tab = await _waitForElement(`#pe-detail-inner-${CSS.escape(id)} [data-pe-tab="overview"]`, 5000);
+      if (!tab) throw new Error('The activity report is not available.');
+      tab.click();
+      return true;
+    } catch (error) {
+      alert(`Unable to open activity report: ${error.message}`);
+      return false;
+    }
+  };
+
   window.openMilestoneDeepLink = async function (milestone) {
     if (!milestone?.kind || !milestone?.id) return alert('Milestone details are missing from this notification.');
     try {
@@ -22259,7 +22882,7 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
           ${clientView ? `${pct(activity.certified)}% certified` : `${pct(activity.claimed)}% claimed / ${pct(activity.certified)}% certified`}
         </div>`).join('') || '<p>No linked activities yet.</p>';
       expandGrayPart(`<section style="padding:16px;overflow:auto;height:100%;">
-        <button class="btn" type="button" onclick="collapseGrayPart()">← Back</button>
+        <button class="btn" type="button" onclick="collapseGrayPart()">← Back to list</button>
         <h3>${esc(result.title || milestone.title || 'Milestone')}</h3>
         <div style="${panelStyle}">
           <div>Derived progress: <strong>${pct(result.derived_progress_pct)}%</strong></div>
@@ -22301,11 +22924,12 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
         }
         if (result.target.type === 'activity' && target.entityType === 'rework_item') {
           const activityId = String(result.target.recordId);
-          sessionStorage.setItem(`pe-activity-tab-${activityId}`, 'certification');
+          const reviewTabKey = wcSide(window.currentUserRole) === 'Consultant' ? 'verify-work' : 'certification';
+          sessionStorage.setItem(`pe-activity-tab-${activityId}`, reviewTabKey);
           collapseGrayPart();
           const opened = await _openRecordNotification('planning_execution', activityId);
           if (!opened) return false;
-          const tab = await _waitForElement(`#pe-detail-inner-${CSS.escape(activityId)} [data-pe-tab="certification"]`);
+          const tab = await _waitForElement(`#pe-detail-inner-${CSS.escape(activityId)} [data-pe-tab="${reviewTabKey}"]`);
           tab?.click();
           const item = await _waitForElement(`#pe-rework-${CSS.escape(String(target.entityId))}`);
           item?.scrollIntoView({ behavior: 'smooth', block: 'center' });
