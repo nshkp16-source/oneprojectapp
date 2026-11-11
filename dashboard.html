@@ -51,13 +51,6 @@
       --c-mustard:     #f5deb3;
       --c-panel-white: #ffffff;
     }
-    const resources = _pe2ReadResources(document.getElementById('pe2-resource-rows'), {
-      row: '[data-pe2-resource-row]', type: '[data-pe2-resource-type]', name: '[data-pe2-resource-name]',
-      quantity: '[data-pe2-resource-quantity]', unit: '[data-pe2-resource-unit]', hours: '[data-pe2-resource-hours]',
-    });
-    if (resources.some((row) => !row.name && (row.planned_quantity || row.unit || row.planned_hours)))
-      return 'Give each planned resource a name, or remove the empty row.';
-
     /* ══════════════════════════════════════════════
        RESET
     ══════════════════════════════════════════════ */
@@ -2354,7 +2347,8 @@
       <div class="modal-actions">
         <button id="errCancelBtn">Cancel</button>
         <button id="errSubmitBtn" class="primary">Send Report</button>
-    </section>
+    </div>
+  </div>
   </div>
 
   <div class="layout">
@@ -17107,6 +17101,98 @@ function _peReportPanelLine(label, value) {
   return `<div><div style="font-size:11px;color:#475569;">${escapeHtml(label)}</div><div style="margin-top:2px;font-size:13px;line-height:1.5;overflow-wrap:anywhere;">${escapeHtml(text)}</div></div>`;
 }
 
+function _peActivityProgressChartModel(report) {
+  const activity = report?.activity || {};
+  const progress = report?.progress || {};
+  const asDay = (value) => {
+    const text = String(value || '').slice(0, 10);
+    const timestamp = Date.parse(`${text}T00:00:00Z`);
+    return Number.isFinite(timestamp) ? timestamp : null;
+  };
+  const startDay = asDay(activity.start_date);
+  const rawEndDay = asDay(activity.end_date);
+  if (startDay == null || rawEndDay == null) return null;
+  const endDay = Math.max(startDay + 86400000, rawEndDay);
+  const asOfDay = asDay(report?.as_of_date) ?? startDay;
+  const currentDay = Math.max(startDay, Math.min(endDay, asOfDay));
+  const isClient = report?.viewer?.mode === 'client' || report?.viewer?.side === 'Client';
+  const label = isClient ? 'Certified' : 'Claimed';
+  const currentPct = Math.max(0, Math.min(100, Number(isClient ? progress.certified_pct : progress.claimed_pct) || 0));
+  const observations = [];
+
+  if (isClient) {
+    for (const certificate of Array.isArray(report?.certificates) ? report.certificates : []) {
+      const date = asDay(certificate.decided_at);
+      const value = Number(certificate.certified_pct);
+      if (date != null && date <= asOfDay && Number.isFinite(value)) {
+        observations.push({ day: Math.max(startDay, Math.min(endDay, date)), value: Math.max(0, Math.min(100, value)) });
+      }
+    }
+  } else {
+    const plannedQuantity = Number(report?.quantities?.planned ?? activity.planned_quantity);
+    if (plannedQuantity > 0) {
+      const byDate = new Map();
+      for (const entry of Array.isArray(report?.daily_log) ? report.daily_log : []) {
+        const date = asDay(entry.date);
+        const runningTotal = Number(entry.running_total);
+        if (date != null && date <= asOfDay && Number.isFinite(runningTotal)) {
+          byDate.set(Math.max(startDay, Math.min(endDay, date)), Math.max(0, Math.min(100, runningTotal / plannedQuantity * 100)));
+        }
+      }
+      for (const [day, value] of byDate) observations.push({ day, value });
+    }
+  }
+
+  observations.sort((a, b) => a.day - b.day);
+  const points = [];
+  if (observations.length && observations[0].day > startDay) points.push({ day: startDay, value: 0 });
+  points.push(...observations);
+  if (!points.length) points.push({ day: currentDay, value: currentPct });
+  else if (points[points.length - 1].day < currentDay) points.push({ day: currentDay, value: currentPct });
+  else points[points.length - 1] = { ...points[points.length - 1], value: currentPct };
+
+  return {
+    startDay, endDay, currentDay, label, points,
+    hasHistory: observations.length > 0,
+  };
+}
+
+function _peActivityProgressChartSvg(report) {
+  const model = _peActivityProgressChartModel(report);
+  if (!model) return '<p style="margin:0;color:#64748b;font-size:11px;">Progress chart unavailable because the activity dates are missing.</p>';
+  const left = 38;
+  const right = 548;
+  const top = 18;
+  const bottom = 119;
+  const x = (day) => left + (day - model.startDay) / (model.endDay - model.startDay) * (right - left);
+  const y = (value) => bottom - value / 100 * (bottom - top);
+  const dateText = (day) => {
+    const date = new Date(day);
+    return `${date.getUTCDate()} ${date.toLocaleString('en', { month: 'short', timeZone: 'UTC' })}`;
+  };
+  const grid = [0, 25, 50, 75, 100].map((value) =>
+    `<g><line x1="${left}" y1="${y(value)}" x2="${right}" y2="${y(value)}" stroke="#dbe3ec" stroke-width="1"/><text x="5" y="${y(value) + 3}" fill="#64748b" font-size="8">${value}%</text></g>`).join('');
+  const ticks = Array.from({ length: 6 }, (_, index) => {
+    const day = model.startDay + (model.endDay - model.startDay) * index / 5;
+    const tickX = x(day);
+    return `<text x="${tickX}" y="143" text-anchor="${index === 0 ? 'start' : index === 5 ? 'end' : 'middle'}" fill="#64748b" font-size="8">${dateText(day)}</text>`;
+  }).join('');
+  const line = model.hasHistory && model.points.length > 1
+    ? `<polyline points="${model.points.map((point) => `${x(point.day)},${y(point.value)}`).join(' ')}" fill="none" stroke="#007f8b" stroke-width="2"/>`
+    : '';
+  const last = model.points[model.points.length - 1];
+  const marker = `<rect x="${x(last.day) - 3}" y="${y(last.value) - 3}" width="6" height="6" fill="#007f8b"/>`;
+  return `<svg viewBox="0 0 560 150" role="img" aria-label="Progress against plan chart showing Plan and ${model.label}" style="display:block;width:100%;height:auto;overflow:visible;">
+    <g><line x1="437" y1="8" x2="457" y2="8" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 3"/><text x="461" y="11" fill="#64748b" font-size="8">Plan</text>
+      <line x1="502" y1="8" x2="522" y2="8" stroke="#007f8b" stroke-width="2"/> <text x="526" y="11" fill="#64748b" font-size="8">${model.label}</text></g>
+    ${grid}
+    <line x1="${left}" y1="${top}" x2="${left}" y2="${bottom}" stroke="#cbd5e1" stroke-width="1"/>
+    <line x1="${left}" y1="${bottom}" x2="${right}" y2="${bottom}" stroke="#cbd5e1" stroke-width="1"/>
+    <line x1="${left}" y1="${y(0)}" x2="${right}" y2="${y(100)}" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="4 3"/>
+    ${line}${marker}${ticks}
+  </svg>${model.hasHistory ? '' : `<div style="font-size:10px;color:#64748b;">No dated ${model.label.toLowerCase()} history available yet.</div>`}`;
+}
+
 function _peActivityReportHtml(report) {
   if (!report || typeof report !== 'object') return '<div class="pe-panel"><p style="margin:0;color:#64748b;">No report data is available for this activity yet.</p></div>';
   const activity = report.activity || {};
@@ -17203,6 +17289,7 @@ function _peActivityReportHtml(report) {
         </div>
         ${progressLine('Certified', certifiedPct, '#0f766e')}
       </section>
+      ${section('1. Progress against plan', _peActivityProgressChartSvg(report))}
       ${section('Activity details', `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px 18px;">
         ${_peReportPanelLine('Status', activity.status || '—')}
         ${_peReportPanelLine('Measure', activity.activity_type || '—')}
@@ -17341,7 +17428,7 @@ function _peActivityReportHtml(report) {
           ${_peReportPanelLine('Equipment', activity.legacy_planned?.equipment || '—')}
           ${_peReportPanelLine('Materials', activity.legacy_planned?.materials || '—')}
         </div>`)}
-      ${section('Progress against plan', taskProgressHtml + progressBar)}
+      ${section('1. Progress against plan', _peActivityProgressChartSvg(report) + taskProgressHtml + progressBar)}
       ${section('Quantities', quantityHtml)}
       ${section('Daily log', dailyLogHtml)}
       ${section('Planned versus used resources', resourceHtml)}
@@ -17404,6 +17491,70 @@ async function _peDownloadActivityReportPdf(report) {
     if (y < 75) addPage();
     write(title.toUpperCase(), { size: 10, face: bold, color: rgb(0.02, 0.37, 0.42), gap: 5 });
   };
+  const drawProgressChart = () => {
+    const model = _peActivityProgressChartModel(report);
+    if (!model) {
+      write('Progress chart unavailable because the activity dates are missing.', { color: muted });
+      return;
+    }
+    if (y < 190) addPage();
+    const left = 66;
+    const right = 545;
+    const top = y - 16;
+    const bottom = y - 105;
+    const x = (day) => left + (day - model.startDay) / (model.endDay - model.startDay) * (right - left);
+    const chartY = (value) => bottom + value / 100 * (top - bottom);
+    const gridColor = rgb(0.86, 0.89, 0.92);
+    const planColor = rgb(0.58, 0.64, 0.70);
+    const progressColor = rgb(0.0, 0.50, 0.55);
+    for (const value of [0, 25, 50, 75, 100]) {
+      const lineY = chartY(value);
+      page.drawLine({ start: { x: left, y: lineY }, end: { x: right, y: lineY }, thickness: 0.5, color: gridColor });
+      page.drawText(`${value}%`, { x: 42, y: lineY - 2, size: 7, font, color: muted });
+    }
+    page.drawLine({ start: { x: left, y: bottom }, end: { x: left, y: top }, thickness: 0.6, color: gridColor });
+    page.drawLine({ start: { x: left, y: bottom }, end: { x: right, y: bottom }, thickness: 0.6, color: gridColor });
+    const diagonal = Math.hypot(right - left, top - bottom);
+    for (let distance = 0; distance < diagonal; distance += 7) {
+      const from = distance / diagonal;
+      const to = Math.min(1, (distance + 4) / diagonal);
+      page.drawLine({
+        start: { x: left + (right - left) * from, y: bottom + (top - bottom) * from },
+        end: { x: left + (right - left) * to, y: bottom + (top - bottom) * to },
+        thickness: 1, color: planColor,
+      });
+    }
+    if (model.hasHistory && model.points.length > 1) {
+      for (let index = 1; index < model.points.length; index++) {
+        const previous = model.points[index - 1];
+        const current = model.points[index];
+        page.drawLine({
+          start: { x: x(previous.day), y: chartY(previous.value) },
+          end: { x: x(current.day), y: chartY(current.value) },
+          thickness: 1.8, color: progressColor,
+        });
+      }
+    }
+    const lastPoint = model.points[model.points.length - 1];
+    page.drawRectangle({
+      x: x(lastPoint.day) - 2.5, y: chartY(lastPoint.value) - 2.5, width: 5, height: 5, color: progressColor,
+    });
+    for (let index = 0; index < 6; index++) {
+      const day = model.startDay + (model.endDay - model.startDay) * index / 5;
+      const date = new Date(day);
+      const label = plain(`${date.getUTCDate()} ${date.toLocaleString('en', { month: 'short', timeZone: 'UTC' })}`);
+      const labelWidth = font.widthOfTextAtSize(label, 7);
+      const labelX = index === 0 ? left : index === 5 ? right - labelWidth : x(day) - labelWidth / 2;
+      page.drawText(label, { x: labelX, y: bottom - 13, size: 7, font, color: muted });
+    }
+    const legendY = top + 8;
+    page.drawLine({ start: { x: 388, y: legendY }, end: { x: 406, y: legendY }, thickness: 1, color: planColor });
+    page.drawText('Plan', { x: 410, y: legendY - 2, size: 7, font, color: muted });
+    page.drawLine({ start: { x: 448, y: legendY }, end: { x: 466, y: legendY }, thickness: 1.8, color: progressColor });
+    page.drawText(model.label, { x: 470, y: legendY - 2, size: 7, font, color: muted });
+    y = bottom - 28;
+    if (!model.hasHistory) write(`No dated ${model.label.toLowerCase()} history available yet.`, { size: 8, color: muted });
+  };
   addPage();
   write(activity.title || 'Activity report', { size: 19, face: bold, gap: 8 });
   write(`As of ${report?.as_of_date || 'today'}`, { size: 9, color: muted });
@@ -17416,6 +17567,8 @@ async function _peDownloadActivityReportPdf(report) {
     write(`Certified quantity: ${qtyText(quantities.certified)}  |  Planned quantity: ${qtyText(quantities.planned)}`);
     write(`Dates: ${activity.start_date || '—'} to ${activity.end_date || '—'}`);
     write(`Milestone: ${activity.milestone?.title || '—'}`);
+    heading('1. Progress against plan');
+    drawProgressChart();
   } else {
     heading('Summary and numbers');
     write(`Claimed: ${Number(progress.claimed_pct) || 0}%  |  Certified: ${Number(progress.certified_pct) || 0}%  |  Variance: ${Number(progress.variance_pct) || 0}%`);
@@ -17427,7 +17580,8 @@ async function _peDownloadActivityReportPdf(report) {
     write(`Finished when: ${activity.done_when || '—'}`);
     write(`Planned work: ${activity.legacy_planned?.work || '—'}  |  Manpower: ${activity.legacy_planned?.manpower || '—'}`);
     write(`Equipment: ${activity.legacy_planned?.equipment || '—'}  |  Materials: ${activity.legacy_planned?.materials || '—'}`);
-    heading('Progress against plan');
+    heading('1. Progress against plan');
+    drawProgressChart();
     write(`Planned today: ${Number(progress.planned_today_pct) || 0}%  |  Claimed: ${Number(progress.claimed_pct) || 0}%  |  Variance: ${Number(progress.variance_pct) || 0}%`);
     write(`Required pace: ${progress.required_pace ?? '—'}${unit ? ` ${unit}` : ''}/day  |  Achieved pace: ${progress.achieved_pace ?? '—'}${unit ? ` ${unit}` : ''}/day  |  Days left: ${progress.days_left ?? '—'}`);
     for (const task of report?.tasks || [])
