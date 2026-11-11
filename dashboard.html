@@ -1027,6 +1027,11 @@
       margin-left: 4px; padding: 2px 7px; border-radius: var(--chip-radius);
       background: #eef2f7; font-size: 11px;
     }
+    .pe-crumbs { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:10px 16px 0; font-size:12px; color:#475569; }
+    .pe-crumb { padding:0; border:0; background:none; font:inherit; color:#0369a1; cursor:pointer; text-align:left; overflow-wrap:anywhere; }
+    .pe-crumb:hover { text-decoration:underline; }
+    .pe-crumb--here { color:#0f172a; font-weight:600; cursor:default; }
+    .pe-crumb-sep { color:#94a3b8; }
     .pe-tab-count--warn { background: #fef3c7; color: #92400e; font-weight: 700; }
     /* Activity card: one text scale, one set of status colours */
     .pe-row-title { font-size: 15px; font-weight: 600; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -12849,7 +12854,7 @@ async function _openTaskQueryNotification(queryId) {
   const opened = await _openRecordNotification('work_center_task', taskId);
   if (!opened) return false;
   const detailSelector = `#wc-detail-${CSS.escape(String(taskId))}`;
-  document.querySelector(`${detailSelector} [data-wc-tab="${tabKey}"]`)?.click();
+  document.querySelector(`${detailSelector} [data-wc-tab="${tabKey}"], ${detailSelector} [data-wc-tab="progress"]`)?.click();
   const queryCard = await _waitForElement(`${detailSelector} #wc-query-${CSS.escape(String(queryId))}`);
   if (!queryCard) return false;
   const report = queryCard.closest('[data-wc-report-card]');
@@ -14115,21 +14120,22 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   const shell = tablist ? tablist.parentElement : null;
   const checklistItems = checklistData.flatMap((list) => list.items || []);
   const extraTabs = [
-    { key: 'attachments', label: 'Attachment', count: (data.attachments || []).length + (task.linked_file_name ? 1 : 0)
+    { key: 'attachments', label: 'Files', count: (data.attachments || []).length + (task.linked_file_name ? 1 : 0)
       + entries.reduce((total, entry) => total + (entry.attachment_name ? 1 : 0)
         + (Array.isArray(entry.supporting_attachments) ? entry.supporting_attachments.length : 0), 0),
       html: _wcFilesHtml(task, entries, data.attachments, leader) },
-    { key: 'checklist', label: 'Checklist', count: checklistItems.length ? `${checklistItems.filter((i) => i.is_complete).length}/${checklistItems.length}` : null, html: checklistSection },
-    { key: 'comments', label: 'Comments', count: (data.comments || []).length, html: commentsSection },
-    { key: 'history', label: 'History', count: null, html: historySection },
+    { key: 'comments', label: 'Discussion', count: (data.comments || []).length, html: commentsSection },
   ];
+  // Folded in: the checklist sits inside Details, and History lives behind the "⋯" menu.
+  const checklistPart = { key: 'checklist', label: 'Checklist', count: checklistItems.length ? `${checklistItems.filter((i) => i.is_complete).length}/${checklistItems.length}` : null, html: checklistSection };
+  const historyPart = { key: 'history', label: 'History', count: null, html: historySection };
 
   if (!shell) {
     // no tab bar in this view: show the same content stacked, so nothing is lost
     const stacked = document.createElement('div');
     stacked.setAttribute('data-wc-card-stacked', '');
     stacked.innerHTML = `<div data-wc-card-header-slot></div>`;
-    for (const part of [{ label: 'Details', html: moreSection }, ...extraTabs]) {
+    for (const part of [{ label: 'Details', html: moreSection }, ...extraTabs, checklistPart, historyPart]) {
       const wrap = document.createElement('div');
       wrap.style.cssText = 'margin-top:14px;padding:14px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;';
       wrap.innerHTML = `<h3 style="margin:0 0 8px;font-size:13px;color:#1f2937;">${part.label}</h3>`;
@@ -14140,9 +14146,26 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
     return;
   }
 
-  shell.insertAdjacentHTML('afterbegin', _wcCardHeaderHtml(task, location) + _wcCardTilesHtml(task, entries, checklistData));
+  const crumbs = `<nav aria-label="Where you are" class="pe-crumbs" data-wc-crumbs style="padding:10px 16px 0;">
+      ${task.activity_milestone_title ? `<span class="pe-crumb" style="color:#475569;cursor:default;">${escapeHtml(task.activity_milestone_title)}</span><span class="pe-crumb-sep" aria-hidden="true">\u203a</span>` : ''}
+      ${task.activity_id && task.activity_title
+        ? `<button type="button" class="pe-crumb" data-wc-crumb-activity="${escapeHtml(String(task.activity_id))}">${escapeHtml(task.activity_title)}</button><span class="pe-crumb-sep" aria-hidden="true">\u203a</span>`
+        : `<span class="pe-crumb" style="color:#475569;cursor:default;">No activity</span><span class="pe-crumb-sep" aria-hidden="true">\u203a</span>`}
+      <span class="pe-crumb pe-crumb--here" aria-current="page">${escapeHtml(task.title || 'Task')}</span>
+    </nav>`;
+  shell.insertAdjacentHTML('afterbegin', crumbs + _wcCardHeaderHtml(task, location) + _wcCardTilesHtml(task, entries, checklistData));
+  shell.querySelector('[data-wc-crumb-activity]')?.addEventListener('click', (event) => {
+    _openActivityCardInPanel(event.currentTarget.getAttribute('data-wc-crumb-activity'));
+  });
   const detailsPane = shell.querySelector('[data-wc-pane="details"]');
-  detailsPane?.appendChild(makeSection('details-more', moreSection));
+  if (detailsPane) {
+    const checklistWrap = document.createElement('div');
+    checklistWrap.style.cssText = 'padding:4px 16px 8px;';
+    checklistWrap.innerHTML = `<div style="${heading}margin:6px 0 4px;">Checklist${checklistPart.count ? ` <span class="detail-tab-count">${escapeHtml(String(checklistPart.count))}</span>` : ''}</div>`;
+    checklistWrap.appendChild(makeSection('checklist', checklistPart.html));
+    detailsPane.appendChild(checklistWrap);
+    detailsPane.appendChild(makeSection('details-more', moreSection));
+  }
   if (leader && detailsPane) {
     const typeSelect = detailsPane.querySelector('[data-card-field="link-type"]');
     const targetSelect = detailsPane.querySelector('[data-card-field="link-target"]');
@@ -14183,6 +14206,29 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
     pane.appendChild(makeSection(tab.key, tab.html));
     shell.appendChild(pane);
   }
+  const historyPane = document.createElement('div');
+  historyPane.setAttribute('data-wc-pane', 'history');
+  historyPane.setAttribute('role', 'tabpanel');
+  historyPane.hidden = true;
+  historyPane.style.padding = '8px 16px 16px';
+  historyPane.appendChild(makeSection('history', historyPart.html));
+  shell.appendChild(historyPane);
+  const moreWrap = document.createElement('span');
+  moreWrap.style.cssText = 'position:relative;margin-left:auto;display:inline-flex;';
+  moreWrap.innerHTML = `<button type="button" class="detail-tab" data-wc-more aria-haspopup="true" aria-expanded="false" aria-label="More" title="More">\u22ef</button>
+    <div data-wc-more-menu hidden style="position:absolute;right:0;top:100%;z-index:5;min-width:130px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 6px 18px rgba(15,23,42,.12);padding:4px;">
+      <button type="button" data-wc-more-history style="display:block;width:100%;text-align:left;padding:7px 10px;border:0;background:none;cursor:pointer;font-size:13px;">History</button></div>`;
+  tablist.appendChild(moreWrap);
+  const moreButton = moreWrap.querySelector('[data-wc-more]');
+  const moreMenu = moreWrap.querySelector('[data-wc-more-menu]');
+  const setMenu = (open) => { moreMenu.hidden = !open; moreButton.setAttribute('aria-expanded', String(open)); };
+  moreButton.addEventListener('click', (event) => { event.stopPropagation(); setMenu(moreMenu.hidden); });
+  const closeOnOutside = (event) => {
+    if (!moreWrap.isConnected) return document.removeEventListener('click', closeOnOutside);
+    if (!moreWrap.contains(event.target)) setMenu(false);
+  };
+  document.addEventListener('click', closeOnOutside);
+  moreWrap.querySelector('[data-wc-more-history]').addEventListener('click', () => { setMenu(false); activate('history'); });
   const activate = (key) => {
     try { sessionStorage.setItem(sessionKey, key); } catch {}
     for (const tab of shell.querySelectorAll('[data-wc-tab]')) {
@@ -14197,7 +14243,7 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   for (const tab of extraTabs) {
     tablist.querySelector(`[data-wc-tab="${tab.key}"]`).addEventListener('click', () => activate(tab.key));
   }
-  if (extraTabs.some((tab) => tab.key === stored)) activate(stored);
+  if (extraTabs.some((tab) => tab.key === stored) || stored === 'history') activate(stored);
 }
 
 async function _wcOpenInternalTaskLink(type, targetId) {
@@ -14217,7 +14263,7 @@ async function _wcOpenInternalTaskLink(type, targetId) {
     opened = await _openRecordNotification('work_center_task', taskId);
     if (opened) {
       const detailSelector = `#wc-detail-${CSS.escape(String(taskId))}`;
-      document.querySelector(`${detailSelector} [data-wc-tab="${tabKey}"]`)?.click();
+      document.querySelector(`${detailSelector} [data-wc-tab="${tabKey}"], ${detailSelector} [data-wc-tab="progress"]`)?.click();
       const queryCard = await _waitForElement(`${detailSelector} #wc-query-${CSS.escape(String(queryId))}`);
       if (!queryCard) return false;
       const report = queryCard.closest('[data-wc-report-card]');
@@ -15020,11 +15066,12 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
 
   const isActive = !['closed', 'completed'].includes(task.status);
   const definitions = leader
-    ? [{ key: 'details', label: 'Details' }, { key: 'reports', label: 'Reports', count: reports.length }]
+    ? [{ key: 'reports', label: 'Reports', count: reports.length }, { key: 'details', label: 'Details' }]
     : [
+        // Members get one Report tab (the form plus their earlier reports); a closed task shows only the earlier reports.
+        isActive ? { key: 'progress', label: 'Report', count: reports.length }
+          : { key: 'my-reports', label: 'Reports', count: reports.length },
         { key: 'details', label: 'Details' },
-        ...(isActive ? [{ key: 'progress', label: 'Report progress' }] : []),
-        { key: 'my-reports', label: 'My reports', count: reports.length },
       ];
   const sessionKey = `wc-task-tab-${taskId}`;
   let selected = '';
@@ -15046,7 +15093,7 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
     <div data-wc-pane="details" role="tabpanel" ${selected !== 'details' ? 'hidden' : ''}></div>
     ${leader ? `<div data-wc-pane="reports" role="tabpanel" ${selected !== 'reports' ? 'hidden' : ''}></div>` : ''}
     ${!leader && isActive ? `<div data-wc-pane="progress" role="tabpanel" ${selected !== 'progress' ? 'hidden' : ''}></div>` : ''}
-    ${!leader ? `<div data-wc-pane="my-reports" role="tabpanel" ${selected !== 'my-reports' ? 'hidden' : ''}></div>` : ''}`;
+    ${!leader && !isActive ? `<div data-wc-pane="my-reports" role="tabpanel" ${selected !== 'my-reports' ? 'hidden' : ''}></div>` : ''}`;
   container.appendChild(shell);
   const detailsPane = shell.querySelector('[data-wc-pane="details"]');
   detailsPane.appendChild(detailsPanel);
@@ -15090,9 +15137,14 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
     const historyHeading = [...actionPanel.querySelectorAll('div')]
       .find((el) => el.textContent.trim() === 'My Previous Submissions');
     const historyPanel = historyHeading?.parentElement;
-    if (historyPanel) shell.querySelector('[data-wc-pane="my-reports"]').appendChild(historyPanel);
-    if (isActive) shell.querySelector('[data-wc-pane="progress"]').appendChild(actionPanel);
-    else actionPanel.remove();
+    if (isActive) {
+      const reportPane = shell.querySelector('[data-wc-pane="progress"]');
+      reportPane.appendChild(actionPanel);
+      if (historyPanel) { historyPanel.style.marginTop = '16px'; reportPane.appendChild(historyPanel); }
+    } else {
+      if (historyPanel) shell.querySelector('[data-wc-pane="my-reports"]').appendChild(historyPanel);
+      actionPanel.remove();
+    }
   }
 
   for (const mount of shell.querySelectorAll('[data-wc-report-queries]')) {
@@ -15106,7 +15158,7 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
   const orphanQueries = (queries || []).filter((query) =>
     !query.report_id || !reportIds.has(String(query.report_id)));
   if (orphanQueries.length) {
-    const queryPane = shell.querySelector(`[data-wc-pane="${leader ? 'reports' : 'my-reports'}"]`);
+    const queryPane = shell.querySelector(`[data-wc-pane="${leader ? 'reports' : (isActive ? 'progress' : 'my-reports')}"]`);
     queryPane?.insertAdjacentHTML('afterbegin',
       `<div data-wc-orphan-queries style="margin:4px 0 14px;">${_wcQueryPanelHtml(task, null, orphanQueries, leader)}</div>`);
   }
@@ -17045,6 +17097,40 @@ function _peRequestEvidencePickerHtml(reports) {
   </fieldset>`;
 }
 
+// Read-only list of the approved work of each task, for the consultant. It shows the task names, their share of the
+// activity and the approved figures. It never shows who reported, private notes or report details.
+function _peWorkByTaskHtml(rows, unit, heading, emptyText) {
+  const list = Array.isArray(rows) ? rows : [];
+  const head = `<strong style="font-size:13px;color:#334155;">${escapeHtml(heading)}</strong>`;
+  if (!list.length) return `<div class="pe-panel">${head}<p style="font-size:12px;color:#64748b;margin:6px 0 0;">${escapeHtml(emptyText)}</p></div>`;
+  const clamp = (value) => Math.min(100, Math.max(0, Number(value) || 0));
+  const unitText = escapeHtml(unit || '');
+  const claimed = Math.round(list.reduce((total, row) => total + (Number(row.weight_pct) || 0) * clamp(row.progress_pct), 0)) / 100;
+  const body = list.map((row) => {
+    const progress = clamp(row.progress_pct);
+    const hasTarget = row.target_quantity != null && Number(row.target_quantity) > 0;
+    const reports = Number(row.approved_report_count) || 0;
+    return `<tr>
+      <td style="font-weight:600;color:#1e293b;overflow-wrap:anywhere;">${escapeHtml(row.title || 'Task')}</td>
+      <td>${Number(row.weight_pct) || 0}%</td>
+      <td>${hasTarget ? `${Number(row.approved_quantity) || 0} of ${Number(row.target_quantity)} ${unitText}` : '<span style="color:#94a3b8;">Not measured by quantity</span>'}</td>
+      <td style="min-width:110px;"><div style="height:6px;border-radius:3px;background:#e2e8f0;"><div style="height:6px;border-radius:3px;background:#475569;width:${progress}%;"></div></div>
+        <span style="font-size:11px;color:#475569;">${progress}%</span></td>
+      <td>${reports ? `${reports} approved` : '<span style="color:#94a3b8;">No approved work yet</span>'}</td>
+      <td>${row.last_approved_date ? escapeHtml(String(row.last_approved_date).slice(0, 10)) : '<span style="color:#94a3b8;">None</span>'}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="pe-panel" style="padding:0;overflow:hidden;">
+    <div style="padding:12px 14px 6px;">${head}</div>
+    <div style="overflow:auto;"><table class="pe-table">
+      <thead><tr>${['Task', 'Share of activity', 'Approved quantity', 'Progress', 'Approved reports', 'Last approved'].map((label) => `<th style="color:#475569;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;">${label}</th>`).join('')}</tr></thead>
+      <tbody>${body}</tbody>
+      <tfoot><tr><td colspan="3" style="font-weight:600;color:#334155;">Claimed activity progress (weighted by task share)</td><td colspan="3" style="font-weight:600;color:#334155;">${claimed}%</td></tr></tfoot>
+    </table></div>
+    <p style="font-size:11px;color:#64748b;margin:0;padding:8px 14px 12px;">Only approved reports are counted. Who reported, notes and report details stay with the contractor unless they are shared with a request.</p>
+  </div>`;
+}
+
 function _peActivityCardHtml(card, verificationData = { verifications: [], rework: [] }, selectedTab = 'overview') {
   verificationData = verificationData || { verifications: [], rework: [] };
   const activity = card.activity || {};
@@ -17061,12 +17147,14 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
   const canCertify = Boolean(activity.drives_milestone && activity.side === 'Contractor' && viewerSide !== 'Client');
   const tabs = [
     ['overview', 'Overview'],
-    ...(hideTasksTab ? [] : [['tasks', 'Tasks', tasks.length]]),
-    ['progress', 'Progress'],
-    ['attachments', 'Attachment', attachments.length + (activity.linked_file_name ? 1 : 0)],
-    ...(canCertify ? [['certification', 'Certification', verifications.filter(item => item.status === 'pending').length, true]] : []),
+    ['work', 'Work', hideTasksTab ? 0 : tasks.length],
+    ...(canCertify ? [['certification', 'Review', verifications.filter(item => item.status === 'pending').length, true]] : []),
+    ['attachments', 'Files', attachments.length + (activity.linked_file_name ? 1 : 0)],
   ];
-  const activeTab = tabs.some(([id]) => id === selectedTab) ? selectedTab : 'overview';
+  // Older saved tab keys (tasks, progress) now live inside the Work tab.
+  const legacyTabKeys = { tasks: 'work', progress: 'work' };
+  const requestedTab = legacyTabKeys[selectedTab] || selectedTab;
+  const activeTab = tabs.some(([id]) => id === requestedTab) ? requestedTab : 'overview';
   const certified = Math.max(0, Math.min(100, Number(activity.certified_progress_pct) || 0));
   const progress = clientView ? certified : Math.max(0, Math.min(100, Number(activity.progress_pct) || 0));
   const start = activity.start_date ? String(activity.start_date).slice(0, 10) : '—';
@@ -17222,27 +17310,39 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
       <p style="font-size:13px;color:#475569;margin:6px 0 0;">
         ${Number(card.activity_summary?.approved_report_count) || 0} approved reports
         ${Number(card.activity_summary?.approved_quantity) ? ` · ${Number(card.activity_summary.approved_quantity)} ${escapeHtml(activity.unit || '')} reported` : ''}.
-        Report details and files are private here; review requests show only the details and evidence the contractor selected to share.
+        Report details and files are private here unless the contractor shares them with a review request.
       </p>
-    </div>` : `
+    </div>
+    ${_peWorkByTaskHtml(card.work_by_task, activity.unit, 'Approved work by task (current)', 'This activity has no tasks yet.')}` : `
     <div class="pe-panel" style="padding:0;overflow:hidden;">
       ${orderedReports.length ? `<div style="overflow:auto;"><table class="pe-table">
         <thead><tr>${['Date','Task','Reported by','Approved work','Running total','Work done','Evidence'].map(label => `<th style="color:#475569;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;">${label}</th>`).join('')}</tr></thead>
         <tbody>${reportRows}</tbody></table></div>` : '<p style="color:#475569;padding:16px;margin:0;">No approved task reports have been recorded yet.</p>'}
     </div>
-    <p style="font-size:12px;color:#475569;margin:10px 0 0;">Only approved reports are listed. Reports waiting for review are on the Tasks tab.</p>`}`;
+    <p style="font-size:12px;color:#475569;margin:10px 0 0;">Only approved reports are listed. Reports waiting for review are on the task rows above.</p>`}`;
   const verificationPanel = canCertify
     ? _peCertificationPanel(activity, tasks, reports, verifications, rework, viewerSide)
     : '';
+  const taskPane = hideTasksTab ? '' : `<div>${taskRows}${card.can_add_task ? `<div style="margin-top:12px;"><button class="rc-btn rc-btn--sm" type="button" data-pe-action="add-task" data-activity-id="${escapeHtml(String(activity.id))}">Add task</button></div>` : ''}</div>`;
+  const workPane = `
+    ${hideTasksTab ? '' : `<div class="pe-label" style="margin:0 0 8px;">Tasks</div>${taskPane}`}
+    <div class="pe-label" style="margin:${hideTasksTab ? '0' : '18px'} 0 8px;">${clientView ? 'Certified progress' : 'Approved reports'}</div>
+    ${progressPanel}`;
   const panes = {
     overview,
-    tasks: `<div>${taskRows}${card.can_add_task ? `<div style="margin-top:12px;"><button class="rc-btn rc-btn--sm" type="button" data-pe-action="add-task" data-activity-id="${escapeHtml(String(activity.id))}">Add task</button></div>` : ''}</div>`,
-    progress: progressPanel,
+    work: workPane,
     attachments: attachmentPanel,
     certification: verificationPanel,
   };
   return `
     <div style="background:var(--section-bg);border:1px solid var(--section-border);border-radius:var(--section-radius);overflow:hidden;">
+      <nav aria-label="Where you are" class="pe-crumbs">
+        ${milestoneTitle ? `<button type="button" class="pe-crumb" data-pe-action="open-milestone"
+          data-milestone-kind="${activity.baseline_milestone_id ? 'baseline' : 'additional'}"
+          data-milestone-id="${escapeHtml(String(activity.baseline_milestone_id || activity.additional_milestone_id || ''))}"
+          data-milestone-title="${escapeHtml(milestoneTitle)}">${escapeHtml(milestoneTitle)}</button><span class="pe-crumb-sep" aria-hidden="true">›</span>` : ''}
+        <span class="pe-crumb pe-crumb--here" aria-current="page">${escapeHtml(activity.title || 'Activity')}</span>
+      </nav>
       <div class="pe-kpis">
         ${(() => {
           const variance = Math.round((progress - plannedToday) * 10) / 10;
@@ -17448,7 +17548,7 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
         <div style="margin-top:8px;color:#334155;font-size:12px;">Claimed at request ${Number(item.claimed_progress_pct) || 0}% · Current certified progress ${Number(activity.certified_progress_pct) || 0}%</div>
       ${item.request_note ? `<p style="margin:8px 0;color:#475569;font-size:12px;">Request note: ${escapeHtml(item.request_note)}</p>` : ''}
       ${attachmentHtml(item.attachments) ? `<div style="margin-top:8px;">Request files: ${attachmentHtml(item.attachments)}</div>` : ''}
-      ${figureHtml}${sharedSummaryHtml}<div style="margin-top:12px;"><strong style="font-size:12px;color:#334155;">${consultantView ? 'Activity progress summary by this cut-off' : 'Approved work reported by this cut-off'}</strong>${evidenceHtml}</div>
+      ${figureHtml}${consultantView ? _peWorkByTaskHtml(item.work_by_task, activity.unit, 'Work covered by this request (as of the request)', 'No task breakdown was stored with this request.') : ''}${sharedSummaryHtml}<div style="margin-top:12px;"><strong style="font-size:12px;color:#334155;">${consultantView ? 'Activity progress summary by this cut-off' : 'Approved work reported by this cut-off'}</strong>${evidenceHtml}</div>
       ${signerHtml}${item.decision_reason ? `<p style="font-size:12px;color:#475569;">Decision note: ${escapeHtml(item.decision_reason)}</p>` : ''}
       ${item.decided_by_role ? `<div style="font-size:11px;color:#64748b;">Decision by ${escapeHtml(item.decided_by_role)} on ${escapeHtml(String(item.decided_at || '').slice(0, 10))}${item.certified_progress_pct != null ? ` · Certified ${Number(item.certified_progress_pct)}%` : ''}</div>` : ''}
       ${revisionHistory}
