@@ -13670,14 +13670,7 @@ bottomContent.addEventListener('change', (event) => {
   const supportingGroup = event.target.closest('[data-wc-supporting-group]');
   if (supportingGroup && event.target.matches('[data-supporting-type]')) {
     _wcUpdateSupportingAttachmentGroup(supportingGroup);
-    return;
   }
-  const dateInput = event.target.closest('input[id^="wc-pr-date-"]');
-  if (!dateInput) return;
-  const taskId = dateInput.id.slice('wc-pr-date-'.length);
-  const task = (recordsCache['work-center'] || []).find((record) => String(record.id) === taskId);
-  const delayInput = document.getElementById(`wc-pr-delay-days-${taskId}`);
-  if (delayInput) delayInput.value = String(_wcReportDelayDays(dateInput.value, task?.end_date));
 });
 
 bottomContent.addEventListener('input', (event) => {
@@ -13703,6 +13696,11 @@ function _wcFmtDate(raw) {
   const date = new Date(year, month - 1, day);
   if (!year || !month || !day || Number.isNaN(date.getTime())) return '—';
   return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function _wcTodayDate() {
+  const today = new Date();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 }
 
 function _wcReportDelayDays(reportDate, plannedEndDate) {
@@ -14841,13 +14839,8 @@ function _wcMemberView(task, myEntries) {
         <p style="font-size:12px;line-height:1.55;color:#526078;margin:0;">
           Submit one report for the work completed on the selected date. Describe what was done and enter the measured result below.
           A leader must approve the report before it changes task or activity progress.</p>
+        <p style="font-size:12px;color:#526078;margin:0;">Report date is recorded automatically when you submit.</p>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <div>
-            ${_wcLabel('Report Date *')}
-            <input id="wc-pr-date-${task.id}" type="date"
-              value="${new Date().toISOString().slice(0,10)}"
-              style="width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;box-sizing:border-box;"/>
-          </div>
           <div>${_wcReportFieldsHtml(task)}</div>
         </div>
         <div>
@@ -15509,7 +15502,7 @@ function _wcInitReportWizard(actionPanel, task) {
   };
   const byId = (name) => actionPanel.querySelector(`#wc-pr-${name}-${CSS.escape(taskId)}`);
   const groups = {
-    progress: ['date', 'work', 'qty', 'failed', 'pct', 'stage'],
+    progress: ['work', 'qty', 'failed', 'pct', 'stage'],
     photos: ['photos'],
     site: ['manpower', 'equipment', 'materials', 'issues', 'notes', 'weather', 'safety',
       'delay-cause', 'delay-days', 'delay-note'],
@@ -15575,7 +15568,6 @@ function _wcInitReportWizard(actionPanel, task) {
   wizard.__wcSetStep = setStep;
   const validateProgress = () => {
     const type = _wcTypeOf(task);
-    if (!byId('date')?.value) return 'Report date is required.';
     if (!byId('work')?.value.trim()) return 'Please describe the work done.';
     if ((type === 'quantity' || type === 'count') && !(Number(byId('qty')?.value) > 0))
       return type === 'count' ? 'Enter how many items were completed.' : 'Enter the quantity done.';
@@ -15642,12 +15634,15 @@ function _wcBeginReportEdit(actionPanel, task, entry) {
   if (active && String(active.id) !== String(entry.id))
     return alert('Finish or cancel the current report edit first.');
   window._wcEditingReportByTask ||= {};
-  window._wcEditingReportByTask[taskId] = { id: String(entry.id), status: entry.validation_status };
+  window._wcEditingReportByTask[taskId] = {
+    id: String(entry.id),
+    status: entry.validation_status,
+    reportDate: String(entry.report_date || '').slice(0, 10),
+  };
   const setField = (name, value) => {
     const field = actionPanel.querySelector(`#wc-pr-${name}-${CSS.escape(taskId)}`);
     if (field && field.type !== 'file') field.value = value == null ? '' : String(value);
   };
-  setField('date', String(entry.report_date || '').slice(0, 10));
   setField('work', entry.work_done || '');
   setField('qty', entry.quantity_done ?? '');
   setField('failed', entry.quantity_failed ?? 0);
@@ -16664,10 +16659,9 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
     const g = (name) => document.getElementById(`wc-pr-${name}-${taskId}`);
     const task = (recordsCache['work-center'] || []).find((r) => String(r.id) === String(taskId)) || {};
     const type = _wcTypeOf(task);
-    const reportDate = g('date')?.value;
+    const reportDate = editing?.reportDate || _wcTodayDate();
     const workDone = g('work')?.value.trim();
     if (!workDone) return alert('Please describe the work done.');
-    if (!reportDate) return alert('Report date is required.');
 
     const form = new FormData();
     reportForm = form;
