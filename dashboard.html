@@ -14811,8 +14811,10 @@ function _wcMemberView(task, myEntries) {
         <p style="margin:8px 0 0;font-size:12px;color:#64748b;">This task is closed. New progress reports cannot be submitted.</p>
       </div>
       <div style="padding:12px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">
+        <div data-wc-member-history>
         <strong style="font-size:13px;">My Previous Submissions</strong>
         <div style="margin-top:8px;">${myHistoryHtml}</div>
+        </div>
       </div>
     </div>`;
   }
@@ -14833,6 +14835,7 @@ function _wcMemberView(task, myEntries) {
       </div>
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;
         display:flex;flex-direction:column;gap:10px;">
+        <div data-wc-member-progress style="display:flex;flex-direction:column;gap:10px;">
         <div style="font-size:13px;font-weight:700;color:#007B8A;padding-bottom:10px;
           border-bottom:2px solid #e5e7eb;">Report progress</div>
         <p style="font-size:12px;line-height:1.55;color:#526078;margin:0;">
@@ -14939,7 +14942,8 @@ function _wcMemberView(task, myEntries) {
           style="width:100%;padding:11px;font-size:13px;font-weight:700;
           background:#007B8A;color:#fff;border:none;border-radius:10px;cursor:pointer;">
           Submit Progress Report</button>
-        <div style="border-top:1px solid #e5e7eb;padding-top:10px;">
+        </div>
+        <div data-wc-member-history style="border-top:1px solid #e5e7eb;padding-top:10px;">
           <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">
             My Previous Submissions</div>
           <p style="font-size:11px;line-height:1.5;color:#64748b;margin:0 0 8px;">
@@ -15700,6 +15704,8 @@ function _wcBeginReportEdit(actionPanel, task, entry) {
   if (submitButton) submitButton.textContent = entry.validation_status === 'rejected'
     ? 'Save and resubmit' : 'Save changes';
   wizard.__wcSetStep(0);
+  wizard.closest('[data-wc-pane="record-progress"]')
+    ?.parentElement?.querySelector('[data-wc-tab="record-progress"]')?.click();
   wizard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -15797,7 +15803,7 @@ function _wcOpenReportPanel(card) {
   });
 }
 
-function _wcEnhanceReports(actionPanel, task, reports, leader) {
+function _wcEnhanceReports(actionPanel, task, reports, leader, progressPanel = actionPanel) {
   const firstCard = actionPanel.querySelector('[data-wc-report-card]');
   if (!firstCard) return;
   const list = firstCard.parentElement;
@@ -15878,15 +15884,15 @@ function _wcEnhanceReports(actionPanel, task, reports, leader) {
       loadMore.hidden = pageItems.length <= visibleCount;
     });
   }
-  const wizard = actionPanel.querySelector('[aria-label="Add progress report"]');
-  wizard?.querySelector('[data-wc-report-cancel-edit]')?.addEventListener('click', () => _wcResetReportEdit(actionPanel, taskId));
+  const wizard = progressPanel.querySelector('[aria-label="Add progress report"]');
+  wizard?.querySelector('[data-wc-report-cancel-edit]')?.addEventListener('click', () => _wcResetReportEdit(progressPanel, taskId));
   if (!leader) {
     for (const button of actionPanel.querySelectorAll('[data-action="wc-edit-progress"]')) {
       button.addEventListener('click', () => {
         const card = button.closest('[data-wc-report-card]');
         let report;
         try { report = JSON.parse(card?.dataset.reportJson || 'null'); } catch {}
-        if (report) _wcBeginReportEdit(actionPanel, task, report);
+        if (report) _wcBeginReportEdit(progressPanel, task, report);
       });
     }
     for (const button of actionPanel.querySelectorAll('[data-action="wc-delete-progress"]')) {
@@ -15943,16 +15949,27 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
   actionPanel.style.padding = '8px 16px 16px';
   actionPanel.style.boxShadow = 'none';
 
-  const definitions = [
-    { key: 'overview', label: 'Overview' },
-    { key: 'reports', label: 'Reports', count: reports.length },
-  ];
+  const memberProgressPanel = !leader && assigned
+    ? actionPanel.querySelector('[data-wc-member-progress]') : null;
+  const memberHistoryPanel = !leader && assigned
+    ? actionPanel.querySelector('[data-wc-member-history]') : null;
+  const definitions = leader
+    ? [
+      { key: 'overview', label: 'Overview' },
+      { key: 'reports', label: 'Reports', count: reports.length },
+    ]
+    : [
+      { key: 'overview', label: 'Overview' },
+      ...(memberProgressPanel ? [{ key: 'record-progress', label: 'Record progress' }] : []),
+      ...(memberHistoryPanel ? [{ key: 'my-submissions', label: 'My submissions', count: reports.length }] : []),
+    ];
   const sessionKey = `wc-task-tab-${taskId}`;
   let selected = '';
   try { selected = sessionStorage.getItem(sessionKey) || ''; } catch {}
   const keys = definitions.map((tab) => tab.key);
   if (selected === 'details') selected = 'overview';
-  if (['progress', 'my-reports'].includes(selected)) selected = 'reports';
+  if (selected === 'progress') selected = memberProgressPanel ? 'record-progress' : 'reports';
+  if (['my-reports', 'reports'].includes(selected) && memberHistoryPanel) selected = 'my-submissions';
   if (selected === 'attachments') selected = 'files';
   if (!keys.includes(selected)) {
     selected = leader && activeReports ? 'reports' : 'overview';
@@ -15965,16 +15982,20 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
         ${tab.label}${tab.count != null ? ` <span class="detail-tab-count">${tab.count}</span>` : ''}
       </button>`).join('')}
     </div>
-    <div data-wc-pane="overview" role="tabpanel" ${selected !== 'overview' ? 'hidden' : ''}></div>
-    <div data-wc-pane="reports" role="tabpanel" ${selected !== 'reports' ? 'hidden' : ''}></div>`;
+    ${definitions.map((tab) => `<div data-wc-pane="${tab.key}" role="tabpanel" ${selected !== tab.key ? 'hidden' : ''}></div>`).join('')}`;
   container.appendChild(shell);
   const overviewPane = shell.querySelector('[data-wc-pane="overview"]');
   overviewPane.insertAdjacentHTML('beforeend', _wcTaskSummaryHtml(task, reports, queries || [], leader));
   overviewPane.appendChild(detailsPanel);
   detailsPanel.insertAdjacentHTML('afterbegin', '<h3 style="margin:0 0 12px;font-size:15px;color:#0f172a;">Details</h3>');
-  const reportPane = shell.querySelector('[data-wc-pane="reports"]');
-  reportPane.appendChild(actionPanel);
-  _wcInitReportWizard(actionPanel, task);
+  const reportPane = shell.querySelector(`[data-wc-pane="${leader ? 'reports' : 'my-submissions'}"]`);
+  if (memberProgressPanel) {
+    shell.querySelector('[data-wc-pane="record-progress"]').appendChild(memberProgressPanel);
+    if (memberHistoryPanel) reportPane.appendChild(memberHistoryPanel);
+  } else {
+    reportPane?.appendChild(actionPanel);
+  }
+  _wcInitReportWizard(memberProgressPanel || actionPanel, task);
 
   if (leader) {
     const pending = reports.filter((entry) => entry.validation_status === 'pending').length;
@@ -15992,11 +16013,10 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
   const orphanQueries = (queries || []).filter((query) =>
     !query.report_id || !reportIds.has(String(query.report_id)));
   if (orphanQueries.length) {
-    const queryPane = shell.querySelector('[data-wc-pane="reports"]');
-    queryPane?.insertAdjacentHTML('afterbegin',
+    reportPane?.insertAdjacentHTML('afterbegin',
       `<div data-wc-orphan-queries style="margin:4px 0 14px;">${_wcQueryPanelHtml(task, null, orphanQueries, leader)}</div>`);
   }
-  _wcEnhanceReports(actionPanel, task, reports, leader);
+  _wcEnhanceReports(memberHistoryPanel || actionPanel, task, reports, leader, memberProgressPanel || actionPanel);
   shell.querySelector('[data-wc-attachment-upload]')?.addEventListener('click', async (event) => {
     const button = event.currentTarget;
     const input = shell.querySelector('[data-wc-attachment-input]');
