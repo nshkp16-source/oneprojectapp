@@ -718,6 +718,14 @@
     .dc-inner { display: contents; }
     .dc-loading { margin: 0; padding: 18px 0; text-align: center; color: #94a3b8; font-size: 13px; }
     .dc-body { font-size: 13px; line-height: 1.65; color: #334155; }
+    .dc-sign-option {
+      display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px;
+      border: 2px solid #0f8b8d; border-radius: 9px; background: #f0fdfa;
+      color: #134e4a; cursor: pointer;
+    }
+    .dc-sign-option input { width: 20px; height: 20px; flex: none; margin: 1px 0 0; accent-color: #007b8a; }
+    .dc-sign-option strong { display: block; font-size: 15px; line-height: 1.4; }
+    .dc-sign-option-hint { display: block; margin-top: 3px; font-size: 13px; line-height: 1.5; color: #475569; }
     .rc-section { padding: 16px; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; }
     .rc-section-title {
       display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 0 0 12px;
@@ -21377,9 +21385,10 @@ function _dcIsAuthor(doc) {
   return String(doc.creator_id) === String(window.currentUserId) && norm(doc.creator_role) === norm(window.currentUserRole);
 }
 function _dcSignOption(id, hint) {
-  return `<label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;color:#374151;cursor:pointer;">
-    <input type="checkbox" id="${id}" style="margin-top:3px;"/>
-    <span><strong>Sign with my stamp</strong> (optional)<br><span style="font-size:11px;color:#6b7280;">${hint || 'You will choose where it goes on the page. PDF files only.'}</span></span></label>`;
+  return `<label class="dc-sign-option" for="${id}">
+    <input type="checkbox" id="${id}"/>
+    <span><strong>Add my signature stamp to the PDF <span style="font-weight:500;">(optional)</span></strong>
+      <span class="dc-sign-option-hint">${hint || 'You will choose where it goes on the page. PDF files only.'}</span></span></label>`;
 }
 function _dcPickPlacement(file) {
   return new Promise(resolve => openStampPlacementModal(file, p => resolve(p), () => resolve(null)));
@@ -21603,7 +21612,7 @@ function _dcDetailsHtml(doc, inControl) {
 // ── Document & Approval ───────────────────────────────────────────────────
 function _daDetailHtml(doc, leader, isCreator, events = []) {
   const id = doc.id;
-  let note = '', bar = '', before = '';
+  let note = '', bar = '', before = '', stampOption = '';
   if (doc.status === 'rejected') {
     note = rcNote(`The leader asked for a correction: <strong>${escapeHtml(doc.rejection_reason || 'No reason was written.')}</strong>`, 'x', 'danger');
   }
@@ -21613,8 +21622,8 @@ function _daDetailHtml(doc, leader, isCreator, events = []) {
         <label style="${_daLabelStyle()}">Reason for returning *</label>
         <textarea id="da-review-comment-${id}" placeholder="Say what must be corrected…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:6px;"></textarea>
         <div style="font-size:11px;color:#6b7280;margin-bottom:10px;">Press <strong>Send back to submitter</strong> to return it, or <a href="#" data-action-link="da-reason-cancel" style="color:#374151;">cancel</a>.</div>
-      </div>
-      <div id="da-sign-box-${id}" style="margin-bottom:4px;">${_dcSignOption('da-sign-stamp-' + id, 'Puts your stamp on the PDF. You choose the position next.')}</div>`;
+      </div>`;
+    stampOption = _dcSignOption('da-sign-stamp-' + id, 'Optional: your approval is recorded either way. If selected, you will choose where the stamp goes before signing.');
     bar = _dcBtn('da-approve', 'Sign document', 'ok', 'check') + _dcBtn('da-reject', 'Return to submitter', 'danger', 'x');
   } else if (leader && doc.status === 'approved') {
     bar = _dcBtn('da-share', 'Share to Control &amp; Reports', 'warn', 'inbox') + (isCreator ? _dcBtn('da-delete', 'Delete', 'danger', 'trash') : '');
@@ -21633,8 +21642,12 @@ function _daDetailHtml(doc, leader, isCreator, events = []) {
   } else if (doc.status === 'shared') {
     note = rcNote('This document is now in Control &amp; Reports, where everyone on this side can read it and comment.', 'check', 'success');
   }
+  const actionBar = bar ? `<div class="rc-actionbar">${bar}</div>` : '';
   const standing = rcSection('info', 'Where this document stands',
-    _dcEvents(_dcStory(doc, false)) + note + before + (bar ? `<div class="rc-actionbar">${bar}</div>` : ''));
+    _dcEvents(_dcStory(doc, false)) + note + (!stampOption ? before + actionBar : ''));
+  const review = stampOption
+    ? rcSection('check', 'Leader review', stampOption + before + actionBar)
+    : '';
 
   const prog = _dcProgress(doc, false);
   const slides = [
@@ -21647,7 +21660,7 @@ function _daDetailHtml(doc, leader, isCreator, events = []) {
       html: rcSection('workflow', 'Progress of this document', _dcTimeline(prog.steps), `${prog.done} of ${prog.steps.length} steps`) },
     _dcHistorySlide(events),
   ];
-  return standing + rcDeckHtml(slides, 'details');
+  return standing + review + rcDeckHtml(slides, 'details');
 }
 
 // ── Control & Reports ─────────────────────────────────────────────────────
