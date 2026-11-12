@@ -12881,7 +12881,7 @@ async function _openTaskQueryNotification(queryId) {
   const opened = await _openRecordNotification('work_center_task', taskId);
   if (!opened) return false;
   const detailSelector = `#wc-detail-${CSS.escape(String(taskId))}`;
-  document.querySelector(`${detailSelector} [data-wc-tab="${tabKey}"], ${detailSelector} [data-wc-tab="progress"]`)?.click();
+  document.querySelector(`${detailSelector} [data-wc-tab="${tabKey}"], ${detailSelector} [data-wc-tab="reports"]`)?.click();
   const queryCard = await _waitForElement(`${detailSelector} #wc-query-${CSS.escape(String(queryId))}`);
   if (!queryCard) return false;
   const report = queryCard.closest('[data-wc-report-card]');
@@ -13980,7 +13980,14 @@ function _wcHistoryText(item) {
     report_submitted: 'Report submitted', comment_added: 'Comment added', location_updated: 'Location updated',
     task_updated: 'Task details updated', checklist_created: 'Checklist created', checklist_item_updated: 'Checklist item updated',
     link_added: 'Link added', dependency_added: 'Earlier-task warning added',
+    task_unlinked: 'Task unlinked from activity', activity_deleted: 'Activity deleted; task retained',
   };
+  if (['report_edited', 'report_deleted'].includes(item.action)) {
+    const label = item.action === 'report_edited' ? 'Report edited' : 'Report deleted';
+    return `${label}. ${String(detail.summary || 'Report details were changed.')} Summary only.`;
+  }
+  if (['task_unlinked', 'activity_deleted'].includes(item.action))
+    return String(detail.summary || labels[item.action]);
   if (item.action === 'report_decision') return decisions[detail.decision] || 'Report reviewed';
   return labels[item.action] || String(item.action || '').replace(/_/g, ' ');
 }
@@ -13998,38 +14005,44 @@ function _wcCardHeaderHtml(task, location) {
   return chips ? `<div data-wc-card-header style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">${chips}</div>` : '';
 }
 
-// Four small figures: what is done, the task's share of its activity, report count, checklist progress.
+// Task card KPIs use approved progress and the task's own dates.
 function _wcCardTilesHtml(task, entries, checklists) {
   const type = _wcTypeOf(task);
   const approved = entries.filter((entry) => entry.validation_status === 'approved');
-  const pending = Number(task.pending_report_count ?? entries.filter((entry) => entry.validation_status === 'pending').length);
-  const tile = (label, value, sub) => `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:9px 12px;min-width:0;">
-    <div style="font-size:11px;color:#64748b;">${label}</div>
-    <div style="font-size:18px;font-weight:600;color:#1f2937;margin-top:2px;">${value}${sub ? ` <span style="font-size:12px;font-weight:400;color:#64748b;">${sub}</span>` : ''}</div></div>`;
-  const tiles = [];
   const progress = Math.max(0, Math.min(100, Number(task.progress_pct) || 0));
-  tiles.push(`<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:9px 12px;min-width:0;">
-    <div style="font-size:11px;color:#64748b;">Task progress</div>
-    <div style="font-size:18px;font-weight:600;color:#1f2937;margin-top:2px;">${progress}%</div>
-    <div style="height:6px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-top:6px;">
-      <div style="height:100%;width:${progress}%;background:#007B8A;border-radius:999px;"></div></div></div>`);
-  if (type === 'quantity' || type === 'count') {
-    const done = Number(task.approved_quantity_done ?? approved.reduce((sum, entry) => sum + (Number(entry.quantity_done) || 0), 0));
-    const target = Number(task.target_quantity);
-    tiles.push(tile(type === 'count' ? 'Items completed' : 'Quantity done', escapeHtml(String(done)),
-      target > 0 ? `of ${escapeHtml(String(target))}${escapeHtml(_wcUnitText(task))}` : ''));
-  } else if (type === 'stages') {
-    const stages = _wcStagesOf(task);
-    const doneStages = new Set(approved.map((entry) => String(entry.stage_id)).filter(Boolean));
-    tiles.push(tile('Stages done', String(stages.filter((stage) => stage.completed_at || doneStages.has(String(stage.id))).length), `of ${stages.length}`));
-  }
-  const grid = (items) => `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;">${items.join('')}</div>`;
-  const extra = [];
-  if (task.activity_id && task.weight_pct != null) extra.push(tile('Share of activity', `${Number(task.weight_pct)}%`));
-  extra.push(tile('Reports', String(Number(task.total_report_count ?? entries.length)), pending ? `${pending} pending` : ''));
-  return `<div data-wc-card-tiles style="margin-bottom:12px;">${grid(tiles)}
-    <details style="margin-top:8px;"><summary style="cursor:pointer;font-size:12px;font-weight:600;color:#0f766e;">More figures</summary>
-      <div style="margin-top:8px;">${grid(extra)}</div></details></div>`;
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const toDay = (value) => {
+    const text = String(value || '').slice(0, 10);
+    const stamp = Date.parse(`${text}T00:00:00Z`);
+    return Number.isFinite(stamp) ? stamp : null;
+  };
+  const start = toDay(task.start_date);
+  const end = toDay(task.end_date);
+  const planned = start == null || end == null || end <= start ? 0
+    : Math.max(0, Math.min(100, (todayUtc - start) / (end - start) * 100));
+  const variance = progress - planned;
+  const paceText = Math.abs(variance) < 0.05 ? 'On plan'
+    : `${variance > 0 ? 'Ahead' : 'Behind'} by ${Math.abs(variance).toFixed(1)}%`;
+  const dueDays = end == null ? null : Math.round((end - todayUtc) / 86400000);
+  const dueText = dueDays == null ? 'Dates not set'
+    : dueDays > 0 ? `${dueDays} days left`
+      : dueDays === 0 ? 'Due today' : `${Math.abs(dueDays)} days overdue`;
+  const done = Number(task.approved_quantity_done ?? approved.reduce((sum, entry) => sum + (Number(entry.quantity_done) || 0), 0));
+  const target = Number(task.target_quantity);
+  const quantityHint = ['quantity', 'count'].includes(type) && target > 0
+    ? `${done} of ${target}${_wcUnitText(task)} approved` : '';
+  const cell = (label, value, note, fill = null) => `<div style="min-width:0;padding:16px 18px;">
+    <div style="font-size:13px;color:#475569;">${label}</div>
+    <div style="font-size:24px;line-height:1.15;font-weight:650;color:#0f172a;margin-top:2px;">${value}</div>
+    ${fill == null ? '' : `<div style="height:6px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin-top:8px;"><div style="height:100%;width:${fill}%;background:#0f766e;border-radius:999px;"></div></div>`}
+    ${note ? `<div style="font-size:12px;color:#475569;margin-top:4px;">${note}</div>` : ''}
+  </div>`;
+  return `<div data-wc-card-tiles style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin:0 -16px 0;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;background:#fff;">
+    ${cell('Progress', `${progress.toFixed(1)}%`, quantityHint, progress)}
+    <div style="border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;">${cell('Planned today', `${planned.toFixed(1)}%`, paceText)}</div>
+    ${cell('Due', dueText, '')}
+  </div>`;
 }
 
 async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
@@ -14078,12 +14091,13 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
     </div>`).join('');
   const checklistSection = `
     ${checklistsHtml || '<p style="font-size:12px;color:#64748b;margin:0;">No checklist items.</p>'}
-    ${leader ? `<details style="margin-top:12px;"><summary style="cursor:pointer;${heading}">Add checklist</summary>
+    ${leader ? `<button type="button" data-checklist-open style="margin-top:12px;min-height:44px;padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#334155;cursor:pointer;${heading}">Add checklist</button>
+      <div data-checklist-form hidden style="margin-top:8px;">
       <input data-card-field="checklist-title" placeholder="Checklist title" style="${box};margin-top:8px;"/>
       <textarea data-card-field="checklist-items" placeholder="One item per line" style="${box};margin-top:7px;min-height:65px;"></textarea>
       <label style="display:block;font-size:12px;margin-top:6px;"><input type="checkbox" data-card-field="checklist-required"/> Required before report approval</label>
       <button data-action="wc-task-card-action" data-card-operation="checklist-create" style="margin-top:7px;">Create checklist</button>
-    </details>` : ''}`;
+      </div>` : ''}`;
 
   const historySection = (data.history || []).length
     ? `<ul style="list-style:none;margin:0;padding:0;">${(data.history || []).map((item) => `
@@ -14104,14 +14118,14 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   const moreSection = `
     <div style="font-size:12px;color:#475569;"><strong>Location:</strong> ${[location.block, location.floor, location.zone, location.grid, location.drawing]
       .filter(Boolean).map(escapeHtml).join(' \u00b7 ') || 'Not set'}</div>
-    ${leader ? `<details style="margin-top:10px;"><summary style="cursor:pointer;${heading}">Edit task location</summary>
+    ${leader ? `<div style="margin-top:10px;"><strong style="${heading}">Edit task location</strong>
       <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:8px;">
         ${['block','floor','zone','grid','drawing'].map((key) => `<input data-card-field="${key}" value="${escapeHtml(location[key] || '')}" placeholder="${key[0].toUpperCase()+key.slice(1)}" style="${box}"/>`).join('')}
       </div>
       <button data-action="wc-task-card-action" data-card-operation="location" style="margin-top:8px;">Save location</button>
-    </details>` : ''}
+    </div>` : ''}
     <div style="margin-top:14px;"><strong style="${heading}">Linked items</strong>${links || '<p style="font-size:12px;color:#64748b;margin:4px 0 0;">No links yet.</p>'}</div>
-    ${leader ? `<details style="margin-top:10px;"><summary style="cursor:pointer;${heading}">Add link</summary>
+    ${leader ? `<div style="margin-top:10px;"><strong style="${heading}">Add link</strong>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:8px;">
         <select data-card-field="link-type" style="${box}">
           <option value="task">Task</option><option value="query">Task question</option>
@@ -14124,19 +14138,19 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
       </div>
       ${linkOptionsError ? `<div role="status" style="font-size:11px;color:#b91c1c;margin-top:5px;">${escapeHtml(linkOptionsError)}</div>` : ''}
       <button data-action="wc-task-card-action" data-card-operation="link-create" style="margin-top:7px;">Add link</button>
-    </details>` : ''}
+    </div>` : ''}
     ${dependencies ? `<div style="margin-top:14px;font-size:12px;"><strong>Earlier tasks (warning only)</strong><ul>${dependencies}</ul></div>` : ''}
-    ${leader ? `<details style="margin-top:10px;"><summary style="cursor:pointer;${heading}">Add earlier task warning</summary>
+    ${leader ? `<div style="margin-top:10px;"><strong style="${heading}">Add earlier task warning</strong>
       <select data-card-field="dependency" style="${box};margin-top:8px;">
         <option value="">Choose task</option>${(recordsCache['work-center'] || []).filter((item) => item.id !== task.id && item.side === task.side)
           .map((item) => `<option value="${escapeHtml(String(item.id))}">${escapeHtml(item.title)}</option>`).join('')}
       </select>
       <button data-action="wc-task-card-action" data-card-operation="dependency-create" style="margin-top:7px;">Add warning</button>
-    </details>
-    <details style="margin-top:10px;"><summary style="cursor:pointer;${heading}">Save as task template</summary>
+    </div>
+    <div style="margin-top:10px;"><strong style="${heading}">Save as task template</strong>
       <input data-card-field="template-name" placeholder="Template name" style="${box};margin-top:8px;"/>
       <button data-action="wc-task-card-action" data-card-operation="template-save" style="margin-top:7px;">Save template</button>
-    </details>
+    </div>
     <button data-action="wc-task-card-action" data-card-operation="duplicate"
       style="margin-top:12px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;cursor:pointer;">Duplicate task</button>` : ''}`;
 
@@ -14150,12 +14164,27 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   const tablist = container.querySelector('[role="tablist"]');
   const shell = tablist ? tablist.parentElement : null;
   const checklistItems = checklistData.flatMap((list) => list.items || []);
+  const incompleteRequiredChecklist = checklistData.some((list) => list.required_before_approval
+    && (list.items || []).some((item) => !item.is_complete));
+  if (incompleteRequiredChecklist) {
+    for (const approveButton of container.querySelectorAll('[data-validate-action="approved"]')) {
+      const reportId = approveButton.closest('[data-wc-report-card]')?.getAttribute('data-report-id') || 'pending';
+      const warningId = `wc-approval-checklist-warning-${task.id}-${reportId}`;
+      approveButton.disabled = true;
+      approveButton.setAttribute('aria-describedby', warningId);
+      approveButton.title = 'Complete required checklist items before approving reports.';
+      const warning = document.createElement('p');
+      warning.id = warningId;
+      warning.setAttribute('role', 'status');
+      warning.style.cssText = 'margin:0 0 8px;color:#92400e;font-size:12px;';
+      warning.textContent = 'Complete all required checklist items before approving this report.';
+      approveButton.parentElement.before(warning);
+    }
+  }
   const extraTabs = [
-    { key: 'attachments', label: 'Files', count: (data.attachments || []).length + (task.linked_file_name ? 1 : 0)
-      + entries.reduce((total, entry) => total + (entry.attachment_name ? 1 : 0)
-        + (Array.isArray(entry.supporting_attachments) ? entry.supporting_attachments.length : 0), 0),
-      html: _wcFilesHtml(task, entries, data.attachments, leader) },
-    { key: 'comments', label: 'Discussion', count: (data.comments || []).length, html: commentsSection },
+    { key: 'files', label: 'Files',
+      count: _wcCollectTaskFiles(task, entries, data.attachments, data.report_files).length,
+      html: _wcFilesHtml(task, entries, data.attachments, true, data.upload_limits, data.report_files) },
   ];
   // Folded in: the checklist sits inside Details, and History lives behind the "⋯" menu.
   const checklistPart = { key: 'checklist', label: 'Checklist', count: checklistItems.length ? `${checklistItems.filter((i) => i.is_complete).length}/${checklistItems.length}` : null, html: checklistSection };
@@ -14196,8 +14225,7 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
       bar.innerHTML = `<button type="button" class="rc-btn" style="min-height:44px;padding:0 20px;font-weight:700;">${escapeHtml(label)}</button>`;
       shell.appendChild(bar);
       bar.querySelector('button').addEventListener('click', () => {
-        shell.querySelector(`[data-wc-tab="${leader ? 'reports' : 'progress'}"]`)?.click();
-        if (leader) shell.querySelector('[data-report-filter="pending"]')?.click();
+          shell.querySelector('[data-wc-tab="reports"]')?.click();
         shell.querySelector('[role="tablist"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     }
@@ -14205,7 +14233,7 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   shell.querySelector('[data-wc-crumb-activity]')?.addEventListener('click', (event) => {
     _openActivityCardInPanel(event.currentTarget.getAttribute('data-wc-crumb-activity'));
   });
-  const detailsPane = shell.querySelector('[data-wc-pane="details"]');
+  const detailsPane = shell.querySelector('[data-wc-pane="overview"]');
   if (detailsPane) {
     const checklistWrap = document.createElement('div');
     checklistWrap.style.cssText = 'padding:4px 16px 8px;';
@@ -14213,6 +14241,16 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
     checklistWrap.appendChild(makeSection('checklist', checklistPart.html));
     detailsPane.appendChild(checklistWrap);
     detailsPane.appendChild(makeSection('details-more', moreSection));
+  const commentsWrap = document.createElement('section');
+  commentsWrap.style.cssText = 'margin:14px 16px 0;padding:14px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;';
+  commentsWrap.innerHTML = `<h3 style="margin:0 0 8px;font-size:14px;color:#0f172a;">Comments</h3>${commentsSection}`;
+  detailsPane.appendChild(commentsWrap);
+  detailsPane.querySelector('[data-checklist-open]')?.addEventListener('click', (event) => {
+    const form = detailsPane.querySelector('[data-checklist-form]');
+    if (!form) return;
+    form.hidden = !form.hidden;
+    event.currentTarget.textContent = form.hidden ? 'Add checklist' : 'Cancel';
+  });
   }
   if (leader && detailsPane) {
     const typeSelect = detailsPane.querySelector('[data-card-field="link-type"]');
@@ -14253,6 +14291,7 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
     pane.style.padding = '8px 16px 16px';
     pane.appendChild(makeSection(tab.key, tab.html));
     shell.appendChild(pane);
+    if (tab.key === 'files') _wcInitTaskFiles(pane, task, entries, data.attachments, true, data.upload_limits, data.report_files);
   }
   const historyPane = document.createElement('div');
   historyPane.setAttribute('data-wc-pane', 'history');
@@ -14265,7 +14304,8 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   moreWrap.style.cssText = 'position:relative;margin-left:auto;display:inline-flex;';
   moreWrap.innerHTML = `<button type="button" class="detail-tab" data-wc-more aria-haspopup="true" aria-expanded="false" aria-label="More" title="More">\u22ef</button>
     <div data-wc-more-menu hidden style="position:absolute;right:0;top:100%;z-index:5;min-width:130px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 6px 18px rgba(15,23,42,.12);padding:4px;">
-      <button type="button" data-wc-more-history style="display:block;width:100%;text-align:left;padding:7px 10px;border:0;background:none;cursor:pointer;font-size:13px;">History</button></div>`;
+    <button type="button" data-wc-more-history style="display:block;width:100%;text-align:left;padding:7px 10px;border:0;background:none;cursor:pointer;font-size:13px;">History</button>
+    <button type="button" data-wc-more-pdf style="display:block;width:100%;text-align:left;padding:7px 10px;border:0;background:none;cursor:pointer;font-size:13px;">Download PDF</button></div>`;
   tablist.appendChild(moreWrap);
   const moreButton = moreWrap.querySelector('[data-wc-more]');
   const moreMenu = moreWrap.querySelector('[data-wc-more-menu]');
@@ -14277,6 +14317,19 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   };
   document.addEventListener('click', closeOnOutside);
   moreWrap.querySelector('[data-wc-more-history]').addEventListener('click', () => { setMenu(false); activate('history'); });
+  moreWrap.querySelector('[data-wc-more-pdf]').addEventListener('click', async (event) => {
+    setMenu(false);
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await _wcDownloadTaskPdf(task, entries, data.checklists || []);
+    } catch (error) {
+      console.error('Task PDF export failed:', error);
+      _wcSetTaskCardMessage(task.id, error.message || 'Could not download the task PDF.', true);
+    } finally {
+      button.disabled = false;
+    }
+  });
   const activate = (key) => {
     try { sessionStorage.setItem(sessionKey, key); } catch {}
     for (const tab of shell.querySelectorAll('[data-wc-tab]')) {
@@ -14293,7 +14346,7 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   }
   const primaryBarEl = shell.querySelector('[data-wc-primary-bar]');
   if (primaryBarEl) shell.appendChild(primaryBarEl); // keep it after the late-added panes
-  if (extraTabs.some((tab) => tab.key === stored) || stored === 'history') activate(stored);
+  if (['overview', 'reports', 'files'].includes(stored) || stored === 'history') activate(stored);
 }
 
 async function _wcOpenInternalTaskLink(type, targetId) {
@@ -14313,7 +14366,7 @@ async function _wcOpenInternalTaskLink(type, targetId) {
     opened = await _openRecordNotification('work_center_task', taskId);
     if (opened) {
       const detailSelector = `#wc-detail-${CSS.escape(String(taskId))}`;
-      document.querySelector(`${detailSelector} [data-wc-tab="${tabKey}"], ${detailSelector} [data-wc-tab="progress"]`)?.click();
+      document.querySelector(`${detailSelector} [data-wc-tab="${tabKey}"], ${detailSelector} [data-wc-tab="reports"]`)?.click();
       const queryCard = await _waitForElement(`${detailSelector} #wc-query-${CSS.escape(String(queryId))}`);
       if (!queryCard) return false;
       const report = queryCard.closest('[data-wc-report-card]');
@@ -14450,9 +14503,10 @@ function _wcPMView(task, progressEntries) {
         const canVal = !e.validation_status || e.validation_status === 'pending';
         const memberName = e.member_title || e.member_name || e.member_email || 'Team member';
         return `
-          <details data-wc-report-card data-report-id="${escapeHtml(String(e.id))}" data-report-status="${escapeHtml(e.validation_status || 'pending')}"
+          <article data-wc-report-card data-wc-task-id="${escapeHtml(String(task.id))}" data-report-id="${escapeHtml(String(e.id))}" data-report-status="${escapeHtml(e.validation_status || 'pending')}"
+            data-report-json="${escapeHtml(JSON.stringify(e))}"
             style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:10px;">
-            <summary style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:12px;cursor:pointer;list-style-position:inside;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:12px;">
               <span style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0;">
                 <strong>${_wcFmtDate(e.report_date)}</strong>
                 <span>${escapeHtml(memberName)}${e.member_position ? ` · ${escapeHtml(e.member_position)}` : ''}</span>
@@ -14460,7 +14514,7 @@ function _wcPMView(task, progressEntries) {
                 ${e.attachment_name ? '<span aria-label="Has attachment" title="Has attachment">Attachment</span>' : ''}
               </span>
               <span style="background:${vc}18;color:${vc};border:1px solid ${vc}40;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:600;">${escapeHtml(vLabel)}</span>
-            </summary>
+            </div>
             <div style="padding:14px;border-top:1px solid #e5e7eb;">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;
               flex-wrap:wrap;gap:8px;margin-bottom:10px;">
@@ -14528,8 +14582,8 @@ function _wcPMView(task, progressEntries) {
               <div style="border-top:1px solid #e5e7eb;padding-top:10px;">
                 <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;
                   letter-spacing:.5px;margin-bottom:6px;">Validate</div>
-                <textarea id="wc-val-notes-${escapeHtml(String(e.id))}"
-                  placeholder="Validation notes (optional)…"
+                <textarea id="wc-val-notes-${escapeHtml(String(e.id))}" hidden
+                  placeholder="Reason for rejecting this report"
                   style="width:100%;min-height:54px;padding:8px 10px;border:1px solid #d1d5db;
                   border-radius:8px;font-size:12px;resize:vertical;box-sizing:border-box;margin-bottom:8px;"></textarea>
                 <div style="display:flex;gap:7px;">
@@ -14539,9 +14593,6 @@ function _wcPMView(task, progressEntries) {
                   <button data-action="wc-validate" data-progress-id="${escapeHtml(String(e.id))}" data-validate-action="rejected"
                     style="flex:1;padding:8px;font-size:12px;font-weight:600;background:#fee2e2;
                     color:#991b1b;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;">Reject</button>
-                  <button data-action="wc-validate" data-progress-id="${escapeHtml(String(e.id))}" data-validate-action="comment_only"
-                    style="flex:1;padding:8px;font-size:12px;font-weight:600;background:#f3f4f6;
-                    color:#374151;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;">Comment</button>
                 </div>
               </div>`:`
               <div style="padding:8px 10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;font-size:12px;color:#6b7280;">
@@ -14555,7 +14606,7 @@ function _wcPMView(task, progressEntries) {
                       class="rc-btn rc-btn--sm rc-btn--danger">Void this report</button>
                   </div>`:''}</div>`}
             <div data-wc-report-queries="${escapeHtml(String(e.id))}" style="margin-top:12px;"></div>
-          </div></details>`;
+          </div></article>`;
       }).join('')
     : `<div style="padding:18px;border:1px dashed #cbd5e1;border-radius:9px;background:#f8fafc;color:#64748b;font-size:13px;">No progress reports have been submitted yet.</div>`;
 
@@ -14692,19 +14743,31 @@ function _wcPMView(task, progressEntries) {
 function _wcMemberView(task, myEntries) {
   const members  = Array.isArray(task.assigned_members) ? task.assigned_members : [];
   const valColor = { pending:'#f59e0b', approved:'#10b981', rejected:'#ef4444', voided:'#6b7280' };
+  const taskClosed = ['closed', 'completed'].includes(String(task.status || '').toLowerCase());
 
   const myHistoryHtml = myEntries.length
     ? myEntries.map(e => {
         const vc     = valColor[e.validation_status] || '#6b7280';
         const vLabel = (e.validation_status||'pending').charAt(0).toUpperCase()+(e.validation_status||'pending').slice(1);
         return `
-          <details data-wc-report-card data-report-id="${escapeHtml(String(e.id))}" data-report-status="${escapeHtml(e.validation_status || 'pending')}"
+          <article data-wc-report-card data-wc-task-id="${escapeHtml(String(task.id))}" data-report-id="${escapeHtml(String(e.id))}" data-report-status="${escapeHtml(e.validation_status || 'pending')}"
+            data-report-json="${escapeHtml(JSON.stringify(e))}"
             style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:8px;">
-            <summary style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:10px;cursor:pointer;list-style-position:inside;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:10px;">
               <span><strong>${_wcFmtDate(e.report_date)}</strong> · ${escapeHtml(_wcEntryFigure(task, e))}
                 ${e.attachment_name ? '<span aria-label="Has attachment" title="Has attachment">Attachment</span>' : ''}</span>
               <span style="background:${vc}18;color:${vc};border:1px solid ${vc}40;border-radius:999px;padding:1px 8px;font-size:11px;font-weight:600;">${escapeHtml(vLabel)}</span>
-            </summary>
+            </div>
+            ${['pending', 'rejected'].includes(e.validation_status) ? `
+              <div style="display:flex;gap:8px;padding:0 10px 10px;flex-wrap:wrap;">
+                <button type="button" data-action="wc-edit-progress" data-progress-id="${escapeHtml(String(e.id))}"
+                  style="min-height:44px;padding:8px 14px;border:1px solid #0f766e;border-radius:7px;background:#0f766e;color:#fff;font-weight:600;cursor:pointer;">
+                  ${e.validation_status === 'rejected' ? 'Edit and resubmit' : 'Edit'}</button>
+                <button type="button" data-action="wc-delete-progress" data-progress-id="${escapeHtml(String(e.id))}"
+                  style="min-height:44px;padding:8px 14px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#7f1d1d;font-weight:600;cursor:pointer;">Delete</button>
+              </div>` : e.validation_status === 'approved' ? `
+              <p style="margin:0;padding:0 10px 10px;font-size:12px;color:#475569;">
+                Approved reports are locked. If one is wrong, ask your leader to void it.</p>` : ''}
             <div style="padding:10px;border-top:1px solid #e5e7eb;">
             <div style="display:flex;justify-content:space-between;align-items:center;
               flex-wrap:wrap;gap:6px;margin-bottom:6px;">
@@ -14730,7 +14793,7 @@ function _wcMemberView(task, myEntries) {
                 border:1px solid #fcd34d;border-radius:6px;font-size:12px;color:#92400e;">
                 Leader note: <em>${escapeHtml(e.validation_notes||e.void_reason)}</em></div>`:''}
             <div data-wc-report-queries="${escapeHtml(String(e.id))}" style="margin-top:12px;"></div>
-          </div></details>`;
+          </div></article>`;
       }).join('')
     : `<div style="padding:14px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;color:#64748b;font-size:12px;">You have not submitted a report yet.</div>`;
 
@@ -14740,6 +14803,19 @@ function _wcMemberView(task, myEntries) {
       <span>${_wcFmtDate(task.activity_start_date)} – ${_wcFmtDate(task.activity_end_date)}</span>
       ${_wcActivityStatusBadge(task.activity_status, task.activity_progress, task.activity_end_date)}
     </div>` : '';
+
+  if (taskClosed) {
+    return `<div style="display:grid;grid-template-columns:1fr;gap:12px;">
+      <div style="padding:12px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;">
+        ${activityInfo}${_wcTaskShareHtml(task)}
+        <p style="margin:8px 0 0;font-size:12px;color:#64748b;">This task is closed. New progress reports cannot be submitted.</p>
+      </div>
+      <div style="padding:12px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">
+        <strong style="font-size:13px;">My Previous Submissions</strong>
+        <div style="margin-top:8px;">${myHistoryHtml}</div>
+      </div>
+    </div>`;
+  }
 
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
@@ -14803,7 +14879,7 @@ function _wcMemberView(task, myEntries) {
         </div>
         <div style="padding:10px;border:1px solid #dbe3ec;border-radius:8px;">
           <strong style="font-size:12px;color:#172033;">Supporting attachments (optional)</strong>
-          <p style="font-size:11px;color:#64748b;margin:4px 0;">Choose an evidence title before selecting its files. Add another group for a different title.</p>
+          <p style="font-size:11px;color:#64748b;margin:4px 0;">Evidence type is optional. Add another group if you need different titles.</p>
           <div data-wc-supporting-groups data-task-id="${escapeHtml(String(task.id))}">
             ${_wcSupportingAttachmentGroupHtml(task.id, 0)}
           </div>
@@ -14888,20 +14964,57 @@ function _wcNotAssignedView() {
 
 function _wcTaskSummaryHtml(task, entries, queries, leader) {
   const unresolved = queries.filter((query) => query.status !== 'resolved');
-  const pendingCount = Number(task.pending_report_count ?? entries.filter((entry) => entry.validation_status === 'pending').length);
-  const reportNote = leader && pendingCount
-    ? `<span style="padding:4px 8px;border:1px solid #fcd34d;border-radius:999px;background:#fffbeb;color:#92400e;font-size:11px;">${pendingCount} report${pendingCount === 1 ? '' : 's'} waiting for approval</span>`
-    : '';
-  const waitingAnswerCount = unresolved.filter((query) => query.status === 'open').length;
-  const queryNote = unresolved.length
-    ? `<span style="padding:4px 8px;border:1px solid #fcd34d;border-radius:999px;background:#fffbeb;color:#92400e;font-size:11px;">${waitingAnswerCount
-      ? `${waitingAnswerCount} quer${waitingAnswerCount === 1 ? 'y' : 'ies'} waiting for an answer`
-      : `${unresolved.length} quer${unresolved.length === 1 ? 'y' : 'ies'} answered and awaiting review`}</span>`
-    : '';
-  return `
-    <section data-wc-card-summary style="margin-bottom:${reportNote || queryNote ? '10px' : '0'};">
-      ${reportNote || queryNote ? `<div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:9px;">${reportNote}${queryNote}</div>` : ''}
-    </section>`;
+  const approved = entries.filter((entry) => entry.validation_status === 'approved');
+  const pending = entries.filter((entry) => entry.validation_status === 'pending');
+  const quantity = approved.reduce((sum, entry) => sum + (Number(entry.quantity_done) || 0), 0);
+  const delayed = entries.filter((entry) => entry.delay_cause || Number(entry.delay_days) > 0).length;
+  const byDay = new Map();
+  for (const entry of entries) {
+    const date = String(entry.report_date || '').slice(0, 10);
+    if (!date) continue;
+    const day = byDay.get(date) || { approved: 0, pending: 0 };
+    const value = Number(entry.quantity_done) || (entry.stage_id ? 1 : Number(entry.progress_pct) || 0);
+    if (entry.validation_status === 'approved') day.approved += value;
+    else if (entry.validation_status === 'pending') day.pending += value;
+    byDay.set(date, day);
+  }
+  const days = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(-7);
+  const maxValue = Math.max(1, ...days.map(([, day]) => day.approved + day.pending));
+  const bars = days.map(([date, day]) => {
+    const approvedHeight = Math.max(day.approved ? 4 : 0, day.approved / maxValue * 94);
+    const pendingHeight = Math.max(day.pending ? 4 : 0, day.pending / maxValue * 94);
+    return `<div style="display:flex;flex-direction:column;justify-content:flex-end;align-items:center;min-width:42px;flex:0 0 42px;">
+      <span style="font-size:10px;color:#475569;">${day.approved ? escapeHtml(String(day.approved)) : ''}</span>
+      <div style="height:${approvedHeight}px;width:100%;background:#0f766e;border-radius:5px 5px 0 0;"></div>
+      ${day.pending ? `<div aria-label="${escapeHtml(String(day.pending))} pending" style="height:${pendingHeight}px;width:100%;border:1px dashed #0f766e;border-bottom:0;border-radius:5px 5px 0 0;"></div>` : ''}
+      <span style="font-size:10px;color:#475569;margin-top:5px;">${escapeHtml(_wcFmtDate(date))}</span>
+    </div>`;
+  }).join('');
+  const date = new Date();
+  const asOf = `${date.getDate()} ${date.toLocaleString('en', { month: 'short' })}`;
+  const unresolvedCount = unresolved.filter((query) => query.status === 'open').length;
+  const queryNote = unresolved.length ? `<span style="font-size:11px;color:#92400e;">${unresolvedCount || unresolved.length} open task question${(unresolvedCount || unresolved.length) === 1 ? '' : 's'}</span>` : '';
+  return `<section data-wc-card-summary style="padding:16px;background:#fff;border:1px solid #e2e8f0;border-radius:14px;margin-bottom:12px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+      <strong style="font-size:14px;color:#0f172a;">Task report</strong>
+      <span style="font-size:11px;color:#475569;">As of ${escapeHtml(asOf)}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px;">
+      ${[['Approved', approved.length], ['Pending', pending.length],
+        [_wcTypeOf(task) === 'quantity' ? 'Quantity' : 'Progress', ['quantity','count'].includes(_wcTypeOf(task)) ? `${quantity}${_wcUnitText(task)}` : `${approved.length ? Number(approved[approved.length - 1].progress_pct) || 0 : 0}%`],
+        ['Delays', delayed]].map(([label, value]) => `<div style="min-width:0;padding:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;">
+          <div style="font-size:11px;color:#475569;">${escapeHtml(String(label))}</div><strong style="display:block;margin-top:3px;font-size:17px;color:#0f172a;">${escapeHtml(String(value))}</strong></div>`).join('')}
+    </div>
+    <div style="display:flex;align-items:flex-end;gap:14px;min-height:116px;margin-top:14px;">
+      <div aria-label="Per-day approved and pending report amounts" style="display:flex;align-items:flex-end;gap:10px;overflow-x:auto;min-width:0;flex:1;padding:0 4px 2px;">
+        ${bars || '<span style="font-size:12px;color:#64748b;">No reports yet.</span>'}
+      </div>
+      <div style="font-size:11px;line-height:1.55;color:#475569;flex:0 0 auto;">
+        <div>${escapeHtml(_wcUnitText(task) || '%')} per day</div>
+        <div><span style="color:#0f766e;">Solid</span> approved, dashed pending</div>${queryNote}
+      </div>
+    </div>
+  </section>`;
 }
 
 function _wcActivityPlanHtml(task) {
@@ -14911,13 +15024,13 @@ function _wcActivityPlanHtml(task) {
       ? `${type === 'quantity' ? 'Quantity' : 'Count'} · planned ${escapeHtml(String(task.target_quantity))}${escapeHtml(_wcUnitText(task))}`
       : type === 'stages' ? 'Stages' : 'Percentage';
     const stages = _wcStagesOf(task);
-    return `<details style="border-top:1px solid #dbe3ec;padding-top:12px;margin-top:12px;">
-      <summary style="cursor:pointer;font-size:13px;font-weight:700;color:#172033;">Task plan</summary>
+    return `<section style="border-top:1px solid #dbe3ec;padding-top:12px;margin-top:12px;">
+      <h4 style="margin:0;font-size:13px;font-weight:700;color:#172033;">Task plan</h4>
       <div style="padding-top:6px;">
         ${_wcPlanRow('Progress measured by', measure)}
         ${stages.length ? _wcPlanRow('Stages', stages.map((stage) => `${escapeHtml(stage.title)} (${Number(stage.weight_pct) || 0}%)`).join(', ')) : ''}
       </div>
-    </details>`;
+    </section>`;
   }
   const typeLabel = { quantity: 'Quantity', count: 'Count', stages: 'Stages', percentage: 'Percentage' }[_wcTypeOf(task)] || 'Percentage';
   const planned = task.activity_planned_quantity != null
@@ -14927,8 +15040,8 @@ function _wcActivityPlanHtml(task) {
     ? `${escapeHtml(task.activity_milestone_title)}${task.activity_milestone_start || task.activity_milestone_end
       ? ` (${escapeHtml(_wcFmtDate(task.activity_milestone_start))} to ${escapeHtml(_wcFmtDate(task.activity_milestone_end))})` : ''}`
     : 'No milestone linked';
-  return `<details style="border-top:1px solid #dbe3ec;padding-top:12px;margin-top:12px;">
-    <summary style="cursor:pointer;font-size:13px;font-weight:700;color:#172033;">Activity plan</summary>
+  return `<section style="border-top:1px solid #dbe3ec;padding-top:12px;margin-top:12px;">
+    <h4 style="margin:0;font-size:13px;font-weight:700;color:#172033;">Activity plan</h4>
     <div style="padding-top:6px;">
       ${_wcPlanRow('Milestone', milestone === 'No milestone linked' ? '' : milestone)}
       ${_wcPlanRow('Scope', task.activity_description)}
@@ -14941,7 +15054,7 @@ function _wcActivityPlanHtml(task) {
       ${_wcPlanRow('Planned equipment', task.activity_planned_equipment)}
       ${_wcPlanRow('Planned materials', task.activity_planned_materials)}
     </div>
-  </details>`;
+  </section>`;
 }
 
 function _wcPlanRow(label, value) {
@@ -14953,6 +15066,7 @@ function _wcPlanRow(label, value) {
 
 function _supportingAttachmentTypeOptions() {
   return [
+    ['general', 'General'],
     ['site_photos', 'Site photos / field evidence'],
     ['daily_progress', 'Daily work progress evidence'],
     ['materials_delivery', 'Material delivery / usage evidence'],
@@ -14966,8 +15080,8 @@ function _supportingAttachmentTypeOptions() {
 }
 
 function _supportingAttachmentTypeLabel(file) {
-  const type = file.attachment_type || 'other';
-  const label = _supportingAttachmentTypeOptions().find(([value]) => value === type)?.[1] || 'Other';
+  const type = file.attachment_type || 'general';
+  const label = _supportingAttachmentTypeOptions().find(([value]) => value === type)?.[1] || 'General';
   return type === 'other' && file.custom_attachment_type
     ? `${label}: ${file.custom_attachment_type}` : label;
 }
@@ -14988,15 +15102,15 @@ function _wcUpdateSupportingAttachmentGroup(group) {
   const newState = `${selectedType}\n${selectedType === 'other' ? customTitle : ''}`;
   if (oldState && oldState !== newState) filesInput.value = '';
   group.dataset.supportingState = newState;
-  filesInput.disabled = !selectedType || (selectedType === 'other' && !customTitle);
+  filesInput.disabled = selectedType === 'other' && !customTitle;
 }
 
 function _wcSupportingAttachmentGroupHtml(taskId, removable = false) {
   const box = 'width:100%;margin-top:4px;padding:7px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;';
   return `<div data-wc-supporting-group style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:8px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;">
-    <label style="display:block;font-size:11px;color:#526078;">Evidence title *
+    <label style="display:block;font-size:11px;color:#526078;">Evidence type (optional)
       <select data-supporting-type style="${box}background:#fff;">
-        <option value="">Choose evidence title first</option>${_supportingAttachmentTypeOptions().map(([value, label]) =>
+        <option value="">General</option>${_supportingAttachmentTypeOptions().filter(([value]) => value !== 'general').map(([value, label]) =>
           `<option value="${value}">${escapeHtml(label)}</option>`).join('')}
       </select>
     </label>
@@ -15005,7 +15119,7 @@ function _wcSupportingAttachmentGroupHtml(taskId, removable = false) {
         style="${box}"/>
     </label>
     <label style="display:block;font-size:11px;color:#526078;">Supporting files
-      <input data-supporting-files type="file" multiple disabled style="${box}"/>
+      <input data-supporting-files type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" style="${box}"/>
     </label>
     ${removable ? `<button type="button" data-action="wc-remove-supporting-attachment"
       data-task-id="${escapeHtml(String(taskId))}" style="align-self:end;padding:7px;border:1px solid #fecaca;border-radius:6px;background:#fff;color:#b91c1c;cursor:pointer;">Remove batch</button>` : ''}
@@ -15017,46 +15131,327 @@ function _wcReportSupportingAttachmentsHtml(report) {
   return files.map((file) => _evidenceFileRowHtml(file, _supportingAttachmentTypeLabel(file))).join('');
 }
 
-function _wcFilesHtml(task, reports, attachments, leader) {
-  const taskFiles = [
-    ...(task.linked_file_name ? [{ legacy: true, file_name: task.linked_file_name }] : []),
-    ...(Array.isArray(attachments) ? attachments : []),
-  ];
-  const taskFileRows = taskFiles.map((file) => `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid #e8edf3;">
-    ${file.legacy
-      ? `<a data-action="wc-dl-task" data-filename="${escapeHtml(file.file_name)}" style="color:#0369a1;cursor:pointer;overflow-wrap:anywhere;">${escapeHtml(file.file_name)}</a>`
-      : `<button type="button" data-wc-attachment-preview="${escapeHtml(file.file_url)}"
-          data-wc-attachment-name="${escapeHtml(file.file_name)}" data-wc-attachment-mime="${escapeHtml(file.mime_type || '')}"
-          style="padding:0;border:0;background:none;color:#0369a1;cursor:pointer;text-align:left;overflow-wrap:anywhere;">${escapeHtml(file.file_name)}</button>
-        <button type="button" data-ev-download data-ev-url="${escapeHtml(file.file_url)}" data-ev-name="${escapeHtml(_fileDisplayName(file))}"
-          style="padding:3px 7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#334155;cursor:pointer;">Download</button>
-        ${leader ? `<button type="button" data-wc-attachment-delete="${escapeHtml(String(file.id))}"
-          style="padding:3px 7px;border:1px solid #fecaca;border-radius:5px;background:#fff;color:#b91c1c;cursor:pointer;">Remove</button>` : ''}`}
-  </div>`).join('');
-  const reportFiles = reports.flatMap((report) => [
-    ...(report.attachment_name ? [{ ...report, file_name: report.attachment_name, legacy: true }] : []),
-    ...(Array.isArray(report.supporting_attachments)
-      ? report.supporting_attachments.map((file) => ({ ...file, report })) : []),
-  ]).map((file) => {
-    const report = file.report || file;
-    const when = escapeHtml(_wcFmtDate(report.report_date));
-    if (!file.legacy) return `<div style="padding:2px 0;border-top:1px solid #e8edf3;">${_evidenceFileRowHtml(file, `${_supportingAttachmentTypeLabel(file)} · ${_wcFmtDate(report.report_date)}`)}</div>`;
-    return `<div style="padding:5px 0;border-top:1px solid #e8edf3;">
-      <a data-action="wc-dl-progress" data-progress-id="${escapeHtml(String(report.id))}"
-        data-filename="${escapeHtml(file.file_name)}" style="color:#0369a1;cursor:pointer;">${escapeHtml(file.file_name)}</a>
-      <span style="font-size:11px;color:#64748b;"> · ${when}</span>
-    </div>`;
+function _wcSendTaskAttachment(url, body, onProgress) {
+  const send = () => new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', url);
+    request.setRequestHeader('Authorization', `Bearer ${localStorage.getItem('authToken') || ''}`);
+    request.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100));
+    });
+    request.addEventListener('load', () => {
+      let data = {};
+      try { data = JSON.parse(request.responseText || '{}'); } catch {}
+      resolve({ status: request.status, ok: request.status >= 200 && request.status < 300, data });
+    });
+    request.addEventListener('error', () => reject(new Error('The upload could not reach the server.')));
+    request.addEventListener('abort', () => reject(new Error('The upload was cancelled.')));
+    request.addEventListener('timeout', () => reject(new Error('The upload timed out.')));
+    request.timeout = 120000;
+    request.send(body);
+  });
+  return (async () => {
+    let response = await send();
+    if ([401, 403].includes(response.status) && await refreshAccessToken()) response = await send();
+    return response;
+  })();
+}
+
+function _wcInitTaskFiles(pane, task, entries, attachments, leader, uploadLimits, reportFiles) {
+  const files = _wcCollectTaskFiles(task, entries, attachments, reportFiles);
+  pane.querySelectorAll('[data-wc-file-index]').forEach((button) => {
+    button.addEventListener('click', () => _wcOpenTaskFilesViewer(files, Number(button.dataset.wcFileIndex), task.id));
+  });
+  if (!leader) return;
+  const normalInput = pane.querySelector('[data-wc-attachment-input]');
+  const cameraInput = pane.querySelector('[data-wc-camera-input]');
+  const chooseButton = pane.querySelector('[data-wc-attachment-choose]');
+  const cameraButton = pane.querySelector('[data-wc-camera-open]');
+  const progress = pane.querySelector('[data-wc-upload-progress]');
+  const dropZone = pane.querySelector('[data-wc-drop-zone]');
+  cameraButton?.addEventListener('click', () => cameraInput?.click());
+  let selectedFiles = [];
+  const setSelected = () => {
+    selectedFiles = [...(normalInput?.files || []), ...(cameraInput?.files || [])];
+    if (chooseButton) chooseButton.textContent = selectedFiles.length
+      ? `Upload files (${selectedFiles.length})` : 'Upload files';
+  };
+  normalInput?.addEventListener('change', setSelected);
+  cameraInput?.addEventListener('change', setSelected);
+  const uploadFiles = async (incoming = selectedFiles) => {
+    const batch = [...incoming];
+    if (!batch.length) return alert('Choose at least one file to upload.');
+    const maxFiles = Number(uploadLimits?.max_files);
+    const maxBytes = Number(uploadLimits?.max_file_size_bytes);
+    if (!Number.isInteger(maxFiles) || maxFiles < 1 || !Number.isFinite(maxBytes) || maxBytes < 1)
+      return alert('The upload size limit is unavailable. Please try again later.');
+    if (batch.length > maxFiles) return alert(`Choose no more than ${maxFiles} files.`);
+    let projectId;
+    try { projectId = await ensureActiveProjectId(); }
+    catch (error) {
+      _wcSetTaskCardMessage(task.id, error.message || 'No active project is selected.', true);
+      return;
+    }
+    if (!projectId) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      const validFiles = batch.filter((file) => file.size <= maxBytes);
+      progress.replaceChildren();
+      for (const file of batch) {
+        const row = document.createElement('div');
+        row.textContent = file.size > maxBytes
+          ? `${file.name} · exceeds the ${Math.round(maxBytes / (1024 * 1024))} MB limit`
+          : `${file.name} · Queued for upload`;
+        row.style.color = file.size > maxBytes ? '#b91c1c' : '#475569';
+        progress.appendChild(row);
+      }
+      if (validFiles.length) {
+        try {
+          await _wcQueueOfflineTaskAttachments(task.id, projectId, validFiles);
+          _wcSetTaskCardMessage(task.id, 'Files are saved on this device and will upload when online.');
+        } catch (error) {
+          _wcSetTaskCardMessage(task.id, error.message || 'Offline files could not be saved.', true);
+          return;
+        }
+      } else {
+        _wcSetTaskCardMessage(task.id, 'No files were queued because they exceed the upload size limit.', true);
+      }
+      if (normalInput) normalInput.value = '';
+      if (cameraInput) cameraInput.value = '';
+      selectedFiles = [];
+      setSelected();
+      return;
+    }
+    if (chooseButton) chooseButton.disabled = true;
+    if (cameraButton) cameraButton.disabled = true;
+    progress.replaceChildren();
+    let uploaded = 0;
+    const failures = [];
+    for (const file of batch) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:center;font-size:11px;';
+      const label = document.createElement('span');
+      label.textContent = `${file.name} · 0%`;
+      const meter = document.createElement('progress');
+      meter.max = 100;
+      meter.value = 0;
+      row.append(label, meter);
+      progress.appendChild(row);
+      if (file.size > maxBytes) {
+        label.textContent = `${file.name} · exceeds the ${Math.round(maxBytes / (1024 * 1024))} MB limit`;
+        failures.push(file.name);
+        continue;
+      }
+      const body = new FormData();
+      body.append('projectId', projectId);
+      body.append('attachments', file);
+      try {
+        const result = await _wcSendTaskAttachment(`${API}/work-center/${task.id}/attachments`, body, (percent) => {
+          meter.value = percent;
+          label.textContent = `${file.name} · ${percent}%`;
+        });
+        if (!result.ok) throw new Error(result.data.error || 'Could not upload this file.');
+        meter.value = 100;
+        label.textContent = `${file.name} · Uploaded`;
+        uploaded++;
+      } catch (error) {
+        label.textContent = `${file.name} · ${error.message || 'Upload failed'}`;
+        label.style.color = '#b91c1c';
+        failures.push(file.name);
+      }
+    }
+    if (normalInput) normalInput.value = '';
+    if (cameraInput) cameraInput.value = '';
+    selectedFiles = [];
+    setSelected();
+    if (chooseButton) chooseButton.disabled = false;
+    if (cameraButton) cameraButton.disabled = false;
+    if (uploaded) {
+      try {
+        await _wcRefreshTaskCard(task.id, 'files', `${uploaded} file${uploaded === 1 ? '' : 's'} uploaded.`);
+      } catch (error) {
+        _wcSetTaskCardMessage(task.id, error.message || 'Files uploaded, but the task could not refresh.', true);
+      }
+    }
+    if (failures.length) _wcSetTaskCardMessage(task.id, `Could not upload: ${failures.join(', ')}.`, true);
+  };
+  chooseButton?.addEventListener('click', (event) => {
+    if (selectedFiles.length) {
+      event.preventDefault();
+      uploadFiles();
+    } else normalInput?.click();
+  });
+  dropZone?.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    dropZone.style.borderColor = '#0f766e';
+    dropZone.style.background = '#f0fdfa';
+  });
+  dropZone?.addEventListener('dragleave', () => {
+    dropZone.style.borderColor = '#94a3b8';
+    dropZone.style.background = '';
+  });
+  dropZone?.addEventListener('drop', (event) => {
+    event.preventDefault();
+    dropZone.style.borderColor = '#94a3b8';
+    dropZone.style.background = '';
+    uploadFiles(Array.from(event.dataTransfer?.files || []));
+  });
+}
+
+function _wcOpenTaskFilesViewer(files, startIndex, taskId) {
+  document.getElementById('wc-task-file-viewer')?.remove();
+  if (!files.length) return;
+  let index = Math.max(0, Math.min(files.length - 1, startIndex));
+  const modal = document.createElement('div');
+  modal.id = 'wc-task-file-viewer';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(15,23,42,.78);display:flex;align-items:center;justify-content:center;padding:12px;';
+  modal.innerHTML = `<section style="width:min(980px,100%);height:min(92vh,850px);display:flex;flex-direction:column;background:#fff;border-radius:12px;overflow:hidden;">
+    <header style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;border-bottom:1px solid #e2e8f0;">
+      <strong data-wc-viewer-name style="min-width:0;overflow-wrap:anywhere;"></strong>
+      <span data-wc-viewer-count style="white-space:nowrap;font-size:12px;color:#64748b;"></span>
+      <button type="button" data-wc-viewer-close aria-label="Close file viewer" style="min-width:44px;min-height:44px;border:0;background:#fff;font-size:22px;cursor:pointer;">×</button>
+    </header>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid #e2e8f0;">
+      <button type="button" data-wc-viewer-prev style="min-height:44px;padding:7px 12px;">Previous</button>
+      <button type="button" data-wc-viewer-next style="min-height:44px;padding:7px 12px;">Next</button>
+    </div>
+    <div data-wc-viewer-content style="flex:1;min-height:0;overflow:auto;display:flex;align-items:center;justify-content:center;padding:12px;background:#e2e8f0;"></div>
+    <footer style="display:grid;gap:8px;padding:10px 14px;border-top:1px solid #e2e8f0;">
+      <div data-wc-viewer-meta style="font-size:11px;color:#475569;"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">
+        <button type="button" data-wc-viewer-download style="min-height:44px;padding:8px 13px;">Download</button>
+        <button type="button" data-wc-viewer-delete style="min-height:44px;padding:8px 13px;color:#b91c1c;">Delete</button>
+      </div>
+    </footer>
+  </section>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  const render = () => {
+    const file = files[index];
+    const url = _safeHttpsUrl(file.file_url);
+    const image = /^image\//i.test(file.mime_type || '')
+      || /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i.test(file.name || '');
+    const pdf = /pdf/i.test(file.mime_type || '') || /\.pdf$/i.test(file.name || '');
+    modal.querySelector('[data-wc-viewer-name]').textContent = file.name || 'File';
+    modal.querySelector('[data-wc-viewer-count]').textContent = `${index + 1} of ${files.length}`;
+    modal.querySelector('[data-wc-viewer-prev]').disabled = index === 0;
+    modal.querySelector('[data-wc-viewer-next]').disabled = index === files.length - 1;
+    modal.querySelector('[data-wc-viewer-delete]').hidden = !file.can_delete || !file.id;
+    modal.querySelector('[data-wc-viewer-download]').hidden = !url;
+    const metadata = [file.uploader || 'Team member', _wcFmtDate(file.date), file.source];
+    if (file.captured_at && file.latitude != null && file.longitude != null)
+      metadata.push(`Time and GPS recorded: ${new Date(file.captured_at).toLocaleString()} · ${Number(file.latitude).toFixed(6)}, ${Number(file.longitude).toFixed(6)}`);
+    modal.querySelector('[data-wc-viewer-meta]').textContent = metadata.join(' · ');
+    const content = modal.querySelector('[data-wc-viewer-content]');
+    if (!url) content.textContent = 'Preview is unavailable for this file.';
+    else if (image) content.innerHTML = `<img src="${escapeHtml(url)}" alt="${escapeHtml(file.name || 'Image')}" style="max-width:100%;max-height:100%;object-fit:contain;"/>`;
+    else if (pdf) content.innerHTML = `<iframe src="${escapeHtml(url)}" title="${escapeHtml(file.name || 'PDF')}" style="width:100%;height:100%;border:0;background:#fff;"></iframe>`;
+    else content.textContent = 'Preview is not available for this file type. Use Download to open it.';
+    modal.querySelector('[data-wc-viewer-download]').onclick = () => _downloadFileWithRealName(url, file.name || 'download');
+    modal.querySelector('[data-wc-viewer-delete]').onclick = async () => {
+      if (!window.confirm('Remove this task file?')) return;
+      try {
+        const projectId = await ensureActiveProjectId();
+        const response = await _wcFetch(`${API}/work-center/${taskId}/attachments/${encodeURIComponent(file.id)}`, {
+          method: 'DELETE', body: JSON.stringify({ projectId }),
+        });
+        const result = response ? await response.json().catch(() => ({})) : {};
+        if (!response?.ok) throw new Error(result.error || 'Could not remove this file.');
+        close();
+        await _wcRefreshTaskCard(taskId, 'files', 'File removed.');
+      } catch (error) {
+        _wcSetTaskCardMessage(taskId, error.message || 'Could not remove this file.', true);
+      }
+    };
+  };
+  modal.querySelector('[data-wc-viewer-close]').addEventListener('click', close);
+  modal.addEventListener('click', (event) => { if (event.target === modal) close(); });
+  modal.querySelector('[data-wc-viewer-prev]').addEventListener('click', () => { if (index > 0) { index--; render(); } });
+  modal.querySelector('[data-wc-viewer-next]').addEventListener('click', () => { if (index < files.length - 1) { index++; render(); } });
+  render();
+}
+
+function _wcCollectTaskFiles(task, reports, attachments, reportFiles) {
+  const files = [];
+  if (task.linked_file_name) files.push({
+    name: task.linked_file_name, file_url: task.linked_file_url, mime_type: '',
+    source: 'Uploaded here', uploader: task.creator_name || 'Task creator',
+    date: task.updated_at || task.created_at, kind: 'task-linked', can_delete: false,
+  });
+  for (const file of Array.isArray(attachments) ? attachments : []) files.push({
+    ...file, name: file.file_name, source: 'Uploaded here',
+    uploader: file.uploaded_by_name || `${file.uploaded_by_role || 'User'} ${file.uploaded_by_id || ''}`.trim(),
+    date: file.created_at, kind: 'task-attachment', can_delete: Boolean(file.can_delete),
+  });
+  const rows = Array.isArray(reportFiles) ? reportFiles : (Array.isArray(reports) ? reports : []).map((report) => ({
+    report_id: report.id, report_date: report.report_date, reporter_name: report.member_title || report.member_email,
+    attachment_name: report.attachment_name, attachment_url: report.attachment_url,
+    photos: report.photos, supporting_attachments: report.supporting_attachments,
+  }));
+  for (const report of rows) {
+    const source = `From report ${_wcFmtDate(report.report_date)}`;
+    const uploader = report.reporter_name || 'Team member';
+    if (report.attachment_name) files.push({
+      id: `report-${report.report_id}`, report_id: report.report_id,
+      name: report.attachment_name, file_url: report.attachment_url, mime_type: '',
+      source, uploader, date: report.report_date, kind: 'report-attachment', can_delete: false,
+    });
+    for (const photo of report.photos || []) files.push({
+      ...photo, report_id: report.report_id, name: photo.file_name || 'Report photo',
+      mime_type: 'image/*', source, uploader, date: photo.uploaded_at || report.report_date,
+      kind: 'report-photo', can_delete: false,
+    });
+    for (const attachment of report.supporting_attachments || []) files.push({
+      ...attachment, report_id: report.report_id, name: attachment.file_name || 'Supporting file',
+      source, uploader: attachment.uploaded_by_role
+        ? `${attachment.uploaded_by_role} ${attachment.uploaded_by_id || ''}`.trim() : uploader,
+      date: attachment.created_at || report.report_date, kind: 'report-supporting', can_delete: false,
+      type_label: _supportingAttachmentTypeLabel(attachment),
+    });
+  }
+  return files;
+}
+
+function _wcFilesHtml(task, reports, attachments, leader, uploadLimits = {}, reportFiles = null) {
+  const files = _wcCollectTaskFiles(task, reports, attachments, reportFiles);
+  const tiles = files.map((file, index) => {
+    const url = _safeHttpsUrl(file.file_url);
+    const image = /^image\//i.test(file.mime_type || '')
+      || /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i.test(file.name || '');
+    const pdf = /pdf/i.test(file.mime_type || '') || /\.pdf$/i.test(file.name || '');
+    const thumb = image && url
+      ? `<img src="${escapeHtml(_thumbUrl(url))}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;"/>`
+      : `<span style="font-size:12px;font-weight:700;color:${pdf ? '#b91c1c' : '#475569'};">${pdf ? 'PDF' : escapeHtml((file.name.split('.').pop() || 'FILE').slice(0, 5).toUpperCase())}</span>`;
+    return `<button type="button" data-wc-file-index="${index}" style="min-width:0;padding:0;text-align:left;border:1px solid #dbe3ec;border-radius:9px;background:#fff;overflow:hidden;cursor:pointer;color:#172033;">
+      <span style="display:flex;align-items:center;justify-content:center;height:94px;background:#f1f5f9;overflow:hidden;">${thumb}</span>
+      <span style="display:grid;gap:3px;padding:8px;">
+        <strong style="font-size:11px;overflow-wrap:anywhere;">${escapeHtml(file.name)}</strong>
+        <span style="font-size:10px;color:#0f766e;">${escapeHtml(file.type_label || file.source)}</span>
+        <span style="font-size:10px;color:#64748b;">${escapeHtml(file.uploader || 'Team member')} · ${escapeHtml(_wcFmtDate(file.date))}</span>
+      </span>
+    </button>`;
   }).join('');
+  const limitBytes = Number(uploadLimits.max_file_size_bytes);
+  const maxFiles = Number(uploadLimits.max_files);
+  const limitText = Number.isFinite(limitBytes) && limitBytes > 0
+    ? `Maximum file size: ${(limitBytes / (1024 * 1024)).toFixed(0)} MB · up to ${maxFiles} files per task`
+    : 'Upload size limit is unavailable.';
+  const touchDevice = (Number(navigator.maxTouchPoints) > 0)
+    || Boolean(window.matchMedia?.('(pointer: coarse)').matches);
   return `<section style="padding:10px 0;">
-    <div style="font-size:12px;font-weight:600;color:#172033;">Task attachments</div>
-    ${taskFileRows || '<div style="padding:7px 0;font-size:12px;color:#64748b;">No task attachments yet.</div>'}
-    ${leader ? `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
-      <input type="file" data-wc-attachment-input multiple style="font-size:12px;max-width:100%;"/>
-      <button type="button" data-wc-attachment-upload
-        style="padding:6px 10px;border:0;border-radius:6px;background:#007B8A;color:#fff;font-weight:600;cursor:pointer;">Upload selected files</button>
-    </div>` : ''}
-    <div style="margin-top:14px;font-size:12px;font-weight:600;color:#172033;">Progress report supporting attachments</div>
-    ${reportFiles || '<div style="padding:7px 0;color:#64748b;">None attached.</div>'}
+    <div style="font-size:12px;font-weight:600;color:#172033;margin-bottom:8px;">Task and report files</div>
+    ${leader ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+      <input type="file" data-wc-attachment-input multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;"/>
+      <input type="file" data-wc-camera-input multiple accept="image/*" capture="environment" style="display:none;"/>
+      <button type="button" data-wc-attachment-choose style="min-height:44px;padding:8px 13px;border:1px solid #0f766e;border-radius:7px;background:#0f766e;color:#fff;font-weight:600;cursor:pointer;">Upload files</button>
+      ${touchDevice ? '<button type="button" data-wc-camera-open style="min-height:44px;padding:8px 13px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#334155;font-weight:600;cursor:pointer;">Take photo</button>' : ''}
+      <span style="font-size:11px;color:#64748b;">${escapeHtml(limitText)}</span>
+    </div>
+    ${!touchDevice ? `<div data-wc-drop-zone tabindex="0" role="button" style="padding:12px;border:1px dashed #94a3b8;border-radius:8px;color:#64748b;font-size:12px;text-align:center;margin-bottom:8px;">Drop files here or choose Upload files</div>` : ''}
+    <div data-wc-upload-progress aria-live="polite" style="display:grid;gap:5px;margin-bottom:8px;"></div>` : ''}
+    ${files.length ? `<div data-wc-file-grid style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;">${tiles}</div>`
+      : '<div style="padding:12px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;color:#64748b;font-size:12px;">No files have been added to this task or its reports.</div>'}
   </section>`;
 }
 
@@ -15096,6 +15491,424 @@ function _wcQueryPanelHtml(task, report, queries, leader) {
     ${askForm}${list}</section>`;
 }
 
+function _wcInitReportWizard(actionPanel, task) {
+  const taskId = String(task.id);
+  const siteDetails = [...actionPanel.querySelectorAll('details')].find((details) =>
+    details.querySelector(`#wc-pr-weather-${CSS.escape(taskId)}`));
+  if (siteDetails) {
+    const fields = siteDetails.querySelector('div[style*="display:grid"]');
+    if (fields) siteDetails.replaceWith(...fields.children);
+  }
+  const rootFor = (element) => {
+    while (element && element.parentElement !== actionPanel) element = element.parentElement;
+    return element;
+  };
+  const byId = (name) => actionPanel.querySelector(`#wc-pr-${name}-${CSS.escape(taskId)}`);
+  const groups = {
+    progress: ['date', 'work', 'qty', 'failed', 'pct', 'stage'],
+    photos: ['photos'],
+    site: ['manpower', 'equipment', 'materials', 'issues', 'notes', 'weather', 'safety',
+      'delay-cause', 'delay-days', 'delay-note'],
+    plan: ['next-plan'],
+  };
+  const resourceRoot = rootFor(actionPanel.querySelector(`#wc-pr-resource-plan-manpower-${CSS.escape(taskId)}`));
+  const submitButton = actionPanel.querySelector('[data-action="wc-submit-progress"]');
+  const stepRoots = Object.fromEntries(Object.entries(groups).map(([step, ids]) => [
+    step,
+    [...new Set(ids.map((id) => rootFor(byId(id))).filter(Boolean))],
+  ]));
+  stepRoots.photos.push(...[...actionPanel.querySelectorAll('[data-wc-supporting-groups]')]
+    .map(rootFor).filter(Boolean));
+  stepRoots.plan.push(...[resourceRoot, rootFor(submitButton)].filter(Boolean));
+  const firstRoot = stepRoots.progress[0];
+  if (!firstRoot) return;
+
+  const stepLabels = ['Progress', 'Photos', 'Site', 'Plan'];
+  const wizard = document.createElement('section');
+  wizard.setAttribute('aria-label', 'Add progress report');
+  wizard.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+  wizard.innerHTML = `
+    <div data-wc-report-edit-notice hidden role="status" style="padding:10px 12px;border:1px solid #fcd34d;border-radius:8px;background:#fffbeb;color:#92400e;font-size:12px;"></div>
+    <div data-wc-existing-report-files hidden style="display:grid;gap:6px;padding:10px;border:1px solid #dbe3ec;border-radius:8px;"></div>
+    <div data-wc-report-step-indicator style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;">
+      ${stepLabels.map((label, index) => `<span data-wc-report-label="${index}" style="font-size:11px;color:#64748b;">${index + 1}. ${label}</span>`).join('')}
+      <strong data-wc-report-step-count style="font-size:11px;color:#475569;">Step 1 of 4</strong>
+    </div>
+    ${stepLabels.map((label, index) => `<section data-wc-report-step="${index}" aria-label="${label}" ${index ? 'hidden' : ''} style="display:flex;flex-direction:column;gap:10px;"></section>`).join('')}
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+      <div style="display:flex;gap:8px;">
+        <button type="button" data-wc-report-back hidden style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#334155;cursor:pointer;">Back</button>
+        <button type="button" data-wc-report-next style="padding:8px 12px;border:0;border-radius:7px;background:#007B8A;color:#fff;cursor:pointer;">Continue</button>
+        <button type="button" data-wc-report-cancel-edit hidden style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#334155;cursor:pointer;">Cancel</button>
+      </div>
+      <button type="button" data-wc-report-save-draft style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#334155;cursor:pointer;">Save draft</button>
+    </div>
+    <p data-wc-report-draft-status aria-live="polite" style="margin:0;font-size:11px;color:#64748b;"></p>`;
+  firstRoot.before(wizard);
+
+  const panels = [...wizard.querySelectorAll('[data-wc-report-step]')];
+  for (const [step, roots] of Object.entries(stepRoots)) {
+    const target = panels[['progress', 'photos', 'site', 'plan'].indexOf(step)];
+    for (const root of roots) target.appendChild(root);
+  }
+  const previousSubmissions = [...actionPanel.children].find((element) =>
+    element.textContent.includes('My Previous Submissions'));
+  if (previousSubmissions) wizard.after(previousSubmissions);
+
+  let current = 0;
+  const setStep = (next) => {
+    current = Math.max(0, Math.min(3, next));
+    panels.forEach((panel, index) => { panel.hidden = index !== current; });
+    wizard.querySelector('[data-wc-report-back]').hidden = current === 0;
+    wizard.querySelector('[data-wc-report-next]').hidden = current === 3;
+    wizard.querySelector('[data-wc-report-step-count]').textContent = `Step ${current + 1} of 4`;
+    wizard.querySelectorAll('[data-wc-report-label]').forEach((label, index) => {
+      label.style.color = index === current ? '#007B8A' : '#64748b';
+      label.style.fontWeight = index === current ? '700' : '400';
+      label.setAttribute('aria-current', index === current ? 'step' : 'false');
+    });
+  };
+  wizard.__wcSetStep = setStep;
+  const validateProgress = () => {
+    const type = _wcTypeOf(task);
+    if (!byId('date')?.value) return 'Report date is required.';
+    if (!byId('work')?.value.trim()) return 'Please describe the work done.';
+    if ((type === 'quantity' || type === 'count') && !(Number(byId('qty')?.value) > 0))
+      return type === 'count' ? 'Enter how many items were completed.' : 'Enter the quantity done.';
+    if (type === 'stages' && !byId('stage')?.value) return 'Choose the stage you completed.';
+    if (!['quantity', 'count', 'stages'].includes(type)) {
+      const percent = Number(byId('pct')?.value);
+      if (!Number.isFinite(percent) || percent < 0 || percent > 100)
+        return 'The percentage must be between 0 and 100.';
+    }
+    return '';
+  };
+  wizard.querySelector('[data-wc-report-next]').addEventListener('click', () => {
+    if (current === 0) {
+      const error = validateProgress();
+      if (error) return alert(error);
+    }
+    setStep(current + 1);
+  });
+  wizard.querySelector('[data-wc-report-back]').addEventListener('click', () => setStep(current - 1));
+  wizard.querySelector('[data-wc-report-save-draft]').addEventListener('click', () => {
+    const status = wizard.querySelector('[data-wc-report-draft-status]');
+    try {
+      const values = {};
+      actionPanel.querySelectorAll('input, select, textarea').forEach((field) => {
+        if (field.type !== 'file' && field.id) values[field.id] = field.value;
+      });
+      localStorage.setItem(`wc-report-draft-${taskId}`, JSON.stringify({ values, step: current }));
+      status.textContent = 'Draft saved on this device. Selected photos and files must be reselected.';
+    } catch (error) {
+      status.textContent = `Draft could not be saved: ${error.message || 'device storage is unavailable.'}`;
+      status.style.color = '#b91c1c';
+    }
+  });
+  try {
+    const draft = JSON.parse(localStorage.getItem(`wc-report-draft-${taskId}`) || 'null');
+    if (draft && draft.values && typeof draft.values === 'object') {
+      actionPanel.querySelectorAll('input, select, textarea').forEach((field) => {
+        if (field.type !== 'file' && field.id && Object.hasOwn(draft.values, field.id))
+          field.value = draft.values[field.id];
+      });
+      if (Number.isInteger(draft.step)) setStep(draft.step);
+    }
+  } catch (error) {
+    wizard.querySelector('[data-wc-report-draft-status]').textContent =
+      `Saved draft could not be restored: ${error.message || 'device storage is unavailable.'}`;
+  }
+  const initialValues = new Map([...actionPanel.querySelectorAll('input, select, textarea')]
+    .filter((field) => field.type !== 'file').map((field) => [field, field.value]));
+  wizard.__wcResetNew = () => {
+    for (const [field, value] of initialValues) {
+      if (field.isConnected) field.value = value;
+    }
+    actionPanel.querySelectorAll('input[type="file"]').forEach((field) => { field.value = ''; });
+    wizard.__wcSetStep(0);
+  };
+  setStep(current);
+}
+
+function _wcBeginReportEdit(actionPanel, task, entry) {
+  const taskId = String(task.id);
+  const wizard = actionPanel.querySelector('[aria-label="Add progress report"]');
+  if (!wizard?.__wcSetStep) return alert('The report form is not available.');
+  const active = window._wcEditingReportByTask?.[taskId];
+  if (active && String(active.id) !== String(entry.id))
+    return alert('Finish or cancel the current report edit first.');
+  window._wcEditingReportByTask ||= {};
+  window._wcEditingReportByTask[taskId] = { id: String(entry.id), status: entry.validation_status };
+  const setField = (name, value) => {
+    const field = actionPanel.querySelector(`#wc-pr-${name}-${CSS.escape(taskId)}`);
+    if (field && field.type !== 'file') field.value = value == null ? '' : String(value);
+  };
+  setField('date', String(entry.report_date || '').slice(0, 10));
+  setField('work', entry.work_done || '');
+  setField('qty', entry.quantity_done ?? '');
+  setField('failed', entry.quantity_failed ?? 0);
+  setField('pct', entry.progress_pct ?? 0);
+  setField('stage', entry.stage_id ?? '');
+  for (const [field, key] of [
+    ['manpower', 'manpower'], ['equipment', 'equipment'], ['materials', 'materials'],
+    ['issues', 'issues'], ['notes', 'notes'], ['weather', 'weather'],
+    ['safety', 'safety_note'], ['next-plan', 'next_plan'],
+    ['delay-cause', 'delay_cause'], ['delay-days', 'delay_days'], ['delay-note', 'delay_note'],
+  ]) setField(field, entry[key] || '');
+  for (const type of ['manpower', 'equipment', 'material']) {
+    const resource = (entry.resources || []).find((item) => item.resource_type === type);
+    for (const [field, key] of [
+      ['name', 'name'], ['qty', 'quantity'], ['unit', 'unit'], ['hours', 'hours'],
+      ['member', 'assigned_member_id'], ['plan', 'planned_resource_id'],
+    ]) {
+      const input = actionPanel.querySelector(`#wc-pr-resource-${field}-${type}-${CSS.escape(taskId)}`);
+      if (input) input.value = resource?.[key] == null ? '' : String(resource[key]);
+    }
+  }
+  const filesPanel = wizard.querySelector('[data-wc-existing-report-files]');
+  const fileRows = [];
+  for (const photo of entry.photos || []) {
+    fileRows.push(`<label style="display:flex;align-items:center;gap:8px;font-size:12px;">
+      <input type="checkbox" data-wc-keep-photo="${escapeHtml(String(photo.id))}" checked/>
+      <span>Keep photo: <a href="${escapeHtml(_safeHttpsUrl(photo.file_url))}" target="_blank" rel="noopener noreferrer">${escapeHtml(photo.file_name || 'Report photo')}</a></span>
+    </label>`);
+  }
+  for (const file of entry.supporting_attachments || []) {
+    fileRows.push(`<label style="display:flex;align-items:center;gap:8px;font-size:12px;">
+      <input type="checkbox" data-wc-keep-supporting="${escapeHtml(String(file.id))}" checked/>
+      <span>Keep ${escapeHtml(_supportingAttachmentTypeLabel(file))}: <a href="${escapeHtml(_safeHttpsUrl(file.file_url))}" target="_blank" rel="noopener noreferrer">${escapeHtml(file.file_name || 'Supporting file')}</a></span>
+    </label>`);
+  }
+  if (entry.attachment_id) {
+    fileRows.push(`<label style="display:flex;align-items:center;gap:8px;font-size:12px;">
+      <input type="checkbox" data-wc-keep-attachment checked/>
+      <span>Keep attachment: <a href="${escapeHtml(_safeHttpsUrl(entry.attachment_url))}" target="_blank" rel="noopener noreferrer">${escapeHtml(entry.attachment_name || 'Report attachment')}</a></span>
+    </label>`);
+  }
+  filesPanel.innerHTML = fileRows.length
+    ? `<strong style="font-size:12px;">Existing files (uncheck to remove)</strong>${fileRows.join('')}`
+    : '<span style="font-size:12px;color:#64748b;">No existing report files.</span>';
+  filesPanel.hidden = false;
+  const notice = wizard.querySelector('[data-wc-report-edit-notice]');
+  notice.innerHTML = entry.validation_status === 'rejected'
+    ? `${entry.validation_notes ? `<div style="margin-bottom:6px;"><strong>Leader note:</strong> ${escapeHtml(entry.validation_notes)}</div>` : ''}
+      <div>Saving replaces the rejected report completely. The old version is kept in History as a short summary only.</div>`
+    : 'Editing a pending report. Its existing files are kept unless you uncheck them.';
+  notice.hidden = false;
+  wizard.querySelector('[data-wc-report-cancel-edit]').hidden = false;
+  const submitButton = actionPanel.querySelector('[data-action="wc-submit-progress"]');
+  if (submitButton) submitButton.textContent = entry.validation_status === 'rejected'
+    ? 'Save and resubmit' : 'Save changes';
+  wizard.__wcSetStep(0);
+  wizard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function _wcResetReportEdit(actionPanel, taskId) {
+  const wizard = actionPanel.querySelector('[aria-label="Add progress report"]');
+  if (!wizard) return;
+  if (window._wcEditingReportByTask) delete window._wcEditingReportByTask[String(taskId)];
+  wizard.__wcResetNew?.();
+  wizard.querySelector('[data-wc-report-edit-notice]').hidden = true;
+  wizard.querySelector('[data-wc-existing-report-files]').hidden = true;
+  wizard.querySelector('[data-wc-report-cancel-edit]').hidden = true;
+  const submitButton = actionPanel.querySelector('[data-action="wc-submit-progress"]');
+  if (submitButton) submitButton.textContent = 'Submit Progress Report';
+}
+
+async function _wcDeleteReport(taskId, progressId, button) {
+  if (!window.confirm('Delete this report? Only a short summary stays in History.')) return;
+  button.disabled = true;
+  try {
+    const projectId = await ensureActiveProjectId();
+    if (!projectId) throw new Error('No active project is selected.');
+    const response = await _wcFetch(`${API}/work-center-progress/${encodeURIComponent(progressId)}`, {
+      method: 'DELETE', body: JSON.stringify({ projectId }),
+    });
+    const result = response ? await response.json().catch(() => ({})) : {};
+    if (!response?.ok) throw new Error(result.error || 'Could not delete the report.');
+    await _wcRefreshTaskCard(taskId, 'my-reports', 'Report deleted.');
+  } catch (error) {
+    _wcSetTaskCardMessage(taskId, error.message || 'Could not delete the report.', true);
+    button.disabled = false;
+  }
+}
+
+function _wcOpenReportPanel(card) {
+  const copy = card.cloneNode(true);
+  copy.hidden = false;
+  const taskId = card.dataset.wcTaskId;
+  const progressId = card.dataset.reportId;
+  expandGrayPart(`<section style="height:100%;overflow:auto;box-sizing:border-box;padding:16px;">
+    <button type="button" data-wc-close-report-panel style="min-height:44px;padding:8px 14px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#334155;cursor:pointer;margin-bottom:12px;">← Back to task</button>
+    ${copy.outerHTML}</section>`);
+  const panel = document.querySelector('#grayContent');
+  panel?.addEventListener('click', (event) => {
+    const close = event.target.closest('[data-wc-close-report-panel]');
+    if (close) {
+      collapseGrayPart();
+      return;
+    }
+    const action = event.target.closest('[data-action]');
+    if (!action || !panel.contains(action)) return;
+    const actionName = action.dataset.action;
+    const notesId = `wc-val-notes-${action.dataset.progressId || progressId}`;
+    if (actionName === 'wc-validate') {
+      const panelNotes = action.closest('[data-wc-report-card]')?.querySelector(`#${CSS.escape(notesId)}`);
+      const sourceNotes = document.querySelector(`#wc-detail-${CSS.escape(taskId)} #${CSS.escape(notesId)}`);
+      if (panelNotes && sourceNotes) sourceNotes.value = panelNotes.value;
+      if (action.dataset.validateAction === 'rejected' && panelNotes?.hidden) {
+        panelNotes.hidden = false;
+        action.textContent = 'Confirm rejection';
+        panelNotes.focus();
+        return;
+      }
+    }
+    if (actionName === 'wc-query-answer') {
+      const queryId = action.dataset.queryId;
+      const panelAnswer = action.closest('[data-wc-report-card]')?.querySelector(`#wc-query-answer-${CSS.escape(queryId)}`);
+      const sourceAnswer = document.querySelector(`#wc-detail-${CSS.escape(taskId)} #wc-query-answer-${CSS.escape(queryId)}`);
+      if (panelAnswer && sourceAnswer) sourceAnswer.value = panelAnswer.value;
+    }
+    if (actionName === 'wc-query-create') {
+      const reportId = action.dataset.reportId;
+      const panelQuestion = action.closest('[data-wc-report-card]')?.querySelector(`#wc-query-question-${CSS.escape(reportId)}`);
+      const sourceQuestion = document.querySelector(`#wc-detail-${CSS.escape(taskId)} #wc-query-question-${CSS.escape(reportId)}`);
+      if (panelQuestion && sourceQuestion) sourceQuestion.value = panelQuestion.value;
+    }
+    if (actionName === 'wc-validate')
+      _wcHandleValidate('work-center', action.dataset.progressId, action.dataset.validateAction, taskId);
+    else if (actionName === 'wc-query-create')
+      _wcHandleQueryCreate(taskId, action.dataset.reportId);
+    else if (actionName === 'wc-query-answer')
+      _wcHandleQueryAnswer(taskId, action.dataset.queryId);
+    else if (actionName === 'wc-query-resolve')
+      _wcHandleQueryResolve(taskId, action.dataset.queryId);
+    else if (actionName === 'wc-dl-progress')
+      _wcDownloadProgress(action.dataset.progressId, action.dataset.filename);
+    else if (actionName === 'wc-edit-progress') {
+      const sourceCard = document.querySelector(`#wc-detail-${CSS.escape(taskId)} [data-wc-report-card][data-report-id="${CSS.escape(action.dataset.progressId)}"]`);
+      let report;
+      try { report = JSON.parse(sourceCard?.dataset.reportJson || 'null'); } catch {}
+      const sourcePanel = document.querySelector(`#wc-detail-${CSS.escape(taskId)} [aria-label="Add progress report"]`)?.parentElement;
+      const task = (recordsCache['work-center'] || []).find((record) => String(record.id) === taskId);
+      if (report && sourcePanel && task) _wcBeginReportEdit(sourcePanel, task, report);
+    } else if (actionName === 'wc-delete-progress')
+      _wcDeleteReport(taskId, action.dataset.progressId, action);
+  });
+}
+
+function _wcEnhanceReports(actionPanel, task, reports, leader) {
+  const firstCard = actionPanel.querySelector('[data-wc-report-card]');
+  if (!firstCard) return;
+  const list = firstCard.parentElement;
+  const taskId = String(task.id);
+  const type = _wcTypeOf(task);
+  const sorted = [...reports].sort((a, b) => {
+    const aVoided = a.validation_status === 'voided', bVoided = b.validation_status === 'voided';
+    if (aVoided !== bVoided) return aVoided ? 1 : -1;
+    return String(b.report_date || '').localeCompare(String(a.report_date || '')) || Number(b.id) - Number(a.id);
+  });
+  const chronological = [...reports].sort((a, b) =>
+    String(a.report_date || '').localeCompare(String(b.report_date || '')) || Number(a.id) - Number(b.id));
+  const totalsAtReport = new Map();
+  let running = 0;
+  for (const report of chronological) {
+    if (report.validation_status === 'approved') {
+      if (type === 'quantity' || type === 'count') running += Number(report.quantity_done) || 0;
+      else if (type === 'stages') running += 1;
+      else running = Math.max(running, Number(report.progress_pct) || 0);
+    }
+    totalsAtReport.set(String(report.id), running);
+  }
+  const formatTotal = (value) => type === 'quantity'
+    ? `${value}${_wcUnitText(task)}`
+    : type === 'count' ? `${value} items`
+      : type === 'stages' ? `${value} stage${value === 1 ? '' : 's'}`
+        : `${value}%`;
+  const pageSize = 10;
+  const pageItems = [];
+  for (const report of sorted) {
+    const card = [...list.querySelectorAll('[data-wc-report-card]')]
+      .find((item) => item.dataset.reportId === String(report.id));
+    if (!card) continue;
+    const status = report.validation_status || 'pending';
+    const isOpen = leader ? status === 'pending' : ['pending', 'rejected'].includes(status);
+    if (isOpen) {
+      card.hidden = false;
+      list.append(card);
+      continue;
+    }
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.dataset.wcReportRow = '';
+    row.dataset.reportId = String(report.id);
+    row.dataset.reportStatus = status;
+    row.dataset.wcTaskId = taskId;
+    row.setAttribute('aria-label', `${_wcFmtDate(report.report_date)} report, ${status}. Open report details.`);
+    row.style.cssText = `width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;padding:12px;margin:0 0 7px;border:1px solid #dbe3ec;border-left:4px solid ${status === 'approved' ? '#10b981' : status === 'rejected' ? '#ef4444' : '#94a3b8'};border-radius:8px;background:${status === 'voided' ? '#f8fafc' : '#fff'};color:${status === 'voided' ? '#64748b' : '#1f2937'};opacity:${status === 'voided' ? '.75' : '1'};cursor:pointer;`;
+    const reporter = report.member_title || report.member_name || report.member_email || 'Your report';
+    const total = `Running total: ${formatTotal(totalsAtReport.get(String(report.id)) || 0)}`;
+    row.innerHTML = `<span style="min-width:0;display:grid;gap:3px;">
+      <strong>${escapeHtml(_wcFmtDate(report.report_date))} · ${escapeHtml(_wcEntryFigure(task, report))}</strong>
+      <span style="font-size:11px;color:#64748b;">${escapeHtml(reporter)} · ${escapeHtml(total)}</span>
+    </span><span style="display:flex;align-items:center;gap:8px;white-space:nowrap;">
+      <span style="font-size:11px;font-weight:700;color:#475569;">${escapeHtml(status[0].toUpperCase() + status.slice(1))}</span><span aria-hidden="true">›</span>
+    </span>`;
+    row.addEventListener('click', () => _wcOpenReportPanel(card));
+    card.hidden = true;
+    list.append(row, card);
+    pageItems.push({ row, card });
+  }
+  if (pageItems.length) {
+    let visibleCount = pageSize;
+    const updateRows = () => pageItems.forEach((item, index) => {
+      item.row.hidden = index >= visibleCount;
+      item.card.hidden = true;
+    });
+    updateRows();
+    const loadMore = document.createElement('button');
+    loadMore.type = 'button';
+    loadMore.textContent = 'Load more reports';
+    loadMore.style.cssText = 'display:block;width:100%;min-height:44px;margin:8px 0;padding:9px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#334155;font-weight:600;cursor:pointer;';
+    list.append(loadMore);
+    loadMore.hidden = pageItems.length <= visibleCount;
+    loadMore.addEventListener('click', () => {
+      visibleCount += pageSize;
+      updateRows();
+      loadMore.hidden = pageItems.length <= visibleCount;
+    });
+  }
+  const wizard = actionPanel.querySelector('[aria-label="Add progress report"]');
+  wizard?.querySelector('[data-wc-report-cancel-edit]')?.addEventListener('click', () => _wcResetReportEdit(actionPanel, taskId));
+  if (!leader) {
+    for (const button of actionPanel.querySelectorAll('[data-action="wc-edit-progress"]')) {
+      button.addEventListener('click', () => {
+        const card = button.closest('[data-wc-report-card]');
+        let report;
+        try { report = JSON.parse(card?.dataset.reportJson || 'null'); } catch {}
+        if (report) _wcBeginReportEdit(actionPanel, task, report);
+      });
+    }
+    for (const button of actionPanel.querySelectorAll('[data-action="wc-delete-progress"]')) {
+      button.addEventListener('click', () => _wcDeleteReport(taskId, button.dataset.progressId, button));
+    }
+  } else {
+    for (const button of actionPanel.querySelectorAll('[data-action="wc-validate"][data-validate-action="rejected"]')) {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const notes = button.closest('[data-wc-report-card]')?.querySelector(`#wc-val-notes-${CSS.escape(button.dataset.progressId)}`);
+        if (notes?.hidden) {
+          notes.hidden = false;
+          button.textContent = 'Confirm rejection';
+          notes.focus();
+          return;
+        }
+        _wcHandleValidate('work-center', button.dataset.progressId, 'rejected', taskId);
+      });
+    }
+  }
+}
+
 function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
   const legacyGrid = container.firstElementChild;
   if (!legacyGrid || legacyGrid.children.length < 2) return;
@@ -15130,87 +15943,42 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
   actionPanel.style.padding = '8px 16px 16px';
   actionPanel.style.boxShadow = 'none';
 
-  const isActive = !['closed', 'completed'].includes(task.status);
-  const definitions = leader
-    ? [{ key: 'reports', label: 'Reports', count: reports.length }, { key: 'details', label: 'Details' }]
-    : [
-        // Members get one Report tab (the form plus their earlier reports); a closed task shows only the earlier reports.
-        isActive ? { key: 'progress', label: 'Report', count: reports.length }
-          : { key: 'my-reports', label: 'Reports', count: reports.length },
-        { key: 'details', label: 'Details' },
-      ];
+  const definitions = [
+    { key: 'overview', label: 'Overview' },
+    { key: 'reports', label: 'Reports', count: reports.length },
+  ];
   const sessionKey = `wc-task-tab-${taskId}`;
   let selected = '';
   try { selected = sessionStorage.getItem(sessionKey) || ''; } catch {}
   const keys = definitions.map((tab) => tab.key);
+  if (selected === 'details') selected = 'overview';
+  if (['progress', 'my-reports'].includes(selected)) selected = 'reports';
+  if (selected === 'attachments') selected = 'files';
   if (!keys.includes(selected)) {
-    selected = leader ? (activeReports ? 'reports' : 'details')
-      : (isActive ? 'progress' : 'details');
+    selected = leader && activeReports ? 'reports' : 'overview';
   }
 
   const shell = document.createElement('div');
-  shell.innerHTML = `${_wcTaskSummaryHtml(task, reports, queries || [], leader)}
-    <div role="tablist" aria-label="Task information" class="detail-tab-list">
+  shell.innerHTML = `<div role="tablist" aria-label="Task information" class="detail-tab-list">
       ${definitions.map((tab) => `<button type="button" role="tab" data-wc-tab="${tab.key}" aria-selected="${tab.key === selected}"
         class="detail-tab">
         ${tab.label}${tab.count != null ? ` <span class="detail-tab-count">${tab.count}</span>` : ''}
       </button>`).join('')}
     </div>
-    <div data-wc-pane="details" role="tabpanel" ${selected !== 'details' ? 'hidden' : ''}></div>
-    ${leader ? `<div data-wc-pane="reports" role="tabpanel" ${selected !== 'reports' ? 'hidden' : ''}></div>` : ''}
-    ${!leader && isActive ? `<div data-wc-pane="progress" role="tabpanel" ${selected !== 'progress' ? 'hidden' : ''}></div>` : ''}
-    ${!leader && !isActive ? `<div data-wc-pane="my-reports" role="tabpanel" ${selected !== 'my-reports' ? 'hidden' : ''}></div>` : ''}`;
+    <div data-wc-pane="overview" role="tabpanel" ${selected !== 'overview' ? 'hidden' : ''}></div>
+    <div data-wc-pane="reports" role="tabpanel" ${selected !== 'reports' ? 'hidden' : ''}></div>`;
   container.appendChild(shell);
-  const detailsPane = shell.querySelector('[data-wc-pane="details"]');
-  detailsPane.appendChild(detailsPanel);
+  const overviewPane = shell.querySelector('[data-wc-pane="overview"]');
+  overviewPane.insertAdjacentHTML('beforeend', _wcTaskSummaryHtml(task, reports, queries || [], leader));
+  overviewPane.appendChild(detailsPanel);
+  detailsPanel.insertAdjacentHTML('afterbegin', '<h3 style="margin:0 0 12px;font-size:15px;color:#0f172a;">Details</h3>');
+  const reportPane = shell.querySelector('[data-wc-pane="reports"]');
+  reportPane.appendChild(actionPanel);
+  _wcInitReportWizard(actionPanel, task);
 
   if (leader) {
     const pending = reports.filter((entry) => entry.validation_status === 'pending').length;
-    const approved = reports.filter((entry) => entry.validation_status === 'approved').length;
-    const rejected = reports.filter((entry) => entry.validation_status === 'rejected').length;
-    const voided = reports.filter((entry) => entry.validation_status === 'voided').length;
-    const reportPane = shell.querySelector('[data-wc-pane="reports"]');
-    let reportFilter = pending ? 'pending' : 'all';
-    const filterCounts = { all: reports.length, pending, approved, rejected, voided };
-    try {
-      const savedFilter = sessionStorage.getItem(`wc-report-filter-${taskId}`);
-      if (Object.prototype.hasOwnProperty.call(filterCounts, savedFilter)
-        && (savedFilter === 'all' || filterCounts[savedFilter] > 0))
-        reportFilter = savedFilter;
-    } catch {}
-    reportPane.insertAdjacentHTML('afterbegin', `<div role="group" aria-label="Filter reports" style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 12px;">
-      ${[['all', 'All', reports.length], ['pending', 'Pending', pending], ['approved', 'Approved', approved], ['rejected', 'Rejected', rejected], ['voided', 'Voided', voided]]
-        .map(([status, label, count]) => `<button type="button" data-report-filter="${status}" aria-pressed="${status === reportFilter}"
-          style="padding:6px 10px;border:1px solid ${status === reportFilter ? '#007B8A' : '#cbd5e1'};border-radius:999px;background:${status === reportFilter ? '#e6f4f5' : '#fff'};color:${status === reportFilter ? '#006570' : '#475569'};font-size:11px;font-weight:600;cursor:pointer;">${label} ${count}</button>`).join('')}
-    </div>`);
-    reportPane.appendChild(actionPanel);
-    const applyReportFilter = (status) => {
-      for (const card of reportPane.querySelectorAll('[data-wc-report-card]'))
-        card.hidden = status !== 'all' && card.getAttribute('data-report-status') !== status;
-      for (const button of reportPane.querySelectorAll('[data-report-filter]')) {
-        const active = button.getAttribute('data-report-filter') === status;
-        button.setAttribute('aria-pressed', String(active));
-        button.style.borderColor = active ? '#007B8A' : '#cbd5e1';
-        button.style.background = active ? '#e6f4f5' : '#fff';
-        button.style.color = active ? '#006570' : '#475569';
-      }
-      try { sessionStorage.setItem(`wc-report-filter-${taskId}`, status); } catch {}
-    };
-    for (const button of reportPane.querySelectorAll('[data-report-filter]'))
-      button.addEventListener('click', () => applyReportFilter(button.getAttribute('data-report-filter')));
-    applyReportFilter(reportFilter);
-  } else {
-    const historyHeading = [...actionPanel.querySelectorAll('div')]
-      .find((el) => el.textContent.trim() === 'My Previous Submissions');
-    const historyPanel = historyHeading?.parentElement;
-    if (isActive) {
-      const reportPane = shell.querySelector('[data-wc-pane="progress"]');
-      reportPane.appendChild(actionPanel);
-      if (historyPanel) { historyPanel.style.marginTop = '16px'; reportPane.appendChild(historyPanel); }
-    } else {
-      if (historyPanel) shell.querySelector('[data-wc-pane="my-reports"]').appendChild(historyPanel);
-      actionPanel.remove();
-    }
+    reportPane.insertAdjacentHTML('afterbegin', `<div style="font-size:12px;color:#475569;margin:4px 0 12px;">${pending ? `${pending} report${pending === 1 ? '' : 's'} waiting for review.` : 'Earlier reports'}</div>`);
   }
 
   for (const mount of shell.querySelectorAll('[data-wc-report-queries]')) {
@@ -15224,10 +15992,11 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
   const orphanQueries = (queries || []).filter((query) =>
     !query.report_id || !reportIds.has(String(query.report_id)));
   if (orphanQueries.length) {
-    const queryPane = shell.querySelector(`[data-wc-pane="${leader ? 'reports' : (isActive ? 'progress' : 'my-reports')}"]`);
+    const queryPane = shell.querySelector('[data-wc-pane="reports"]');
     queryPane?.insertAdjacentHTML('afterbegin',
       `<div data-wc-orphan-queries style="margin:4px 0 14px;">${_wcQueryPanelHtml(task, null, orphanQueries, leader)}</div>`);
   }
+  _wcEnhanceReports(actionPanel, task, reports, leader);
   shell.querySelector('[data-wc-attachment-upload]')?.addEventListener('click', async (event) => {
     const button = event.currentTarget;
     const input = shell.querySelector('[data-wc-attachment-input]');
@@ -15716,10 +16485,12 @@ async function _wcReadPhotoMetadata(file) {
 
 function _wcOpenOfflineReportDb() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('oneproject-work-center', 1);
+    const request = indexedDB.open('oneproject-work-center', 2);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains('reports'))
         request.result.createObjectStore('reports', { keyPath: 'key' });
+      if (!request.result.objectStoreNames.contains('attachments'))
+        request.result.createObjectStore('attachments', { keyPath: 'key' });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error('Offline report storage could not be opened.'));
@@ -15787,12 +16558,86 @@ async function _wcSyncOfflineReports() {
     if (db) db.close();
   }
 }
-if (window.addEventListener) window.addEventListener('online', _wcSyncOfflineReports);
-if (typeof navigator !== 'undefined' && navigator.onLine) _wcSyncOfflineReports();
+
+async function _wcQueueOfflineTaskAttachments(taskId, projectId, files) {
+  const record = {
+    key: `${taskId}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    taskId: String(taskId),
+    projectId: String(projectId),
+    files: files.map((file) => ({
+      blob: file,
+      fileName: file.name || 'attachment',
+      fileType: file.type || 'application/octet-stream',
+    })),
+  };
+  const db = await _wcOpenOfflineReportDb();
+  await new Promise((resolve, reject) => {
+    const request = db.transaction('attachments', 'readwrite').objectStore('attachments').put(record);
+    request.onsuccess = resolve;
+    request.onerror = () => reject(request.error || new Error('The offline task files could not be saved.'));
+  });
+  db.close();
+}
+
+async function _wcSyncOfflineTaskAttachments() {
+  if (!navigator.onLine || !window.indexedDB) return;
+  let db;
+  let syncedAny = false;
+  try {
+    db = await _wcOpenOfflineReportDb();
+    const records = await new Promise((resolve, reject) => {
+      const request = db.transaction('attachments', 'readonly').objectStore('attachments').getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error || new Error('Offline task files could not be read.'));
+    });
+    for (const record of records) {
+      const form = new FormData();
+      form.append('projectId', record.projectId);
+      for (const file of record.files)
+        form.append('attachments', file.blob, file.fileName);
+      const response = await _wcFetch(`${API}/work-center/${encodeURIComponent(record.taskId)}/attachments`, {
+        method: 'POST', body: form,
+      });
+      if (!response) {
+        alert('Offline task files could not sync yet. They remain saved on this device for another retry.');
+        break;
+      }
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        alert(`Offline task files could not sync: ${result.error || 'The server rejected them.'} They remain saved on this device.`);
+        break;
+      }
+      await new Promise((resolve, reject) => {
+        const request = db.transaction('attachments', 'readwrite').objectStore('attachments').delete(record.key);
+        request.onsuccess = resolve;
+        request.onerror = () => reject(request.error || new Error('Synced task files could not be cleared from offline storage.'));
+      });
+      syncedAny = true;
+    }
+    if (syncedAny) {
+      delete recordsCache['work-center'];
+      loadWCRecords();
+    }
+  } catch (error) {
+    console.error('Offline task file synchronization failed:', error);
+    alert(`Offline task file sync failed: ${error.message || 'The saved files remain on this device.'}`);
+  } finally {
+    if (db) db.close();
+  }
+}
+if (window.addEventListener) {
+  window.addEventListener('online', _wcSyncOfflineReports);
+  window.addEventListener('online', _wcSyncOfflineTaskAttachments);
+}
+if (typeof navigator !== 'undefined' && navigator.onLine) {
+  _wcSyncOfflineReports();
+  _wcSyncOfflineTaskAttachments();
+}
 
 async function _wcHandleSubmitProgress(taskId, tabKey) {
   let submitted = false;
   let reportForm = null;
+  const editing = window._wcEditingReportByTask?.[String(taskId)] || null;
   let requestAttempted = false;
   let responseReceived = false;
   try {
@@ -15870,11 +16715,10 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
       .find((group) => group.dataset.taskId === String(taskId));
     const supportingMetadata = [];
     for (const group of supportingGroups?.querySelectorAll('[data-wc-supporting-group]') || []) {
-      const attachmentType = group.querySelector('[data-supporting-type]')?.value || '';
+      const attachmentType = group.querySelector('[data-supporting-type]')?.value || 'general';
       const customAttachmentType = group.querySelector('[data-supporting-custom]')?.value.trim() || '';
       const files = Array.from(group.querySelector('[data-supporting-files]')?.files || []);
       if (!files.length) continue;
-      if (!attachmentType) return alert('Choose an evidence title before selecting supporting files.');
       if (attachmentType === 'other' && !customAttachmentType)
         return alert('Enter a custom evidence title for Other before selecting its files.');
       if (customAttachmentType.length > 120) return alert('Custom evidence titles cannot exceed 120 characters.');
@@ -15886,19 +16730,34 @@ async function _wcHandleSubmitProgress(taskId, tabKey) {
     if (supportingMetadata.length > 20) return alert('Choose no more than 20 supporting files.');
     if (supportingMetadata.length)
       form.append('supportingAttachmentMetadata', JSON.stringify(supportingMetadata));
+    if (editing) {
+      const wizard = document.querySelector(`#wc-detail-${CSS.escape(String(taskId))} [aria-label="Add progress report"]`);
+      form.append('keepPhotoIds', JSON.stringify([...wizard.querySelectorAll('[data-wc-keep-photo]:checked')]
+        .map((input) => input.getAttribute('data-wc-keep-photo'))));
+      form.append('keepSupportingAttachmentIds', JSON.stringify([...wizard.querySelectorAll('[data-wc-keep-supporting]:checked')]
+        .map((input) => input.getAttribute('data-wc-keep-supporting'))));
+      form.append('removeAttachment', String(Boolean(wizard.querySelector('[data-wc-keep-attachment]') &&
+        !wizard.querySelector('[data-wc-keep-attachment]').checked)));
+    }
     form.append('idempotencyKey', (window.crypto?.randomUUID
       ? window.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`));
 
     requestAttempted = true;
-    const res = await _wcFetch(`${API}/work-center-progress`, { method: 'POST', body: form });
+    const reportUrl = editing
+      ? `${API}/work-center-progress/${encodeURIComponent(editing.id)}`
+      : `${API}/work-center-progress`;
+    const res = await _wcFetch(reportUrl, { method: editing ? 'PATCH' : 'POST', body: form });
     responseReceived = Boolean(res);
     if (!res) throw new Error('The report could not be sent.');
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || data.message || 'Failed to submit progress');
     submitted = true;
-    await _wcRefreshTaskCard(taskId, 'my-reports', 'Report submitted. It counts toward progress after a leader approves it.' + (data.warning ? ` ${data.warning}` : ''));
+    try { localStorage.removeItem(`wc-report-draft-${taskId}`); } catch {}
+    if (editing && window._wcEditingReportByTask) delete window._wcEditingReportByTask[String(taskId)];
+    await _wcRefreshTaskCard(taskId, 'my-reports',
+      `${editing ? 'Report changes saved and submitted for approval.' : 'Report submitted. It counts toward progress after a leader approves it.'}${data.warning ? ` ${data.warning}` : ''}`);
   } catch (err) {
-    if (!submitted && requestAttempted && !responseReceived && reportForm && window.indexedDB) {
+    if (!editing && !submitted && requestAttempted && !responseReceived && reportForm && window.indexedDB) {
       try {
         await _wcQueueOfflineReport(reportForm, taskId);
         alert('The report could not reach the server. It is saved on this device and will retry when you reconnect.');
@@ -17018,6 +17877,115 @@ function _peHttpError(response, body, what) {
   return { peKind: 'server', message: detail || `${what} could not be loaded (server error ${response.status}). Try again in a moment.` };
 }
 
+async function _peDeleteActivityWithPreview(activityId, activity) {
+  const projectId = await ensureActiveProjectId();
+  if (!projectId) throw new Error('Select a project before deleting this activity.');
+  const previewResponse = await _wcFetch(
+    `${API}/planning-execution/${encodeURIComponent(activityId)}/delete-preview?projectId=${encodeURIComponent(projectId)}`);
+  if (!previewResponse) throw new Error('Your session could not be refreshed. Please sign in again.');
+  const previewData = await previewResponse.json().catch(() => ({}));
+  if (!previewResponse.ok) throw new Error(previewData.error || 'The activity delete preview could not be loaded.');
+  const preview = previewData.preview;
+  if (!preview) throw new Error('The activity delete preview is unavailable.');
+
+  const overlay = document.createElement('div');
+  overlay.setAttribute('role', 'presentation');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:100002;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px;';
+  const dialog = document.createElement('section');
+  dialog.setAttribute('role', 'alertdialog');
+  dialog.setAttribute('aria-modal', 'true');
+  dialog.setAttribute('aria-labelledby', 'pe-delete-activity-title');
+  dialog.style.cssText = 'width:min(520px,100%);max-height:90vh;overflow:auto;background:#fff;border-radius:12px;padding:20px;box-shadow:0 12px 35px rgba(15,23,42,.25);';
+  const title = document.createElement('h2');
+  title.id = 'pe-delete-activity-title';
+  title.textContent = `Delete ${activity?.title || 'activity'}?`;
+  title.style.cssText = 'margin:0 0 8px;font-size:18px;color:#0f172a;';
+  const explanation = document.createElement('p');
+  explanation.textContent = 'Only the activity is deleted. Nothing below it is removed.';
+  explanation.style.cssText = 'margin:0 0 12px;font-size:13px;color:#334155;';
+  const rows = document.createElement('ul');
+  rows.style.cssText = 'margin:0;padding-left:20px;font-size:13px;line-height:1.6;color:#334155;';
+  for (const text of [
+    `Tasks: ${preview.task_count} will become unlinked tasks.`,
+    'Reports and files stay with each task.',
+    'Progress is recalculated. Unlinked tasks do not count until linked again.',
+  ]) {
+    const row = document.createElement('li');
+    row.textContent = text;
+    rows.appendChild(row);
+  }
+  const tasks = document.createElement('div');
+  tasks.style.cssText = 'margin-top:8px;font-size:12px;color:#475569;';
+  tasks.textContent = preview.tasks?.length
+    ? `Tasks kept: ${preview.tasks.map((task) => task.title).join(', ')}`
+    : 'This activity has no linked tasks.';
+  const weights = document.createElement('div');
+  weights.style.cssText = 'margin-top:10px;padding:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#334155;';
+  if (preview.remaining_activities?.length) {
+    const heading = document.createElement('strong');
+    heading.textContent = `${preview.milestone_title || 'Milestone'} activity weights after deletion`;
+    weights.appendChild(heading);
+    for (const item of preview.remaining_activities) {
+      const line = document.createElement('div');
+      line.textContent = `${item.title}: ${Number(item.before_weight_pct)}% to ${Number(item.after_weight_pct)}%`;
+      weights.appendChild(line);
+    }
+    const progress = document.createElement('div');
+    progress.style.marginTop = '5px';
+    progress.textContent = `Milestone derived progress: ${Number(preview.progress_before || 0)}% to ${Number(preview.progress_after || 0)}%`;
+    weights.appendChild(progress);
+  } else {
+    weights.textContent = 'No remaining milestone activity weights need adjustment.';
+  }
+  const note = document.createElement('p');
+  note.textContent = 'You can delete individual reports from the task afterwards if you choose.';
+  note.style.cssText = 'margin:10px 0;font-size:12px;color:#64748b;';
+  const status = document.createElement('div');
+  status.setAttribute('role', 'status');
+  status.style.cssText = 'min-height:18px;margin:6px 0;color:#b91c1c;font-size:12px;';
+  const actions = document.createElement('div');
+  actions.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:8px;';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  cancel.style.cssText = 'min-height:44px;padding:8px 14px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#334155;cursor:pointer;';
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.textContent = 'Delete activity';
+  remove.style.cssText = 'min-height:44px;padding:8px 14px;border:1px solid #b91c1c;border-radius:7px;background:#b91c1c;color:#fff;cursor:pointer;';
+  actions.append(cancel, remove);
+  dialog.append(title, explanation, rows, tasks, weights, note, status, actions);
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  cancel.addEventListener('click', close);
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+  remove.addEventListener('click', async () => {
+    remove.disabled = true;
+    status.textContent = '';
+    try {
+      const response = await _wcFetch(`${API}/planning-execution/${encodeURIComponent(activityId)}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ projectId, expectedWeights: preview.source_weights }),
+      });
+      if (!response) throw new Error('Your session could not be refreshed. Please sign in again.');
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'The activity could not be deleted.');
+      close();
+      delete recordsCache['planning-execution'];
+      delete recordsCache['work-center'];
+      await loadPERecords();
+      const unlinked = Number(result.unlinked_tasks) || 0;
+      window.alert(`Activity deleted. ${unlinked} task${unlinked === 1 ? ' is' : 's are'} now unlinked and kept.`);
+      if (result.cleanup_warning) window.alert(result.cleanup_warning);
+    } catch (error) {
+      status.textContent = error.message || 'The activity could not be deleted.';
+      remove.disabled = false;
+    }
+  });
+  cancel.focus();
+}
+
 async function _peLoadDetail(recordId, tabKey) {
   const container = document.getElementById(`pe-detail-inner-${recordId}`);
   if (!container) return { ok: false, error: { peKind: 'missing', message: 'The activity panel is not open.' } };
@@ -17670,6 +18638,213 @@ async function _peDownloadActivityReportPdf(report) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
+async function _wcDownloadTaskPdf(task, entries, checklists) {
+  if (!window.PDFLib) throw new Error('The PDF library is unavailable. Reload the page and try again.');
+  const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
+  const pdfDoc = await PDFDocument.create();
+  const page = pdfDoc.addPage([595.28, 841.89]);
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const ink = rgb(0.12, 0.18, 0.24);
+  const muted = rgb(0.35, 0.4, 0.45);
+  const line = rgb(0.82, 0.86, 0.89);
+  const accent = rgb(0.06, 0.46, 0.44);
+  const plain = (value) => String(value ?? '').normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7e]/g, '-');
+  const fit = (value, face, size, width) => {
+    let text = plain(value);
+    if (face.widthOfTextAtSize(text, size) <= width) return text;
+    while (text.length && face.widthOfTextAtSize(`${text}...`, size) > width) text = text.slice(0, -1);
+    return `${text}...`;
+  };
+  const write = (value, x, y, { size = 8, face = font, color = ink, width = 511 } = {}) => {
+    page.drawText(fit(value, face, size, width), { x, y, size, font: face, color });
+  };
+  const allEntries = Array.isArray(entries) ? entries : [];
+  const approved = allEntries.filter((entry) => entry.validation_status === 'approved');
+  const type = _wcTypeOf(task);
+  const unit = _wcUnitText(task);
+  const toDay = (value) => {
+    const text = String(value || '').slice(0, 10);
+    const date = Date.parse(`${text}T00:00:00Z`);
+    return Number.isFinite(date) ? date : null;
+  };
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const start = toDay(task.start_date);
+  const end = toDay(task.end_date);
+  const planned = start == null || end == null || end <= start ? 0
+    : Math.max(0, Math.min(100, (todayUtc - start) / (end - start) * 100));
+  const progress = Math.max(0, Math.min(100, Number(task.progress_pct) || 0));
+  const variance = progress - planned;
+  const approvedQuantity = Number(task.approved_quantity_done ?? approved.reduce(
+    (sum, entry) => sum + (Number(entry.quantity_done) || 0), 0));
+  const target = Number(task.target_quantity);
+  const assigned = (Array.isArray(task.assigned_members) ? task.assigned_members : [])
+    .map((member) => member.name || member.title || member.email || `Member ${member.id}`)
+    .join(', ') || 'No members assigned';
+  const projectName = typeof _projectName === 'function' ? _projectName() : 'Project';
+  const activityPath = task.activity_title
+    ? `${task.activity_milestone_title || 'No milestone'} > ${task.activity_title}`
+    : 'Standalone task';
+  const generated = new Date().toISOString().slice(0, 10);
+
+  page.drawText('ONEPROJECTAPP  |  TASK SUMMARY', { x: 42, y: 814, size: 8, font: bold, color: muted });
+  page.drawLine({ start: { x: 42, y: 804 }, end: { x: 553, y: 804 }, thickness: 0.7, color: line });
+  write(task.title || 'Task', 42, 780, { size: 18, face: bold });
+  write(`${projectName}  |  ${activityPath}`, 42, 763, { size: 8, color: muted, width: 511 });
+  write(`Generated ${generated}  |  Assigned ${assigned}`, 42, 746, { size: 8, width: 511 });
+  const dateRange = `${_wcFmtDate(task.start_date)} to ${_wcFmtDate(task.end_date)}`;
+  const share = task.activity_id && task.weight_pct != null ? `  |  ${Number(task.weight_pct)}% of activity` : '';
+  write(`Dates ${dateRange}  |  Status ${task.status || 'Not set'}${share}`, 42, 731, { size: 8, color: muted });
+
+  const figures = [
+    ['Progress', `${progress.toFixed(1)}%`],
+    ['Planned today', `${planned.toFixed(1)}%`],
+    ['Variance', `${variance >= 0 ? '+' : ''}${variance.toFixed(1)}%`],
+    ['Quantity approved', ['quantity', 'count'].includes(type) && target > 0
+      ? `${approvedQuantity} / ${target}${unit}` : 'Not applicable'],
+  ];
+  const boxWidth = 122;
+  figures.forEach(([label, value], index) => {
+    const x = 42 + index * 128;
+    page.drawRectangle({ x, y: 655, width: boxWidth, height: 56, borderColor: line, borderWidth: 0.7 });
+    write(label, x + 8, 694, { size: 7, color: muted, width: boxWidth - 16 });
+    write(value, x + 8, 674, { size: 11, face: bold, width: boxWidth - 16 });
+  });
+
+  const stages = _wcStagesOf(task);
+  const chronological = [...allEntries].sort((left, right) =>
+    String(left.report_date || '').localeCompare(String(right.report_date || ''))
+      || Number(left.id || 0) - Number(right.id || 0));
+  const runningById = new Map();
+  let runningQuantity = 0;
+  let runningProgress = 0;
+  const completedStages = new Set();
+  for (const entry of chronological) {
+    if (entry.validation_status === 'approved') {
+      if (['quantity', 'count'].includes(type)) runningQuantity += Number(entry.quantity_done) || 0;
+      else if (type === 'stages') {
+        if (entry.stage_id != null) completedStages.add(String(entry.stage_id));
+        runningProgress = stages.filter((stage) => completedStages.has(String(stage.id)))
+          .reduce((sum, stage) => sum + (Number(stage.weight_pct) || 0), 0);
+      } else runningProgress = Math.max(runningProgress, Number(entry.progress_pct) || 0);
+    }
+    runningById.set(String(entry.id), ['quantity', 'count'].includes(type)
+      ? `${runningQuantity}${unit}` : type === 'percentage' || type === 'stages'
+        ? `${runningProgress.toFixed(1)}%` : '-');
+  }
+  page.drawText('REPORTS', { x: 42, y: 632, size: 9, font: bold, color: accent });
+  const columns = [
+    { title: 'Date', x: 42, width: 60 },
+    { title: 'Member', x: 106, width: 158 },
+    { title: 'Quantity / result', x: 268, width: 86 },
+    { title: 'Running total', x: 358, width: 84 },
+    { title: 'Status', x: 448, width: 105 },
+  ];
+  page.drawLine({ start: { x: 42, y: 621 }, end: { x: 553, y: 621 }, thickness: 0.7, color: line });
+  columns.forEach((column) => write(column.title, column.x, 608, { size: 7, face: bold, width: column.width }));
+  const newestFirst = [...allEntries].sort((left, right) =>
+    String(right.report_date || '').localeCompare(String(left.report_date || ''))
+      || Number(right.id || 0) - Number(left.id || 0));
+  const shownReports = newestFirst.slice(0, 12);
+  shownReports.forEach((entry, index) => {
+    const y = 592 - index * 13;
+    const status = entry.validation_status === 'pending' ? 'Pending review - Not counted'
+      : entry.validation_status === 'approved' ? 'Approved' : entry.validation_status || 'Not counted';
+    const result = ['quantity', 'count'].includes(type)
+      ? `${Number(entry.quantity_done) || 0}${unit}`
+      : entry.progress_pct != null ? `${Number(entry.progress_pct) || 0}%` : entry.stage_id != null ? 'Stage' : '-';
+    const member = entry.member_title || entry.member_email || `Member ${entry.member_id || ''}`;
+    const values = [
+      _wcFmtDate(entry.report_date), member, result,
+      entry.validation_status === 'pending' ? 'Not counted' : runningById.get(String(entry.id)) || '-',
+      entry.validation_status === 'pending' ? 'Pending review' : status,
+    ];
+    columns.forEach((column, columnIndex) => write(values[columnIndex], column.x, y, {
+      size: 6.5, width: column.width,
+      color: entry.validation_status === 'pending' && columnIndex === 4 ? accent : ink,
+    }));
+    page.drawLine({ start: { x: 42, y: y - 4 }, end: { x: 553, y: y - 4 }, thickness: 0.35, color: line });
+  });
+  const reportsBottom = 588 - shownReports.length * 13;
+  if (newestFirst.length > shownReports.length)
+    write(`Showing ${shownReports.length} latest of ${newestFirst.length} reports.`, 42, reportsBottom - 1, { size: 6.5, color: muted });
+
+  const siteTop = Math.min(418, reportsBottom - (newestFirst.length > shownReports.length ? 18 : 8));
+  page.drawText('SITE CONDITIONS', { x: 42, y: siteTop, size: 9, font: bold, color: accent });
+  const latest = [...allEntries].sort((left, right) =>
+    String(right.report_date || '').localeCompare(String(left.report_date || ''))
+      || Number(right.id || 0) - Number(left.id || 0))[0];
+  const manpowerResources = (latest?.resources || []).filter((item) => item.resource_type === 'manpower')
+    .map((item) => `${item.name || 'Manpower'} ${item.quantity ?? ''} ${item.unit || ''}`.trim());
+  const manpower = latest?.manpower || manpowerResources.join(', ') || 'Not recorded';
+  const delays = allEntries.filter((entry) => Number(entry.delay_days) > 0 || entry.delay_cause);
+  const delayDays = delays.reduce((sum, entry) => sum + (Number(entry.delay_days) || 0), 0);
+  const checklistItems = (Array.isArray(checklists) ? checklists : []).flatMap((list) => list.items || []);
+  const completedChecklistItems = checklistItems.filter((item) => item.is_complete).length;
+  const siteRows = [
+    `Manpower on latest report: ${manpower}`,
+    `Delays logged: ${delays.length}${delayDays ? ` (${delayDays} days)` : ''}`,
+    `Checklist progress: ${checklistItems.length ? `${completedChecklistItems} of ${checklistItems.length} complete` : 'No checklist items'}`,
+  ];
+  siteRows.forEach((value, index) => write(value, 42, siteTop - 14 - index * 12, { size: 7.5, width: 511 }));
+
+  const photos = Array.isArray(latest?.photos) ? latest.photos.slice(0, 3) : [];
+  const photoTop = siteTop - 63;
+  page.drawText('PHOTOS FROM LATEST REPORT', { x: 42, y: photoTop, size: 9, font: bold, color: accent });
+  if (!photos.length) write('No photos on the latest report.', 42, photoTop - 14, { size: 7.5, color: muted });
+  for (const [index, photo] of photos.entries()) {
+    const x = 42 + index * 170;
+    const safeUrl = _safeHttpsUrl(photo.file_url);
+    let embedded = false;
+    if (safeUrl) {
+      try {
+        const response = await fetch(safeUrl, { mode: 'cors' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const bitmap = await createImageBitmap(await response.blob());
+        const scale = Math.min(1, 420 / Math.max(bitmap.width, bitmap.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        bitmap.close();
+        const jpeg = await new Promise((resolve, reject) => canvas.toBlob((blob) =>
+          blob ? resolve(blob) : reject(new Error('Photo could not be resized.')), 'image/jpeg', 0.82));
+        const image = await pdfDoc.embedJpg(await jpeg.arrayBuffer());
+        const dimensions = image.scale(Math.min(145 / image.width, 55 / image.height));
+        page.drawImage(image, { x, y: photoTop - 70, width: dimensions.width, height: dimensions.height });
+        embedded = true;
+      } catch (error) {
+        console.warn('Task report photo could not be embedded in the PDF:', photo.file_name, error);
+      }
+    }
+    if (!embedded) write(photo.file_name || 'Photo unavailable', x, photoTop - 36, { size: 7, color: muted, width: 150 });
+    const caption = photo.captured_at && photo.latitude != null && photo.longitude != null
+      ? `Time and GPS recorded: ${String(photo.captured_at).slice(0, 16)} ${Number(photo.latitude).toFixed(4)}, ${Number(photo.longitude).toFixed(4)}`
+      : photo.file_name || 'Report photo';
+    write(caption, x, photoTop - 78, { size: 5.5, color: muted, width: 155 });
+  }
+
+  page.drawLine({ start: { x: 42, y: 153 }, end: { x: 272, y: 153 }, thickness: 0.7, color: muted });
+  page.drawLine({ start: { x: 323, y: 153 }, end: { x: 553, y: 153 }, thickness: 0.7, color: muted });
+  write('Prepared by (member)', 42, 139, { size: 7, color: muted });
+  write('Reviewed by (leader)', 323, 139, { size: 7, color: muted });
+  page.drawLine({ start: { x: 42, y: 100 }, end: { x: 553, y: 100 }, thickness: 0.7, color: line });
+  write('Only approved reports count toward progress', 42, 82, { size: 7, color: muted });
+  write('1 / 1', 520, 82, { size: 7, color: muted, width: 33 });
+
+  const bytes = await pdfDoc.save();
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `Task_Summary_${plain(task.id || 'task')}_${generated}.pdf`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
 window._peSharedEvidenceHtml = function (list, unit) {
   const items = Array.isArray(list) ? { reports: list, supporting_attachments: [] } : (list || {});
   const reports = Array.isArray(items.reports) ? items.reports : [];
@@ -18045,6 +19220,8 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
           data-milestone-id="${escapeHtml(String(activity.baseline_milestone_id || activity.additional_milestone_id || ''))}"
           data-milestone-title="${escapeHtml(milestoneTitle)}">${escapeHtml(milestoneTitle)}</button><span class="pe-crumb-sep" aria-hidden="true">›</span>` : ''}
         <span class="pe-crumb pe-crumb--here" aria-current="page">${escapeHtml(activity.title || 'Activity')}</span>
+        ${card.can_delete_activity ? `<button type="button" data-pe-delete-activity
+          style="margin-left:auto;min-height:44px;padding:8px 12px;border:1px solid #fecaca;border-radius:7px;background:#fff;color:#b91c1c;cursor:pointer;">Delete activity</button>` : ''}
       </nav>
       <div class="pe-kpis">
         ${(() => {
@@ -18346,6 +19523,13 @@ function _peCertificationPanel(activity, tasks, reports, verifications, rework, 
 function _peWireActivityCard(recordId, card, cachedRecord, verificationData) {
   const container = document.getElementById(`pe-detail-inner-${recordId}`);
   if (!container) return;
+  container.querySelector('[data-pe-delete-activity]')?.addEventListener('click', async () => {
+    try {
+      await _peDeleteActivityWithPreview(recordId, card.activity);
+    } catch (error) {
+      _peShowActivityNotice(recordId, error.message || 'Could not load the activity delete preview.', true);
+    }
+  });
   const selectedTab = () => container.querySelector('[data-pe-tab][aria-selected="true"]')?.getAttribute('data-pe-tab') || 'overview';
   container.querySelectorAll('[data-pe-tab]').forEach(button => button.addEventListener('click', () => {
     const tab = button.getAttribute('data-pe-tab');
