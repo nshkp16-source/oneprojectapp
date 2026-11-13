@@ -5555,6 +5555,26 @@ OPA_PATTERNS.push(
 /* ═══ ROUND 3: cards (records / activities / tasks) ═══ */
 const _opaEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const _pl = n => (+n > 1 ? 's' : '');
+const _recordRoleFr = role => {
+  const key = String(role || '').trim();
+  const normalized = key.toLowerCase().replace(/[\s_-]+/g, '');
+  const roles = {
+    client: 'client',
+    contractor: 'entrepreneur',
+    consultant: 'consultant',
+    clientpm: 'chef de projet client',
+    contractorpm: 'chef de projet entrepreneur',
+    consultantpm: 'chef de projet consultant',
+    teammember: "membre de l'équipe",
+    projectmember: 'membre du projet'
+  };
+  return roles[normalized] || OPA_FR[key] || key;
+};
+const _recordRolePhrase = role => {
+  if (String(role || '').trim().toLowerCase() === 'a project member') return 'un membre du projet';
+  const translated = _recordRoleFr(role);
+  return /^[aeiouàâäéèêëîïôöùûü]/i.test(translated) ? `l’${translated}` : `le ${translated}`;
+};
 const OPA_PREFIX = {
   'Reply by ': 'Réponse avant le ', 'Reply was due ': 'Réponse attendue le ', 'Opened ': 'Ouvert le ',
   'Stage: ': 'Étape : ', 'Weather: ': 'Météo : ', 'Resources: ': 'Ressources : ', 'Contractor note: ': "Note de l'entrepreneur : ",
@@ -5563,13 +5583,52 @@ const OPA_PREFIX = {
   'Rejected on ': 'Rejeté le ', 'Written by ': 'Rédigé par ', 'Requested ': 'Demandé le ', 'Review by ': 'Revue avant le ',
   'Calculated target: ': 'Objectif calculé : ', 'Selected: ': 'Sélectionné : ', 'Saved for ': 'Enregistré pour ',
   'Created on ': 'Créé le ', 'Added ': 'Ajouté le ', 'Due ': 'Échéance ', 'Running total ': 'Cumul ',
-  'Completed ': 'Réalisé ', 'Updated ': 'Mis à jour ', 'Revision ': 'Révision ', 'Supporting files (': 'Fichiers justificatifs (',
+  'Completed ': 'Réalisé ', 'Updated ': 'Mis à jour ', 'Revision ': 'Révision ', 'As of ': 'Au ', 'Supporting files (': 'Fichiers justificatifs (',
   'Supporting attachments (': 'Pièces justificatives (', 'Executed Qty Today (': "Qté exécutée aujourd'hui (",
   'Milestones validated against extended deadline (': "Jalons validés par rapport à l'échéance prolongée (",
   'New finish (': 'Nouvelle fin ('
 };
 Object.keys(OPA_PREFIX).forEach(k => OPA_PATTERNS.push([new RegExp('^' + _opaEsc(k) + '(\\S.*)$'), (m, rest) => OPA_PREFIX[k] + rest]));
 OPA_PATTERNS.push(
+  [/^The (.+) submitted this record\.$/, (m, role) => `${_recordRolePhrase(role)} a soumis ce dossier.`],
+  [/^The (.+) issued this notice\.$/, (m, role) => `${_recordRolePhrase(role)} a émis cet avis.`],
+  [/^The (.+) (accepted|approved) this record\.$/, (m, role, action) => `${_recordRolePhrase(role)} a ${action === 'accepted' ? 'accepté' : 'approuvé'} ce dossier.`],
+  [/^The (.+) rejected this record\.$/, (m, role) => `${_recordRolePhrase(role)} a rejeté ce dossier.`],
+  [/^Waiting for the (.+) to (accept|approve) this record\.$/, (m, role, action) => `En attente que ${_recordRolePhrase(role)} ${action === 'accept' ? 'accepte' : 'approuve'} ce dossier.`],
+  [/^(\d+) of (\d+) named signers? (?:has|have) signed for the (.+) side\.$/, (m, signed, total, side) => {
+    const singular = +total === 1;
+    return `${signed} sur ${total} signataire${singular ? '' : 's'} désigné${singular ? '' : 's'} ${singular ? 'a' : 'ont'} signé pour le côté ${_recordRoleFr(side)}.`;
+  }],
+  [/^(\d+) of (\d+) approval steps are finished\.$/, (m, done, total) => `${done} étape${+done === 1 ? '' : 's'} d’approbation terminée${+done === 1 ? '' : 's'} sur ${total}.`],
+  [/^The (.+) is the next to decide\.$/, (m, role) => `La prochaine décision revient à ${_recordRolePhrase(role)}.`],
+  [/^(\d+) (?:person|people) (?:has|have) opened, commented on or decided on this record\.$/, (m, count) => `${count} personne${+count === 1 ? '' : 's'} ${+count === 1 ? 'a' : 'ont'} consulté, commenté ou pris une décision sur ce dossier.`],
+  [/^(\d+) approved or accepted it and (\d+) rejected it\.$/, (m, approved, rejected) => `${approved} ${+approved === 1 ? 'l’a approuvé ou accepté' : 'l’ont approuvé ou accepté'} et ${rejected} ${+rejected === 1 ? 'l’a rejeté' : 'l’ont rejeté'}.`],
+  [/^This is the summary of record (.+)\.$/, 'Voici le résumé du dossier $1.'],
+  [/^(\d+) files? (?:is|are) attached to this record\.$/, (m, count) => `${count} fichier${+count === 1 ? '' : 's'} ${+count === 1 ? 'est joint' : 'sont joints'} à ce dossier.`],
+  [/^The (.+) submitted this record on (.+)\.$/, (m, role, date) => `${_recordRolePhrase(role)} a soumis ce dossier le ${date}.`],
+  [/^Approved this record on (.+)\.$/, 'Dossier approuvé le $1.'],
+  [/^Accepted this record on (.+)\.$/, 'Dossier accepté le $1.'],
+  [/^Rejected this record on (.+)\.$/, 'Dossier rejeté le $1.'],
+  [/^Commented on this record on (.+)\.$/, 'Commentaire ajouté au dossier le $1.'],
+  [/^Opened this record on (.+)\.$/, 'Dossier consulté le $1.'],
+  [/^Last activity on (.+)\.$/, 'Dernière activité le $1.'],
+  [/^(\d+) of (\d+) signed$/, '$1 sur $2 signé(s)'],
+  [/^(\d+) of (\d+) decisions made$/, '$1 sur $2 décisions prises'],
+  [/^(\d+) working days? remain\.$/, (m, count) => `${count} jour${+count === 1 ? '' : 's'} ouvré${+count === 1 ? '' : 's'} restant${+count === 1 ? '' : 's'}.`],
+  [/^(.+?) is behind plan by ([\d.,]+) points?\. (\d+) approved task reports? record (.+?) claimed work\. (.+?) is certified\.(?: (\d+) working days? remain\.)?$/, (m, title, variance, reports, claimed, certified, days) =>
+    `${title} est en retard de ${variance} point${+variance === 1 ? '' : 's'}. ${reports} rapport${+reports === 1 ? '' : 's'} de tâche approuvé${+reports === 1 ? '' : 's'} indique${+reports === 1 ? '' : 'nt'} ${claimed} de travaux déclarés. Quantité certifiée : ${certified}.${days ? ` ${days} jour${+days === 1 ? '' : 's'} ouvré${+days === 1 ? '' : 's'} restant${+days === 1 ? '' : 's'}.` : ''}`],
+  [/^(.+?) is behind plan by ([\d.,]+) points?\. (\d+) approved task reports? record (.+?) claimed work\. (.+?) of claimed work still needs verification\.(?: (\d+) working days? remain\.)?$/, (m, title, variance, reports, claimed, pending, days) =>
+    `${title} est en retard de ${variance} point${+variance === 1 ? '' : 's'}. ${reports} rapport${+reports === 1 ? '' : 's'} de tâche approuvé${+reports === 1 ? '' : 's'} indique${+reports === 1 ? '' : 'nt'} ${claimed} de travaux déclarés. ${pending} de ce travail reste à vérifier.${days ? ` ${days} jour${+days === 1 ? '' : 's'} ouvré${+days === 1 ? '' : 's'} restant${+days === 1 ? '' : 's'}.` : ''}`],
+  [/^(.+?) is being measured against the planned progress\. (\d+) approved task reports? record (.+?) claimed work\. (.+?) is certified\.(?: (\d+) working days? remain\.)?$/, (m, title, reports, claimed, certified, days) =>
+    `${title} est mesurée par rapport à l’avancement prévu. ${reports} rapport${+reports === 1 ? '' : 's'} de tâche approuvé${+reports === 1 ? '' : 's'} indique${+reports === 1 ? '' : 'nt'} ${claimed} de travaux déclarés. Quantité certifiée : ${certified}.${days ? ` ${days} jour${+days === 1 ? '' : 's'} ouvré${+days === 1 ? '' : 's'} restant${+days === 1 ? '' : 's'}.` : ''}`],
+  [/^(.+?) is being measured against the planned progress\. (\d+) approved task reports? record (.+?) claimed work\. (.+?) of claimed work still needs verification\.(?: (\d+) working days? remain\.)?$/, (m, title, reports, claimed, pending, days) =>
+    `${title} est mesurée par rapport à l’avancement prévu. ${reports} rapport${+reports === 1 ? '' : 's'} de tâche approuvé${+reports === 1 ? '' : 's'} indique${+reports === 1 ? '' : 'nt'} ${claimed} de travaux déclarés. ${pending} de ce travail reste à vérifier.${days ? ` ${days} jour${+days === 1 ? '' : 's'} ouvré${+days === 1 ? '' : 's'} restant${+days === 1 ? '' : 's'}.` : ''}`],
+  [/^Task: (.+)$/, 'Tâche : $1'],
+  [/^From report (.+)$/, 'Du rapport du $1'],
+  [/^(.+) reported$/, '$1 déclaré'],
+  [/^(.+) verified$/, '$1 vérifié'],
+  [/^Ahead by ([\d.,]+)%$/, 'En avance de $1 %'],
+  [/^Behind by ([\d.,]+)%$/, 'En retard de $1 %'],
   [/^(\d+) days? overdue$/, (m, n) => n + ' jour' + _pl(n) + ' de retard'],
   [/^(\d+) days? left$/, (m, n) => n + ' jour' + _pl(n) + ' restant' + _pl(n)],
   [/^Overdue by (\d+) days?$/, (m, n) => 'En retard de ' + n + ' jour' + _pl(n)],
@@ -5695,10 +5754,33 @@ Object.assign(OPA_FR, {
   "No pending verification requests. Earlier requests are under History.": "Aucune demande de vérification en attente. Les demandes antérieures sont dans l'historique.",
   "Load more": "Charger plus", "No earlier request matches your search.": "Aucune demande antérieure ne correspond à votre recherche.", "No earlier requests yet.": "Aucune demande antérieure pour le moment.",
   "Temporary value:": "Valeur temporaire :", "No meetings scheduled yet. Use": "Aucune réunion programmée. Utilisez",
-  "Download": "Télécharger", "Reason:": "Motif :"
+  "Download": "Télécharger", "Reason:": "Motif :",
+  "Where this record stands": "Où en est ce dossier",
+  "About this record": "À propos de ce dossier",
+  "Title of this record": "Titre de ce dossier",
+  "Description of this record": "Description de ce dossier",
+  "Documents attached to this record": "Documents joints à ce dossier",
+  "Progress of this record": "Avancement de ce dossier",
+  "Named signers of this record": "Signataires désignés de ce dossier",
+  "Reviews and comments": "Revues et commentaires",
+  "First submission": "Première soumission",
+  "Document stamp": "Cachet du document",
+  "Stamped and signed": "Tamponné et signé",
+  "You can view or download each file.": "Vous pouvez consulter ou télécharger chaque fichier.",
+  "No files are attached to this record.": "Aucun fichier n'est joint à ce dossier.",
+  "Activity details": "Détails de l'activité",
+  "Task report": "Rapport de tâche",
+  "Reporting period not set": "Période de rapport non définie",
+  "Dates not set": "Dates non définies",
+  "On plan": "Dans les délais",
+  "Due": "Échéance",
+  "Upload size limit is unavailable.": "La limite de taille de téléversement est indisponible."
 });
 
 const OPA_ATTRS = ['placeholder', 'title', 'aria-label'];
+const OPA_ATTR_ONLY = {
+  placeholder: { Block: 'Bloc', Floor: 'Étage', Zone: 'Zone', Grid: 'Grille', Drawing: 'Plan' }
+};
 const OPA_SKIP = 'script,style,textarea,code,pre,[translate="no"],[data-user],[data-no-translate],[contenteditable="true"]';
 const OPA_ATTR_SKIP = 'script,style,code,pre,[translate="no"],[data-user],[data-no-translate],[contenteditable="true"]';
 const opaOrigText = new WeakMap();   // text node -> original English text
@@ -5749,8 +5831,8 @@ function opaAttr(el, name, toFrench) {
     if (opaSkipped(el, true)) return;
     const cur = el.getAttribute(name);
     if (cur === null) return;
-    if (store && store[name] !== undefined && opaLookup(store[name]) === cur) return;
-    const tr = opaLookup(cur);
+    if (store && store[name] !== undefined && opaAttrLookup(store[name], name) === cur) return;
+    const tr = opaAttrLookup(cur, name);
     if (tr !== null) {
       if (!store) { store = {}; opaOrigAttr.set(el, store); }
       store[name] = cur; el.setAttribute(name, tr);
@@ -5758,6 +5840,9 @@ function opaAttr(el, name, toFrench) {
   } else if (store && store[name] !== undefined) {
     el.setAttribute(name, store[name]); delete store[name];
   }
+}
+function opaAttrLookup(raw, name) {
+  return opaLookup(raw) ?? (OPA_ATTR_ONLY[name] && OPA_ATTR_ONLY[name][raw]) ?? null;
 }
 function opaWalk(root, toFrench) {
   if (!root) return;
@@ -10435,7 +10520,7 @@ function meetingWhen(meeting) {
 function formatMeetingDate(date, timeZone = '') {
   if (!(date instanceof Date)) date = new Date(date);
   if (Number.isNaN(date.getTime())) return '—';
-  const p = new Intl.DateTimeFormat('en-GB', {
+  const p = new Intl.DateTimeFormat(opaLocale() || 'en-GB', {
     weekday: 'short', day: '2-digit', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
     ...(timeZone ? { timeZone } : {}),
@@ -10800,17 +10885,18 @@ function renderMeetingFormPreview() {
   const timeZone = read('mTimeZone');
   const start = read('mDateTime');
   const end = read('mEndTime');
-  const formatLocalDateTime = value => {
+  const formatLocalDateTime = (value, includeWeekday = true) => {
     const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
     if (!match) return value || 'Not scheduled yet';
     const [, year, month, day, hour, minute] = match;
     const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
-    const dayName = new Intl.DateTimeFormat('en-GB', { weekday: 'short', timeZone: 'UTC' }).format(date);
-    const monthName = new Intl.DateTimeFormat('en-GB', { month: 'short', timeZone: 'UTC' }).format(date);
-    return `${dayName} ${day} ${monthName} ${year}, ${hour}:${minute}`;
+    const locale = opaLocale() || 'en-GB';
+    const dayName = includeWeekday ? `${new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }).format(date)} ` : '';
+    const monthName = new Intl.DateTimeFormat(locale, { month: 'short', timeZone: 'UTC' }).format(date);
+    return `${dayName}${day} ${monthName} ${year}, ${hour}:${minute}`;
   };
   const dateLabel = start
-    ? `${formatLocalDateTime(start)}${end ? ` – ${formatLocalDateTime(end).replace(/^[A-Za-z]{3} /, '')}` : ''}${timeZone ? ` ${timeZone}` : ''}`
+    ? `${formatLocalDateTime(start)}${end ? ` – ${formatLocalDateTime(end, false)}` : ''}${timeZone ? ` ${timeZone}` : ''}`
     : 'Not scheduled yet';
   const projectName = projectMeetingInfo.name || '';
   const projectReference = projectMeetingInfo.contract_reference || '';
@@ -11659,8 +11745,10 @@ function rcDate(value, withTime) {
   const d = new Date(value);
   if (isNaN(d.getTime())) return '—';
   const opts = withTime ? { dateStyle: 'medium', timeStyle: 'short' } : { dateStyle: 'medium' };
-  if (rcProjectTz) { try { return d.toLocaleString('en-GB', { ...opts, timeZone: rcProjectTz }); } catch (_) { /* unknown zone: fall back */ } }
-  return d.toLocaleString(undefined, opts);
+  const language = localStorage.getItem('appLanguage') || localStorage.getItem(savedLanguageKey) || defaultLanguage;
+  const locale = language === 'French' ? 'fr-FR' : undefined;
+  if (rcProjectTz) { try { return d.toLocaleString(locale || 'en-GB', { ...opts, timeZone: rcProjectTz }); } catch (_) { /* unknown zone: fall back */ } }
+  return d.toLocaleString(locale, opts);
 }
 
 function rcKindLabel(kind) {
@@ -16912,7 +17000,7 @@ function _wcTaskSummaryHtml(task, entries, queries, leader) {
     </div>`;
   }).join('');
   const date = new Date();
-  const asOf = `${date.getDate()} ${date.toLocaleString('en', { month: 'short' })}`;
+  const asOf = `${date.getDate()} ${date.toLocaleString(opaLocale() || undefined, { month: 'short' })}`;
   const unresolvedCount = unresolved.filter((query) => query.status === 'open').length;
   const queryNote = unresolved.length ? `<span style="font-size:11px;color:#92400e;">${unresolvedCount || unresolved.length} open task question${(unresolvedCount || unresolved.length) === 1 ? '' : 's'}</span>` : '';
   return `<section data-wc-card-summary style="padding:16px;background:#fff;border:1px solid #e2e8f0;border-radius:14px;margin-bottom:12px;">
@@ -20074,7 +20162,7 @@ function _peActivityProgressChartSvg(report) {
   const y = (value) => bottom - value / 100 * (bottom - top);
   const dateText = (day) => {
     const date = new Date(day);
-    return `${date.getUTCDate()} ${date.toLocaleString('en', { month: 'short', timeZone: 'UTC' })}`;
+    return `${date.getUTCDate()} ${date.toLocaleString(opaLocale() || 'en', { month: 'short', timeZone: 'UTC' })}`;
   };
   const grid = [0, 25, 50, 75, 100].map((value) =>
     `<g><line x1="${left}" y1="${y(value)}" x2="${right}" y2="${y(value)}" stroke="#dbe3ec" stroke-width="1"/><text x="5" y="${y(value) + 3}" fill="#64748b" font-size="8">${value}%</text></g>`).join('');
@@ -20129,7 +20217,7 @@ function _peActivityReportHtml(report) {
   const dateLabel = (value) => {
     if (!value) return '—';
     const [year, month, day] = String(value).slice(0, 10).split('-');
-    return year && month && day ? `${Number(day)} ${new Date(Number(year), Number(month) - 1).toLocaleString('en', { month: 'short' })} ${year}` : String(value);
+    return year && month && day ? `${Number(day)} ${new Date(Number(year), Number(month) - 1).toLocaleString(opaLocale() || 'en', { month: 'short' })} ${year}` : String(value);
   };
   const dateRange = activity.start_date && activity.end_date
     ? `${dateLabel(activity.start_date)} – ${dateLabel(activity.end_date)}` : 'Reporting period not set';
