@@ -3448,7 +3448,7 @@ async function refreshProjectDeletionBanner(projectId) {
       return;
     }
     projectDeletionDate.textContent = lifecycle.project.deletion_scheduled_at
-      ? new Date(lifecycle.project.deletion_scheduled_at).toLocaleDateString()
+      ? new Date(lifecycle.project.deletion_scheduled_at).toLocaleDateString(opaLocale())
       : '—';
     projectDeletionNotice.textContent = lifecycle.isClientOwner
       ? 'You can cancel deletion during the recovery period.'
@@ -5525,6 +5525,33 @@ OPA_PATTERNS.push(
   [/^Uploading (.+)$/, 'Téléversement de $1']
 );
 
+
+/* ═══ ROUND 2: helpers + more French entries ═══ */
+function opaLocale() { return localStorage.getItem('appLanguage') === 'French' ? 'fr-FR' : undefined; }
+function opaDay(v) { return v ? String(v).replace(/T.*$/, '') : v; }   /* 2026-11-13T00:00:00.000Z -> 2026-11-13 */
+function opaWeekdayLetters() { return localStorage.getItem('appLanguage') === 'French' ? ['D','L','M','M','J','V','S'] : ['S','M','T','W','T','F','S']; }
+Object.assign(OPA_FR, {
+  "Active": "Actif", "Done": "Terminé", "Not Started": "Non commencé",
+  "Baseline Milestone": "Jalon de référence", "Post-Extension Milestone": "Jalon post-prolongation",
+  "Planned Quantity": "Quantité prévue", "Planned quantity": "Quantité prévue", "Planned finish": "Fin prévue",
+  "Back to all milestones": "Retour à tous les jalons", "← All milestones": "← Tous les jalons", "Calendar": "Calendrier",
+  "Overcast": "Couvert"
+});
+OPA_PATTERNS.push(
+  [/^(\d+) days? until project finish$/, (m, n) => n + ' jour' + (+n > 1 ? 's' : '') + ' avant la fin du projet'],
+  [/^(.+) · (\d+) days? remaining$/, (m, t, n) => t + ' · ' + n + ' jour' + (+n > 1 ? 's' : '') + ' restant' + (+n > 1 ? 's' : '')],
+  [/^([+-]?[\d.]+)% vs plan today \(plan: ([\d.]+)%\)$/, '$1 % par rapport au plan aujourd\'hui (plan : $2 %)'],
+  [/^([+-]?[\d.]+)% vs plan at pause$/, '$1 % par rapport au plan à la pause'],
+  [/^(\d+)d left$/, '$1 j restants'],
+  [/^(\d+)d overdue$/, '$1 j de retard'],
+  [/^(\d+) entr(?:y|ies)$/, (m, n) => n + ' entrée' + (+n > 1 ? 's' : '')],
+  [/^Milestones \((\d+)\)$/, 'Jalons ($1)'],
+  [/^(💨 )?Wind (\d+) km\/h$/, (m, i, n) => (i || '') + 'Vent ' + n + ' km/h'],
+  [/^Rain (\d+)%$/, 'Pluie $1 %'],
+  [/^(.+) · Rain (\d+)%$/, (m, l, n) => (OPA_FR[l] || l) + ' · Pluie ' + n + ' %'],
+  [/^(.*\d°C) · (.+)$/, (m, a, l) => OPA_FR[l] ? a + ' · ' + OPA_FR[l] : m]
+);
+
 const OPA_ATTRS = ['placeholder', 'title', 'aria-label'];
 const OPA_SKIP = 'script,style,textarea,code,pre,[translate="no"],[data-user],[data-no-translate],[contenteditable="true"],[data-translate-default]';
 const OPA_ATTR_SKIP = 'script,style,code,pre,[translate="no"],[data-user],[data-no-translate],[contenteditable="true"],[data-translate-default]';
@@ -5749,6 +5776,7 @@ applyLanguageBtn.addEventListener('click', () => {
   if (!supportedLanguages.includes(selected)) return;
   if (languageDialog) languageDialog.classList.remove('active');
   applyTranslations(selected);
+  try { if (typeof loadSummaryPanelData === 'function') loadSummaryPanelData(); } catch (e) {}   /* re-render dates/weather in the new language */
   alert(`${t('lang-changed')} ${selected}`);
 });
 
@@ -6000,7 +6028,7 @@ let summaryPhotoCurrentIndex = 0;
 function formatSummaryPhotoDate(value) {
   if (!value) return 'Date not recorded';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? 'Date not recorded' : date.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
+  return Number.isNaN(date.getTime()) ? 'Date not recorded' : date.toLocaleDateString(opaLocale(), { month:'short', day:'numeric', year:'numeric' });
 }
 
 function openSummaryPhoto(url) {
@@ -6203,7 +6231,7 @@ function renderWeatherForecastDialog() {
       if (parts.length === 3) {
         const dateObj = new Date(Date.UTC(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])));
         if (!isNaN(dateObj.getTime())) {
-          day = dateObj.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
+          day = dateObj.toLocaleDateString(opaLocale(), { weekday:'short', month:'short', day:'numeric' });
         }
       }
     } catch (e) {
@@ -6420,7 +6448,7 @@ async function loadSummaryPanelData() {
           if (parts.length !== 3) return '—';
           const date = new Date(Date.UTC(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])));
           if (isNaN(date.getTime())) return '—';
-          return date.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
+          return date.toLocaleDateString(opaLocale(), { month:'short', day:'numeric', year:'numeric' });
         } catch (e) {
           console.warn('Invalid date format:', value);
           return '—';
@@ -6815,7 +6843,7 @@ function initRecentMilestoneCard() {
             ? new Date(`${value}T00:00:00Z`)
             : new Date(value);
           if (isNaN(date.getTime())) return '—';
-          return date.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
+          return date.toLocaleDateString(opaLocale(), { month:'short', day:'numeric', year:'numeric' });
         } catch (e) {
           return '—';
         }
@@ -8912,7 +8940,7 @@ function openActualProgressPage(savedSchedule) {
       }
       // FIX 3: show clean date, not raw ISO string with T00:00:00.000Z
       const dateEl = _el('p3DaysLeftProjectDate');
-      if (dateEl) dateEl.textContent = projFinish;
+      if (dateEl) dateEl.textContent = opaDay(projFinish);
     }
 
     if (selectedMs) {
@@ -8975,7 +9003,7 @@ function openActualProgressPage(savedSchedule) {
           <span class="sc-tag ${stCls}" style="font-size:9px;padding:2px 6px;">${stLbl}</span>
         </div>
         <div style="font-size:10px;color:var(--c-muted);font-family:var(--font-mono);margin-bottom:6px;">
-          ${ms.start || '—'} → ${ms.end || '—'}
+          ${opaDay(ms.start) || '—'} → ${opaDay(ms.end) || '—'}
         </div>
         <div class="sc-pbar" style="height:4px;"><div class="sc-pfill" style="width:${pct}%;background:${fillColor};"></div></div>
         <div style="font-size:10px;font-family:var(--font-mono);font-weight:600;color:${fillColor};margin-top:2px;">${pct.toFixed(1)}%</div>
@@ -9109,7 +9137,7 @@ function openActualProgressPage(savedSchedule) {
     const firstDay = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const monthLabel = today.toLocaleString((localStorage.getItem('appLanguage') === 'French' ? 'fr-FR' : 'en-US'), { month: 'long', year: 'numeric' });
-    const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+    const dayLabels = opaWeekdayLetters();
     const cells = [];
 
     for (let i = 0; i < firstDay; i++) cells.push('<span></span>');
@@ -9320,9 +9348,9 @@ function openActualProgressPage(savedSchedule) {
             <div style="flex:1;min-width:0;">
               <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--c-text);margin-bottom:8px;">Timeline</div>
               <div style="font-size:10px;color:var(--c-muted);">Planned start</div>
-              <div style="font-size:15px;font-weight:700;font-family:var(--font-mono);">${msStartDate || '—'}</div>
+              <div style="font-size:15px;font-weight:700;font-family:var(--font-mono);">${opaDay(msStartDate) || '—'}</div>
               <div style="font-size:10px;color:var(--c-muted);margin-top:6px;">Planned end</div>
-              <div style="font-size:15px;font-weight:700;font-family:var(--font-mono);">${msEnd || '—'}</div>
+              <div style="font-size:15px;font-weight:700;font-family:var(--font-mono);">${opaDay(msEnd) || '—'}</div>
             </div>
             ${currentCalendarHTML()}
           </div>
@@ -15438,7 +15466,7 @@ function _wcFmtDate(raw) {
   const [year, month, day] = String(raw).slice(0, 10).split('-').map(Number);
   const date = new Date(year, month - 1, day);
   if (!year || !month || !day || Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  return date.toLocaleDateString(opaLocale() || 'en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function _wcTodayDate() {
@@ -22450,7 +22478,7 @@ function _dcDaysLate(dateStr) {
 function _dcDay(dateStr) {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr || ''));
   if (!m) return '';
-  return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString(opaLocale(), { day: 'numeric', month: 'short', year: 'numeric' });
 }
 function _dcRevLetter(n) {
   let x = Math.max(0, Math.floor(Number(n) || 0)), out = '';
@@ -24403,7 +24431,7 @@ async function openStampSetup() {
       </div>
       <div style="flex:1;overflow-y:auto;padding:16px 20px;">
         ${existing ? `<div style="margin-bottom:16px;padding:10px 12px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:8px;font-size:12px;color:#374151;">
-          Saved for ${esc(projectName)}, last updated ${new Date(existing.updated_at).toLocaleDateString()}. Saving again will replace it.
+          Saved for ${esc(projectName)}, last updated ${new Date(existing.updated_at).toLocaleDateString(opaLocale())}. Saving again will replace it.
         </div>` : ''}
 
         <label style="display:block;font-weight:700;color:#374151;font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">1. How do you want to sign?</label>
