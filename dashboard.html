@@ -5206,6 +5206,55 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Download close-out CSV": "Télécharger le CSV de clôture",
   "Enter a title for every stage and make their weights add up to 100%.": "Saisissez un titre pour chaque étape et faites en sorte que leurs pondérations totalisent 100 %.",
   "Earlier requests, newest first. Search by activity, note or decision, or filter by outcome.": "Demandes précédentes, les plus récentes d'abord. Recherchez par activité, note ou décision, ou filtrez par résultat.",
+  "Record": "Dossier",
+  "Submission": "Soumission",
+  "Approval": "Approbation",
+  "Submitted by": "Soumis par",
+  "Date submitted": "Date de soumission",
+  "Created": "Créé le",
+  "Created on": "Créé le",
+  "Created by": "Créé par",
+  "Date created": "Date de création",
+  "Shared": "Partagé le",
+  "Plan file:": "Fichier du plan :",
+  "Attached by": "Joint par",
+  "Client": "Client",
+  "Client Project Manager": "Chef de projet client",
+  "ClientPM": "Chef de projet client",
+  "Client PM": "Chef de projet client",
+  "Contractor": "Entrepreneur",
+  "Contractor Project Manager": "Chef de projet entrepreneur",
+  "ContractorPM": "Chef de projet entrepreneur",
+  "Contractor PM": "Chef de projet entrepreneur",
+  "Consultant": "Consultant",
+  "Consultant Project Manager": "Chef de projet consultant",
+  "ConsultantPM": "Chef de projet consultant",
+  "Consultant PM": "Chef de projet consultant",
+  "TeamMember": "Membre de l'équipe",
+  "Team Member": "Membre de l'équipe",
+  "you": "vous",
+  "You": "Vous",
+  "Not recorded": "Non renseigné",
+  "a project member": "un membre du projet",
+  "on": "le",
+  "by": "par",
+  "You submitted this record. Nobody has made a decision on it yet.": "Vous avez soumis ce dossier. Personne n'a encore pris de décision.",
+  "You are one of the named signers, so your review is needed on this record.": "Vous êtes l'un des signataires désignés ; votre examen de ce dossier est donc nécessaire.",
+  "The final decision cannot be approved until they are cleared.": "La décision finale ne peut pas être approuvée tant que ces questions ne sont pas résolues.",
+  "The named signers are handling this decision.": "Les signataires désignés traitent cette décision.",
+  "The named signers are handling this decision. You can add a comment.": "Les signataires désignés traitent cette décision. Vous pouvez ajouter un commentaire.",
+  "Your decision is needed on this record.": "Votre décision est requise pour ce dossier.",
+  "Under review. There is no decision yet.": "En cours d'examen. Aucune décision n'a encore été prise.",
+  "Nobody has made a decision on it yet.": "Personne n'a encore pris de décision.",
+  "No decision yet": "Aucune décision pour le moment",
+  "Decision files:": "Fichiers de décision :",
+  "Waiting for": "En attente de",
+  "to sign before the final decision is made.": "pour signer avant que la décision finale soit prise.",
+  "raised queries that are still open, so this record cannot be approved yet.": "a soulevé des questions toujours ouvertes ; ce dossier ne peut donc pas encore être approuvé.",
+  "Final decision maker": "Décideur final",
+  "Decision revised.": "Décision révisée.",
+  "Verification decision recorded.": "Décision de vérification enregistrée.",
+  "Enter a decision reason for Verify with changes or Reject.": "Saisissez un motif pour « Vérifier avec modifications » ou « Rejeter ».",
   "List": "Liste",
   "Indent": "Augmenter le retrait",
   "Outdent": "Réduire le retrait",
@@ -5221,6 +5270,10 @@ const OPA_PATTERNS = [
   [/^Step (\d+) of (\d+)$/, 'Étape $1 sur $2'],
   [/^Page (\d+) of (\d+)$/, 'Page $1 sur $2'],
   [/^Page (\d+) • x (\d+)% • y (\d+)%$/, 'Page $1 • x $2 % • y $3 %'],
+  [/^This record is waiting for the (.+) approval before you can decide\.$/, 'Ce dossier attend l’approbation de $1 avant que vous puissiez prendre une décision.'],
+  [/^Opened (\d+) days? ago and there is still no decision\.$/, (m, n) => `Ouvert il y a ${n} jour${+n > 1 ? 's' : ''} et aucune décision n'a encore été prise.`],
+  [/^Opened by the consultant (\d{4}-\d{2}-\d{2}), no decision yet$/, 'Ouvert par le consultant le $1 ; aucune décision pour le moment'],
+  [/^Decision by (.+) on (\d{4}-\d{2}-\d{2})(.*)$/, 'Décision prise par $1 le $2$3'],
   [/^(\d+) milestones?$/, (m, n) => n + ' jalon' + (+n > 1 ? 's' : '')],
   [/^(\d+) selected$/, (m, n) => n + ' sélectionné' + (+n > 1 ? 's' : '')],
   [/^(\d+) participants? selected$/, (m, n) => n + ' participant' + (+n > 1 ? 's' : '') + ' sélectionné' + (+n > 1 ? 's' : '')],
@@ -5367,11 +5420,13 @@ function applyTranslations(selected) {
   const sb = document.getElementById('searchBox');
   if (sb) sb.placeholder = translations['search'] || 'Search...';
   localStorage.setItem(savedLanguageKey, selected);
+  localStorage.setItem('appLanguage', selected);
   opaApplyLanguage(selected);   // translate everything else on screen
 }
 
 function loadSavedLanguage() {
-  const selected = localStorage.getItem(savedLanguageKey) || defaultLanguage;
+  const saved = localStorage.getItem('appLanguage') || localStorage.getItem(savedLanguageKey);
+  const selected = supportedLanguages.includes(saved) ? saved : defaultLanguage;
   const radio = document.querySelector(`input[name="language"][value="${selected}"]`);
   if (radio) radio.checked = true;
   applyTranslations(selected);
@@ -8116,7 +8171,7 @@ function openExtensionDetailsModal(extensions, milestones) {
             <div style="margin-top:12px;font-size:12px;line-height:1.6;color:var(--c-text);"><strong>Reason:</strong> ${_esc(extension.reason || '—')}</div>
             <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;">
               ${fileUrl ? `<a class="sc-btn sc-btn-ghost" href="${_esc(fileUrl)}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;">📎 ${_esc(fileName || 'Open supporting document')}</a>` : '<span style="font-size:11px;color:var(--c-muted);">No supporting document attached</span>'}
-              <span style="font-size:11px;color:var(--c-muted);padding:8px 0;">Created ${date(extension.created_at)}</span>
+              <span style="font-size:11px;color:var(--c-muted);padding:8px 0;"><span>Created </span><span>${date(extension.created_at)}</span></span>
             </div>
             ${related.length ? `<div style="margin-top:14px;padding-top:10px;border-top:1px solid #f1dfc4;"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--c-ext);font-family:var(--font-mono);margin-bottom:7px;">Related milestones</div>${related.map(ms => `<div style="font-size:12px;color:var(--c-text);padding:5px 0;display:flex;justify-content:space-between;gap:10px;"><span>${_esc(ms.title || 'Untitled')}</span><span style="font-family:var(--font-mono);color:var(--c-muted);">${date(ms.start)} → ${date(ms.end)}</span></div>`).join('')}</div>` : ''}
           </article>`;
@@ -11597,15 +11652,15 @@ function rcDocumentsHtml(doc, notices) {
   let body = '';
   if (fileName) {
     const attrs = `data-filename="${escapeHtml(fileName)}"`;
-    const sentence = `Submitted by ${who} on ${rcDate(doc.issued_date, true)}.` +
-      (doc.stamp_type === 'STAMPED' ? ' The document has been stamped and signed.' : '') +
-      (hasNotice ? ` ${rcPlural(notices.length, 'notice has', 'notices have')} been issued on this record.` : '');
+    const sentence = `<span>Submitted by </span><span>${escapeHtml(who)}</span><span> on </span><span>${escapeHtml(rcDate(doc.issued_date, true))}</span>.` +
+      (doc.stamp_type === 'STAMPED' ? ' <span>The document has been stamped and signed.</span>' : '') +
+      (hasNotice ? ` <span>${rcPlural(notices.length, 'notice has', 'notices have')} been issued on this record.</span>` : '');
     body += `
       <div class="rc-item rc-item--file">
         <span class="rc-file-icon">${rcIcon('file')}</span>
         <div class="rc-item-body">
           <div class="rc-item-head"><span class="rc-item-title" title="${escapeHtml(fileName)}">${escapeHtml(fileName)}</span><span class="rc-tag">Original record</span></div>
-          <p class="rc-item-text">${escapeHtml(sentence)}</p>
+          <p class="rc-item-text">${sentence}</p>
           <div class="rc-item-actions">
             ${rcBtn('preview', hasNotice ? 'View original record only' : 'View', null, 'sm', attrs)}
             ${hasNotice ? rcBtn('preview-combined', 'View record and notice together', null, 'sm', attrs) : ''}
@@ -11860,7 +11915,7 @@ function renderRecordsList(records, tabKey) {
               ${kindChip}${revChip}
             </div>
             <div class="rc-meta">
-              <span class="rc-meta-item">${rcIcon('user')}<span>Submitted by ${escapeHtml(rcRoleLabel(doc.uploader_role) || 'a project member')}</span></span>
+              <span class="rc-meta-item">${rcIcon('user')}<span>Submitted by <span>${escapeHtml(rcRoleLabel(doc.uploader_role) || 'a project member')}</span></span></span>
               <span class="rc-meta-item" title="${escapeHtml(rcDate(doc.issued_date, true))}">${rcIcon('calendar')}<span>${rcDate(doc.issued_date)}</span></span>
               ${doc.respond_by ? `<span class="rc-meta-item rc-meta-due${dueLate ? ' is-late' : ''}" title="Date a reply is needed by">${rcIcon('clock')}<span>Reply by ${escapeHtml(rcDate(doc.respond_by))}${dueLate ? ' · overdue' : ''}</span></span>` : ''}
             </div>
@@ -20434,7 +20489,7 @@ function _peActivityCardHtml(card, verificationData = { verifications: [], rewor
       </details>
       <div style="font-size:12px;color:#475569;padding:0 4px;line-height:1.6;">
         ${activity.drives_milestone && milestoneTitle ? `Counts for ${Number(activity.milestone_weight_pct) || 0}% of ${escapeHtml(milestoneTitle)}${milestoneStart || milestoneEnd ? ` (${escapeHtml(dateText(milestoneStart))} – ${escapeHtml(dateText(milestoneEnd))})` : ''}<br>` : ''}
-        ${activity.linked_file_name ? `Plan file: ${escapeHtml(activity.linked_file_name)} · ` : ''}Created ${escapeHtml(dateText(activity.created_at))}${activity.creator_role ? ` by ${escapeHtml(activity.creator_role)}` : ''}
+        ${activity.linked_file_name ? `<span>Plan file: </span><span translate="no" data-user>${escapeHtml(activity.linked_file_name)}</span> · ` : ''}<span>Created </span><span>${escapeHtml(dateText(activity.created_at))}</span>${activity.creator_role ? ` <span>by </span><span>${escapeHtml(activity.creator_role)}</span>` : ''}
       </div>
     </section>`;
   const activityAttachmentIds = new Map(attachments.map((file) => [`${file.file_name}|${file.file_url}`, file.id]));
@@ -22259,6 +22314,11 @@ function _dcNewChip(doc) { return doc.unread ? '<span class="dc-new-chip">NEW</s
 
 // cards
 const mineCard = doc => _dcIsAuthor(doc);
+function _dcSubmitterHtml(doc) {
+  if (mineCard(doc)) return '<span>You</span>';
+  if (doc.creator_name) return `<span translate="no" data-user>${escapeHtml(doc.creator_name)}</span>`;
+  return `<span>${escapeHtml(rcRoleLabel(doc.creator_role) || 'a project member')}</span>`;
+}
 function _daCardHtml(doc, open, v) {
   const mine = _dcIsAuthor(doc);
   const pickable = v.bulk && doc.can_review && ['pending_approval', 'approved'].includes(doc.status);
@@ -22276,8 +22336,8 @@ function _daCardHtml(doc, open, v) {
                 ${_dcDueChip(doc, 'document-approval')}
               </div>
               <div class="rc-meta">
-                <span class="rc-meta-item">${rcIcon('user')}<span>Submitted by ${mineCard(doc) ? 'you' : escapeHtml(doc.creator_name || rcRoleLabel(doc.creator_role) || 'a project member')}</span></span>
-                <span class="rc-meta-item">${rcIcon('calendar')}<span>${escapeHtml(_dcDate(doc.created_at))}</span></span>
+                <span class="rc-meta-item">${rcIcon('user')}<span>Submitted by ${_dcSubmitterHtml(doc)}</span></span>
+                <span class="rc-meta-item">${rcIcon('calendar')}<span>Created on <span>${escapeHtml(_dcDate(doc.created_at))}</span></span></span>
               </div>
             </div>
             <div class="rc-side">
@@ -22305,8 +22365,8 @@ function _crCardHtml(doc) {
               ${_dcDueChip(doc, 'control-reports')}
             </div>
             <div class="rc-meta">
-              <span class="rc-meta-item">${rcIcon('user')}<span>Submitted by ${mineCard(doc) ? 'you' : escapeHtml(doc.creator_name || rcRoleLabel(doc.creator_role) || 'a project member')}</span></span>
-              <span class="rc-meta-item">${rcIcon('calendar')}<span>Shared ${escapeHtml(_dcDate(doc.shared_at))}</span></span>
+              <span class="rc-meta-item">${rcIcon('user')}<span>Submitted by ${_dcSubmitterHtml(doc)}</span></span>
+              <span class="rc-meta-item">${rcIcon('calendar')}<span>Shared <span>${escapeHtml(_dcDate(doc.shared_at))}</span></span></span>
             </div>
           </div>
           <div class="rc-side">
@@ -22738,7 +22798,9 @@ function _dcTypeMissingMsg(selectId) {
 function _dcDate(v) {
   if (!v) return '—';
   const d = new Date(v);
-  return isNaN(d) ? '—' : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const language = localStorage.getItem('appLanguage') || localStorage.getItem(savedLanguageKey) || defaultLanguage;
+  const locale = language === 'French' ? 'fr-FR' : 'en-US';
+  return isNaN(d) ? '—' : d.toLocaleString(locale, { dateStyle: 'medium', timeStyle: 'short' });
 }
 function _dcIsLeaderOf(doc) {
   const s = wcSide(window.currentUserRole);
