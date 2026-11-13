@@ -5566,7 +5566,8 @@ const _recordRoleFr = role => {
     contractorpm: 'chef de projet entrepreneur',
     consultantpm: 'chef de projet consultant',
     teammember: "membre de l'équipe",
-    projectmember: 'membre du projet'
+    projectmember: 'membre du projet',
+    projectteam: "équipe du projet"
   };
   return roles[normalized] || OPA_FR[key] || key;
 };
@@ -5574,6 +5575,10 @@ const _recordRolePhrase = role => {
   if (String(role || '').trim().toLowerCase() === 'a project member') return 'un membre du projet';
   const translated = _recordRoleFr(role);
   return /^[aeiouàâäéèêëîïôöùûü]/i.test(translated) ? `l’${translated}` : `le ${translated}`;
+};
+const _recordRolePhraseStart = role => {
+  const phrase = _recordRolePhrase(role);
+  return phrase.charAt(0).toUpperCase() + phrase.slice(1);
 };
 const OPA_PREFIX = {
   'Reply by ': 'Réponse avant le ', 'Reply was due ': 'Réponse attendue le ', 'Opened ': 'Ouvert le ',
@@ -5590,10 +5595,10 @@ const OPA_PREFIX = {
 };
 Object.keys(OPA_PREFIX).forEach(k => OPA_PATTERNS.push([new RegExp('^' + _opaEsc(k) + '(\\S.*)$'), (m, rest) => OPA_PREFIX[k] + rest]));
 OPA_PATTERNS.push(
-  [/^The (.+) submitted this record\.$/, (m, role) => `${_recordRolePhrase(role)} a soumis ce dossier.`],
-  [/^The (.+) issued this notice\.$/, (m, role) => `${_recordRolePhrase(role)} a émis cet avis.`],
-  [/^The (.+) (accepted|approved) this record\.$/, (m, role, action) => `${_recordRolePhrase(role)} a ${action === 'accepted' ? 'accepté' : 'approuvé'} ce dossier.`],
-  [/^The (.+) rejected this record\.$/, (m, role) => `${_recordRolePhrase(role)} a rejeté ce dossier.`],
+  [/^The (.+) submitted this record\.$/, (m, role) => `${_recordRolePhraseStart(role)} a soumis ce dossier.`],
+  [/^The (.+) issued this notice\.$/, (m, role) => `${_recordRolePhraseStart(role)} a émis cet avis.`],
+  [/^The (.+) (accepted|approved) this record\.$/, (m, role, action) => `${_recordRolePhraseStart(role)} a ${action === 'accepted' ? 'accepté' : 'approuvé'} ce dossier.`],
+  [/^The (.+) rejected this record\.$/, (m, role) => `${_recordRolePhraseStart(role)} a rejeté ce dossier.`],
   [/^Waiting for the (.+) to (accept|approve) this record\.$/, (m, role, action) => `En attente que ${_recordRolePhrase(role)} ${action === 'accept' ? 'accepte' : 'approuve'} ce dossier.`],
   [/^(\d+) of (\d+) named signers? (?:has|have) signed for the (.+) side\.$/, (m, signed, total, side) => {
     const singular = +total === 1;
@@ -5605,7 +5610,7 @@ OPA_PATTERNS.push(
   [/^(\d+) approved or accepted it and (\d+) rejected it\.$/, (m, approved, rejected) => `${approved} ${+approved === 1 ? 'l’a approuvé ou accepté' : 'l’ont approuvé ou accepté'} et ${rejected} ${+rejected === 1 ? 'l’a rejeté' : 'l’ont rejeté'}.`],
   [/^This is the summary of record (.+)\.$/, 'Voici le résumé du dossier $1.'],
   [/^(\d+) files? (?:is|are) attached to this record\.$/, (m, count) => `${count} fichier${+count === 1 ? '' : 's'} ${+count === 1 ? 'est joint' : 'sont joints'} à ce dossier.`],
-  [/^The (.+) submitted this record on (.+)\.$/, (m, role, date) => `${_recordRolePhrase(role)} a soumis ce dossier le ${date}.`],
+  [/^The (.+) submitted this record on (.+)\.$/, (m, role, date) => `${_recordRolePhraseStart(role)} a soumis ce dossier le ${date}.`],
   [/^Approved this record on (.+)\.$/, 'Dossier approuvé le $1.'],
   [/^Accepted this record on (.+)\.$/, 'Dossier accepté le $1.'],
   [/^Rejected this record on (.+)\.$/, 'Dossier rejeté le $1.'],
@@ -5656,6 +5661,45 @@ OPA_PATTERNS.push(
   [/^Task "(.+)" created and assigned to (\d+) member\(s\)\.$/, 'Tâche « $1 » créée et affectée à $2 membre(s).'],
   [/^Activity created(?: with (\d+) tasks?)?\.$/, (m, n) => 'Activité créée' + (n ? ' avec ' + n + ' tâche' + _pl(n) : '') + '.']
 );
+OPA_PATTERNS.unshift(
+  [/^Signed by (.+)\.$/, (m, details) => `Signé par ${details.replace(/,\s*(Client|Consultant|Contractor) side(?=\s*(?:\(|;|\.))/g, (part, side) => `, côté ${_recordRoleFr(side)}`)}.`],
+  [/^Submitted by (.+)$/, (m, role) => {
+    const translated = _recordRoleFr(role);
+    return `Soumis par ${translated === role && role.toLowerCase() !== 'a project member' ? role : _recordRolePhrase(role)}`;
+  }]
+);
+OPA_PATTERNS.push(
+  [/^The newest one is the (.+) of (.+)\. Earlier ones stay closed until you open them\.$/, (m, label, date) => {
+    const notice = {
+      'rejection notice': 'avis de rejet',
+      'notice of acceptance': "avis d'acceptation",
+      'notice of determination': 'avis de décision'
+    }[label.toLowerCase()] || label;
+    return `Le plus récent est l’${notice} du ${date}. Les précédents restent fermés jusqu’à ce que vous les ouvriez.`;
+  }],
+  [/^(\d+) notices? (?:has|have) been issued on this record\.$/, (m, count) => `${count} avis ${+count === 1 ? 'a été émis' : 'ont été émis'} sur ce dossier.`],
+  [/^(\d+) notices?$/, (m, count) => `${count} avis`],
+  [/^(\d+) quer(?:y|ies) (?:have|has) been raised on this record\.$/, (m, count) => `${count} question${+count === 1 ? '' : 's'} ${+count === 1 ? 'a été soulevée' : 'ont été soulevées'} sur ce dossier.`],
+  [/^(\d+) quer(?:y|ies) (?:are|is) still waiting for an answer\.$/, (m, count) => `${count} question${+count === 1 ? '' : 's'} attend${+count === 1 ? '' : 'ent'} toujours une réponse.`],
+  [/^Queries raised on this record$/, 'Questions soulevées sur ce dossier'],
+  [/^(\d+) quer(?:y|ies), (\d+) resolved$/, (m, count, resolved) => `${count} question${+count === 1 ? '' : 's'}, ${resolved} résolue${+resolved === 1 ? '' : 's'}`],
+  [/^Show earlier (notice|notices|review|reviews) \((\d+)\)$/, (m, noun, count) => `Afficher les ${noun.startsWith('notice') ? 'avis précédents' : 'revues précédentes'} (${count})`],
+  [/^Hide earlier (notice|notices|review|reviews)$/, (m, noun) => `Masquer les ${noun.startsWith('notice') ? 'avis précédents' : 'revues précédentes'}`],
+  [/^Earlier notice, issued (.+)$/, 'Avis précédent, émis le $1'],
+  [/^Earlier activity, (.+)$/, 'Activité précédente, le $1'],
+  [/^A notice has been issued, so the original record is closed until you choose to open it\.$/, 'Un avis a été émis ; le dossier d’origine est fermé jusqu’à ce que vous choisissiez de l’ouvrir.'],
+  [/^A notice appears here when a decision maker issues one\.$/, 'Un avis apparaîtra ici lorsqu’un décideur en émettra un.'],
+  [/^Issued by the (.+) on (.+)\.$/, (m, role, date) => `Émis par ${_recordRolePhrase(role)} le ${date}.`],
+  [/^A reply is needed by (.+)\.$/, 'Une réponse est attendue avant le $1.'],
+  [/^(\d+) quer(?:y|ies) (?:was|were) raised in this notice\.$/, (m, count) => `${count} question${+count === 1 ? ' a été soulevée' : 's ont été soulevées'} dans cet avis.`],
+  [/^(?:The )?(.+) submitted this record\.$/, (m, role) => `${_recordRolePhraseStart(role)} a soumis ce dossier.`],
+  [/^(Consultant|Client|Contractor) (Approval|Acceptance)$/, (m, role, action) => `${action === 'Approval' ? 'Approbation' : 'Acceptation'} ${role === 'Client' ? 'du client' : role === 'Consultant' ? 'du consultant' : 'de l’entrepreneur'}`],
+  [/^(Accepted|Approved) by the (.+)\.$/, (m, action, role) => `${action === 'Accepted' ? 'Accepté' : 'Approuvé'} par ${_recordRolePhrase(role)}.`],
+  [/^Rejected by the (.+)\.$/, (m, role) => `Rejeté par ${_recordRolePhrase(role)}.`],
+  [/^Not reached, because the record was rejected\.$/, 'Non atteinte, car le dossier a été rejeté.'],
+  [/^Not reached\.$/, 'Non atteinte.'],
+  [/^Starts after the step before it is finished\.$/, 'Commence une fois l’étape précédente terminée.']
+);
 Object.assign(OPA_FR, {
   "quantity": "quantité", "count": "nombre", "Fog": "Brouillard",
   "Unable to verify project edit access.": "Impossible de vérifier l'accès en modification au projet.",
@@ -5689,6 +5733,7 @@ Object.assign(OPA_FR, {
   "The document has been stamped and signed.": "Le document a été tamponné et signé.",
   "View original record only": "Voir uniquement le dossier d'origine", "View record and notice together": "Voir le dossier et l'avis ensemble",
   "Show the original record and its files": "Afficher le dossier d'origine et ses fichiers",
+  "Hide the original record and its files": "Masquer le dossier d'origine et ses fichiers",
   "No notice has been issued on this record yet.": "Aucun avis n'a encore été émis sur ce dossier.",
   "No queries have been raised on this record.": "Aucune question n'a été soulevée sur ce dossier.",
   "Nobody has reviewed this record yet.": "Personne n'a encore examiné ce dossier.",
@@ -5777,7 +5822,7 @@ Object.assign(OPA_FR, {
   "Upload size limit is unavailable.": "La limite de taille de téléversement est indisponible."
 });
 
-const OPA_ATTRS = ['placeholder', 'title', 'aria-label'];
+const OPA_ATTRS = ['placeholder', 'title', 'aria-label', 'data-label-open', 'data-label-closed'];
 const OPA_ATTR_ONLY = {
   placeholder: { Block: 'Bloc', Floor: 'Étage', Zone: 'Zone', Grid: 'Grille', Drawing: 'Plan' }
 };
