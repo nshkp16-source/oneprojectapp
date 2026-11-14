@@ -70,7 +70,7 @@ class LanguageSwitcher {
     select.value = this.currentLanguage;
     select.addEventListener('change', (event) => this.changeLanguage(event.target.value));
 
-    const style = 'position:fixed;top:12px;right:12px;z-index:9999;padding:6px 10px;border:1px solid #dbe2ea;border-radius:999px;background:#fff;color:#0f172a;box-shadow:0 8px 20px rgba(15,23,42,0.08);font-size:13px;';
+    const style = 'position:fixed;top:12px;right:12px;z-index:9999;display:inline-block;width:auto;min-width:0;max-width:calc(100vw - 24px);box-sizing:border-box;padding:6px 10px;border:1px solid #dbe2ea;border-radius:999px;background:#fff;color:#0f172a;box-shadow:0 8px 20px rgba(15,23,42,0.08);font-size:13px;background-image:none;-webkit-appearance:menulist;appearance:auto;';
     select.style.cssText = style;
 
     if (mount) {
