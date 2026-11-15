@@ -733,7 +733,7 @@
         .flex-center { display: flex; align-items: center; justify-content: center; }
     </style>
 </head>
-<body>
+<body data-auto-translate>
 <div class="app" id="app">
 
     <!-- ══ SIDEBAR ══ -->
@@ -948,8 +948,11 @@ let audioCtx        = null;
 let activeMediaElement = null;
 
 /* ── INIT ── */
-projectLabel.textContent = projectName ? 'Project: ' + projectName : 'ID: ' + projectId;
-currentChip.textContent  = currentUserName + (currentUserRole ? ' · ' + currentUserRole : '');
+projectLabel.innerHTML = projectName
+    ? 'Project: <span data-user>'+esc(projectName)+'</span>'
+    : 'ID: <span data-user>'+esc(projectId)+'</span>';
+currentChip.innerHTML = '<span data-user>'+esc(currentUserName)+'</span>'
+    +(currentUserRole ? ' · <span>'+esc(currentUserRole)+'</span>' : '');
 
 /* ── EMOJI PICKER ── */
 EMOJIS.forEach(em => {
@@ -1382,6 +1385,8 @@ function normMember(m) {
 function setReply(msg) {
     if (!msg?.id) return;
     replyTarget = msg;
+    replyBarName.setAttribute('data-user', '');
+    replyBarText.setAttribute('data-user', '');
     replyBarName.textContent = msg.senderName||'Unknown';
     replyBarText.textContent = msg.text||(msg.attachmentName?'📎 '+msg.attachmentName:'');
     replyBar.classList.add('visible');
@@ -1389,6 +1394,8 @@ function setReply(msg) {
 }
 function clearReply() {
     replyTarget = null;
+    replyBarName.removeAttribute('data-user');
+    replyBarText.removeAttribute('data-user');
     replyBar.classList.remove('visible');
     replyBarName.textContent = '';
     replyBarText.textContent = '';
@@ -1589,10 +1596,10 @@ function renderContacts(filter) {
             '<div class="avatar '+(c.online?'online':'')+'" style="'+(c.pictureUrl?'':'background:'+strColor(c.name)+';')+'">'+buildAvatarContent(c)+'</div>'+
             '<div class="contact-info">'+
                 '<div class="contact-row">'+
-                    '<div class="contact-name">'+esc(c.name)+'</div>'+
-                    '<div class="contact-time">'+esc(c.time||'')+'</div>'+
+                    '<div class="contact-name" data-user>'+esc(c.name)+'</div>'+
+                    '<div class="contact-time" data-user>'+esc(c.time||'')+'</div>'+
                 '</div>'+
-                '<div class="contact-msg">'+esc(c.lastMessage||'Tap to chat')+'</div>'+
+                '<div class="contact-msg"'+(c.lastMessage?' data-user':'')+'>'+esc(c.lastMessage||'Tap to chat')+'</div>'+
             '</div>'+
             (c.unreadCount?'<div class="unread-badge">'+c.unreadCount+'</div>':'');
         div.addEventListener('click', ()=>selectChat(c));
@@ -1770,6 +1777,7 @@ function renderMessages(forceBottom = false) {
         if (currentChat.isGroup && !m.sent && !consecutive) {
             const lbl = document.createElement('div');
             lbl.className = 'sender-label '+roleClass(m.senderRole);
+            lbl.setAttribute('data-user', '');
             lbl.textContent = buildSenderLabel(m);
             bubble.appendChild(lbl);
         }
@@ -1777,13 +1785,24 @@ function renderMessages(forceBottom = false) {
         if (m.replyToText) {
             const rb = document.createElement('div');
             rb.className = 'reply-block';
-            rb.innerHTML = '<div class="reply-block-name">↩ '+esc(m.replyToSenderName||'Unknown')+'</div>'
-                +'<div class="reply-block-text">'+esc(m.replyToText)+'</div>';
+            const replyName = document.createElement('div');
+            replyName.className = 'reply-block-name';
+            replyName.append('↩ ');
+            const replySender = document.createElement('span');
+            if (m.replyToSenderName) replySender.setAttribute('data-user', '');
+            replySender.textContent = m.replyToSenderName || 'Unknown';
+            replyName.appendChild(replySender);
+            const replyText = document.createElement('div');
+            replyText.className = 'reply-block-text';
+            replyText.setAttribute('data-user', '');
+            replyText.textContent = m.replyToText;
+            rb.append(replyName, replyText);
             bubble.appendChild(rb);
         }
 
         if (m.text) {
             const t = document.createElement('div');
+            t.setAttribute('data-user', '');
             t.textContent = m.text;
             bubble.appendChild(t);
         }
@@ -1808,6 +1827,7 @@ function renderMessages(forceBottom = false) {
             } else if (isImageMime(mime, name)) {
                 const img = document.createElement('img');
                 img.src = m.attachmentUrl; img.className = 'msg-image';
+                img.setAttribute('data-user', '');
                 img.alt = name||'Image'; img.loading = 'lazy';
                 img.addEventListener('click',()=>openMediaPreview(m.attachmentUrl, name));
                 bubble.appendChild(img);
@@ -1815,7 +1835,11 @@ function renderMessages(forceBottom = false) {
                 const a = document.createElement('a');
                 a.href = m.attachmentUrl; a.target='_blank'; a.rel='noopener noreferrer';
                 a.className = 'msg-file';
-                a.textContent = '📎 '+(name||'Attachment');
+                a.append(document.createTextNode('📎 '));
+                const fileName = document.createElement('span');
+                if (name) fileName.setAttribute('data-user', '');
+                fileName.textContent = name || 'Attachment';
+                a.appendChild(fileName);
                 bubble.appendChild(a);
             }
         }
@@ -1884,6 +1908,7 @@ async function selectChat(contact) {
     currentChat.unreadCount = 0;
 
     chatName.textContent = contact.name;
+    chatName.setAttribute('data-user', '');
     chatStatus.textContent = contact.isGroup
         ? 'Group chat · '+(contact.membersCount||(contacts.length-1))+' members'
         : contact.email||'';
@@ -2176,5 +2201,6 @@ async function loadContacts() {
 
 })();
 </script>
+<script src="language-switcher.js"></script>
 </body>
 </html>

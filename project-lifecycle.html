@@ -91,7 +91,7 @@
     }
   </style>
 </head>
-<body>
+<body data-auto-translate>
   <header>
     <div class="brand">OneProject</div>
     <a href="dashboard.html">← Back to dashboard</a>
@@ -155,10 +155,53 @@
       return data;
     }
 
+    // Emailed 6-digit code field used by project deletion and project exit.
+    function codeFieldHTML(prefix) {
+      return `<div class="confirm-box">
+        <label for="${prefix}Input">Verification code</label>
+        <input id="${prefix}Input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit code" spellcheck="false">
+        <p class="field-hint" id="${prefix}Hint">We email a 6-digit code to your account email. It expires in 10 minutes.</p>
+        <div class="actions" style="margin-top:10px"><button type="button" class="secondary" id="${prefix}Send">Email me a code</button></div>
+      </div>`;
+    }
+
+    function wireCodeField(prefix, purpose, onChange) {
+      const input = document.getElementById(`${prefix}Input`);
+      const send = document.getElementById(`${prefix}Send`);
+      const hint = document.getElementById(`${prefix}Hint`);
+      let timer;
+      const cooldown = seconds => {
+        let left = seconds;
+        send.disabled = true;
+        clearInterval(timer);
+        const tick = () => {
+          if (left <= 0) { clearInterval(timer); send.disabled = false; send.textContent = 'Send a new code'; return; }
+          send.textContent = `New code in ${left}s`;
+          left -= 1;
+        };
+        tick();
+        timer = setInterval(tick, 1000);
+      };
+      input.addEventListener('input', () => { input.value = input.value.replace(/\D/g, '').slice(0, 6); onChange(); });
+      send.addEventListener('click', async () => {
+        send.disabled = true;
+        hint.textContent = 'Sending the code...';
+        try {
+          const result = await request('/project-lifecycle/send-code', { method: 'POST', body: JSON.stringify({ projectId, purpose }) });
+          hint.textContent = `We sent a 6-digit code to ${result.sentTo}. It expires in ${result.expiresInMinutes} minutes.`;
+          cooldown(30);
+        } catch (err) {
+          hint.textContent = err.message;
+          cooldown(10);
+        }
+      });
+    }
+
     function render() {
       if (!lifecycle) return;
       const project = lifecycle.project;
       const isClient = lifecycle.isClientOwner;
+      projectNameEl.setAttribute('data-user', '');
       projectNameEl.textContent = project.name;
       projectStatusEl.textContent = project.lifecycle_status === 'pending_deletion'
         ? 'Read-only · deletion scheduled'
@@ -174,7 +217,7 @@
         actionContent.innerHTML = `
           <div class="notice danger locked">
             <strong>Project is read-only</strong>
-            <p>Deletion is scheduled for <strong>${escapeHtml(formatDate(project.deletion_scheduled_at))}</strong>.</p>
+            <p>Deletion is scheduled for <strong data-user>${escapeHtml(formatDate(project.deletion_scheduled_at))}</strong>.</p>
             <p>Until then, project records remain available to view. No one can add, edit, or delete project content. Cancel below to restore normal project use.</p>
           </div>
           <h2 class="section-heading">Restore project</h2>
@@ -208,11 +251,7 @@
         <p class="section-copy">Both checks are required before the 60-day recovery period begins.</p>
         <div class="confirmation">
           <div class="confirmation-grid">
-            <div class="confirm-box">
-              <label for="confirmProjectName">Type the project name</label>
-              <input id="confirmProjectName" autocomplete="off" spellcheck="false">
-              <p class="field-hint">Enter: ${escapeHtml(project.name)}</p>
-            </div>
+            ${codeFieldHTML('deleteCode')}
             <div class="confirm-box">
               <label for="confirmProjectPassword">Client account password</label>
               <input id="confirmProjectPassword" type="password" autocomplete="current-password">
@@ -221,11 +260,11 @@
           <div class="actions"><button class="danger" id="scheduleDeletion" disabled>Schedule project deletion</button></div>
         </div>
       `;
-      const input = document.getElementById('confirmProjectName');
+      const input = document.getElementById('deleteCodeInput');
       const password = document.getElementById('confirmProjectPassword');
       const button = document.getElementById('scheduleDeletion');
-      const updateConfirmation = () => { button.disabled = input.value.trim() !== project.name || !password.value; };
-      input.addEventListener('input', updateConfirmation);
+      const updateConfirmation = () => { button.disabled = !/^\d{6}$/.test(input.value) || !password.value; };
+      wireCodeField('deleteCode', 'delete', updateConfirmation);
       password.addEventListener('input', updateConfirmation);
       button.addEventListener('click', scheduleDeletion);
     }
@@ -237,7 +276,7 @@
         actionContent.innerHTML = `
           <div class="notice danger">
             <p><strong>Project read-only</strong></p>
-            <p>Scheduled deletion: <strong>${escapeHtml(formatDate(project.deletion_scheduled_at))}</strong></p>
+            <p>Scheduled deletion: <strong data-user>${escapeHtml(formatDate(project.deletion_scheduled_at))}</strong></p>
             <p>You can view existing project content until deletion. The client can cancel the request.</p>
           </div>`;
         return;
@@ -246,7 +285,7 @@
         ledeEl.textContent = 'Your project access is read-only during the 15-day exit period. Other members can continue working normally.';
         actionContent.innerHTML = `
           <div class="notice">
-            <p><strong>Exit date: ${escapeHtml(formatDate(lifecycle.exitRequest.effective_at))}</strong></p>
+            <p><strong>Exit date: <span data-user>${escapeHtml(formatDate(lifecycle.exitRequest.effective_at))}</span></strong></p>
             <p>You can review and download existing project files, but cannot add, edit, or delete project content. Your previous contributions stay in the project.</p>
             <p>Other members are not restricted and can continue working. Cancel your exit request below to restore your own editing access.</p>
           </div>
@@ -261,8 +300,16 @@
           <p>Your membership is removed after 15 days unless you cancel. Your existing contributions stay with the project.</p>
           <p>Other project users will receive a notification when your exit takes effect. The project and other users’ access are not deleted or changed.</p>
         </div>
-        <div class="actions"><button class="danger" id="scheduleExit">Schedule my exit</button></div>`;
-      document.getElementById('scheduleExit').addEventListener('click', scheduleExit);
+        <h2 class="section-heading">Confirm your exit</h2>
+        <p class="section-copy">Request a code, then enter it to confirm that it is you.</p>
+        <div class="confirmation">
+          ${codeFieldHTML('exitCode')}
+          <div class="actions"><button class="danger" id="scheduleExit" disabled>Schedule my exit</button></div>
+        </div>`;
+      const exitInput = document.getElementById('exitCodeInput');
+      const exitButton = document.getElementById('scheduleExit');
+      wireCodeField('exitCode', 'exit', () => { exitButton.disabled = !/^\d{6}$/.test(exitInput.value); });
+      exitButton.addEventListener('click', scheduleExit);
     }
 
     async function refresh() {
@@ -273,15 +320,15 @@
 
     async function scheduleDeletion() {
       const button = document.getElementById('scheduleDeletion');
-      const projectName = document.getElementById('confirmProjectName').value.trim();
+      const verificationCode = document.getElementById('deleteCodeInput').value.trim();
       const password = document.getElementById('confirmProjectPassword').value;
       button.disabled = true;
       feedback.textContent = '';
       feedback.classList.remove('success');
       try {
-        const result = await request('/project-deletion/request', { method: 'POST', body: JSON.stringify({ projectId, projectName, password }) });
+        const result = await request('/project-deletion/request', { method: 'POST', body: JSON.stringify({ projectId, verificationCode, password }) });
         await refresh();
-        feedback.textContent = notificationFeedback(result.notifications);
+        showNotificationFeedback(result.notifications);
         feedback.classList.add('success');
       } catch (err) {
         feedback.textContent = err.message;
@@ -298,7 +345,7 @@
       try {
         const result = await request('/project-deletion/cancel', { method: 'POST', body: JSON.stringify({ projectId, password }) });
         await refresh();
-        feedback.textContent = notificationFeedback(result.notifications);
+        showNotificationFeedback(result.notifications);
         feedback.classList.add('success');
       } catch (err) {
         feedback.textContent = err.message;
@@ -306,20 +353,39 @@
       }
     }
 
-    function notificationFeedback(notifications) {
-      if (!notifications) return 'Project status updated.';
-      const emailText = `${notifications.emailSent} member email${notifications.emailSent === 1 ? '' : 's'} sent`;
-      const inAppText = notifications.inAppSent ? 'in-app notification posted' : 'no other members to notify in-app';
-      const failureText = notifications.emailFailed ? `; ${notifications.emailFailed} email${notifications.emailFailed === 1 ? '' : 's'} failed` : '';
-      return `Project status updated. ${emailText}; ${inAppText}${failureText}.`;
+    function showNotificationFeedback(notifications) {
+      if (!notifications) {
+        feedback.textContent = 'Project status updated.';
+        return;
+      }
+
+      feedback.replaceChildren(document.createTextNode('Project status updated. '));
+      const emailCount = document.createElement('span');
+      emailCount.setAttribute('data-user', '');
+      emailCount.textContent = String(notifications.emailSent);
+      feedback.append(emailCount, document.createTextNode(notifications.emailSent === 1 ? ' member email sent; ' : ' member emails sent; '));
+      feedback.append(document.createTextNode(
+        notifications.inAppSent ? 'in-app notification posted' : 'no other members to notify in-app'
+      ));
+
+      if (notifications.emailFailed) {
+        feedback.append(document.createTextNode('; '));
+        const failedCount = document.createElement('span');
+        failedCount.setAttribute('data-user', '');
+        failedCount.textContent = String(notifications.emailFailed);
+        feedback.append(failedCount, document.createTextNode(notifications.emailFailed === 1 ? ' email failed' : ' emails failed'));
+      }
+
+      feedback.append(document.createTextNode('.'));
     }
 
     async function scheduleExit() {
       const button = document.getElementById('scheduleExit');
+      const verificationCode = document.getElementById('exitCodeInput').value.trim();
       button.disabled = true;
       feedback.textContent = '';
       try {
-        await request('/project-exit/request', { method: 'POST', body: JSON.stringify({ projectId }) });
+        await request('/project-exit/request', { method: 'POST', body: JSON.stringify({ projectId, verificationCode }) });
         await refresh();
       } catch (err) {
         feedback.textContent = err.message;
@@ -344,9 +410,11 @@
       titleEl.textContent = 'Unable to load project';
       ledeEl.textContent = '';
       projectNameEl.textContent = 'Project status unavailable';
+      projectNameEl.removeAttribute('data-user');
       projectStatusEl.textContent = '';
       feedback.textContent = err.message;
     });
   </script>
+  <script src="language-switcher.js"></script>
 </body>
 </html>

@@ -11052,6 +11052,11 @@ function attachTabEvents() {
 }
 
 function loadHomeTabs(selectedTab = 'contractual') {
+  const loadMoreButton = document.getElementById('loadMoreRecordsButton');
+  if (loadMoreButton) {
+    loadMoreButton.hidden = true;
+    loadMoreButton.style.display = 'none';
+  }
   const recordTabs = ['contractual', 'administrative', 'safety', 'operational', 'financial', 'meeting'];
   if (!recordTabs.includes(selectedTab)) selectedTab = 'contractual';
   getNavTabs().innerHTML = `
@@ -11190,6 +11195,11 @@ function loadReportTabs(selectedTab = _getDashboardView().workspaceTab || Object
 function setTabContent(tabKey) {
   const ws = WORKSPACE_TABS[tabKey];
   if (ws) {
+    const loadMoreButton = document.getElementById('loadMoreRecordsButton');
+    if (loadMoreButton) {
+      loadMoreButton.hidden = true;
+      loadMoreButton.style.display = 'none';
+    }
     if (ws.cached !== false) _wsInvalidateIfStale(tabKey);
     ws.open();
     return;
@@ -12398,39 +12408,90 @@ async function saveMinute(meeting, scope, scopeValue, replace = false) {
 //  RECORDS CACHE
 // =======================================================================
 const recordsCache = {};
+const recordsPageState = {};
 let currentArrets = [];
+
+function renderRecordPagination(tabKey) {
+  const recordsList = document.getElementById('recordsList');
+  if (!recordsList) return;
+
+  let button = document.getElementById('loadMoreRecordsButton');
+  if (!button) {
+    button = document.createElement('button');
+    button.id = 'loadMoreRecordsButton';
+    button.type = 'button';
+    button.className = 'btn secondary';
+    button.setAttribute('data-translate', 'load-more-records');
+    button.style.cssText = 'display:block;margin:12px auto;';
+    recordsList.insertAdjacentElement('afterend', button);
+    window.languageSwitcher?.applyLanguage(window.languageSwitcher.currentLanguage);
+  }
+
+  const page = recordsPageState[tabKey];
+  button.hidden = !page?.hasMore;
+  button.style.display = page?.hasMore ? 'block' : 'none';
+  button.disabled = Boolean(page?.loading);
+  const language = window.languageSwitcher?.currentLanguage || localStorage.getItem('appLanguage') || 'English';
+  const translatedLabel = window.languageSwitcher?.getTranslation('load-more-records', language);
+  const loadMoreLabel = translatedLabel && translatedLabel !== 'load-more-records'
+    ? translatedLabel
+    : (language === 'French' ? 'Charger plus d’enregistrements' : 'Load more records');
+  button.textContent = page?.loading
+    ? (language === 'French' ? 'Chargement…' : 'Loading…')
+    : page?.retry
+      ? (language === 'French' ? 'Réessayer' : 'Try again')
+      : loadMoreLabel;
+  button.onclick = () => loadTabRecords(tabKey, { loadMore: true });
+}
 
 // =======================================================================
 //  LOAD TAB RECORDS
 // =======================================================================
-async function loadTabRecords(tabKey) {
+async function loadTabRecords(tabKey, { loadMore = false } = {}) {
   const recordsList    = document.getElementById('recordsList');
   const placeholderDiv = document.querySelector('.no-data-placeholder');
   if (!recordsList || !placeholderDiv) return;
 
-  if (recordsCache[tabKey]) {
+  if (recordsCache[tabKey] && !loadMore) {
     renderRecordsList(recordsCache[tabKey], tabKey);
+    renderRecordPagination(tabKey);
     return;
   }
 
-  const projectId = await ensureActiveProjectId(placeholderDiv);
-  if (!projectId) return;
+  const pageState = recordsPageState[tabKey] || { nextOffset: 0, hasMore: false, loading: false };
+  if (loadMore && (pageState.loading || !pageState.hasMore)) return;
+  pageState.loading = true;
+  pageState.retry = false;
+  if (!loadMore) {
+    pageState.nextOffset = 0;
+    pageState.hasMore = false;
+  }
+  recordsPageState[tabKey] = pageState;
+  renderRecordPagination(tabKey);
 
-  recordsList.innerHTML = '';
-  placeholderDiv.style.display = 'block';
-  placeholderDiv.innerHTML = "<p style='color:#999;'>Loading...</p>";
+  if (!loadMore) {
+    recordsList.innerHTML = '';
+    placeholderDiv.style.display = 'block';
+    placeholderDiv.innerHTML = "<p style='color:#999;'>Loading...</p>";
+  }
 
   try {
+    const projectId = await ensureActiveProjectId(placeholderDiv);
+    if (!projectId) return;
     const res = await authFetch(
       `${API}/fetch-tab-records`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, recordType: tabToTable(tabKey) })
+        body: JSON.stringify({
+          projectId,
+          recordType: tabToTable(tabKey),
+          limit: 25,
+          offset: loadMore ? pageState.nextOffset : 0,
+        })
       }
     );
-
-    if (!res) return;
+    if (!res) throw new Error('No response from server.');
     if (res.status === 401) {
       placeholderDiv.innerHTML = "<p style='color:#ef4444;'>⚠️ Unauthorized. Please log in again.</p>";
       return;
@@ -12439,16 +12500,36 @@ async function loadTabRecords(tabKey) {
 
     const data = await res.json();
     const records = (data.records || []).map(r => ({ ...r, _tabKey: tabKey }));
-    recordsCache[tabKey] = records;
-    renderRecordsList(records, tabKey);
+    recordsCache[tabKey] = loadMore ? [...(recordsCache[tabKey] || []), ...records] : records;
+    pageState.nextOffset = Number.isInteger(data.page?.next_offset)
+      ? data.page.next_offset
+      : recordsCache[tabKey].length;
+    pageState.hasMore = data.page?.has_more === true;
+    pageState.retry = false;
+    renderRecordsList(loadMore ? records : recordsCache[tabKey], tabKey, loadMore);
+    const searchTerm = document.getElementById('searchBox')?.value?.toLowerCase() || '';
+    if (loadMore && searchTerm) {
+      recordsList.querySelectorAll('.doc-item').forEach(item => {
+        item.style.display = item.textContent.toLowerCase().includes(searchTerm) ? '' : 'none';
+      });
+    }
+    renderRecordPagination(tabKey);
 
   } catch (err) {
     console.error('Listing error:', err);
-    const pl = document.querySelector('.no-data-placeholder');
-    if (pl) {
-      pl.style.display = 'block';
-      pl.innerHTML = "<p style='color:#ef4444;'>⚠️ Error loading records. Please try again.</p>";
+    if (loadMore && recordsCache[tabKey]) {
+      pageState.retry = true;
+      renderRecordPagination(tabKey);
+    } else {
+      const pl = document.querySelector('.no-data-placeholder');
+      if (pl) {
+        pl.style.display = 'block';
+        pl.innerHTML = "<p style='color:#ef4444;'>⚠️ Error loading records. Please try again.</p>";
+      }
     }
+  } finally {
+    pageState.loading = false;
+    renderRecordPagination(tabKey);
   }
 }
 
@@ -13083,7 +13164,7 @@ function rcDeckHtml(slides, startKey) {
 // =======================================================================
 //  RENDER RECORDS LIST
 // =======================================================================
-function renderRecordsList(records, tabKey) {
+function renderRecordsList(records, tabKey, append = false) {
   const ws = WORKSPACE_TABS[tabKey];
   if (ws && ws.list) { ws.list(records); return; }
   const recordsList    = document.getElementById('recordsList');
@@ -13098,6 +13179,7 @@ function renderRecordsList(records, tabKey) {
   );
 
   if (!displayRecords.length) {
+    if (append && recordsList.children.length) return;
     recordsList.innerHTML = '';
     placeholderDiv.style.display = 'block';
     placeholderDiv.innerHTML = `
@@ -13112,7 +13194,7 @@ function renderRecordsList(records, tabKey) {
 
   const tzFromServer = displayRecords.find(r => r.time_zone)?.time_zone;
   if (tzFromServer) rcProjectTz = tzFromServer;
-  recordsList.innerHTML = displayRecords.map(doc => {
+  const recordCardsHtml = displayRecords.map(doc => {
     const isUploader = doc.is_uploader === true;
     const isUnread   = !doc.is_viewed && !isUploader;
     const isLocked   = doc.is_locked === true;
@@ -13275,6 +13357,8 @@ function renderRecordsList(records, tabKey) {
         </div>
       </li>`;
   }).join('');
+  if (append) recordsList.insertAdjacentHTML('beforeend', recordCardsHtml);
+  else recordsList.innerHTML = recordCardsHtml;
 }
 
 // Keyboard support for the card header (Enter / Space)
