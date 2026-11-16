@@ -100,6 +100,19 @@
       .actions button { width: 100%; }
       .confirmation-grid { grid-template-columns: 1fr; }
     }
+      /* Confirmation dialog: opens only after the person chooses to delete or exit */
+    .dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(13,43,78,.5); }
+    .dialog { width: 100%; max-width: 440px; max-height: 92vh; overflow: auto; padding: 22px; background: #fff; border-radius: 10px; box-shadow: 0 20px 50px rgba(0,0,0,.3); }
+    .dialog h2 { margin: 0 0 8px; font-size: 18px; color: var(--navy); }
+    .dialog p { margin: 0 0 10px; color: var(--muted); }
+    .dialog .confirm-box { margin-top: 12px; }
+    .dialog .code-input { text-align: center; letter-spacing: .45em; font-size: 22px; font-weight: 600; }
+    .dialog-resend { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; font-size: 13px; color: var(--muted); }
+    .dialog-msg { min-height: 20px; margin: 10px 0 0; font-size: 13px; color: var(--danger); }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    main button.link-btn { min-height: 0; padding: 4px 0; border: 0; background: none; color: var(--teal-dark); font-size: 13px; font-weight: 400; text-decoration: underline; }
+    main button.link-btn:disabled { color: var(--muted); text-decoration: none; opacity: 1; }
+    @media (max-width: 520px) { .dialog-actions button { width: 100%; } }
   </style>
 </head>
 <body data-auto-translate>
@@ -227,46 +240,103 @@ const App = (function () {
       return data;
     }
 
-    // Emailed 6-digit code field used by project deletion and project exit.
-    function codeFieldHTML(prefix) {
-      return `<div class="confirm-box">
-        <label for="${prefix}Input">Verification code</label>
-        <input id="${prefix}Input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit code" spellcheck="false">
-        <p class="field-hint" id="${prefix}Hint">We email a 6-digit code to your account email. It expires in 10 minutes.</p>
-        <div class="actions" style="margin-top:10px"><button type="button" class="secondary" id="${prefix}Send">Email me a code</button></div>
-      </div>`;
-    }
+    // Confirmation dialog. The code is emailed when it opens, which is after the person has read the
+    // warnings and chosen to continue. onConfirm(code, password) must throw an Error to show a message.
+    function openConfirmDialog({ title, intro, purpose, withPassword, confirmLabel, onConfirm }) {
+      const previous = document.activeElement;
+      const backdrop = document.createElement('div');
+      backdrop.className = 'dialog-backdrop';
+      backdrop.innerHTML = `
+        <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+          <h2 id="dlgTitle">${escapeHtml(title)}</h2>
+          <p>${escapeHtml(intro)}</p>
+          <p class="field-hint" id="dlgHint">Sending a code to your email...</p>
+          <div class="confirm-box">
+            <label for="dlgCode">Verification code</label>
+            <input id="dlgCode" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" spellcheck="false">
+          </div>
+          ${withPassword ? `<div class="confirm-box">
+            <label for="dlgPassword">Client account password</label>
+            <input id="dlgPassword" type="password" autocomplete="current-password">
+          </div>` : ''}
+          <div class="dialog-resend"><button type="button" class="link-btn" id="dlgResend" disabled>Send a new code</button><span id="dlgTimer"></span></div>
+          <p class="dialog-msg" id="dlgMsg" role="alert"></p>
+          <div class="dialog-actions">
+            <button type="button" class="secondary" id="dlgCancel">Cancel</button>
+            <button type="button" class="danger" id="dlgConfirm" disabled>${escapeHtml(confirmLabel)}</button>
+          </div>
+        </div>`;
+      document.querySelector('main').appendChild(backdrop);
 
-    function wireCodeField(prefix, purpose, onChange) {
-      const input = document.getElementById(`${prefix}Input`);
-      const send = document.getElementById(`${prefix}Send`);
-      const hint = document.getElementById(`${prefix}Hint`);
+      const hint = backdrop.querySelector('#dlgHint'), msg = backdrop.querySelector('#dlgMsg');
+      const code = backdrop.querySelector('#dlgCode'), password = backdrop.querySelector('#dlgPassword');
+      const resend = backdrop.querySelector('#dlgResend'), timerEl = backdrop.querySelector('#dlgTimer');
+      const confirmBtn = backdrop.querySelector('#dlgConfirm'), cancelBtn = backdrop.querySelector('#dlgCancel');
       let timer;
+
+      const close = () => {
+        clearInterval(timer);
+        document.removeEventListener('keydown', onKey);
+        backdrop.remove();
+        if (previous && previous.focus) previous.focus();
+      };
+      const ready = () => { confirmBtn.disabled = !/^\d{6}$/.test(code.value) || (withPassword && !password.value); };
       const cooldown = seconds => {
         let left = seconds;
-        send.disabled = true;
+        resend.disabled = true;
         clearInterval(timer);
         const tick = () => {
-          if (left <= 0) { clearInterval(timer); send.disabled = false; send.textContent = 'Send a new code'; return; }
-          send.textContent = `New code in ${left}s`;
+          if (left <= 0) { clearInterval(timer); resend.disabled = false; timerEl.textContent = ''; return; }
+          timerEl.textContent = `New code available in ${left}s`;
           left -= 1;
         };
         tick();
         timer = setInterval(tick, 1000);
       };
-      input.addEventListener('input', () => { input.value = input.value.replace(/\D/g, '').slice(0, 6); onChange(); });
-      send.addEventListener('click', async () => {
-        send.disabled = true;
-        hint.textContent = 'Sending the code...';
+      const sendCode = async () => {
+        msg.textContent = '';
+        hint.textContent = 'Sending a code to your email...';
+        resend.disabled = true;
         try {
           const result = await request('/project-lifecycle/send-code', { method: 'POST', body: JSON.stringify({ projectId, purpose }) });
           hint.textContent = `We sent a 6-digit code to ${result.sentTo}. It expires in ${result.expiresInMinutes} minutes.`;
           cooldown(30);
         } catch (err) {
-          hint.textContent = err.message;
+          hint.textContent = 'Enter the 6-digit code we emailed you.';
+          msg.textContent = err.message;
           cooldown(10);
         }
+      };
+      function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+        if (e.key !== 'Tab') return;
+        const items = [...backdrop.querySelectorAll('button:not(:disabled), input')];
+        if (!items.length) return;
+        const first = items[0], last = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+
+      code.addEventListener('input', () => { code.value = code.value.replace(/\D/g, '').slice(0, 6); ready(); });
+      if (password) password.addEventListener('input', ready);
+      resend.addEventListener('click', sendCode);
+      cancelBtn.addEventListener('click', close);
+      confirmBtn.addEventListener('click', async () => {
+        confirmBtn.disabled = true;
+        msg.textContent = '';
+        feedback.textContent = '';
+        feedback.classList.remove('success');
+        try {
+          await onConfirm(code.value.trim(), password ? password.value : undefined);
+          close();
+        } catch (err) {
+          msg.textContent = err.message;
+          ready();
+        }
       });
+      document.addEventListener('keydown', onKey);
+      code.focus();
+      sendCode();
     }
 
     function render() {
@@ -321,26 +391,14 @@ const App = (function () {
           <li><strong>Before continuing:</strong> save any files you need to keep.</li>
           <li><strong>Notifications:</strong> project members receive an email and an in-app notification.</li>
         </ul>
-        <h2 class="section-heading">Confirm deletion</h2>
-        <p class="section-copy">Both checks are required before the 60-day recovery period begins.</p>
-        <div class="confirmation">
-          <div class="confirmation-grid">
-            ${codeFieldHTML('deleteCode')}
-            <div class="confirm-box">
-              <label for="confirmProjectPassword">Client account password</label>
-              <input id="confirmProjectPassword" type="password" autocomplete="current-password">
-            </div>
-          </div>
-          <div class="actions"><button class="danger" id="scheduleDeletion" disabled>Schedule project deletion</button></div>
-        </div>
+        <div class="actions"><button class="danger" id="startDeletion">Delete this project</button></div>
       `;
-      const input = document.getElementById('deleteCodeInput');
-      const password = document.getElementById('confirmProjectPassword');
-      const button = document.getElementById('scheduleDeletion');
-      const updateConfirmation = () => { button.disabled = !/^\d{6}$/.test(input.value) || !password.value; };
-      wireCodeField('deleteCode', 'delete', updateConfirmation);
-      password.addEventListener('input', updateConfirmation);
-      button.addEventListener('click', scheduleDeletion);
+      document.getElementById('startDeletion').addEventListener('click', () => openConfirmDialog({
+        title: 'Confirm project deletion',
+        intro: 'We email a 6-digit code to your account email. Enter it with your password to start the 60-day recovery period.',
+        purpose: 'delete', withPassword: true, confirmLabel: 'Schedule project deletion',
+        onConfirm: scheduleDeletion,
+      }));
     }
 
     function renderMember(project) {
@@ -374,16 +432,13 @@ const App = (function () {
           <p>Your membership is removed after 15 days unless you cancel. Your existing contributions stay with the project.</p>
           <p>Other project users will receive a notification when your exit takes effect. The project and other users’ access are not deleted or changed.</p>
         </div>
-        <h2 class="section-heading">Confirm your exit</h2>
-        <p class="section-copy">Request a code, then enter it to confirm that it is you.</p>
-        <div class="confirmation">
-          ${codeFieldHTML('exitCode')}
-          <div class="actions"><button class="danger" id="scheduleExit" disabled>Schedule my exit</button></div>
-        </div>`;
-      const exitInput = document.getElementById('exitCodeInput');
-      const exitButton = document.getElementById('scheduleExit');
-      wireCodeField('exitCode', 'exit', () => { exitButton.disabled = !/^\d{6}$/.test(exitInput.value); });
-      exitButton.addEventListener('click', scheduleExit);
+        <div class="actions"><button class="danger" id="startExit">Exit this project</button></div>`;
+      document.getElementById('startExit').addEventListener('click', () => openConfirmDialog({
+        title: 'Confirm your exit',
+        intro: 'We email a 6-digit code to your account email. Enter it to schedule your exit.',
+        purpose: 'exit', withPassword: false, confirmLabel: 'Schedule my exit',
+        onConfirm: code => scheduleExit(code),
+      }));
     }
 
     async function refresh() {
@@ -392,22 +447,11 @@ const App = (function () {
       render();
     }
 
-    async function scheduleDeletion() {
-      const button = document.getElementById('scheduleDeletion');
-      const verificationCode = document.getElementById('deleteCodeInput').value.trim();
-      const password = document.getElementById('confirmProjectPassword').value;
-      button.disabled = true;
-      feedback.textContent = '';
-      feedback.classList.remove('success');
-      try {
-        const result = await request('/project-deletion/request', { method: 'POST', body: JSON.stringify({ projectId, verificationCode, password }) });
-        await refresh();
-        showNotificationFeedback(result.notifications);
-        feedback.classList.add('success');
-      } catch (err) {
-        feedback.textContent = err.message;
-        button.disabled = false;
-      }
+    async function scheduleDeletion(verificationCode, password) {
+      const result = await request('/project-deletion/request', { method: 'POST', body: JSON.stringify({ projectId, verificationCode, password }) });
+      await refresh();
+      showNotificationFeedback(result.notifications);
+      feedback.classList.add('success');
     }
 
     async function cancelDeletion() {
@@ -453,18 +497,9 @@ const App = (function () {
       feedback.append(document.createTextNode('.'));
     }
 
-    async function scheduleExit() {
-      const button = document.getElementById('scheduleExit');
-      const verificationCode = document.getElementById('exitCodeInput').value.trim();
-      button.disabled = true;
-      feedback.textContent = '';
-      try {
-        await request('/project-exit/request', { method: 'POST', body: JSON.stringify({ projectId, verificationCode }) });
-        await refresh();
-      } catch (err) {
-        feedback.textContent = err.message;
-        button.disabled = false;
-      }
+    async function scheduleExit(verificationCode) {
+      await request('/project-exit/request', { method: 'POST', body: JSON.stringify({ projectId, verificationCode }) });
+      await refresh();
     }
 
     async function cancelExit() {
