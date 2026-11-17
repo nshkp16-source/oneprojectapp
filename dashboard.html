@@ -487,10 +487,25 @@
     .arret-bar { appearance: none; -webkit-appearance: none; font-family: inherit; line-height: 1.2; }
     .arret-bar:hover { background: var(--bg); }
     .arret-bar:focus-visible { outline: 2px solid #007B8A; outline-offset: 2px; }
-    /* Red outline while any stop-work order is still open; the filled pink + dot additionally means one is new to you. */
-    .arret-bar.open { border-color: #dc2626; color: #b91c1c; }
     .arret-bar.alert { background: #fff0f0; border-color: #fca5a5; color: #991b1b; }
-    .arret-bar.open.alert { border-color: #dc2626; }
+    /* Solid red for as long as any stop-work order is open, so it cannot be missed even if the notification was never seen.
+       The white dot and the soft pulse additionally mean that one of them is new to you. */
+    .arret-bar.open { background: #dc2626; border-color: #ef4444; color: #fff; }
+    .arret-bar.open:hover { background: #b91c1c; }
+    .arret-bar.open .arret-count { background: #fff; }
+    @keyframes arretPulse {
+      0%   { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.65); }
+      70%  { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+    }
+    .arret-bar.open.alert { animation: arretPulse 1.8s ease-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .arret-bar.open.alert { animation: none; } }
+    .arret-counter { font-size: 11px; color: #9ca3af; text-align: right; margin-top: 3px; }
+    .arret-file::file-selector-button {
+      background: var(--surface); color: var(--text); border: 1px solid var(--border);
+      border-radius: 8px; padding: 6px 12px; margin-right: 10px; cursor: pointer; font: inherit;
+    }
+    .arret-file::file-selector-button:hover { background: var(--bg); }
     .arret-status { display: inline-block; padding: 2px 9px; border-radius: 99px; font-size: 11px; font-weight: 600; }
     .arret-status.open     { background: #fee2e2; color: #991b1b; }
     .arret-status.resolved { background: #dcfce7; color: #166534; }
@@ -4440,6 +4455,20 @@ const OPA_FR = Object.assign(Object.create(null), {
   "← Back to activities": "← Retour aux activités",
   "Loading the activity...": "Chargement de l'activité...",
   "🛑 Site Arrets": "🛑 Arrêts de chantier",
+  "Site Arrets": "Arrêts de chantier",
+  "Quality": "Qualité",
+  "Design or instruction": "Conception ou instruction",
+  "Select a category": "Sélectionnez une catégorie",
+  "Work affected": "Travaux concernés",
+  "Effective from": "En vigueur à partir du",
+  "Conditions to resume": "Conditions de reprise des travaux",
+  "Defaults to now. Set an earlier time if work has already stopped.": "Par défaut : maintenant. Indiquez une heure antérieure si les travaux sont déjà arrêtés.",
+  "e.g. Block B, level 3 formwork": "ex. Bloc B, coffrage du niveau 3",
+  "e.g. Props inspected and signed off by the engineer": "ex. Étais contrôlés et validés par l'ingénieur",
+  "Choose a category for the arret.": "Choisissez une catégorie pour l'arrêt.",
+  "Describe the work affected (at least 3 characters).": "Décrivez les travaux concernés (3 caractères minimum).",
+  "Set a valid effective date and time.": "Indiquez une date et une heure d'entrée en vigueur valides.",
+  "State the conditions to resume work (at least 3 characters).": "Indiquez les conditions de reprise des travaux (3 caractères minimum).",
   "+ Add Arret": "+ Ajouter un arrêt",
   "View": "Voir",
   "You can only view this arret. Only the creator can edit or delete it.": "Vous pouvez seulement consulter cet arrêt. Seul son créateur peut le modifier ou le supprimer.",
@@ -15716,7 +15745,7 @@ async function _openNotificationTarget(target) {
         opened = true;
       } else {
         expandGrayPart(`<div style="padding:20px;">
-          <h3 style="margin-top:0;">🛑 Site Arrets</h3>
+          <h3 style="margin-top:0;display:flex;align-items:center;gap:8px;">${arretIcon(20)}<span>Site Arrets</span></h3>
           <p>${escapeHtml(message || 'This arret is no longer available.')}</p>
           <p style="font-size:12px;color:#6b7280;">This arret is no longer available.</p>
           <button class="btn" type="button" onclick="collapseGrayPart()">Close</button>
@@ -16064,13 +16093,13 @@ function renderArretPanel(arrets) {
   const html = `
     <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:2px solid #007B8A;flex-shrink:0;">
       <div>
-        <h3 style="margin:0;color:#333;font-size:18px;">🛑 Site Arrets</h3>
+        <h3 style="margin:0;color:#333;font-size:18px;display:flex;align-items:center;gap:8px;">${arretIcon(20)}<span>Site Arrets</span></h3>
         <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">${canChangeProject ? 'Add and review stop-work arret reports for this project.' : 'Project is read-only during its scheduled lifecycle period.'}</p>
       </div>
       ${canChangeProject ? '<button class="btn" type="button" onclick="openArretForm()">+ Add Arret</button>' : ''}
     </div>
     <div style="flex:1;overflow-y:auto;padding:16px 20px;">
-      ${arrets.length ? '<ul style="padding:0;margin:0;list-style:none;">' : `<div style="text-align:center;padding:40px 0;color:#9ca3af;"><div style="font-size:32px;margin-bottom:8px;">🛑</div><p style="margin:0;">${canChangeProject ? 'No arrets yet. Add one now to flag a stop-work issue.' : 'No arret reports are available for this project.'}</p></div>`}
+      ${arrets.length ? '<ul style="padding:0;margin:0;list-style:none;">' : `<div style="text-align:center;padding:40px 0;color:#9ca3af;"><div style="margin-bottom:10px;display:flex;justify-content:center;">${arretIcon(40)}</div><p style="margin:0;">${canChangeProject ? 'No arrets yet. Add one now to flag a stop-work issue.' : 'No arret reports are available for this project.'}</p></div>`}
       ${arrets.map(arret => {
           const attachmentMarkup = arret.attachments?.length ? `
           <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;">
@@ -16080,7 +16109,7 @@ function renderArretPanel(arrets) {
               </button>
             ` : `
               <button type="button" class="attachment-preview-btn" data-file-url="${escapeHtml(att.file_url)}" data-file-name="${escapeHtml(att.file_name)}" data-file-mime="${escapeHtml(att.file_mime)}" style="display:inline-flex;align-items:center;gap:6px;padding:8px 12px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:10px;color:#111;cursor:pointer;">
-                📎 ${escapeHtml(att.file_name)}
+                ${arretClipIcon()} ${escapeHtml(att.file_name)}
               </button>
             `).join('')}
           </div>
@@ -16090,6 +16119,7 @@ function renderArretPanel(arrets) {
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
               <div style="flex:1;min-width:220px;">
                 <div style="font-weight:700;font-size:14px;color:#111;">${escapeHtml(arret.title || 'Untitled arret')} ${arretStatusChip(arret)}</div>
+                ${arret.category ? `<div style=\"font-size:12px;color:#374151;margin-top:4px;\"><span>${escapeHtml(ARRET_CATEGORY_LABELS[arret.category] || arret.category)}</span> · ${escapeHtml(arret.work_affected || '')}</div>` : ''}
                 <div style="font-size:12px;color:#6b7280;margin-top:4px;white-space:pre-wrap;">${escapeHtml(arret.description || '')}</div>
                 <div style="font-size:11px;color:#9ca3af;margin-top:8px;">${new Date(arret.issued_date).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})} · ${escapeHtml(arret.creator_role || 'Unknown')}</div>
                 ${attachmentMarkup}
@@ -16172,6 +16202,20 @@ async function handleArretView(recordId) {
   const canEdit = isArretCreator(arret) && !projectLifecycleReadOnly;
   const canDelete = canEdit;
   const canManage = Boolean(arret.can_manage) && !projectLifecycleReadOnly;
+  const detailRows = [
+    ['Category', arret.category ? (ARRET_CATEGORY_LABELS[arret.category] || arret.category) : ''],
+    ['Work affected', arret.work_affected || ''],
+    ['Effective from', arret.effective_at ? new Date(arret.effective_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : ''],
+  ].filter(([, value]) => value);
+  const detailFieldsHtml = detailRows.length ? `
+    <div style=\"display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;font-size:13px;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid #e5e7eb;\">
+      ${detailRows.map(([label, value]) => `<span style=\"color:#6b7280;\">${label}</span><span style=\"color:#111;\">${escapeHtml(value)}</span>`).join('')}
+    </div>` : '';
+  const resumeHtml = arret.resume_conditions ? `
+    <div style=\"margin-top:18px;padding:10px 14px;border-left:3px solid #007B8A;background:rgba(0,123,138,0.08);border-radius:0 8px 8px 0;\">
+      <div style=\"font-size:12px;font-weight:700;color:#007B8A;margin-bottom:4px;\">Conditions to resume</div>
+      <div style=\"font-size:14px;line-height:1.6;white-space:pre-wrap;\">${escapeHtml(arret.resume_conditions)}</div>
+    </div>` : '';
   const historyHtml = (arret.events || []).length ? `
     <div style="margin-top:22px;border-top:1px solid #e5e7eb;padding-top:12px;">
       <div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:8px;">History</div>
@@ -16188,7 +16232,7 @@ async function handleArretView(recordId) {
         </button>
       ` : `
         <button type="button" class="attachment-preview-btn" data-file-url="${escapeHtml(att.file_url)}" data-file-name="${escapeHtml(att.file_name)}" data-file-mime="${escapeHtml(att.file_mime)}" style="display:inline-flex;align-items:center;gap:8px;padding:10px 14px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:10px;color:#111;cursor:pointer;">
-          📎 ${escapeHtml(att.file_name)}
+          ${arretClipIcon()} ${escapeHtml(att.file_name)}
         </button>
       `).join('')}
     </div>
@@ -16196,12 +16240,14 @@ async function handleArretView(recordId) {
 
   const html = `
     <div style="padding:18px 20px;border-bottom:2px solid #007B8A;flex-shrink:0;">
-      <h3 style="margin:0;color:#333;font-size:18px;">🛑 ${escapeHtml(arret.title)} ${arretStatusChip(arret)}</h3>
+      <h3 style="margin:0;color:#333;font-size:18px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">${arretIcon(20)}<span>${escapeHtml(arret.title)}</span> ${arretStatusChip(arret)}</h3>
       <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Reported by ${escapeHtml(arret.creator_role || 'Unknown')} on ${new Date(arret.issued_date).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}</p>
       ${!canEdit ? '<div style="margin-top:8px;font-size:12px;color:#71717a;">You can only view this arret. Only the creator can edit or delete it.</div>' : ''}
     </div>
     <div style="flex:1;overflow-y:auto;padding:16px 20px;">
+      ${detailFieldsHtml}
       <div style="font-size:14px;color:#111;line-height:1.6;white-space:pre-wrap;">${escapeHtml(arret.description)}</div>
+      ${resumeHtml}
       ${attachmentHtml}
       ${historyHtml}
     </div>
@@ -16305,6 +16351,28 @@ function showAttachmentPreview(url, name, mime) {
   document.body.appendChild(overlay);
 }
 
+const ARRET_CATEGORY_LABELS = {
+  safety: 'Safety', quality: 'Quality', design_instruction: 'Design or instruction', weather: 'Weather', other: 'Other',
+};
+
+function arretLocalInputValue(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function arretFieldLabel(text) {
+  return `<label style=\"display:block;font-size:13px;color:#374151;margin-bottom:6px;\"><span>${text}</span> <span style=\"color:#dc2626;\" aria-hidden=\"true\">*</span></label>`;
+}
+
+function arretIcon(size = 18) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:#dc2626;flex-shrink:0;"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>`;
+}
+function arretClipIcon() {
+  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink:0;"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`;
+}
+
 function arretStatusChip(arret) {
   const status = ['open', 'resolved', 'closed'].includes(arret?.status) ? arret.status : 'open';
   const label = { open: 'Open', resolved: 'Resolved', closed: 'Closed' }[status];
@@ -16360,26 +16428,56 @@ function openArretForm(arret = null) {
   const isEditing = Boolean(arret);
   const titleValue = isEditing ? arret.title : '';
   const descriptionValue = isEditing ? arret.description : '';
+  const categoryValue = isEditing ? (arret.category || '') : '';
+  const workValue = isEditing ? (arret.work_affected || '') : '';
+  const resumeValue = isEditing ? (arret.resume_conditions || '') : '';
+  const effectiveValue = arretLocalInputValue(isEditing ? (arret.effective_at || arret.issued_date) : new Date());
   const html = `
     <div style="padding:18px 20px;border-bottom:2px solid #007B8A;flex-shrink:0;">
-      <h3 style="margin:0;color:#333;font-size:18px;">${isEditing ? '✏️ Edit Arret Report' : '➕ New Arret Report'}</h3>
+      <h3 style="margin:0;color:#333;font-size:18px;">${isEditing ? 'Edit Arret Report' : 'New Arret Report'}</h3>
       <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Submit a stop-work arret for the active project.</p>
     </div>
     <div style="flex:1;overflow-y:auto;padding:16px 20px;">
       <div style="display:flex;flex-direction:column;gap:14px;">
         <input id="arretId" type="hidden" value="${isEditing ? escapeHtml(String(arret.id)) : ''}" />
         <div>
-          <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px;">Title</label>
-          <input id="arretTitle" type="text" maxlength="200" value="${escapeHtml(titleValue)}" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;" placeholder="Short summary of the issue" />
+          ${arretFieldLabel('Title')}
+          <input id=\"arretTitle\" type=\"text\" maxlength=\"200\" required value=\"${escapeHtml(titleValue)}\" style=\"width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;\" placeholder=\"Short summary of the issue\" />
+          <div class=\"arret-counter\" id=\"arretTitleCounter\">${titleValue.length} / 200</div>
+        </div>
+        <div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;\">
+          <div>
+            ${arretFieldLabel('Category')}
+            <select id=\"arretCategory\" required style=\"width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;\">
+              <option value=\"\">Select a category</option>
+              ${Object.entries(ARRET_CATEGORY_LABELS).map(([key, label]) => `<option value=\"${key}\" ${key === categoryValue ? 'selected' : ''}>${label}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            ${arretFieldLabel('Effective from')}
+            <input id=\"arretEffective\" type=\"datetime-local\" required value=\"${effectiveValue}\" style=\"width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;\" />
+            <div style=\"font-size:12px;color:#6b7280;margin-top:4px;\">Defaults to now. Set an earlier time if work has already stopped.</div>
+          </div>
         </div>
         <div>
-          <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px;">Description</label>
-          <textarea id="arretDescription" rows="6" maxlength="5000" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;resize:vertical;" placeholder="Describe the reason for the arret and any immediate actions taken.">${escapeHtml(descriptionValue)}</textarea>
+          ${arretFieldLabel('Work affected')}
+          <input id=\"arretWork\" type=\"text\" maxlength=\"300\" required value=\"${escapeHtml(workValue)}\" style=\"width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;\" placeholder=\"e.g. Block B, level 3 formwork\" />
+          <div class=\"arret-counter\" id=\"arretWorkCounter\">${workValue.length} / 300</div>
+        </div>
+        <div>
+          ${arretFieldLabel('Description')}
+          <textarea id=\"arretDescription\" rows=\"5\" maxlength=\"5000\" required style=\"width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;resize:vertical;\" placeholder=\"Describe the reason for the arret and any immediate actions taken.\">${escapeHtml(descriptionValue)}</textarea>
+          <div class=\"arret-counter\" id=\"arretDescriptionCounter\">${descriptionValue.length} / 5000</div>
+        </div>
+        <div>
+          ${arretFieldLabel('Conditions to resume')}
+          <textarea id=\"arretResume\" rows=\"3\" maxlength=\"2000\" required style=\"width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px;resize:vertical;\" placeholder=\"e.g. Props inspected and signed off by the engineer\">${escapeHtml(resumeValue)}</textarea>
+          <div class=\"arret-counter\" id=\"arretResumeCounter\">${resumeValue.length} / 2000</div>
         </div>
         ${!isEditing ? `
         <div>
           <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px;">Attach images or documents</label>
-          <input id="arretAttachment" type="file" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.doc,.docx,.xls,.xlsx,.txt" style="width:100%;" />
+          <input id="arretAttachment" class="arret-file" type="file" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.doc,.docx,.xls,.xlsx,.txt" style="width:100%;" />
           <div style="font-size:12px;color:#6b7280;margin-top:4px;">Up to 5 files, 10 MB each (images, PDF, Word, Excel or text).</div>
           <div id="arretAttachmentPreview"></div>
         </div>
@@ -16394,6 +16492,12 @@ function openArretForm(arret = null) {
   expandGrayPart(`<div style="display:flex;flex-direction:column;height:100%;">${html}</div>`);
   setTimeout(() => {
     document.getElementById('saveArretBtn')?.addEventListener('click', submitArretForm);
+    [['arretTitle', 'arretTitleCounter', 200], ['arretWork', 'arretWorkCounter', 300],
+     ['arretDescription', 'arretDescriptionCounter', 5000], ['arretResume', 'arretResumeCounter', 2000]].forEach(([inputId, counterId, max]) => {
+      const input = document.getElementById(inputId);
+      const counter = document.getElementById(counterId);
+      if (input && counter) input.addEventListener('input', () => { counter.textContent = `${input.value.length} / ${max}`; });
+    });
     document.getElementById('arretAttachment')?.addEventListener('change', (event) => {
       setArretAttachmentPreview(event.target.files);
     });
@@ -16432,6 +16536,10 @@ async function submitArretForm() {
   }
   const title = document.getElementById('arretTitle')?.value?.trim();
   const description = document.getElementById('arretDescription')?.value?.trim();
+  const category = document.getElementById('arretCategory')?.value || '';
+  const workAffected = document.getElementById('arretWork')?.value?.trim() || '';
+  const effectiveRaw = document.getElementById('arretEffective')?.value || '';
+  const resumeConditions = document.getElementById('arretResume')?.value?.trim() || '';
   if (!title || !description) {
     alert('Please provide both title and description for the arret.');
     return;
@@ -16440,6 +16548,23 @@ async function submitArretForm() {
     alert('The title must be at least 3 characters.');
     return;
   }
+  if (!category) {
+    alert('Choose a category for the arret.');
+    return;
+  }
+  if (workAffected.length < 3) {
+    alert('Describe the work affected (at least 3 characters).');
+    return;
+  }
+  if (!effectiveRaw || Number.isNaN(new Date(effectiveRaw).getTime())) {
+    alert('Set a valid effective date and time.');
+    return;
+  }
+  if (resumeConditions.length < 3) {
+    alert('State the conditions to resume work (at least 3 characters).');
+    return;
+  }
+  const effectiveAt = new Date(effectiveRaw).toISOString();
   const chosenFiles = Array.from(document.getElementById('arretAttachment')?.files || []);
   if (chosenFiles.length > ARRET_MAX_FILES || chosenFiles.some(f => f.size > ARRET_MAX_FILE_BYTES || !ARRET_FILE_EXT.test(f.name))) {
     alert('You can attach up to 5 files of 10 MB each (images, PDF, Word, Excel or text).');
@@ -16457,7 +16582,7 @@ async function submitArretForm() {
       res = await authFetch(`${API}/arrets/${arretId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, title, description })
+        body: JSON.stringify({ projectId, title, description, category, workAffected, effectiveAt, resumeConditions })
       });
     } else {
       const formData = new FormData();
@@ -16465,6 +16590,10 @@ async function submitArretForm() {
       formData.append('title', title);
       formData.append('description', description);
       formData.append('projectId', projectId);
+      formData.append('category', category);
+      formData.append('workAffected', workAffected);
+      formData.append('effectiveAt', effectiveAt);
+      formData.append('resumeConditions', resumeConditions);
       Array.from(attachments).forEach(file => formData.append('attachments', file));
       res = await authFetch(`${API}/arrets`, { method: 'POST', body: formData });
     }
