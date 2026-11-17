@@ -500,6 +500,32 @@
     }
     .arret-bar.open.alert { animation: arretPulse 1.8s ease-out infinite; }
     @media (prefers-reduced-motion: reduce) { .arret-bar.open.alert { animation: none; } }
+    .arret-card { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 12px; background: var(--surface); overflow: hidden; }
+    .arret-card.open { border-color: var(--accent); box-shadow: var(--sh-sm); }
+    .arret-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 14px 16px; cursor: pointer; }
+    .arret-card-head:hover { background: var(--bg); }
+    .arret-card-main { flex: 1; min-width: 0; }
+    .arret-card-title { font-weight: 700; font-size: 14px; color: var(--text); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .arret-card-sub { font-size: 12px; color: var(--text); margin-top: 4px; }
+    .arret-card-desc { font-size: 12px; color: var(--muted); margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .arret-card-meta { font-size: 11px; color: var(--muted); margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+    .arret-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 8px 12px; flex-shrink: 0; }
+    .arret-toggle svg { transition: transform 0.15s; }
+    .arret-card.open .arret-toggle svg { transform: rotate(180deg); }
+    .arret-new { background: #dc2626; color: #fff; font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 99px; }
+    .arret-card-body { border-top: 1px solid var(--border); padding: 16px; display: flex; flex-direction: column; gap: 16px; cursor: default; }
+    .arret-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px 20px; }
+    .arret-fact-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 2px; }
+    .arret-fact-value { font-size: 13px; color: var(--text); }
+    .arret-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 6px; }
+    .arret-prose { font-size: 14px; line-height: 1.6; color: var(--text); }
+    .arret-resume { border-left: 3px solid var(--accent); background: rgba(0, 123, 138, 0.08); padding: 10px 14px; border-radius: 0 8px 8px 0; }
+    .arret-resolution { border-left: 3px solid #16a34a; background: rgba(22, 163, 74, 0.08); padding: 10px 14px; border-radius: 0 8px 8px 0; }
+    .arret-attach { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
+    .arret-timeline { list-style: none; margin: 0 0 0 5px; padding: 0 0 0 16px; border-left: 2px solid var(--border); }
+    .arret-timeline li { position: relative; padding-bottom: 10px; font-size: 12px; color: var(--text); }
+    .arret-timeline li::before { content: ''; position: absolute; left: -21px; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+    .arret-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; border-top: 1px solid var(--border); padding-top: 14px; }
     .arret-counter { font-size: 11px; color: #9ca3af; text-align: right; margin-top: 3px; }
     .arret-file::file-selector-button {
       background: var(--surface); color: var(--text); border: 1px solid var(--border);
@@ -4457,6 +4483,8 @@ const OPA_FR = Object.assign(Object.create(null), {
   "🛑 Site Arrets": "🛑 Arrêts de chantier",
   "Site Arrets": "Arrêts de chantier",
   "Quality": "Qualité",
+  "Hide": "Masquer",
+  "Reported by": "Signalé par",
   "Design or instruction": "Conception ou instruction",
   "Select a category": "Sélectionnez une catégorie",
   "Work affected": "Travaux concernés",
@@ -16078,17 +16106,172 @@ function isArretCreator(arret) {
   return !!arret && String(creatorId) === String(window.currentUserId) && String(arret.creator_role) === String(window.currentUserRole);
 }
 
-async function openArretPanel() {
+const expandedArrets = new Set();
+
+function arretFormatDate(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function arretChevronIcon() {
+  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>`;
+}
+
+function arretAttachmentsHtml(attachments) {
+  return attachments.map(att => att.file_mime?.startsWith('image/') ? `
+    <button type="button" class="attachment-preview-btn" data-file-url="${escapeHtml(att.file_url)}" data-file-name="${escapeHtml(att.file_name)}" data-file-mime="${escapeHtml(att.file_mime)}" style="border:none;background:none;padding:0;cursor:pointer;">
+      <img src="${escapeHtml(att.file_url)}" alt="${escapeHtml(att.file_name)}" style="max-width:200px;max-height:200px;border-radius:12px;object-fit:cover;border:1px solid var(--border);" />
+    </button>` : `
+    <button type="button" class="attachment-preview-btn" data-file-url="${escapeHtml(att.file_url)}" data-file-name="${escapeHtml(att.file_name)}" data-file-mime="${escapeHtml(att.file_mime)}" style="display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);cursor:pointer;font-size:13px;">
+      ${arretClipIcon()} ${escapeHtml(att.file_name)}
+    </button>`).join('');
+}
+
+// Everything inside an opened card: facts, description, conditions, files, history and the action buttons.
+function renderArretCardBody(arret) {
+  const canChange = !projectLifecycleReadOnly;
+  const canEdit = canChange && isArretCreator(arret);
+  const canManage = canChange && Boolean(arret.can_manage);
+  const attachments = arret.attachments || [];
+  const id = arret.id;
+
+  const facts = [
+    ['Category', arret.category ? (ARRET_CATEGORY_LABELS[arret.category] || arret.category) : ''],
+    ['Work affected', arret.work_affected || ''],
+    ['Effective from', arretFormatDate(arret.effective_at)],
+    ['Reported by', arret.creator_role || ''],
+    ['Issued', arretFormatDate(arret.issued_date)],
+  ].filter(([, value]) => value);
+
+  const closedBlock = arret.status && arret.status !== 'open' ? `
+    <div class="arret-resolution">
+      <div class="arret-section-title">${arret.status === 'resolved' ? 'Resolved' : 'Closed'}</div>
+      <div class="arret-prose">${escapeHtml([arret.closed_by_name || arret.closed_by_role || '', arretFormatDate(arret.closed_at)].filter(Boolean).join(' · '))}</div>
+      ${arret.resolution_note ? `<div class="arret-prose" style="margin-top:6px;white-space:pre-wrap;">${escapeHtml(arret.resolution_note)}</div>` : ''}
+    </div>` : '';
+
+  const events = arret.events || [];
+  const buttons = [
+    canManage && arret.status === 'open' ? `<button class="btn" type="button" data-arret-action="resolved" data-arret-id="${id}">Mark resolved</button><button class="btn secondary" type="button" data-arret-action="closed" data-arret-id="${id}">Close arret</button>` : '',
+    canManage && arret.status !== 'open' ? `<button class="btn secondary" type="button" data-arret-action="open" data-arret-id="${id}">Reopen arret</button>` : '',
+    canEdit ? `<button class="btn secondary" type="button" data-arret-action="edit" data-arret-id="${id}">Edit</button><button class="btn danger" type="button" data-arret-action="delete" data-arret-id="${id}">Delete</button>` : '',
+  ].join('');
+
+  return `
+    <div class="arret-card-body" id="arretBody-${id}">
+      ${facts.length ? `<div class="arret-facts">${facts.map(([label, value]) => `<div><div class="arret-fact-label">${label}</div><div class="arret-fact-value">${escapeHtml(value)}</div></div>`).join('')}</div>` : ''}
+      ${closedBlock}
+      <div>
+        <div class="arret-section-title">Description</div>
+        <div class="arret-prose" style="white-space:pre-wrap;">${escapeHtml(arret.description || '')}</div>
+      </div>
+      ${arret.resume_conditions ? `
+      <div class="arret-resume">
+        <div class="arret-section-title" style="color:var(--accent);">Conditions to resume</div>
+        <div class="arret-prose" style="white-space:pre-wrap;">${escapeHtml(arret.resume_conditions)}</div>
+      </div>` : ''}
+      ${attachments.length ? `<div><div class="arret-section-title">Attachments</div><div class="arret-attach">${arretAttachmentsHtml(attachments)}</div></div>` : ''}
+      ${events.length ? `
+      <div>
+        <div class="arret-section-title">History</div>
+        <ul class="arret-timeline">
+          ${events.map(ev => `<li><span style="font-weight:600;">${escapeHtml(arretEventLabel(ev.action))}</span> · ${escapeHtml(ev.actor_name || ev.actor_role || '')} · <span style="color:var(--muted);">${escapeHtml(arretFormatDate(ev.created_at))}</span>${ev.detail ? `<div class="arret-prose" style="white-space:pre-wrap;color:var(--muted);">${escapeHtml(ev.detail)}</div>` : ''}</li>`).join('')}
+        </ul>
+      </div>` : ''}
+      ${!isArretCreator(arret) ? '<div style="font-size:12px;color:var(--muted);">You can only view this arret. Only the creator can edit or delete it.</div>' : ''}
+      ${buttons ? `<div class="arret-actions">${buttons}</div>` : ''}
+    </div>`;
+}
+
+// One arret as a card. Closed it shows a summary; opened it shows everything, in place.
+function renderArretCard(arret) {
+  const id = arret.id;
+  const expanded = expandedArrets.has(String(id));
+  const isNew = !arret.is_viewed && !isArretCreator(arret) && arret.status === 'open';
+  const attachmentCount = (arret.attachments || []).length;
+  const categoryLabel = arret.category ? (ARRET_CATEGORY_LABELS[arret.category] || arret.category) : '';
+  return `
+    <li class="arret-card${expanded ? ' open' : ''}" data-arret-card="${id}">
+      <div class="arret-card-head" data-arret-action="toggle" data-arret-id="${id}">
+        <div class="arret-card-main">
+          <div class="arret-card-title"><span>${escapeHtml(arret.title || 'Untitled arret')}</span> ${arretStatusChip(arret)}${isNew ? ' <span class="arret-new">New</span>' : ''}</div>
+          ${categoryLabel ? `<div class="arret-card-sub"><span>${escapeHtml(categoryLabel)}</span> · ${escapeHtml(arret.work_affected || '')}</div>` : ''}
+          ${expanded ? '' : `<div class="arret-card-desc">${escapeHtml(arret.description || '')}</div>`}
+          <div class="arret-card-meta">
+            <span>${escapeHtml(arretFormatDate(arret.issued_date))}</span><span>${escapeHtml(arret.creator_role || 'Unknown')}</span>
+            ${attachmentCount ? `<span style="display:inline-flex;align-items:center;gap:4px;">${arretClipIcon()} ${attachmentCount}</span>` : ''}
+          </div>
+        </div>
+        <button type="button" class="btn arret-toggle" data-arret-action="toggle" data-arret-id="${id}" aria-expanded="${expanded}" aria-controls="arretBody-${id}">
+          <span>${expanded ? 'Hide' : 'View'}</span>${arretChevronIcon()}
+        </button>
+      </div>
+      ${expanded ? renderArretCardBody(arret) : ''}
+    </li>`;
+}
+
+// Fetches the full arret (history, current status). The server also marks it viewed and clears its bell entry.
+async function loadArretDetail(arret) {
+  const projectId = localStorage.getItem('activeProjectId');
+  if (!projectId || !arret) return;
+  try {
+    const res = await authFetch(`${API}/arrets/${arret.id}?projectId=${encodeURIComponent(projectId)}`);
+    if (res && res.ok) {
+      const data = await res.json();
+      if (data.arret) Object.assign(arret, data.arret);
+    }
+  } catch (err) {
+    console.warn('Could not load arret detail:', err);
+  }
+  arret.is_viewed = true;
+  updateArretBar();
+  updateNotificationBadge();
+}
+
+function updateArretCardDom(key) {
+  const arret = currentArrets.find(a => String(a.id) === String(key));
+  const card = document.querySelector(`[data-arret-card="${key}"]`);
+  if (!arret || !card) return;
+  card.outerHTML = renderArretCard(arret);
+  document.querySelector(`[data-arret-card="${key}"] .arret-toggle`)?.focus();
+}
+
+async function toggleArretCard(id) {
+  const key = String(id);
+  if (expandedArrets.has(key)) {
+    expandedArrets.delete(key);
+    updateArretCardDom(key);
+    return;
+  }
+  const arret = currentArrets.find(a => String(a.id) === key);
+  if (!arret) return;
+  await loadArretDetail(arret);
+  expandedArrets.add(key);
+  updateArretCardDom(key);
+}
+
+async function openArretPanel(options) {
   const projectId = localStorage.getItem('activeProjectId');
   if (!projectId) {
     expandGrayPart('<p>Please select a project first.</p>');
     return;
   }
+  // The header pill passes its click event here, so only a plain object counts as options.
+  const opts = options && typeof options === 'object' && !(options instanceof Event) ? options : {};
+  const previousScroll = document.getElementById('arretListScroll')?.scrollTop || 0;
   const arrets = await fetchArrets();
-  renderArretPanel(arrets);
+  expandedArrets.clear();
+  const expandId = opts.expandId != null ? String(opts.expandId) : '';
+  const target = expandId ? arrets.find(a => String(a.id) === expandId) : null;
+  if (target) {
+    await loadArretDetail(target);
+    expandedArrets.add(expandId);
+  }
+  renderArretPanel(arrets, { scrollTop: previousScroll, revealId: target ? expandId : '' });
 }
 
-function renderArretPanel(arrets) {
+function renderArretPanel(arrets, { scrollTop = 0, revealId = '' } = {}) {
   const canChangeProject = !projectLifecycleReadOnly;
   const html = `
     <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:2px solid #007B8A;flex-shrink:0;">
@@ -16098,42 +16281,10 @@ function renderArretPanel(arrets) {
       </div>
       ${canChangeProject ? '<button class="btn" type="button" onclick="openArretForm()">+ Add Arret</button>' : ''}
     </div>
-    <div style="flex:1;overflow-y:auto;padding:16px 20px;">
-      ${arrets.length ? '<ul style="padding:0;margin:0;list-style:none;">' : `<div style="text-align:center;padding:40px 0;color:#9ca3af;"><div style="margin-bottom:10px;display:flex;justify-content:center;">${arretIcon(40)}</div><p style="margin:0;">${canChangeProject ? 'No arrets yet. Add one now to flag a stop-work issue.' : 'No arret reports are available for this project.'}</p></div>`}
-      ${arrets.map(arret => {
-          const attachmentMarkup = arret.attachments?.length ? `
-          <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;">
-            ${arret.attachments.map(att => att.file_mime?.startsWith('image/') ? `
-              <button type="button" class="attachment-preview-btn" data-file-url="${escapeHtml(att.file_url)}" data-file-name="${escapeHtml(att.file_name)}" data-file-mime="${escapeHtml(att.file_mime)}" style="border:none;background:none;padding:0;cursor:pointer;">
-                <img src="${escapeHtml(att.file_url)}" alt="${escapeHtml(att.file_name)}" style="max-width:120px;max-height:120px;border-radius:10px;object-fit:cover;border:1px solid #d1d5db;" />
-              </button>
-            ` : `
-              <button type="button" class="attachment-preview-btn" data-file-url="${escapeHtml(att.file_url)}" data-file-name="${escapeHtml(att.file_name)}" data-file-mime="${escapeHtml(att.file_mime)}" style="display:inline-flex;align-items:center;gap:6px;padding:8px 12px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:10px;color:#111;cursor:pointer;">
-                ${arretClipIcon()} ${escapeHtml(att.file_name)}
-              </button>
-            `).join('')}
-          </div>
-        ` : '';
-        return `
-          <li style="border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;margin-bottom:12px;">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
-              <div style="flex:1;min-width:220px;">
-                <div style="font-weight:700;font-size:14px;color:#111;">${escapeHtml(arret.title || 'Untitled arret')} ${arretStatusChip(arret)}</div>
-                ${arret.category ? `<div style=\"font-size:12px;color:#374151;margin-top:4px;\"><span>${escapeHtml(ARRET_CATEGORY_LABELS[arret.category] || arret.category)}</span> · ${escapeHtml(arret.work_affected || '')}</div>` : ''}
-                <div style="font-size:12px;color:#6b7280;margin-top:4px;white-space:pre-wrap;">${escapeHtml(arret.description || '')}</div>
-                <div style="font-size:11px;color:#9ca3af;margin-top:8px;">${new Date(arret.issued_date).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})} · ${escapeHtml(arret.creator_role || 'Unknown')}</div>
-                ${attachmentMarkup}
-              </div>
-              <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;">
-                <button type="button" class="btn" style="font-size:12px;padding:8px 12px;" data-arret-id="${arret.id}">View</button>
-                ${canChangeProject && isArretCreator(arret) ? `<button type="button" class="btn secondary" style="font-size:12px;padding:8px 12px;" data-edit-arret-id="${arret.id}">Edit</button>` : ''}
-                ${canChangeProject && isArretCreator(arret) ? `<button type="button" class="btn danger" style="font-size:12px;padding:8px 12px;" data-delete-arret-id="${arret.id}">Delete</button>` : ''}
-              </div>
-            </div>
-          </li>
-        `;
-      }).join('')}
-      ${arrets.length ? '</ul>' : ''}
+    <div id="arretListScroll" style="flex:1;overflow-y:auto;padding:16px 20px;">
+      ${arrets.length
+        ? `<ul style="padding:0;margin:0;list-style:none;">${arrets.map(renderArretCard).join('')}</ul>`
+        : `<div style="text-align:center;padding:40px 0;color:#9ca3af;"><div style="margin-bottom:10px;display:flex;justify-content:center;">${arretIcon(40)}</div><p style="margin:0;">${canChangeProject ? 'No arrets yet. Add one now to flag a stop-work issue.' : 'No arret reports are available for this project.'}</p></div>`}
     </div>
     <div style="padding:16px 20px;border-top:1px solid #e5e7eb;flex-shrink:0;">
       <button class="btn" style="width:100%;" onclick="collapseGrayPart()">← Back</button>
@@ -16142,137 +16293,37 @@ function renderArretPanel(arrets) {
   expandGrayPart(`<div style="display:flex;flex-direction:column;height:100%;">${html}</div>`);
 
   setTimeout(() => {
-    document.querySelectorAll('[data-arret-id]').forEach(btn => {
-      btn.addEventListener('click', async (event) => {
-        const recordId = event.currentTarget.getAttribute('data-arret-id');
-        if (recordId) await handleArretView(recordId);
-      });
-    });
-    document.querySelectorAll('[data-edit-arret-id]').forEach(btn => {
-      btn.addEventListener('click', async (event) => {
-        const recordId = event.currentTarget.getAttribute('data-edit-arret-id');
-        const arret = currentArrets.find(a => String(a.id) === String(recordId));
+    const scroller = document.getElementById('arretListScroll');
+    if (!scroller) return;
+    scroller.scrollTop = scrollTop;
+    if (revealId) document.querySelector(`[data-arret-card="${revealId}"]`)?.scrollIntoView({ block: 'nearest' });
+    // One listener for the whole list: cards are replaced in place, so per-button listeners would be lost.
+    scroller.addEventListener('click', async (event) => {
+      const preview = event.target.closest('.attachment-preview-btn');
+      if (preview && scroller.contains(preview)) {
+        const url = preview.getAttribute('data-file-url');
+        const name = preview.getAttribute('data-file-name');
+        const mime = preview.getAttribute('data-file-mime');
+        if (url && name && mime) showAttachmentPreview(url, name, mime);
+        return;
+      }
+      const el = event.target.closest('[data-arret-action]');
+      if (!el || !scroller.contains(el)) return;
+      const arretId = el.getAttribute('data-arret-id');
+      const action = el.getAttribute('data-arret-action');
+      if (action === 'toggle') await toggleArretCard(arretId);
+      else if (action === 'edit') {
+        const arret = currentArrets.find(a => String(a.id) === String(arretId));
         if (arret) openArretForm(arret);
-      });
-    });
-    document.querySelectorAll('[data-delete-arret-id]').forEach(btn => {
-      btn.addEventListener('click', async (event) => {
-        const recordId = event.currentTarget.getAttribute('data-delete-arret-id');
-        if (recordId) await deleteArret(recordId);
-      });
-    });
-
-    document.querySelectorAll('.attachment-preview-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const url = btn.getAttribute('data-file-url');
-        const name = btn.getAttribute('data-file-name');
-        const mime = btn.getAttribute('data-file-mime');
-        if (url && name && mime) {
-          showAttachmentPreview(url, name, mime);
-        }
-      });
+      } else if (action === 'delete') await deleteArret(arretId);
+      else if (['resolved', 'closed', 'open'].includes(action)) await changeArretStatus(arretId, action);
     });
   }, 50);
 }
 
+// Kept for the notification link: it now opens the list with that arret expanded.
 async function handleArretView(recordId) {
-  const arret = currentArrets.find(a => String(a.id) === String(recordId));
-  const projectId = localStorage.getItem('activeProjectId');
-  if (!arret || !projectId) return;
-
-  await authFetch(`${API}/arrets/view`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectId, arretId: recordId })
-  });
-
-  // Fresh status and history from the server (it also tells us if the arret was removed meanwhile).
-  try {
-    const detailRes = await authFetch(`${API}/arrets/${recordId}?projectId=${encodeURIComponent(projectId)}`);
-    if (detailRes && detailRes.ok) {
-      const detail = await detailRes.json();
-      if (detail.arret) Object.assign(arret, detail.arret);
-    }
-  } catch (err) { console.warn('Could not refresh arret detail:', err); }
-
-  arret.is_viewed = true;
-  updateArretBar();
-  updateNotificationBadge();   // opening the arret also cleared its bell entry on the server
-
-  const canEdit = isArretCreator(arret) && !projectLifecycleReadOnly;
-  const canDelete = canEdit;
-  const canManage = Boolean(arret.can_manage) && !projectLifecycleReadOnly;
-  const detailRows = [
-    ['Category', arret.category ? (ARRET_CATEGORY_LABELS[arret.category] || arret.category) : ''],
-    ['Work affected', arret.work_affected || ''],
-    ['Effective from', arret.effective_at ? new Date(arret.effective_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : ''],
-  ].filter(([, value]) => value);
-  const detailFieldsHtml = detailRows.length ? `
-    <div style=\"display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;font-size:13px;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid #e5e7eb;\">
-      ${detailRows.map(([label, value]) => `<span style=\"color:#6b7280;\">${label}</span><span style=\"color:#111;\">${escapeHtml(value)}</span>`).join('')}
-    </div>` : '';
-  const resumeHtml = arret.resume_conditions ? `
-    <div style=\"margin-top:18px;padding:10px 14px;border-left:3px solid #007B8A;background:rgba(0,123,138,0.08);border-radius:0 8px 8px 0;\">
-      <div style=\"font-size:12px;font-weight:700;color:#007B8A;margin-bottom:4px;\">Conditions to resume</div>
-      <div style=\"font-size:14px;line-height:1.6;white-space:pre-wrap;\">${escapeHtml(arret.resume_conditions)}</div>
-    </div>` : '';
-  const historyHtml = (arret.events || []).length ? `
-    <div style="margin-top:22px;border-top:1px solid #e5e7eb;padding-top:12px;">
-      <div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:8px;">History</div>
-      <ul style="list-style:none;margin:0;padding:0;font-size:12px;color:#4b5563;">
-        ${arret.events.map(ev => `<li style="margin-bottom:6px;"><span>${escapeHtml(arretEventLabel(ev.action))}</span> · ${escapeHtml(ev.actor_name || ev.actor_role || '')} · ${new Date(ev.created_at).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}${ev.detail ? `<div style="color:#6b7280;white-space:pre-wrap;">${escapeHtml(ev.detail)}</div>` : ''}</li>`).join('')}
-      </ul>
-    </div>` : '';
-
-  const attachmentHtml = arret.attachments?.length ? `
-    <div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:12px;">
-      ${arret.attachments.map(att => att.file_mime?.startsWith('image/') ? `
-        <button type="button" class="attachment-preview-btn" data-file-url="${escapeHtml(att.file_url)}" data-file-name="${escapeHtml(att.file_name)}" data-file-mime="${escapeHtml(att.file_mime)}" style="border:none;background:none;padding:0;cursor:pointer;">
-          <img src="${escapeHtml(att.file_url)}" alt="${escapeHtml(att.file_name)}" style="max-width:260px;max-height:260px;border-radius:12px;object-fit:cover;border:1px solid #d1d5db;" />
-        </button>
-      ` : `
-        <button type="button" class="attachment-preview-btn" data-file-url="${escapeHtml(att.file_url)}" data-file-name="${escapeHtml(att.file_name)}" data-file-mime="${escapeHtml(att.file_mime)}" style="display:inline-flex;align-items:center;gap:8px;padding:10px 14px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:10px;color:#111;cursor:pointer;">
-          ${arretClipIcon()} ${escapeHtml(att.file_name)}
-        </button>
-      `).join('')}
-    </div>
-  ` : '';
-
-  const html = `
-    <div style="padding:18px 20px;border-bottom:2px solid #007B8A;flex-shrink:0;">
-      <h3 style="margin:0;color:#333;font-size:18px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">${arretIcon(20)}<span>${escapeHtml(arret.title)}</span> ${arretStatusChip(arret)}</h3>
-      <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Reported by ${escapeHtml(arret.creator_role || 'Unknown')} on ${new Date(arret.issued_date).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}</p>
-      ${!canEdit ? '<div style="margin-top:8px;font-size:12px;color:#71717a;">You can only view this arret. Only the creator can edit or delete it.</div>' : ''}
-    </div>
-    <div style="flex:1;overflow-y:auto;padding:16px 20px;">
-      ${detailFieldsHtml}
-      <div style="font-size:14px;color:#111;line-height:1.6;white-space:pre-wrap;">${escapeHtml(arret.description)}</div>
-      ${resumeHtml}
-      ${attachmentHtml}
-      ${historyHtml}
-    </div>
-    <div style="padding:16px 20px;border-top:1px solid #e5e7eb;display:flex;gap:12px;justify-content:flex-end;flex-wrap:wrap;flex-shrink:0;">
-      ${canManage && arret.status === 'open' ? `<button class="btn" type="button" onclick="changeArretStatus(${arret.id}, 'resolved')">Mark resolved</button><button class="btn secondary" type="button" onclick="changeArretStatus(${arret.id}, 'closed')">Close arret</button>` : ''}
-      ${canManage && arret.status !== 'open' ? `<button class="btn secondary" type="button" onclick="changeArretStatus(${arret.id}, 'open')">Reopen arret</button>` : ''}
-      ${canEdit ? `<button class="btn secondary" type="button" onclick="openArretForm(${arret.id})">Edit</button>` : ''}
-      ${canDelete ? `<button class="btn danger" type="button" onclick="deleteArret(${arret.id})">Delete</button>` : ''}
-      <button class="btn" type="button" onclick="openArretPanel()">← Back to list</button>
-    </div>`;
-
-  expandGrayPart(`<div style="display:flex;flex-direction:column;height:100%;">${html}</div>`);
-
-  setTimeout(() => {
-    document.querySelectorAll('.attachment-preview-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const url = btn.getAttribute('data-file-url');
-        const name = btn.getAttribute('data-file-name');
-        const mime = btn.getAttribute('data-file-mime');
-        if (url && name && mime) {
-          showAttachmentPreview(url, name, mime);
-        }
-      });
-    });
-  }, 50);
+  await openArretPanel({ expandId: recordId });
 }
 
 function showAttachmentPreview(url, name, mime) {
@@ -16605,7 +16656,7 @@ async function submitArretForm() {
 
     alert(arretId ? 'Arret updated successfully.' : 'Arret saved successfully.');
     updateArretBar();
-    openArretPanel();
+    openArretPanel({ expandId: arretId || result.arret?.id });
   } catch (err) {
     console.error('Save arret error:', err);
     alert('Error saving arret: ' + (err.message || 'Please try again.'));
