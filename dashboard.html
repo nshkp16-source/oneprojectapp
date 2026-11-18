@@ -1001,6 +1001,12 @@
       min-width: 0; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px;
       background: #fff;
     }
+    .rc-decision-current {
+      display: flex; justify-content: space-between; align-items: center; gap: 10px;
+      margin-bottom: 10px; padding: 9px 10px; border: 1px solid #e2e8f0;
+      border-radius: 8px; background: #f8fafc;
+    }
+    .rc-decision-current > span { font-size: 12px; font-weight: 600; color: #475569; }
     .rc-decision-stat strong { display: block; font-size: 18px; line-height: 1.2; color: #0f172a; }
     .rc-decision-stat span { display: block; margin-top: 3px; font-size: 12px; color: #64748b; }
     .rc-decision-row {
@@ -1012,6 +1018,14 @@
     .rc-decision-person strong { display: block; font-size: 13.5px; color: #0f172a; overflow-wrap: anywhere; }
     .rc-decision-person span, .rc-decision-date { font-size: 12px; color: #64748b; }
     .rc-decision-comment { grid-column: 1 / -1; }
+    .rc-disclosure > .rc-section-title { margin: 0; cursor: pointer; list-style: none; user-select: none; }
+    .rc-disclosure > .rc-section-title::-webkit-details-marker { display: none; }
+    .rc-disclosure > .rc-section-title::after {
+      content: "+"; margin-left: auto; color: #64748b; font-size: 16px; font-weight: 500; line-height: 1;
+    }
+    .rc-disclosure[open] > .rc-section-title { margin-bottom: 12px; }
+    .rc-disclosure[open] > .rc-section-title::after { content: "-"; }
+    .rc-disclosure-body { min-width: 0; }
     .rc-seen-list { margin: 0; padding: 0; list-style: none; }
     .rc-seen-list li {
       display: flex; justify-content: space-between; gap: 10px; padding: 8px 0;
@@ -5652,6 +5666,12 @@ Object.assign(OPA_FR, {
   "Overview": "Aperçu",
   "Decisions": "Décisions",
   "Decisions and comments": "Décisions et commentaires",
+  "Formal decisions and sign-off": "Décisions formelles et signature",
+  "Latest decision first. Expand a section to see comments, signature or earlier activity.": "Décision la plus récente en premier. Développez une section pour voir les commentaires, la signature ou l'activité antérieure.",
+  "Current record status": "État actuel du dossier",
+  "Decision overview": "Aperçu des décisions",
+  "Decision history": "Historique des décisions",
+  "Decision reason / note:": "Motif / note de la décision :",
   "Record state": "État du dossier",
   "Signature and stamp": "Signature et cachet",
   "No decisions have been made on this record yet.": "Aucune décision n'a encore été prise sur ce dossier.",
@@ -5801,6 +5821,10 @@ Object.assign(OPA_FR, {
   "Overcast": "Couvert"
 });
 OPA_PATTERNS.push(
+  [/^Show earlier (notice|notices|review|reviews|decision|decisions) \((\d+)\)$/, (m, noun, count) => `Afficher les ${noun.startsWith('notice') ? 'avis précédents' : noun.startsWith('review') ? 'revues précédentes' : 'décisions précédentes'} (${count})`],
+  [/^Hide earlier (notice|notices|review|reviews|decision|decisions)$/, (m, noun) => `Masquer les ${noun.startsWith('notice') ? 'avis précédents' : noun.startsWith('review') ? 'revues précédentes' : 'décisions précédentes'}`],
+  [/^Earlier decision, (.+)$/, 'Décision précédente, le $1'],
+  [/^(\d+) sign-offs?$/, (m, count) => `${count} signature${+count > 1 ? 's' : ''}`],
   [/^(\d+) days? until project finish$/, (m, n) => n + ' jour' + (+n > 1 ? 's' : '') + ' avant la fin du projet'],
   [/^(.+) · (\d+) days? remaining$/, (m, t, n) => t + ' · ' + n + ' jour' + (+n > 1 ? 's' : '') + ' restant' + (+n > 1 ? 's' : '')],
   [/^([+-]?[\d.]+)% vs plan today \(plan: ([\d.]+)%\)$/, '$1 % par rapport au plan aujourd\'hui (plan : $2 %)'],
@@ -13022,6 +13046,15 @@ function rcSection(icon, title, body, count) {
     </section>`;
 }
 
+function rcDisclosureSection(icon, title, body, count, open = false) {
+  const hasCount = count !== null && count !== undefined && count !== '';
+  return `
+    <details class="rc-section rc-disclosure"${open ? ' open' : ''}>
+      <summary class="rc-section-title">${rcIcon(icon)}<span>${title}</span>${hasCount ? `<span class="rc-section-count">${count}</span>` : ''}</summary>
+      <div class="rc-disclosure-body">${body}</div>
+    </details>`;
+}
+
 // Newest first, like an inbox. Items with no date keep their order, with the later ones first.
 function rcNewestFirst(list, dateOf) {
   return list.map((x, i) => ({ x, i, t: new Date(dateOf(x) || 0).getTime() || 0 }))
@@ -13114,8 +13147,8 @@ function rcParseCommentQueries(text) {
   });
   return out.map(q => ({ ref: q.ref.trim(), query: q.query.trim(), required_action: q.required_action.trim() })).filter(q => q.query);
 }
-function rcCommentHtml(comment) {
-  const plain = `<div class="rc-quote"><strong>Comment:</strong>${escapeHtml(comment)}</div>`;
+function rcCommentHtml(comment, label = 'Comment:') {
+  const plain = `<div class="rc-quote"><strong>${label}</strong>${escapeHtml(comment)}</div>`;
   if (!/^Query\s+\d+\s*$/m.test(String(comment || ''))) return plain;
   const items = rcParseCommentQueries(comment);
   if (!items.length) return plain;
@@ -13610,7 +13643,7 @@ function renderRecordsList(records, tabKey, append = false) {
         <div class="rc-decision-person"><strong>${escapeHtml(reviewName(r))}</strong>${sub ? `<span>${escapeHtml(sub)}</span>` : ''}</div>
         <span class="rc-status rc-status--${d.tone}">${d.label}</span>
         <span class="rc-decision-date">${escapeHtml(rcDate(r.action_date, true))}</span>
-        ${r.comment ? `<div class="rc-decision-comment">${rcCommentHtml(r.comment)}</div>` : ''}
+        ${r.comment ? `<div class="rc-decision-comment">${rcCommentHtml(r.comment, 'Decision reason / note:')}</div>` : ''}
       </div>`;
     };
 
@@ -13620,37 +13653,49 @@ function renderRecordsList(records, tabKey, append = false) {
       signatureFacts.push(['Signed by', escapeHtml(signer)], ['Signed on', escapeHtml(rcDate(doc.signed_at, true))]);
     }
     if (doc.stamp_type === 'STAMPED') signatureFacts.push(['Document stamp', 'Stamped and signed']);
+    const signatureSummary = signer ? `Signed by ${escapeHtml(signer)}` : doc.stamp_type === 'STAMPED' ? 'Stamped' : '';
     const signatureHtml = signatureFacts.length
-      ? rcSection('check', 'Signature and stamp',
-          `<div class="rc-factgroups"><section class="rc-factgroup"><dl class="rc-factlist">${signatureFacts.map(([k,v]) => `<div class="rc-fact"><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl></section></div>`)
+      ? rcDisclosureSection('check', 'Signature and stamp',
+          `<div class="rc-factgroups"><section class="rc-factgroup"><dl class="rc-factlist">${signatureFacts.map(([k,v]) => `<div class="rc-fact"><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl></section></div>`,
+          signatureSummary, false)
       : '';
+    const signoffCount = signatureHtml ? 1 : 0;
+    const decisionTabCount = allReviews.length + signoffCount;
 
     const decisionSummary = `
+      <div class="rc-decision-current">
+        <span>Current record status</span>${statusBadge(doc.status)}
+      </div>
       <div class="rc-decision-summary">
         <div class="rc-decision-stat"><strong>${approvedCount}</strong><span>Approved or accepted</span></div>
         <div class="rc-decision-stat"><strong>${rejectedCount}</strong><span>Rejected</span></div>
         <div class="rc-decision-stat"><strong>${pendingCount}</strong><span>Still pending</span></div>
       </div>`;
     const decisionsHtml = decisions.length
-      ? decisions.map(decisionRow).join('')
+      ? rcLatestAndEarlier(decisions.map(r => ({
+          html: decisionRow(r),
+          label: `Earlier decision, ${rcDate(r.action_date, true)}`
+        })), 'decision', 'decisions')
       : `<p class="rc-text rc-text--empty">No formal decision has been made yet.</p>`;
+    const decisionsGroup = rcDisclosureSection('check', 'Decision history', decisionsHtml,
+      decisions.length ? rcPlural(decisions.length, 'decision', 'decisions') : '', true);
     const commentsHtml = comments.length
-      ? rcSection('chat', 'Comments',
+      ? rcDisclosureSection('chat', 'Comments',
           comments.map(r => `<div class="rc-decision-row">
             <div class="rc-decision-person"><strong>${escapeHtml(reviewName(r))}</strong><span>${escapeHtml(reviewSub(r))}</span></div>
             <span class="rc-status rc-status--neutral">Comment</span>
             <span class="rc-decision-date">${escapeHtml(rcDate(r.action_date, true))}</span>
             <div class="rc-decision-comment">${rcCommentHtml(r.comment)}</div>
           </div>`).join(''),
-          rcPlural(comments.length, 'comment', 'comments'))
+          rcPlural(comments.length, 'comment', 'comments'), false)
       : '';
     const seenHtml = seen.length
-      ? rcSection('user', 'Seen by',
+      ? rcDisclosureSection('user', 'Viewed by',
           `<ul class="rc-seen-list">${seen.map(r => `<li><span>${escapeHtml(reviewName(r))}</span><span>Opened ${escapeHtml(rcDate(r.action_date, true))}</span></li>`).join('')}</ul>`,
-          rcPlural(seen.length, 'person', 'people'))
+          rcPlural(seen.length, 'person', 'people'), false)
       : '';
-    const reviewHtml = rcSection('check', 'Decision summary', decisionSummary + decisionsHtml,
-      decisions.length ? rcPlural(decisions.length, 'decision', 'decisions') : '') + signatureHtml + commentsHtml + seenHtml;
+    const reviewHtml = rcSection('info', 'Decision overview', decisionSummary) +
+      decisionsGroup + signatureHtml + commentsHtml + seenHtml;
 
     // ── Slides: one part at a time, each with a plain sentence about what is going on ──
     const who   = rcRoleLabel(doc.uploader_role) || 'A project member';
@@ -13729,10 +13774,9 @@ function renderRecordsList(records, tabKey, append = false) {
         headline: documentsCount ? `${rcPlural(documentsCount, 'file is', 'files are')} available for viewing or download.` : 'No files are available for this record.',
         sub: documentsCount ? 'Merge selected original-record and notice PDFs, or download selected supporting attachments as a ZIP.' : '',
         html: downloadsHtml },
-      { key: 'decisions', label: 'Decisions', count: (decisions.length + comments.length) || '', empty: !(decisions.length + comments.length),
-        headline: decisions.length ? `${rcPlural(decisions.length, 'formal decision has', 'formal decisions have')} been made.` : 'No formal decision has been made yet.',
-        sub: decisions.length ? `${approvedCount} approved or accepted it and ${rejectedCount} rejected it.`
-          : seen.length ? `${rcPlural(seen.length, 'person has', 'people have')} opened this record.` : '',
+      { key: 'decisions', label: 'Decisions', count: decisionTabCount || '', empty: !decisionTabCount,
+        headline: 'Formal decisions and sign-off',
+        sub: 'Latest decision first. Expand a section to see comments, signature or earlier activity.',
         html: reviewHtml },
       Object.assign({}, noticesSlide, { html: noticeBarHtml + noticesSlide.html, empty: !notices.length }),
       Object.assign({}, queriesSlide, { empty: !queriesSlide.count }),
@@ -13740,7 +13784,8 @@ function renderRecordsList(records, tabKey, append = false) {
     const deckHtml = rcDeckHtml(tabSlides, 'status');
     // Small counts for the collapsed header: where to look, without repeating the content
     const countChips = [
-      allReviews.length ? `<span class="rc-chip rc-chip--muted">${rcPlural(allReviews.length, 'decision', 'decisions')}</span>` : '',
+      decisions.length ? `<span class="rc-chip rc-chip--muted">${rcPlural(decisions.length, 'decision', 'decisions')}</span>` : '',
+      signoffCount ? `<span class="rc-chip rc-chip--muted">${rcPlural(signoffCount, 'sign-off', 'sign-offs')}</span>` : '',
       notices.length ? `<span class="rc-chip rc-chip--muted">${rcPlural(notices.length, 'notice', 'notices')}</span>` : '',
       ownOpen ? `<span class="rc-chip rc-chip--notice">${rcPlural(ownOpen, 'open query', 'open queries')}</span>` : '',
     ].filter(Boolean).join('');
