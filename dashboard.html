@@ -817,14 +817,14 @@
 
     /* Record summary: three labelled columns, separated by thin lines */
     .rc-factgroups {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 1px;
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1px;
       background: #e2e8f0; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;
     }
     .rc-factgroup { min-width: 0; padding: 14px 16px 16px; background: #fff; }
     .rc-factgroup-title { margin: 0 0 12px; padding-bottom: 8px; border-bottom: 1px solid #eef2f6; font-size: 13px; font-weight: 600; color: #334155; }
     .rc-factlist { display: flex; flex-direction: column; margin: 0; }
     .rc-factlist .rc-fact {
-      display: grid; grid-template-columns: 116px minmax(0, 1fr); column-gap: 12px; align-items: baseline;
+      display: grid; grid-template-columns: minmax(0, 1fr); row-gap: 2px;
       padding: 9px 0; border-top: 1px solid #f1f5f9;
     }
     .rc-factlist .rc-fact:first-child { padding-top: 0; border-top: 0; }
@@ -1211,6 +1211,11 @@
     .rc-deck-tab:hover { color: #0f172a; }
     .rc-deck-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     .rc-deck-tab.is-active { color: var(--accent-dark); border-bottom-color: var(--accent); }
+    .rc-rich.rc-clamp { max-height: 6.8em; overflow: hidden; }
+    .rc-rich.rc-clamp.is-open { max-height: none; }
+    #bottomContent .rc-footbar .rc-btn { min-height: 44px; font-weight: 600; }
+    #bottomContent .rc-footbar .rc-btn--approve { background: var(--accent); border-color: var(--accent); font-weight: 700; padding-left: 20px; padding-right: 20px; }
+    #bottomContent .rc-footbar .rc-btn--approve:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
     .rc-deck-tab.is-empty:not(.is-active) { color: #64748b; font-weight: 500; }
     #bottomContent .rc-footbar { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; padding: 12px 16px; background: #fff; border-top: 1px solid #cbd5e1; }
     #bottomContent .rc-footbar .rc-footcue { font-size: 13px; font-weight: 600; color: #0f172a; }
@@ -13431,9 +13436,9 @@ function renderRecordsList(records, tabKey, append = false) {
     const cueText = rcCueText(doc);
 
     // ── Section 1: where the record stands, and what this person can do ──
-    const standing = rcStandingEventsHtml(doc);
     const act = rcActionParts(doc);
-    const standingHtml = rcSection('info', 'Where this record stands', standing + act.note);
+    // The footer cue ("Your decision is needed") already says it when the person has a button to press
+    const standingHtml = (cueText && act.buttons) ? '' : act.note;
     // Actions stay at the bottom of the card on every tab, so a reviewer can read the record and then act
     const actionBarHtml = act.buttons
       ? `<div class="rc-footbar">${cueText ? `<span class="rc-footcue">${escapeHtml(cueText)}</span>` : ''}<div class="rc-actionbar">${act.buttons}</div></div>`
@@ -13447,7 +13452,9 @@ function renderRecordsList(records, tabKey, append = false) {
       doc.title ? `<p class="rc-record-title">${escapeHtml(doc.title)}</p>` : `<p class="rc-text rc-text--empty">This record has no title.</p>`);
     const descriptionHtml = rcSection('notice', 'Description of this record',
       rcExcerpt(doc.description, 1)
-        ? `<div class="rc-rich">${rcRichText(doc.description)}</div>`
+        ? (String(doc.description).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().length > 320
+            ? `<div class="rc-rich rc-clamp">${rcRichText(doc.description)}</div>${rcBtn('toggle-clamp', 'Show more', null, 'sm', 'aria-expanded="false" data-label-closed="Show more" data-label-open="Show less"')}`
+            : `<div class="rc-rich">${rcRichText(doc.description)}</div>`)
         : `<p class="rc-text rc-text--empty">No description was written for this record.</p>`);
 
     // ── Section 4: documents ──────────────────────────────────────
@@ -13486,8 +13493,10 @@ function renderRecordsList(records, tabKey, append = false) {
         label: `Earlier activity, ${rcDate(r.action_date, true)}`
       })), 'review', 'reviews');
     }
-    const reviewHtml = rcSection('chat', 'Reviews and comments', reviewBody,
-      allReviews.length ? rcPlural(allReviews.length, 'entry', 'entries') : '');
+    const nApproved = allReviews.filter(r => r.action === 'approved' || r.action === 'accepted').length;
+    const nRejected = allReviews.filter(r => r.action === 'rejected').length;
+    const reviewHtml = rcSection('chat', 'Who has reviewed', reviewBody,
+      allReviews.length ? `${nApproved} approved · ${nRejected} rejected` : '');
 
     // ── Slides: one part at a time, each with a plain sentence about what is going on ──
     const who   = rcRoleLabel(doc.uploader_role) || 'A project member';
@@ -13692,6 +13701,18 @@ bottomContent.addEventListener('click', (e) => {
       slidesEls.forEach((el, i) => el.classList.toggle('is-active', i === idx));
       deck.querySelectorAll('.rc-deck-tab').forEach((el, i) => { el.classList.toggle('is-active', i === idx); el.setAttribute('aria-selected', String(i === idx)); });
       const tab = deck.querySelectorAll('.rc-deck-tab')[idx]; if (tab && tab.scrollIntoView) tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+    return;
+  }
+
+  if (action === 'toggle-clamp') {
+    const box = actionEl.previousElementSibling;
+    if (box && box.classList.contains('rc-clamp')) {
+      box.classList.toggle('is-open');
+      const open = box.classList.contains('is-open');
+      actionEl.setAttribute('aria-expanded', String(open));
+      const span = actionEl.querySelector('span');
+      if (span) span.textContent = actionEl.getAttribute(open ? 'data-label-open' : 'data-label-closed');
     }
     return;
   }
