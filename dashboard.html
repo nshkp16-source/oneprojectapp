@@ -1233,6 +1233,24 @@
     .rc-section-title { font-size: 13px; }
     .rc-btn, .rc-btn--sm { font-size: 13px; }
 
+    /* Record cards: four status meanings only (grey, amber, green, red) */
+    .rc-status--purple, .rc-status--orange { background: #fffbeb; color: #92400e; border-color: #fde68a; }
+    .rc-status--info { background: #f1f5f9; color: #475569; border-color: #e2e8f0; }
+    /* Readability */
+    .rc-meta { font-size: 13px; }
+    .rc-status { font-size: 12.5px; }
+    /* "Your turn" cue on the collapsed row */
+    .rc-cue { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--accent-dark); }
+    .rc-cue::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+    /* Grouped tabs: parts inside one tab */
+    .rc-group-part + .rc-group-part { margin-top: 8px; padding-top: 18px; border-top: 1px solid #e2e8f0; }
+    .rc-group-part > .rc-subtitle { margin: 0 0 4px; font-size: 13px; text-transform: none; }
+    .rc-group-part > .rc-muted { margin: 0 0 12px; }
+    .rc-group-part > .rc-subtitle + .rc-slide-body { margin-top: 10px; }
+    @media (max-width: 560px) {
+      #bottomContent .rc-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    }
+
     /* One accent colour (the brand teal); colour elsewhere is kept for status only */
     .rc-slide-kicker { color: var(--accent); }
     .rc-slide-head { color: #0b2545; }
@@ -11190,10 +11208,10 @@ function statusBadge(status) {
   // label = short text shown in the pill, full = the complete wording (tooltip / screen readers)
   const map = {
     pending_review:                { label: 'Pending review',      full: 'Pending Review',                tone: 'pending' },
-    pending_consultant_approval:   { label: 'Awaiting consultant', full: 'Pending Consultant Approval',   tone: 'purple'  },
-    pending_client_acceptance:     { label: 'Awaiting client',     full: 'Pending Client Acceptance',     tone: 'info'    },
-    pending_client_approval:       { label: 'Awaiting client',     full: 'Pending Client Approval',       tone: 'info'    },
-    pending_contractor_acceptance: { label: 'Awaiting contractor', full: 'Pending Contractor Acceptance', tone: 'orange'  },
+    pending_consultant_approval:   { label: 'Awaiting consultant', full: 'Pending Consultant Approval',   tone: 'pending' },
+    pending_client_acceptance:     { label: 'Awaiting client',     full: 'Pending Client Acceptance',     tone: 'pending' },
+    pending_client_approval:       { label: 'Awaiting client',     full: 'Pending Client Approval',       tone: 'pending' },
+    pending_contractor_acceptance: { label: 'Awaiting contractor', full: 'Pending Contractor Acceptance', tone: 'pending' },
     approved_record:               { label: 'Approved',            full: 'Approved',                      tone: 'success' },
     rejected:                      { label: 'Rejected',            full: 'Rejected',                      tone: 'danger'  },
     issued:                        { label: 'Issued',              full: 'Issued',                        tone: 'success' },
@@ -13119,6 +13137,17 @@ function rcStandingText(doc) {
   return parts;
 }
 
+// Short "your turn" line for the collapsed row (only when this person must act)
+function rcCueText(doc) {
+  if (doc.is_locked === true) return '';
+  const st = doc.btn_state;
+  if (st === 'can_approve') return 'Your decision is needed';
+  if (st === 'sign_review') return 'Your review is needed';
+  if (st === 'sign_review_again') return 'Your review needs updating';
+  if (doc.status === 'rejected' && doc.can_resubmit) return 'Needs a corrected version from you';
+  return '';
+}
+
 // The sentence about what the current person can do, and the buttons that go with it
 function rcActionParts(doc) {
   const esc = escapeHtml;
@@ -13328,7 +13357,6 @@ function rcDeckHtml(slides, startKey) {
     </button>`).join('');
   const body = slides.map((sl, i) => `
     <div class="rc-slide${i === start ? ' is-active' : ''}" data-key="${sl.key}" data-index="${i}" role="tabpanel">
-      <p class="rc-slide-kicker">${sl.label}</p>
       <h3 class="rc-slide-head">${sl.headline}</h3>
       ${sl.sub ? `<p class="rc-slide-sub">${sl.sub}</p>` : '<p class="rc-slide-sub"></p>'}
       <div class="rc-slide-body">${sl.html}</div>
@@ -13398,6 +13426,7 @@ function renderRecordsList(records, tabKey, append = false) {
       ? `<span class="rc-chip rc-chip--locked">${rcIcon('lock')}Final</span>` : '';
 
     const dueLate = !!doc.respond_by && !isLocked && new Date(doc.respond_by).getTime() < Date.now();
+    const cueText = rcCueText(doc);
 
     // ── Section 1: where the record stands, and what this person can do ──
     const standing = rcStandingEventsHtml(doc);
@@ -13505,7 +13534,23 @@ function renderRecordsList(records, tabKey, append = false) {
       headline: allReviews.length ? `${rcPlural(allReviews.length, 'person has', 'people have')} opened, commented on or decided on this record.` : 'Nobody has reviewed this record yet.',
       sub: allReviews.length ? `${approvedN} approved or accepted it and ${rejectedN} rejected it.` : '',
       html: reviewHtml });
-    const deckHtml = rcDeckHtml(slides, notices.length ? 'notices' : 'details');
+    // Six parts are grouped into three tabs: Overview, Decision, Queries
+    const slideBy = k => slides.find(x => x.key === k);
+    const mergeSlides = (key, label, keys, leadKey) => {
+      const parts = keys.map(slideBy).filter(Boolean);
+      const lead = slideBy(leadKey);
+      const total = parts.reduce((n, x) => n + (Number(x.count) || 0), 0);
+      return {
+        key, label, count: total || '', headline: lead.headline, sub: lead.sub,
+        html: parts.map(x => `<div class="rc-group-part"><h4 class="rc-subtitle">${x.label}</h4>${x === lead ? '' : `<p class="rc-muted">${x.headline} ${x.sub || ''}</p>`}<div class="rc-slide-body">${x.html}</div></div>`).join('')
+      };
+    };
+    const groupedSlides = [
+      mergeSlides('overview', 'Overview', ['details', 'documents'], 'details'),
+      mergeSlides('decision', 'Decision', ['notices', 'progress', 'reviews'], 'progress'),
+      slideBy('queries'),
+    ];
+    const deckHtml = rcDeckHtml(groupedSlides, notices.length ? 'decision' : 'overview');
 
     return `
       <li class="doc-item record-card${isUnread ? ' record-unread' : ''}" data-id="${doc.id}" data-tab-key="${tabKey}">
@@ -13515,14 +13560,14 @@ function renderRecordsList(records, tabKey, append = false) {
               ${isUnread ? `<span class="rc-unread-dot unread-dot-${doc.id}" title="New: you have not opened this record yet"></span>` : ''}
               <span class="rc-ref" title="Reference">${escapeHtml(doc.reference || ('#' + doc.id))}</span>
               <span class="rc-title" title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</span>
-              ${kindChip}${revChip}
+              ${kindChip}
             </div>
             <div class="rc-meta">
               <span class="rc-meta-item">${rcIcon('user')}<span>Submitted by <span>${escapeHtml(rcRoleLabel(doc.uploader_role) || 'a project member')}</span></span></span>
               <span class="rc-meta-item" title="${escapeHtml(rcDate(doc.issued_date, true))}">${rcIcon('calendar')}<span>${rcDate(doc.issued_date)}</span></span>
               ${doc.respond_by ? `<span class="rc-meta-item rc-meta-due${dueLate ? ' is-late' : ''}" title="Date a reply is needed by">${rcIcon('clock')}<span>Reply by ${escapeHtml(rcDate(doc.respond_by))}${dueLate ? ' · overdue' : ''}</span></span>` : ''}
             </div>
-            ${(reviewChip || supChip || lockChip) ? `<div class="rc-progress">${reviewChip}${supChip}${lockChip}</div>` : ''}
+            ${(cueText || reviewChip || revChip || supChip || lockChip) ? `<div class="rc-progress">${cueText ? `<span class="rc-cue">${escapeHtml(cueText)}</span>` : ''}${reviewChip}${revChip}${supChip}${lockChip}</div>` : ''}
           </div>
           <div class="rc-side">
             ${statusBadge(doc.status)}
@@ -23773,7 +23818,7 @@ function _daBadge(status) {
     pending_approval: ['pending', 'Waiting for leader'],
     approved:         ['success', 'Signed'],
     rejected:         ['danger',  'Returned'],
-    shared:           ['info',    'Shared'],
+    shared:           ['neutral', 'Shared'],
   };
   const [cls, label] = map[status] || ['neutral', status || 'Unknown'];
   return `<span class="rc-status rc-status--${cls}">${escapeHtml(label)}</span>`;
@@ -24931,7 +24976,7 @@ function _crThreadHtml(comments, doc, leader) {
     <li class="rc-review dc-q">
       <div class="dc-q-head">
         <span class="rc-review-name">${mine ? 'You' : escapeHtml(c.author_name || rcRoleLabel(c.author_role) || 'A project member')}</span>
-        <span class="rc-status rc-status--${c.kind === 'recommendation' ? 'pending' : 'info'}">${c.kind === 'recommendation' ? 'Recommendation' : (isQuery ? 'Query' : 'Comment')}</span>
+        <span class="rc-status rc-status--${c.kind === 'recommendation' ? 'pending' : 'neutral'}">${c.kind === 'recommendation' ? 'Recommendation' : (isQuery ? 'Query' : 'Comment')}</span>
         ${stateChip}${byChip}
       </div>
       <div class="rc-review-sub">${escapeHtml([c.author_name && !mine ? rcRoleLabel(c.author_role) : '', rcDate(c.created_at, true)].filter(Boolean).join(' · '))}${c.closed_at ? ` · closed ${escapeHtml(rcDate(c.closed_at, true))}${_dcIsMe(c.closed_by_id, c.closed_by_role) ? ' by you' : (c.closed_by_name ? ' by ' + escapeHtml(c.closed_by_name) : '')}` : ''}</div>
@@ -25447,9 +25492,9 @@ async function _crLoadRecords() {
 // ═══════════════════════════════════════════════════════════════════════
 function _crBadge(cr) {
   const map = {
-    shared:              ['info',   'Shared'],
+    shared:              ['neutral', 'Shared'],
     rejected:            ['danger', 'Rejected, waiting for a new file'],
-    replacement_pending: ['orange', 'New file waiting for the leader'],
+    replacement_pending: ['pending', 'New file waiting for the leader'],
   };
   const [cls, label] = map[cr || 'shared'] || map.shared;
   return `<span class="rc-status rc-status--${cls}">${escapeHtml(label)}</span>`;
