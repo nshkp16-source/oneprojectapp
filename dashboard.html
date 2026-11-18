@@ -993,6 +993,39 @@
     .rc-review-name { font-size: 13.5px; font-weight: 600; color: #0f172a; overflow-wrap: anywhere; }
     .rc-review-sub { margin: 2px 0 4px; font-size: 12px; color: #64748b; overflow-wrap: anywhere; }
     .rc-review .rc-item-text { margin-top: 4px; }
+    .rc-decision-summary {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+      margin-bottom: 14px;
+    }
+    .rc-decision-stat {
+      min-width: 0; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px;
+      background: #fff;
+    }
+    .rc-decision-stat strong { display: block; font-size: 18px; line-height: 1.2; color: #0f172a; }
+    .rc-decision-stat span { display: block; margin-top: 3px; font-size: 12px; color: #64748b; }
+    .rc-decision-row {
+      display: grid; grid-template-columns: minmax(150px, .8fr) minmax(160px, 1fr) auto;
+      align-items: center; gap: 10px 14px; padding: 10px 0; border-top: 1px solid #eef2f6;
+    }
+    .rc-decision-row:first-child { border-top: 0; padding-top: 2px; }
+    .rc-decision-person { min-width: 0; }
+    .rc-decision-person strong { display: block; font-size: 13.5px; color: #0f172a; overflow-wrap: anywhere; }
+    .rc-decision-person span, .rc-decision-date { font-size: 12px; color: #64748b; }
+    .rc-decision-comment { grid-column: 1 / -1; }
+    .rc-seen-list { margin: 0; padding: 0; list-style: none; }
+    .rc-seen-list li {
+      display: flex; justify-content: space-between; gap: 10px; padding: 8px 0;
+      border-top: 1px solid #eef2f6; font-size: 12.5px; color: #334155;
+    }
+    .rc-seen-list li:first-child { border-top: 0; }
+    .rc-seen-list span:last-child { color: #64748b; white-space: nowrap; }
+    @media (max-width: 620px) {
+      .rc-decision-summary { grid-template-columns: 1fr; }
+      .rc-decision-row { grid-template-columns: minmax(0, 1fr) auto; }
+      .rc-decision-person { grid-column: 1; }
+      .rc-decision-row > .rc-status { grid-column: 2; grid-row: 1; }
+      .rc-decision-date { grid-column: 1 / -1; }
+    }
 
     .rc-support-type { flex: none; padding: 1px 7px; border-radius: 4px; background: #f1f5f9; color: #475569; font-size: 11px; font-weight: 700; letter-spacing: .04em; }
     .fl-link { padding: 0; border: 0; background: none; color: #0f172a; font-size: 12.5px; text-decoration: underline; cursor: pointer; }
@@ -13478,37 +13511,69 @@ function renderRecordsList(records, tabKey, append = false) {
     const noticeBarHtml = (notices.length && doc.file_path)
       ? `<div class="rc-earlier-bar">${rcBtn('preview-combined', 'View record and notice together', null, 'sm')}</div>` : '';
 
-    // ── Section 7: reviews and comments ───────────────────────────
-    let reviewBody;
-    if (!allReviews.length) {
-      reviewBody = `<p class="rc-text rc-text--empty">Nobody has reviewed this record yet.</p>`;
-    } else {
-      const rowFor = r => {
-        if (r.is_decision_maker === true) return rcReviewRow(rcRoleLabel(r.reviewer_role) || 'Decision maker', r.reviewer_email || '', r);
-        const side = String(r.reviewer_assigned_part || '').trim();
-        const sideLabel = side ? side.charAt(0).toUpperCase() + side.slice(1).toLowerCase() + ' side' : '';
-        const sub = [r.reviewer_position, sideLabel].filter(Boolean).join(' · ');
-        return rcReviewRow(r.reviewer_email || 'Team member', sub, r);
-      };
-      const reviewsSorted = rcNewestFirst(allReviews, r => r.action_date);
-      reviewBody = rcLatestAndEarlier(reviewsSorted.map(r => ({
-        html: `<ul class="rc-reviews">${rowFor(r)}</ul>`,
-        label: `Earlier activity, ${rcDate(r.action_date, true)}`
-      })), 'review', 'reviews');
+    // ── Section 7: decisions, comments and signing ─────────────────
+    const decisionActions = new Set(['approved', 'accepted', 'rejected']);
+    const decisions = rcNewestFirst(allReviews.filter(r => decisionActions.has(r.action)), r => r.action_date);
+    const comments = rcNewestFirst(allReviews.filter(r => r.action === 'no_action' && r.comment), r => r.action_date);
+    const seen = rcNewestFirst(allReviews.filter(r => r.action === 'no_action' && !r.comment), r => r.action_date);
+    const approvedCount = decisions.filter(r => r.action === 'approved' || r.action === 'accepted').length;
+    const rejectedCount = decisions.filter(r => r.action === 'rejected').length;
+    const pendingCount = Math.max(0, (doc.workflow_steps || []).filter(x => x.status !== 'done' && x.status !== 'rejected').length);
+
+    const reviewName = r => r.is_decision_maker === true
+      ? (rcRoleLabel(r.reviewer_role) || 'Decision maker')
+      : (r.reviewer_email || 'Team member');
+    const reviewSub = r => r.is_decision_maker === true
+      ? (r.reviewer_email || '')
+      : [r.reviewer_position, r.reviewer_assigned_part].filter(Boolean).join(' · ');
+    const decisionRow = r => {
+      const d = rcDecision(r.action);
+      const sub = reviewSub(r);
+      return `<div class="rc-decision-row">
+        <div class="rc-decision-person"><strong>${escapeHtml(reviewName(r))}</strong>${sub ? `<span>${escapeHtml(sub)}</span>` : ''}</div>
+        <span class="rc-status rc-status--${d.tone}">${d.label}</span>
+        <span class="rc-decision-date">${escapeHtml(rcDate(r.action_date, true))}</span>
+        ${r.comment ? `<div class="rc-decision-comment">${rcCommentHtml(r.comment)}</div>` : ''}
+      </div>`;
+    };
+
+    const signer = doc.signed_by_display_name || rcRoleLabel(doc.signed_by_role);
+    const signatureFacts = [];
+    if (doc.signed_at && signer) {
+      signatureFacts.push(['Signed by', escapeHtml(signer)], ['Signed on', escapeHtml(rcDate(doc.signed_at, true))]);
     }
-    const nApproved = allReviews.filter(r => r.action === 'approved' || r.action === 'accepted').length;
-    const nRejected = allReviews.filter(r => r.action === 'rejected').length;
-    const reviewHtml = rcSection('chat', 'Decisions and comments', reviewBody,
-      allReviews.length ? `${nApproved} approved · ${nRejected} rejected` : '');
-    // Signature and stamp: the outcome of the decision, so it sits with the decisions, not with the record facts
-    const signerName = doc.signed_by_display_name || rcRoleLabel(doc.signed_by_role);
-    const sigFacts = [
-      (doc.signed_at && signerName) ? `<div class="rc-fact"><dt>Signed by</dt><dd>${escapeHtml(signerName)}</dd></div>` : '',
-      (doc.signed_at && signerName) ? `<div class="rc-fact"><dt>Signed on</dt><dd>${escapeHtml(rcDate(doc.signed_at, true))}</dd></div>` : '',
-      doc.stamp_type === 'STAMPED' ? `<div class="rc-fact"><dt>Document stamp</dt><dd>Stamped and signed</dd></div>` : '',
-    ].filter(Boolean).join('');
-    const signatureHtml = sigFacts
-      ? rcSection('check', 'Signature and stamp', `<div class="rc-factgroups"><section class="rc-factgroup"><dl class="rc-factlist">${sigFacts}</dl></section></div>`) : '';
+    if (doc.stamp_type === 'STAMPED') signatureFacts.push(['Document stamp', 'Stamped and signed']);
+    const signatureHtml = signatureFacts.length
+      ? rcSection('check', 'Signature and stamp',
+          `<div class="rc-factgroups"><section class="rc-factgroup"><dl class="rc-factlist">${signatureFacts.map(([k,v]) => `<div class="rc-fact"><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl></section></div>`)
+      : '';
+
+    const decisionSummary = `
+      <div class="rc-decision-summary">
+        <div class="rc-decision-stat"><strong>${approvedCount}</strong><span>Approved or accepted</span></div>
+        <div class="rc-decision-stat"><strong>${rejectedCount}</strong><span>Rejected</span></div>
+        <div class="rc-decision-stat"><strong>${pendingCount}</strong><span>Still pending</span></div>
+      </div>`;
+    const decisionsHtml = decisions.length
+      ? decisions.map(decisionRow).join('')
+      : `<p class="rc-text rc-text--empty">No formal decision has been made yet.</p>`;
+    const commentsHtml = comments.length
+      ? rcSection('chat', 'Comments',
+          comments.map(r => `<div class="rc-decision-row">
+            <div class="rc-decision-person"><strong>${escapeHtml(reviewName(r))}</strong><span>${escapeHtml(reviewSub(r))}</span></div>
+            <span class="rc-status rc-status--neutral">Comment</span>
+            <span class="rc-decision-date">${escapeHtml(rcDate(r.action_date, true))}</span>
+            <div class="rc-decision-comment">${rcCommentHtml(r.comment)}</div>
+          </div>`).join(''),
+          rcPlural(comments.length, 'comment', 'comments'))
+      : '';
+    const seenHtml = seen.length
+      ? rcSection('user', 'Seen by',
+          `<ul class="rc-seen-list">${seen.map(r => `<li><span>${escapeHtml(reviewName(r))}</span><span>Opened ${escapeHtml(rcDate(r.action_date, true))}</span></li>`).join('')}</ul>`,
+          rcPlural(seen.length, 'person', 'people'))
+      : '';
+    const reviewHtml = rcSection('check', 'Decision summary', decisionSummary + decisionsHtml,
+      decisions.length ? rcPlural(decisions.length, 'decision', 'decisions') : '') + signatureHtml + commentsHtml + seenHtml;
 
     // ── Slides: one part at a time, each with a plain sentence about what is going on ──
     const who   = rcRoleLabel(doc.uploader_role) || 'A project member';
@@ -13584,10 +13649,11 @@ function renderRecordsList(records, tabKey, append = false) {
         headline: `This is what ${escapeHtml(who)} submitted as record ${escapeHtml(doc.reference || ('#' + doc.id))}.`,
         sub: filesCount ? `It has ${rcPlural(filesCount, 'attached file', 'attached files')}.` : 'No files are attached to it.',
         html: descriptionHtml + documentHtml + aboutHtml },
-      { key: 'decisions', label: 'Decisions', count: allReviews.length || '', empty: !allReviews.length,
-        headline: allReviews.length ? `${rcPlural(allReviews.length, 'decision or comment has', 'decisions and comments have')} been recorded.` : 'No decisions have been made on this record yet.',
-        sub: allReviews.length ? `${approvedN} approved or accepted it and ${rejectedN} rejected it.` : '',
-        html: signatureHtml + reviewHtml },
+      { key: 'decisions', label: 'Decisions', count: (decisions.length + comments.length) || '', empty: !(decisions.length + comments.length),
+        headline: decisions.length ? `${rcPlural(decisions.length, 'formal decision has', 'formal decisions have')} been made.` : 'No formal decision has been made yet.',
+        sub: decisions.length ? `${approvedCount} approved or accepted it and ${rejectedCount} rejected it.`
+          : seen.length ? `${rcPlural(seen.length, 'person has', 'people have')} opened this record.` : '',
+        html: reviewHtml },
       Object.assign({}, noticesSlide, { html: noticeBarHtml + noticesSlide.html, empty: !notices.length }),
       Object.assign({}, queriesSlide, { empty: !queriesSlide.count }),
     ];
