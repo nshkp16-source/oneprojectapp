@@ -5594,6 +5594,7 @@ Object.assign(OPA_FR, {
   "Decisions": "Décisions",
   "Decisions and comments": "Décisions et commentaires",
   "Record state": "État du dossier",
+  "Signature and stamp": "Signature et cachet",
   "No decisions have been made on this record yet.": "Aucune décision n'a encore été prise sur ce dossier.",
   "Reports": "Rapports",
   "Record progress": "Enregistrer l'avancement",
@@ -13253,7 +13254,7 @@ function rcActionParts(doc) {
 }
 
 function rcFacts(doc, tabKey) {
-  const groups = { Record: [], Submission: [], Approval: [] };
+  const groups = { Record: [], Submission: [] };
   const add = (group, label, value, cls) => {
     if (value === null || value === undefined || value === '') return;
     groups[group].push(`<div class="rc-fact"><dt>${label}</dt><dd${cls ? ` class="${cls}"` : ''}>${value}</dd></div>`);
@@ -13271,12 +13272,6 @@ function rcFacts(doc, tabKey) {
     add('Submission', 'Reply needed by', escapeHtml(rcDate(doc.respond_by)) + (late ? ' (this date has passed)' : ''), late ? 'rc-fact-late' : '');
   }
 
-  const signer = doc.signed_by_display_name || rcRoleLabel(doc.signed_by_role);
-  if (doc.signed_at && signer) {
-    add('Approval', 'Signed by', escapeHtml(signer));
-    add('Approval', 'Signed on', escapeHtml(rcDate(doc.signed_at, true)));
-  }
-  if (doc.stamp_type === 'STAMPED') add('Approval', 'Document stamp', 'Stamped and signed');
 
   return `<div class="rc-factgroups">${Object.entries(groups).filter(([, list]) => list.length).map(([name, list]) =>
     `<section class="rc-factgroup"><h4 class="rc-factgroup-title">${name}</h4><dl class="rc-factlist">${list.join('')}</dl></section>`).join('')}</div>`;
@@ -13505,6 +13500,15 @@ function renderRecordsList(records, tabKey, append = false) {
     const nRejected = allReviews.filter(r => r.action === 'rejected').length;
     const reviewHtml = rcSection('chat', 'Decisions and comments', reviewBody,
       allReviews.length ? `${nApproved} approved · ${nRejected} rejected` : '');
+    // Signature and stamp: the outcome of the decision, so it sits with the decisions, not with the record facts
+    const signerName = doc.signed_by_display_name || rcRoleLabel(doc.signed_by_role);
+    const sigFacts = [
+      (doc.signed_at && signerName) ? `<div class="rc-fact"><dt>Signed by</dt><dd>${escapeHtml(signerName)}</dd></div>` : '',
+      (doc.signed_at && signerName) ? `<div class="rc-fact"><dt>Signed on</dt><dd>${escapeHtml(rcDate(doc.signed_at, true))}</dd></div>` : '',
+      doc.stamp_type === 'STAMPED' ? `<div class="rc-fact"><dt>Document stamp</dt><dd>Stamped and signed</dd></div>` : '',
+    ].filter(Boolean).join('');
+    const signatureHtml = sigFacts
+      ? rcSection('check', 'Signature and stamp', `<div class="rc-factgroups"><section class="rc-factgroup"><dl class="rc-factlist">${sigFacts}</dl></section></div>`) : '';
 
     // ── Slides: one part at a time, each with a plain sentence about what is going on ──
     const who   = rcRoleLabel(doc.uploader_role) || 'A project member';
@@ -13583,7 +13587,7 @@ function renderRecordsList(records, tabKey, append = false) {
       { key: 'decisions', label: 'Decisions', count: allReviews.length || '', empty: !allReviews.length,
         headline: allReviews.length ? `${rcPlural(allReviews.length, 'decision or comment has', 'decisions and comments have')} been recorded.` : 'No decisions have been made on this record yet.',
         sub: allReviews.length ? `${approvedN} approved or accepted it and ${rejectedN} rejected it.` : '',
-        html: reviewHtml },
+        html: signatureHtml + reviewHtml },
       Object.assign({}, noticesSlide, { html: noticeBarHtml + noticesSlide.html, empty: !notices.length }),
       Object.assign({}, queriesSlide, { empty: !queriesSlide.count }),
     ];
