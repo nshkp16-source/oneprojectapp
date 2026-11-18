@@ -1019,6 +1019,18 @@
     }
     .rc-seen-list li:first-child { border-top: 0; }
     .rc-seen-list span:last-child { color: #64748b; white-space: nowrap; }
+    .rc-download-group + .rc-download-group { margin-top: 16px; padding-top: 14px; border-top: 1px solid #e2e8f0; }
+    .rc-download-group h5 { margin: 0 0 4px; font-size: 13px; color: #0f172a; }
+    .rc-download-hint { margin: 0 0 8px; font-size: 12px; line-height: 1.5; color: #64748b; }
+    .rc-download-choices { display: grid; gap: 6px; }
+    .rc-download-choice {
+      display: flex; align-items: flex-start; gap: 9px; padding: 9px 10px;
+      border: 1px solid #e2e8f0; border-radius: 7px; background: #fff; cursor: pointer;
+    }
+    .rc-download-choice input { flex: none; margin: 2px 0 0; accent-color: var(--accent); }
+    .rc-download-choice strong { display: block; font-size: 12.5px; font-weight: 600; color: #1e293b; overflow-wrap: anywhere; }
+    .rc-download-choice small { display: block; margin-top: 2px; font-size: 11.5px; color: #64748b; }
+    .rc-download-actions { display: flex; justify-content: flex-end; margin-top: 9px; }
     @media (max-width: 620px) {
       .rc-decision-summary { grid-template-columns: 1fr; }
       .rc-decision-row { grid-template-columns: minmax(0, 1fr) auto; }
@@ -5620,6 +5632,20 @@ Object.assign(OPA_FR, {
   "Delayed": "Retardé",
   "Notices": "Avis",
   "Documents": "Documents",
+  "Files and downloads": "Fichiers et téléchargements",
+  "Merge official PDFs": "Fusionner les PDF officiels",
+  "Supporting attachments": "Pièces jointes justificatives",
+  "Merge selected PDFs": "Fusionner les PDF sélectionnés",
+  "Download selected as ZIP": "Télécharger la sélection en ZIP",
+  "Merge selected original-record and notice PDFs, or download selected supporting attachments as a ZIP.": "Fusionnez les PDF sélectionnés du dossier original et des avis, ou téléchargez les pièces justificatives sélectionnées au format ZIP.",
+  "Select the original record and/or notices. Selected PDFs are combined in one file, with clear labels between documents.": "Sélectionnez le dossier original et/ou les avis. Les PDF sélectionnés seront réunis dans un seul fichier, avec des séparations clairement indiquées.",
+  "Select any supporting files to download them together as a ZIP. All file formats are kept as-is.": "Sélectionnez les pièces justificatives à télécharger ensemble au format ZIP. Tous les formats de fichiers sont conservés.",
+  "Select the original record and/or at least one notice PDF to merge.": "Sélectionnez le dossier original et/ou au moins un avis PDF à fusionner.",
+  "Select at least one supporting attachment to download.": "Sélectionnez au moins une pièce jointe justificative à télécharger.",
+  "No files are available for this record.": "Aucun fichier n'est disponible pour ce dossier.",
+  "No original-record or notice PDFs are available.": "Aucun PDF du dossier original ou des avis n'est disponible.",
+  "No supporting attachments are available.": "Aucune pièce jointe justificative n'est disponible.",
+  "PDF merging is available for PDF files only": "La fusion est disponible uniquement pour les fichiers PDF",
   "Reviews": "Revues",
   "Files": "Fichiers",
   "Checklist": "Liste de contrôle",
@@ -5750,6 +5776,8 @@ Object.assign(OPA_FR, {
   "Add activities, then expand each card to log daily execution entries.": "Ajoutez des activités, puis développez chaque carte pour saisir l'exécution quotidienne."
 });
 OPA_PATTERNS.push(
+  [/^(\d+) file is available for viewing or download\.$/, (m, n) => `${n} fichier est disponible pour consultation ou téléchargement.`],
+  [/^(\d+) files are available for viewing or download\.$/, (m, n) => `${n} fichiers sont disponibles pour consultation ou téléchargement.`],
   [/^Planned to be executed in (.+)$/, 'Prévu pour être exécuté en $1'],
   [/^Completed in (.+)$/, 'Terminé en $1'],
   [/^⚠ Took (.+)$/, '⚠ A pris $1'],
@@ -13040,7 +13068,6 @@ function rcFileItem({ name, mime, text, ownerId, supportIndex, tag }) {
         ${text ? `<p class="rc-item-text">${escapeHtml(text)}</p>` : ''}
         <div class="rc-item-actions">
           ${rcBtn('file-view', 'View', null, 'sm', attrs)}
-          ${rcBtn('file-save', 'Download', 'download', 'sm', attrs)}
         </div>
       </div>
     </div>`;
@@ -13335,7 +13362,6 @@ function rcDocumentsHtml(doc, notices, plain) {
           <div class="rc-item-actions">
             ${rcBtn('preview', hasNotice && !plain ? 'View original record only' : 'View', null, 'sm', attrs)}
             ${hasNotice && !plain ? rcBtn('preview-combined', 'View record and notice together', null, 'sm', attrs) : ''}
-            ${rcBtn('download', 'Download', 'download', 'sm', attrs)}
           </div>
         </div>
       </div>`;
@@ -13370,9 +13396,60 @@ function rcNoticeItem(n, isLatest) {
       </div>
       ${renderNoticeFacts(n)}
       ${rcExcerpt(n.description, 1) ? `<div class="rc-rich" style="margin-top:10px;">${rcRichText(n.description)}</div>` : ''}
-      ${nFile ? `<div class="rc-item-actions">${rcBtn('file-view', 'View notice', null, 'sm', fileAttrs)}${rcBtn('file-save', 'Download notice', 'download', 'sm', fileAttrs)}</div>` : ''}
+      ${nFile ? `<div class="rc-item-actions">${rcBtn('file-view', 'View notice', null, 'sm', fileAttrs)}</div>` : ''}
       ${nSupporting.length ? `<div class="rc-item-sub">Supporting files</div>${rcSupportItems(nSupporting, n.id, `Attached to this notice on ${rcDate(n.issued_date)}.`)}` : ''}
     </div>`;
+}
+
+function rcDownloadsHtml(doc, notices) {
+  const official = [];
+  const supporting = [];
+  const addOfficial = (ownerId, name, label) => {
+    if (!name) return;
+    official.push({ ownerId, name, label, isPdf: /\.pdf$/i.test(name) });
+  };
+  const addSupporting = (ownerId, files, label) => {
+    (Array.isArray(files) ? files : []).forEach((file, index) => {
+      supporting.push({ ownerId, index, name: file.name || 'Supporting file', label });
+    });
+  };
+
+  addOfficial(doc.id, doc.file_path ? doc.file_path.split('/').pop() : '', 'Original record');
+  addSupporting(doc.id, doc.supporting_files, 'Original record · Supporting file');
+  notices.forEach((notice, index) => {
+    const noticeLabel = `Notice ${index + 1}: ${notice.title || rcNoticeLabel(notice)}`;
+    addOfficial(notice.id, notice.file_path ? notice.file_path.split('/').pop() : '', noticeLabel);
+    addSupporting(notice.id, notice.supporting_files, `${noticeLabel} · Supporting file`);
+  });
+
+  if (!official.length && !supporting.length) {
+    return rcSection('download', 'Files and downloads', `<p class="rc-text rc-text--empty">No files are available for this record.</p>`);
+  }
+
+  const pdfRows = official.map(file => file.isPdf
+    ? `<label class="rc-download-choice">
+        <input type="checkbox" data-download-select="pdf" data-owner-id="${escapeHtml(String(file.ownerId))}" data-file-name="${escapeHtml(file.name)}">
+        <span><strong>${escapeHtml(file.name)}</strong><small>${escapeHtml(file.label)}</small></span>
+      </label>`
+    : `<div class="rc-download-choice"><span><strong>${escapeHtml(file.name)}</strong><small>${escapeHtml(file.label)} · PDF merging is available for PDF files only</small></span></div>`
+  ).join('');
+  const supportRows = supporting.map(file => `<label class="rc-download-choice">
+      <input type="checkbox" data-download-select="support" data-owner-id="${escapeHtml(String(file.ownerId))}" data-support-index="${file.index}" data-file-name="${escapeHtml(file.name)}">
+      <span><strong>${escapeHtml(file.name)}</strong><small>${escapeHtml(file.label)}</small></span>
+    </label>`).join('');
+  const body = `
+    <div class="rc-download-group">
+      <h5>Merge official PDFs</h5>
+      <p class="rc-download-hint">Select the original record and/or notices. Selected PDFs are combined in one file, with clear labels between documents.</p>
+      ${pdfRows ? `<div class="rc-download-choices">${pdfRows}</div>` : `<p class="rc-text rc-text--empty">No original-record or notice PDFs are available.</p>`}
+      ${official.some(file => file.isPdf) ? `<div class="rc-download-actions">${rcBtn('download-selected-pdfs', 'Merge selected PDFs', 'download', 'sm', 'disabled')}</div>` : ''}
+    </div>
+    <div class="rc-download-group">
+      <h5>Supporting attachments</h5>
+      <p class="rc-download-hint">Select any supporting files to download them together as a ZIP. All file formats are kept as-is.</p>
+      ${supportRows ? `<div class="rc-download-choices">${supportRows}</div><div class="rc-download-actions">${rcBtn('download-selected-support-zip', 'Download selected as ZIP', 'download', 'sm', 'disabled')}</div>` : `<p class="rc-text rc-text--empty">No supporting attachments are available.</p>`}
+    </div>`;
+  return rcSection('download', 'Files and downloads', body, rcPlural(official.length + supporting.length, 'file', 'files'));
 }
 
 
@@ -13583,6 +13660,10 @@ function renderRecordsList(records, tabKey, append = false) {
     const own = doc.queries || [];
     const ownOpen = own.filter(q => q.status === 'open' || q.status === 'reopened').length;
     const filesCount = (doc.file_path ? 1 : 0) + (Array.isArray(doc.supporting_files) ? doc.supporting_files.length : 0);
+    const noticesFileCount = notices.reduce((count, notice) =>
+      count + (notice.file_path ? 1 : 0) + (Array.isArray(notice.supporting_files) ? notice.supporting_files.length : 0), 0);
+    const documentsCount = filesCount + noticesFileCount;
+    const downloadsHtml = rcDownloadsHtml(doc, notices);
     const latestNotice = rcNewestFirst(notices, n => n.issued_date || n.signed_at)[0];
     const approvedN = allReviews.filter(r => r.action === 'approved' || r.action === 'accepted').length;
     const rejectedN = allReviews.filter(r => r.action === 'rejected').length;
@@ -13600,10 +13681,6 @@ function renderRecordsList(records, tabKey, append = false) {
       headline: `This is the summary of record ${escapeHtml(doc.reference || ('#' + doc.id))}.`,
       sub: '',
       html: titleHtml + aboutHtml + descriptionHtml });
-    slides.push({ key: 'documents', label: 'Documents', count: filesCount || '',
-      headline: filesCount ? `${rcPlural(filesCount, 'file is', 'files are')} attached to this record.` : 'No files are attached to this record.',
-      sub: notices.length ? 'A notice has been issued, so the original record is closed until you choose to open it.' : 'You can view or download each file.',
-      html: documentHtml });
     slides.push({ key: 'progress', label: 'Progress',
       headline: !steps.length ? 'No approval steps have been set for this record.'
         : steps.some(x => x.status === 'rejected') ? 'This record was rejected.'
@@ -13625,7 +13702,7 @@ function renderRecordsList(records, tabKey, append = false) {
       headline: allReviews.length ? `${rcPlural(allReviews.length, 'person has', 'people have')} opened, commented on or decided on this record.` : 'Nobody has reviewed this record yet.',
       sub: allReviews.length ? `${approvedN} approved or accepted it and ${rejectedN} rejected it.` : '',
       html: reviewHtml });
-    // Five tabs, each answering one question. A fact lives in one tab only;
+    // Six tabs, each answering one question. A fact lives in one tab only;
     // the other places show a count.
     //   Status    = where it stands: next step, approval steps, record state
     //   Record    = what was submitted (description, files, facts)
@@ -13635,7 +13712,6 @@ function renderRecordsList(records, tabKey, append = false) {
     // The action buttons sit in a footer bar under the tabs, so they show on every tab.
     const slideBy = k => slides.find(x => x.key === k);
     const progressSlide = slideBy('progress');
-    const docsSlide = slideBy('documents');
     const noticesSlide = slideBy('notices');
     const queriesSlide = slideBy('queries');
     const stateChips = [reviewChip, revChip, supChip, lockChip].filter(Boolean).join('');
@@ -13645,10 +13721,14 @@ function renderRecordsList(records, tabKey, append = false) {
       { key: 'status', label: 'Status', count: '',
         headline: progressSlide.headline, sub: progressSlide.sub,
         html: standingHtml + progressSlide.html + stateHtml },
-      { key: 'record', label: 'Record', count: docsSlide.count,
+      { key: 'record', label: 'Record', count: '',
         headline: `This is what ${escapeHtml(who)} submitted as record ${escapeHtml(doc.reference || ('#' + doc.id))}.`,
         sub: filesCount ? `It has ${rcPlural(filesCount, 'attached file', 'attached files')}.` : 'No files are attached to it.',
         html: descriptionHtml + documentHtml + aboutHtml },
+      { key: 'documents', label: 'Documents', count: documentsCount || '', empty: !documentsCount,
+        headline: documentsCount ? `${rcPlural(documentsCount, 'file is', 'files are')} available for viewing or download.` : 'No files are available for this record.',
+        sub: documentsCount ? 'Merge selected original-record and notice PDFs, or download selected supporting attachments as a ZIP.' : '',
+        html: downloadsHtml },
       { key: 'decisions', label: 'Decisions', count: (decisions.length + comments.length) || '', empty: !(decisions.length + comments.length),
         headline: decisions.length ? `${rcPlural(decisions.length, 'formal decision has', 'formal decisions have')} been made.` : 'No formal decision has been made yet.',
         sub: decisions.length ? `${approvedCount} approved or accepted it and ${rejectedCount} rejected it.`
@@ -13880,7 +13960,19 @@ bottomContent.addEventListener('click', (e) => {
     case 'preview': previewRecordFile(recordId, tabKey, actionEl.getAttribute('data-filename')); break;
     case 'preview-combined': previewRecordBundle(recordId, tabKey); break;
     case 'download': downloadFile(recordId, tabKey, actionEl.getAttribute('data-filename')); break;
+    case 'download-selected-pdfs': downloadSelectedRecordPdfs(item, recordId, tabKey); break;
+    case 'download-selected-support-zip': downloadSelectedSupportingZip(item, recordId, tabKey); break;
   }
+});
+
+bottomContent.addEventListener('change', event => {
+  const input = event.target.closest('[data-download-select]');
+  if (!input) return;
+  const card = input.closest('.doc-item');
+  const selector = input.dataset.downloadSelect;
+  const action = selector === 'pdf' ? 'download-selected-pdfs' : 'download-selected-support-zip';
+  const button = card?.querySelector(`[data-action="${action}"]`);
+  if (button) button.disabled = !card.querySelector(`[data-download-select="${selector}"]:checked`);
 });
 
 // =======================================================================
@@ -14280,7 +14372,6 @@ async function previewRecordFile(recordId, tabKey, fileName, supportingIndex) {
         </div>
         <div style="padding:14px;background:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:120px;">${viewer}</div>
         <div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid #e5e7eb;">
-          <button type="button" id="recordPreviewDownload" style="padding:8px 12px;border:1px solid #bfdbfe;border-radius:6px;background:#eff6ff;color:#2563eb;font-weight:600;cursor:pointer;">Download</button>
           <button type="button" id="recordPreviewCancel" style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#334155;cursor:pointer;">Close</button>
         </div>
       </div>`;
@@ -14288,7 +14379,6 @@ async function previewRecordFile(recordId, tabKey, fileName, supportingIndex) {
     const close = () => { URL.revokeObjectURL(url); modal.remove(); };
     modal.querySelector('#recordPreviewClose').addEventListener('click', close);
     modal.querySelector('#recordPreviewCancel').addEventListener('click', close);
-    modal.querySelector('#recordPreviewDownload').addEventListener('click', () => downloadFile(recordId, tabKey, safeName, supportingIndex));
     modal.addEventListener('click', event => { if (event.target === modal) close(); });
   } catch (err) {
     console.error('Preview error:', err);
@@ -14338,16 +14428,6 @@ async function previewRecordBundle(recordId, tabKey) {
           <iframe src="${bundleUrl}" title="Merged notices and original record" style="display:block;width:100%;height:100%;border:0;background:#fff;"></iframe>
         </div>
         <div style="display:flex;justify-content:flex-end;align-items:flex-start;flex-wrap:wrap;gap:8px;padding:12px 16px;border-top:1px solid #e5e7eb;">
-          <div style="position:relative;">
-            <button type="button" id="recordDownloadMenuToggle" aria-expanded="false" style="padding:8px 12px;border:1px solid #99f6e4;border-radius:6px;background:#ecfeff;color:#0f766e;font-weight:700;cursor:pointer;">Download ▾</button>
-            <div id="recordDownloadMenu" hidden style="position:absolute;right:0;bottom:calc(100% + 8px);z-index:2;min-width:250px;padding:6px;background:#fff;border:1px solid #dbe5ea;border-radius:8px;box-shadow:0 8px 24px rgba(15,23,42,.16);">
-              ${notices.map((notice, index) => `
-                <button type="button" data-download-mode="notice" data-notice-id="${notice.id}" style="display:block;width:100%;padding:8px 10px;border:0;background:#fff;color:#92400e;text-align:left;cursor:pointer;font-size:12px;overflow-wrap:anywhere;">Notice ${index + 1}: ${escapeHtml(notice.title || 'Untitled notice')}</button>
-                `).join('')}
-              <button type="button" data-download-mode="record" style="display:block;width:100%;padding:8px 10px;border:0;background:#fff;color:#2563eb;text-align:left;cursor:pointer;font-size:12px;">Original record only</button>
-              <button type="button" data-download-mode="both" data-notice-ids="${notices.map(notice => notice.id).join(',')}" style="display:block;width:100%;padding:8px 10px;border:0;background:#fff;color:#0f766e;text-align:left;cursor:pointer;font-size:12px;font-weight:700;">Both</button>
-            </div>
-          </div>
           <button type="button" id="recordPreviewCancel" style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#334155;cursor:pointer;">Close</button>
         </div>
       </div>`;
@@ -14355,19 +14435,6 @@ async function previewRecordBundle(recordId, tabKey) {
     const close = () => { URL.revokeObjectURL(bundleUrl); modal.remove(); };
     modal.querySelector('#recordPreviewClose').addEventListener('click', close);
     modal.querySelector('#recordPreviewCancel').addEventListener('click', close);
-    const menuToggle = modal.querySelector('#recordDownloadMenuToggle');
-    const downloadMenu = modal.querySelector('#recordDownloadMenu');
-    menuToggle.addEventListener('click', () => {
-      downloadMenu.hidden = !downloadMenu.hidden;
-      menuToggle.setAttribute('aria-expanded', String(!downloadMenu.hidden));
-    });
-    downloadMenu.querySelectorAll('[data-download-mode]').forEach(button => {
-      button.addEventListener('click', () => {
-        downloadRecordBundle(recordId, tabKey, button.dataset.noticeIds || button.dataset.noticeId || null, button.dataset.downloadMode);
-        downloadMenu.hidden = true;
-        menuToggle.setAttribute('aria-expanded', 'false');
-      });
-    });
     modal.addEventListener('click', event => { if (event.target === modal) close(); });
   } catch (error) {
     console.error('Combined preview error:', error);
@@ -14375,21 +14442,29 @@ async function previewRecordBundle(recordId, tabKey) {
   }
 }
 
-async function downloadRecordBundle(recordId, tabKey, noticeIds, mode) {
+async function downloadRecordBundle(recordId, tabKey, noticeIds, mode, includeRecord) {
   try {
     const projectId = localStorage.getItem('activeProjectId');
     const params = new URLSearchParams({ projectId, recordId, recordType: tabToTable(tabKey), mode });
-    if (noticeIds) {
+    if (mode === 'selected') {
+      params.set('noticeIds', noticeIds || '');
+      params.set('includeRecord', String(includeRecord === true));
+    } else if (noticeIds) {
       if (mode === 'both') params.set('noticeIds', noticeIds);
       else params.set('noticeId', noticeIds);
     }
     const response = await authFetch(`${API}/download-record-bundle?${params}`, { method: 'GET' });
-    if (!response || !response.ok) { alert('Failed to create the selected download.'); return; }
+    if (!response || !response.ok) {
+      const error = response ? await response.json().catch(() => null) : null;
+      alert(error?.error || 'Failed to create the selected download.');
+      return;
+    }
     const blob = await response.blob();
+    if (!blob.size) { alert('The selected download is empty.'); return; }
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `record-${recordId}-${mode}.pdf`;
+    link.download = `record-${recordId}-${mode === 'selected' ? 'selected-documents' : mode}.pdf`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -14397,6 +14472,78 @@ async function downloadRecordBundle(recordId, tabKey, noticeIds, mode) {
   } catch (error) {
     console.error('Bundle download error:', error);
     alert('Failed to create the selected download.');
+  }
+}
+
+async function downloadSelectedRecordPdfs(card, recordId, tabKey) {
+  const selected = Array.from(card.querySelectorAll('[data-download-select="pdf"]:checked'));
+  const includeRecord = selected.some(input => String(input.dataset.ownerId) === String(recordId));
+  const noticeIds = selected
+    .map(input => input.dataset.ownerId)
+    .filter(id => String(id) !== String(recordId));
+  if (!includeRecord && !noticeIds.length) {
+    alert('Select the original record and/or at least one notice PDF to merge.');
+    return;
+  }
+  await downloadRecordBundle(recordId, tabKey, [...new Set(noticeIds)].join(','), 'selected', includeRecord);
+}
+
+async function fetchRecordFileBlob(recordId, tabKey, fileName, supportingIndex) {
+  const params = new URLSearchParams({
+    recordId: String(recordId),
+    recordType: tabToTable(tabKey),
+    filename: fileName
+  });
+  if (supportingIndex !== undefined && supportingIndex !== null && supportingIndex !== '') {
+    params.set('supportingIndex', String(supportingIndex));
+  }
+  const response = await authFetch(`${API}/download-file?${params}`, { method: 'GET' });
+  if (!response || !response.ok) {
+    const error = response ? await response.json().catch(() => null) : null;
+    throw new Error(error?.error || `Could not download ${fileName}.`);
+  }
+  const blob = await response.blob();
+  if (!blob.size) throw new Error(`${fileName} is empty.`);
+  return blob;
+}
+
+async function downloadSelectedSupportingZip(card, recordId, tabKey) {
+  const selected = Array.from(card.querySelectorAll('[data-download-select="support"]:checked'));
+  if (!selected.length) {
+    alert('Select at least one supporting attachment to download.');
+    return;
+  }
+  const files = [];
+  const failures = [];
+  const usedNames = new Set();
+  const safeName = value => String(value || 'file').replace(/[\\/:*?"<>|]+/g, '_');
+  const uniqueName = name => {
+    let candidate = name, suffix = 2;
+    while (usedNames.has(candidate)) {
+      candidate = name.replace(/(\.[^.]*)?$/, ` (${suffix++})$1`);
+    }
+    usedNames.add(candidate);
+    return candidate;
+  };
+  for (const input of selected) {
+    const ownerId = input.dataset.ownerId;
+    const fileName = input.dataset.fileName || 'supporting-file';
+    const supportIndex = input.dataset.supportIndex;
+    const folder = String(ownerId) === String(recordId) ? 'original-record' : `notice-${safeName(ownerId)}`;
+    try {
+      const blob = await fetchRecordFileBlob(ownerId, tabKey, fileName, supportIndex);
+      files.push({ name: uniqueName(`${folder}/${safeName(fileName)}`), data: new Uint8Array(await blob.arrayBuffer()) });
+    } catch (error) {
+      failures.push(`${fileName}: ${error.message}`);
+    }
+  }
+  if (!files.length) {
+    alert(`No supporting attachments could be added to the ZIP.\n${failures.join('\n')}`);
+    return;
+  }
+  _dcSaveBlob(_dcMakeZip(files), `record-${safeName(recordId)}-supporting-attachments.zip`);
+  if (failures.length) {
+    alert(`${files.length} file(s) were added to the ZIP; ${failures.length} could not be fetched.\n${failures.slice(0, 5).join('\n')}`);
   }
 }
 
