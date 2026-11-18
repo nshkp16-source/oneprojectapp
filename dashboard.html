@@ -5591,6 +5591,10 @@ Object.assign(OPA_FR, {
   "Files": "Fichiers",
   "Checklist": "Liste de contrôle",
   "Overview": "Aperçu",
+  "Decisions": "Décisions",
+  "Decisions and comments": "Décisions et commentaires",
+  "Record state": "État du dossier",
+  "No decisions have been made on this record yet.": "Aucune décision n'a encore été prise sur ce dossier.",
   "Reports": "Rapports",
   "Record progress": "Enregistrer l'avancement",
   "My submissions": "Mes soumissions",
@@ -5804,6 +5808,9 @@ OPA_PATTERNS.push(
   [/^(\d+) of (\d+) approval steps are finished\.$/, (m, done, total) => `${done} étape${+done === 1 ? '' : 's'} d’approbation terminée${+done === 1 ? '' : 's'} sur ${total}.`],
   [/^The (.+) is the next to decide\.$/, (m, role) => `La prochaine décision revient à ${_recordRolePhrase(role)}.`],
   [/^(\d+) (?:person|people) (?:has|have) opened, commented on or decided on this record\.$/, (m, count) => `${count} personne${+count === 1 ? '' : 's'} ${+count === 1 ? 'a' : 'ont'} consulté, commenté ou pris une décision sur ce dossier.`],
+  [/^(\d+) decisions? or comments? (?:has|have) been recorded\.$/, (m, n) => `${n} ${+n === 1 ? 'décision ou commentaire a été enregistré' : 'décisions et commentaires ont été enregistrés'}.`],
+  [/^(\d+) open quer(?:y|ies)$/, (m, n) => `${n} question${+n === 1 ? ' ouverte' : 's ouvertes'}`],
+  [/^(\d+) decisions?$/, (m, n) => `${n} décision${+n === 1 ? '' : 's'}`],
   [/^(\d+) approved or accepted it and (\d+) rejected it\.$/, (m, approved, rejected) => `${approved} ${+approved === 1 ? 'l’a approuvé ou accepté' : 'l’ont approuvé ou accepté'} et ${rejected} ${+rejected === 1 ? 'l’a rejeté' : 'l’ont rejeté'}.`],
   [/^This is the summary of record (.+)\.$/, 'Voici le résumé du dossier $1.'],
   [/^This is the summary of document (.+)\.$/, 'Voici le résumé du document $1.'],
@@ -13264,7 +13271,6 @@ function rcFacts(doc, tabKey) {
     add('Submission', 'Reply needed by', escapeHtml(rcDate(doc.respond_by)) + (late ? ' (this date has passed)' : ''), late ? 'rc-fact-late' : '');
   }
 
-  add('Approval', 'Current status', statusBadge(doc.status));
   const signer = doc.signed_by_display_name || rcRoleLabel(doc.signed_by_role);
   if (doc.signed_at && signer) {
     add('Approval', 'Signed by', escapeHtml(signer));
@@ -13291,7 +13297,7 @@ function rcDocumentsHtml(doc, notices, plain) {
     const attrs = `data-filename="${escapeHtml(fileName)}"`;
     const sentence = `<span>Submitted by </span><span>${escapeHtml(who)}</span><span> on </span><span>${escapeHtml(rcDate(doc.issued_date, true))}</span>.` +
       (doc.stamp_type === 'STAMPED' ? ' <span>The document has been stamped and signed.</span>' : '') +
-      (hasNotice ? ` <span>${rcPlural(notices.length, 'notice has', 'notices have')} been issued on this record.</span>` : '');
+      (hasNotice && !plain ? ` <span>${rcPlural(notices.length, 'notice has', 'notices have')} been issued on this record.</span>` : '');
     body += `
       <div class="rc-item rc-item--file">
         <span class="rc-file-icon">${rcIcon('file')}</span>
@@ -13299,8 +13305,8 @@ function rcDocumentsHtml(doc, notices, plain) {
           <div class="rc-item-head"><span class="rc-item-title" title="${escapeHtml(fileName)}">${escapeHtml(fileName)}</span><span class="rc-tag">Original record</span></div>
           <p class="rc-item-text">${sentence}</p>
           <div class="rc-item-actions">
-            ${rcBtn('preview', hasNotice ? 'View original record only' : 'View', null, 'sm', attrs)}
-            ${hasNotice ? rcBtn('preview-combined', 'View record and notice together', null, 'sm', attrs) : ''}
+            ${rcBtn('preview', hasNotice && !plain ? 'View original record only' : 'View', null, 'sm', attrs)}
+            ${hasNotice && !plain ? rcBtn('preview-combined', 'View record and notice together', null, 'sm', attrs) : ''}
             ${rcBtn('download', 'Download', 'download', 'sm', attrs)}
           </div>
         </div>
@@ -13474,6 +13480,8 @@ function renderRecordsList(records, tabKey, append = false) {
         : `<p class="rc-text rc-text--empty">No notice has been issued on this record.</p>`,
       noticesSorted.length ? rcPlural(noticesSorted.length, 'notice', 'notices') : '');
     const queriesHtml = renderQueriesSection(doc);
+    const noticeBarHtml = (notices.length && doc.file_path)
+      ? `<div class="rc-earlier-bar">${rcBtn('preview-combined', 'View record and notice together', null, 'sm')}</div>` : '';
 
     // ── Section 7: reviews and comments ───────────────────────────
     let reviewBody;
@@ -13495,7 +13503,7 @@ function renderRecordsList(records, tabKey, append = false) {
     }
     const nApproved = allReviews.filter(r => r.action === 'approved' || r.action === 'accepted').length;
     const nRejected = allReviews.filter(r => r.action === 'rejected').length;
-    const reviewHtml = rcSection('chat', 'Who has reviewed', reviewBody,
+    const reviewHtml = rcSection('chat', 'Decisions and comments', reviewBody,
       allReviews.length ? `${nApproved} approved · ${nRejected} rejected` : '');
 
     // ── Slides: one part at a time, each with a plain sentence about what is going on ──
@@ -13548,29 +13556,44 @@ function renderRecordsList(records, tabKey, append = false) {
       headline: allReviews.length ? `${rcPlural(allReviews.length, 'person has', 'people have')} opened, commented on or decided on this record.` : 'Nobody has reviewed this record yet.',
       sub: allReviews.length ? `${approvedN} approved or accepted it and ${rejectedN} rejected it.` : '',
       html: reviewHtml });
-    // Four tabs, each about one thing:
-    //   Overview = where the record stands, approval steps, who reviewed
-    //   Record   = what was submitted (description, files, facts)
-    //   Notices  = notices and their files (only when one exists)
-    //   Queries  = questions raised
+    // Five tabs, each answering one question. A fact lives in one tab only;
+    // the other places show a count.
+    //   Status    = where it stands: next step, approval steps, record state
+    //   Record    = what was submitted (description, files, facts)
+    //   Decisions = who approved / rejected / commented
+    //   Notices   = notices and their files (tab always shown)
+    //   Queries   = questions raised
     // The action buttons sit in a footer bar under the tabs, so they show on every tab.
     const slideBy = k => slides.find(x => x.key === k);
     const progressSlide = slideBy('progress');
     const docsSlide = slideBy('documents');
-    const reviewsSlide = slideBy('reviews');
+    const noticesSlide = slideBy('notices');
     const queriesSlide = slideBy('queries');
+    const stateChips = [reviewChip, revChip, supChip, lockChip].filter(Boolean).join('');
+    const stateHtml = stateChips
+      ? rcSection('info', 'Record state', `<div class="rc-progress" style="margin-top:0;">${stateChips}</div>`) : '';
     const tabSlides = [
-      { key: 'overview', label: 'Overview', count: '',
+      { key: 'status', label: 'Status', count: '',
         headline: progressSlide.headline, sub: progressSlide.sub,
-        html: standingHtml + progressSlide.html + reviewsSlide.html },
+        html: standingHtml + progressSlide.html + stateHtml },
       { key: 'record', label: 'Record', count: docsSlide.count,
         headline: `This is what ${escapeHtml(who)} submitted as record ${escapeHtml(doc.reference || ('#' + doc.id))}.`,
         sub: filesCount ? `It has ${rcPlural(filesCount, 'attached file', 'attached files')}.` : 'No files are attached to it.',
         html: descriptionHtml + documentHtml + aboutHtml },
+      { key: 'decisions', label: 'Decisions', count: allReviews.length || '', empty: !allReviews.length,
+        headline: allReviews.length ? `${rcPlural(allReviews.length, 'decision or comment has', 'decisions and comments have')} been recorded.` : 'No decisions have been made on this record yet.',
+        sub: allReviews.length ? `${approvedN} approved or accepted it and ${rejectedN} rejected it.` : '',
+        html: reviewHtml },
+      Object.assign({}, noticesSlide, { html: noticeBarHtml + noticesSlide.html, empty: !notices.length }),
+      Object.assign({}, queriesSlide, { empty: !queriesSlide.count }),
     ];
-    if (notices.length) tabSlides.push(slideBy('notices'));
-    tabSlides.push(Object.assign({}, queriesSlide, { empty: !queriesSlide.count }));
-    const deckHtml = rcDeckHtml(tabSlides, 'overview');
+    const deckHtml = rcDeckHtml(tabSlides, 'status');
+    // Small counts for the collapsed header: where to look, without repeating the content
+    const countChips = [
+      allReviews.length ? `<span class="rc-chip rc-chip--muted">${rcPlural(allReviews.length, 'decision', 'decisions')}</span>` : '',
+      notices.length ? `<span class="rc-chip rc-chip--muted">${rcPlural(notices.length, 'notice', 'notices')}</span>` : '',
+      ownOpen ? `<span class="rc-chip rc-chip--notice">${rcPlural(ownOpen, 'open query', 'open queries')}</span>` : '',
+    ].filter(Boolean).join('');
 
     return `
       <li class="doc-item record-card${isUnread ? ' record-unread' : ''}" data-id="${doc.id}" data-tab-key="${tabKey}">
@@ -13587,7 +13610,7 @@ function renderRecordsList(records, tabKey, append = false) {
               <span class="rc-meta-item" title="${escapeHtml(rcDate(doc.issued_date, true))}">${rcIcon('calendar')}<span>${rcDate(doc.issued_date)}</span></span>
               ${doc.respond_by ? `<span class="rc-meta-item rc-meta-due${dueLate ? ' is-late' : ''}" title="Date a reply is needed by">${rcIcon('clock')}<span>Reply by ${escapeHtml(rcDate(doc.respond_by))}${dueLate ? ' · overdue' : ''}</span></span>` : ''}
             </div>
-            ${(cueText || reviewChip || revChip || supChip || lockChip) ? `<div class="rc-progress">${cueText ? `<span class="rc-cue">${escapeHtml(cueText)}</span>` : ''}${reviewChip}${revChip}${supChip}${lockChip}</div>` : ''}
+            ${(cueText || countChips) ? `<div class="rc-progress">${cueText ? `<span class="rc-cue">${escapeHtml(cueText)}</span>` : ''}${countChips}</div>` : ''}
           </div>
           <div class="rc-side">
             ${statusBadge(doc.status)}
