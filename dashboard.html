@@ -13434,7 +13434,7 @@ function rcNoticeItem(n, isLatest) {
     </div>`;
 }
 
-function rcDownloadsHtml(doc, notices) {
+function rcDownloadsHtml(doc, notices, asDisclosure) {
   const official = [];
   const supporting = [];
   const addOfficial = (ownerId, name, label) => {
@@ -13456,6 +13456,7 @@ function rcDownloadsHtml(doc, notices) {
   });
 
   if (!official.length && !supporting.length) {
+    if (asDisclosure) return '';
     return rcSection('download', 'Files and downloads', `<p class="rc-text rc-text--empty">No files are available for this record.</p>`);
   }
 
@@ -13482,6 +13483,7 @@ function rcDownloadsHtml(doc, notices) {
       <p class="rc-download-hint">Select any supporting files to download them together as a ZIP. All file formats are kept as-is.</p>
       ${supportRows ? `<div class="rc-download-choices">${supportRows}</div><div class="rc-download-actions">${rcBtn('download-selected-support-zip', 'Download selected as ZIP', 'download', 'sm', 'disabled')}</div>` : `<p class="rc-text rc-text--empty">No supporting attachments are available.</p>`}
     </div>`;
+  if (asDisclosure) return rcDisclosureSection('download', 'Download or merge files', body, rcPlural(official.length + supporting.length, 'file', 'files'), false);
   return rcSection('download', 'Files and downloads', body, rcPlural(official.length + supporting.length, 'file', 'files'));
 }
 
@@ -13508,8 +13510,8 @@ function rcDeckHtml(slides, startKey) {
     </button>`).join('');
   const body = slides.map((sl, i) => `
     <div class="rc-slide${i === start ? ' is-active' : ''}" data-key="${sl.key}" data-index="${i}" role="tabpanel">
-      <h3 class="rc-slide-head">${sl.headline}</h3>
-      ${sl.sub ? `<p class="rc-slide-sub">${sl.sub}</p>` : '<p class="rc-slide-sub"></p>'}
+      ${sl.headline ? `<h3 class="rc-slide-head">${sl.headline}</h3>` : ''}
+      ${sl.sub ? `<p class="rc-slide-sub">${sl.sub}</p>` : (sl.headline ? '<p class="rc-slide-sub"></p>' : '')}
       <div class="rc-slide-body">${sl.html}</div>
     </div>`).join('');
   return `
@@ -13747,41 +13749,33 @@ function renderRecordsList(records, tabKey, append = false) {
       headline: allReviews.length ? `${rcPlural(allReviews.length, 'person has', 'people have')} opened, commented on or decided on this record.` : 'Nobody has reviewed this record yet.',
       sub: allReviews.length ? `${approvedN} approved or accepted it and ${rejectedN} rejected it.` : '',
       html: reviewHtml });
-    // Six tabs, each answering one question. A fact lives in one tab only;
-    // the other places show a count.
-    //   Status    = where it stands: next step, approval steps, record state
-    //   Record    = what was submitted (description, files, facts)
-    //   Decisions = who approved / rejected / commented
-    //   Notices   = notices and their files (tab always shown)
-    //   Queries   = questions raised
+    // Four plain tabs, each answering one question. A fact lives in one tab only.
+    //   Summary = what is this, and where does it stand
+    //   Files   = the documents, and how to download them
+    //   Review  = approval steps, decisions, comments and notices
+    //   Queries = questions raised (shown only when there are some)
     // The action buttons sit in a footer bar under the tabs, so they show on every tab.
-    const slideBy = k => slides.find(x => x.key === k);
-    const progressSlide = slideBy('progress');
-    const noticesSlide = slideBy('notices');
-    const queriesSlide = slideBy('queries');
+    const progressSlide = slides.find(x => x.key === 'progress');
+    const queriesSlide  = slides.find(x => x.key === 'queries');
     const stateChips = [reviewChip, revChip, supChip, lockChip].filter(Boolean).join('');
     const stateHtml = stateChips
       ? rcSection('info', 'Record state', `<div class="rc-progress" style="margin-top:0;">${stateChips}</div>`) : '';
+    // Rarely needed facts stay closed until someone asks for them
+    const moreDetailsHtml = rcDisclosureSection('list', 'More details',
+      `<div style="display:flex;flex-direction:column;gap:14px;">${aboutHtml}${stateHtml}</div>`, '', false);
+    const hasQueries = own.length + teamPending.length + (doc.revision_queries || []).length > 0;
     const tabSlides = [
-      { key: 'status', label: 'Status', count: '',
+      { key: 'summary', label: 'Summary', count: '',
         headline: progressSlide.headline, sub: progressSlide.sub,
-        html: standingHtml + progressSlide.html + stateHtml },
-      { key: 'record', label: 'Record', count: '',
-        headline: `This is what ${escapeHtml(who)} submitted as record ${escapeHtml(doc.reference || ('#' + doc.id))}.`,
-        sub: filesCount ? `It has ${rcPlural(filesCount, 'attached file', 'attached files')}.` : 'No files are attached to it.',
-        html: descriptionHtml + documentHtml + aboutHtml },
-      { key: 'documents', label: 'Documents', count: documentsCount || '', empty: !documentsCount,
-        headline: documentsCount ? `${rcPlural(documentsCount, 'file is', 'files are')} available for viewing or download.` : 'No files are available for this record.',
-        sub: documentsCount ? 'Merge selected original-record and notice PDFs, or download selected supporting attachments as a ZIP.' : '',
-        html: downloadsHtml },
-      { key: 'decisions', label: 'Decisions', count: decisionTabCount || '', empty: !decisionTabCount,
-        headline: 'Formal decisions and sign-off',
-        sub: 'Latest decision first. Expand a section to see comments, signature or earlier activity.',
-        html: reviewHtml },
-      Object.assign({}, noticesSlide, { html: noticeBarHtml + noticesSlide.html, empty: !notices.length }),
-      Object.assign({}, queriesSlide, { empty: !queriesSlide.count }),
-    ];
-    const deckHtml = rcDeckHtml(tabSlides, 'status');
+        html: standingHtml + descriptionHtml + moreDetailsHtml },
+      documentsCount ? { key: 'files', label: 'Files', count: '', headline: '', sub: '',
+        html: documentHtml + rcDownloadsHtml(doc, notices, true) } : null,
+      { key: 'review', label: 'Review', count: '', headline: '', sub: '',
+        html: progressSlide.html + reviewHtml + (notices.length ? noticeBarHtml + noticesHtml : '') },
+      hasQueries ? { key: 'queries', label: 'Queries', count: queriesSlide.count || '', headline: '', sub: '',
+        html: queriesHtml } : null,
+    ].filter(Boolean);
+    const deckHtml = rcDeckHtml(tabSlides, 'summary');
     // Small counts for the collapsed header: where to look, without repeating the content
     const countChips = [
       decisions.length ? `<span class="rc-chip rc-chip--muted">${rcPlural(decisions.length, 'decision', 'decisions')}</span>` : '',
