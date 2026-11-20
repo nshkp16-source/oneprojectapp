@@ -708,6 +708,21 @@
     }
     .record-unread .rc-title { font-weight: 700; }
     .rc-unread-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+    .rc-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 10px; }
+    .rc-filter { position: relative; }
+    .rc-filter-btn { min-height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; color: #334155; font-family: inherit; font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+    .rc-filter-btn b { color: #0f172a; }
+    .rc-filter-btn[aria-expanded="true"] { border-color: var(--accent); }
+    .rc-filter-btn svg { width: 14px; height: 14px; }
+    .rc-filter-menu { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; min-width: 220px; background: #fff; border: 1px solid #cbd5e1; border-radius: 10px; box-shadow: 0 6px 20px rgba(15,23,42,.12); padding: 6px; }
+    .rc-filter-menu[hidden] { display: none; }
+    .rc-filter-opt { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: #334155; font-family: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+    .rc-filter-opt:hover { background: #f1f5f9; }
+    .rc-filter-opt.is-on { background: #e6f4f6; color: #00606b; font-weight: 700; }
+    .rc-filter-opt .rc-tick { width: 14px; height: 14px; visibility: hidden; flex: none; }
+    .rc-filter-opt.is-on .rc-tick { visibility: visible; }
+    .rc-filter-note, .rc-filter-empty { font-size: 12px; color: #475569; }
+    #recordsList > .rc-filtered-out { display: none !important; }
     .rc-meta {
       display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px;
       margin-top: 5px; font-size: 13px; line-height: 1.4; color: #64748b;
@@ -13505,6 +13520,105 @@ function rcDeckHtml(slides, startKey) {
 // =======================================================================
 const RC_RECORD_DETAIL_RENDERERS = new Map();
 
+// =======================================================================
+//  RECORDS FILTER: one small control, closed by default, "All" selected.
+//  It hides cards with a class, so the top search box (which uses inline
+//  display) keeps working and only searches among the cards the filter allows.
+// =======================================================================
+const RC_FILTERS = [
+  ['all', 'All'], ['needs', 'Needs me'], ['pending', 'Pending'],
+  ['approved', 'Approved'], ['rejected', 'Rejected'], ['mine', 'Recorded by me']
+];
+const recordsFilterState = {};
+
+function rcFilterKeys(doc) {
+  const keys = [];
+  const st = String(doc.status || '');
+  if (!doc.is_locked && (['can_approve', 'sign_review', 'sign_review_again'].includes(doc.btn_state)
+      || (st === 'rejected' && doc.can_resubmit))) keys.push('needs');
+  if (st.startsWith('pending')) keys.push('pending');
+  if (st === 'approved_record') keys.push('approved');
+  if (st === 'rejected') keys.push('rejected');
+  if (doc.is_uploader === true) keys.push('mine');
+  return keys.join(' ');
+}
+
+function rcApplyRecordsFilter() {
+  const bar = document.getElementById('recordsFilterBar');
+  const list = document.getElementById('recordsList');
+  if (!bar || !list) return;
+  const tabKey = bar.dataset.tabKey;
+  const key = recordsFilterState[tabKey] || 'all';
+  let shown = 0, total = 0;
+  list.querySelectorAll(':scope > li.record-card').forEach(li => {
+    total++;
+    const hide = key !== 'all' && !(li.dataset.fk || '').split(' ').includes(key);
+    li.classList.toggle('rc-filtered-out', hide);
+    if (!hide) shown++;
+  });
+  const label = (RC_FILTERS.find(f => f[0] === key) || RC_FILTERS[0])[1];
+  bar.querySelector('.rc-filter-btn b').textContent = label;
+  bar.querySelectorAll('.rc-filter-opt').forEach(o => {
+    const on = o.dataset.filter === key;
+    o.classList.toggle('is-on', on);
+    o.setAttribute('aria-selected', String(on));
+  });
+  bar.querySelector('.rc-filter-empty').hidden = !(key !== 'all' && total > 0 && shown === 0);
+  bar.querySelector('.rc-filter-note').hidden = !(key !== 'all' && recordsPageState[tabKey]?.hasMore === true);
+}
+
+function rcSetupRecordsFilter(tabKey) {
+  const list = document.getElementById('recordsList');
+  if (!list) return;
+  let bar = document.getElementById('recordsFilterBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'recordsFilterBar';
+    bar.className = 'rc-filterbar';
+    bar.innerHTML = `
+      <div class="rc-filter">
+        <button type="button" class="rc-filter-btn" aria-haspopup="listbox" aria-expanded="false">Filter: <b>All</b>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+        <div class="rc-filter-menu" role="listbox" aria-label="Filter records" hidden>
+          ${RC_FILTERS.map(([k, l]) => `<button type="button" role="option" class="rc-filter-opt" data-filter="${k}" aria-selected="false">
+            <svg class="rc-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>${l}</button>`).join('')}
+        </div>
+      </div>
+      <span class="rc-filter-note" hidden>Showing from the records loaded so far. Use “Load more” to include others.</span>
+      <span class="rc-filter-empty" hidden>No loaded records match this filter.</span>`;
+    list.insertAdjacentElement('beforebegin', bar);
+  }
+  bar.dataset.tabKey = tabKey;
+  rcApplyRecordsFilter();
+}
+
+document.addEventListener('click', e => {
+  const bar = document.getElementById('recordsFilterBar');
+  if (!bar) return;
+  const menu = bar.querySelector('.rc-filter-menu');
+  const btn = bar.querySelector('.rc-filter-btn');
+  const opt = e.target.closest('.rc-filter-opt');
+  if (e.target.closest('.rc-filter-btn')) {
+    menu.hidden = !menu.hidden;
+    btn.setAttribute('aria-expanded', String(!menu.hidden));
+    return;
+  }
+  if (opt && bar.contains(opt)) {
+    recordsFilterState[bar.dataset.tabKey] = opt.dataset.filter;
+    rcApplyRecordsFilter();
+  }
+  if (!menu.hidden) { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const menu = document.querySelector('#recordsFilterBar .rc-filter-menu');
+  if (menu && !menu.hidden) {
+    menu.hidden = true;
+    const btn = document.querySelector('#recordsFilterBar .rc-filter-btn');
+    btn.setAttribute('aria-expanded', 'false'); btn.focus();
+  }
+});
+
 function renderRecordsList(records, tabKey, append = false) {
   const ws = WORKSPACE_TABS[tabKey];
   if (ws && ws.list) { ws.list(records); return; }
@@ -13516,6 +13630,8 @@ function renderRecordsList(records, tabKey, append = false) {
   const recordsList    = document.getElementById('recordsList');
   const placeholderDiv = document.querySelector('.no-data-placeholder');
   if (!recordsList || !placeholderDiv) return;
+
+  if (!append) document.getElementById('recordsFilterBar')?.remove();
 
   // Standalone notice cards are rendered embedded inside their parent record
   const displayRecords = records.filter(r =>
@@ -13705,7 +13821,7 @@ function renderRecordsList(records, tabKey, append = false) {
     RC_RECORD_DETAIL_RENDERERS.set(`${tabKey}:${doc.id}`, detailRenderer);
 
     return `
-      <li class="doc-item record-card${isUnread ? ' record-unread' : ''}${doc.superseded_by_id ? ' record-card--replaced' : ''}" data-id="${doc.id}" data-tab-key="${tabKey}">
+      <li class="doc-item record-card${isUnread ? ' record-unread' : ''}${doc.superseded_by_id ? ' record-card--replaced' : ''}" data-id="${doc.id}" data-tab-key="${tabKey}" data-fk="${rcFilterKeys(doc)}">
         <div class="doc-item-header record-card-header" data-action="toggle" aria-expanded="false" role="button" tabindex="0">
           <div class="rc-main">
             <div class="rc-title-row">
@@ -13732,6 +13848,7 @@ function renderRecordsList(records, tabKey, append = false) {
   }).join('');
   if (append) recordsList.insertAdjacentHTML('beforeend', recordCardsHtml);
   else recordsList.innerHTML = recordCardsHtml;
+  rcSetupRecordsFilter(tabKey);
 }
 
 // Keyboard support for the card header (Enter / Space)
