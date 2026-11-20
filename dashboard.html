@@ -733,6 +733,12 @@
     .rc-outcome--success { background: #f0fdf4; border-color: #bbf7d0; color: #166534; }
     .rc-outcome-line { margin: 0 0 6px; }
     .rc-outcome .rc-quote { color: #334155; }
+    .rc-record-warning { margin: 0 0 12px; padding: 11px 14px; border: 1px solid; border-radius: 8px; font-size: 13px; line-height: 1.5; }
+    .rc-record-warning--amber { color: #854d0e; background: #fffbeb; border-color: #fcd34d; }
+    .rc-record-warning--final { color: #475569; background: #f8fafc; border-color: #cbd5e1; }
+    .rc-previous-record-link { margin: 14px 0 2px; padding-top: 12px; border-top: 1px solid #e2e8f0; }
+    .rc-previous-record-link button { padding: 0; border: 0; background: transparent; color: var(--accent-dark); font: inherit; font-size: 13px; font-weight: 600; text-align: left; text-decoration: underline; cursor: pointer; }
+    .rc-previous-record-link button:hover { color: var(--accent); }
     .rc-meta {
       display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px;
       margin-top: 5px; font-size: 13px; line-height: 1.4; color: #64748b;
@@ -13285,9 +13291,22 @@ function rcStandingText(doc) {
   return parts;
 }
 
+function rcRecordWarningHtml(doc, dueLate) {
+  if (doc.superseded_by_id) {
+    return `<aside class="rc-record-warning rc-record-warning--amber" role="status">A newer version replaced this record (#${escapeHtml(doc.superseded_by_id)}).</aside>`;
+  }
+  if (doc.status === 'approved_record' || doc.btn_state === 'notice_final' || (doc.is_locked === true && doc.status !== 'rejected')) {
+    return '<aside class="rc-record-warning rc-record-warning--final" role="status">This record is final and can no longer be changed.</aside>';
+  }
+  if (dueLate && doc.respond_by) {
+    return `<aside class="rc-record-warning rc-record-warning--amber" role="status">The reply date has passed (${escapeHtml(rcDate(doc.respond_by))}).</aside>`;
+  }
+  return '';
+}
+
 // Short "your turn" line for the collapsed row (only when this person must act)
 function rcCueText(doc) {
-  if (doc.is_locked === true) return '';
+  if (doc.is_locked === true || doc.superseded_by_id) return '';
   const st = doc.btn_state;
   if (st === 'can_approve') return 'Your decision is needed';
   if (st === 'sign_review') return 'Your review is needed';
@@ -13304,6 +13323,10 @@ function rcActionParts(doc) {
   const nextRev = (doc.revision_no || 0) + 1;
   const st = doc.btn_state;
   let note = '', icon = 'info', tone = '', buttons = '';
+
+  if (doc.superseded_by_id) {
+    return { note: `A newer version replaced this record (#${esc(doc.superseded_by_id)}).`, icon, tone, buttons };
+  }
 
   if (st === 'notice_final') {
     note = 'This notice has been issued and signed. It is final.'; icon = 'lock'; tone = 'success';
@@ -13517,14 +13540,21 @@ function rcDocumentDownloadsHtml(doc, notices) {
     </div>`);
 }
 
-function rcDocumentTabHtml(doc, notices) {
+function rcDocumentTabHtml(doc, notices, tabKey) {
   const newestFirst = rcNewestFirst(notices, notice => notice.issued_date || notice.signed_at);
   const newNoticeIds = new Set((doc.new_notice_ids || []).map(String));
   const items = newestFirst.map((notice, index) =>
     rcDocumentItem(notice, false, index === 0, newNoticeIds.has(String(notice.id)))
   ).join('');
+  const previousRecordLink = doc.revision_of_id ? `
+    <div class="rc-previous-record-link">
+      <button type="button" data-action="open-previous-record"
+        data-target-record-id="${escapeHtml(String(doc.revision_of_id))}"
+        data-target-tab-key="${escapeHtml(tabKey || '')}">Open rejected record #${escapeHtml(String(doc.revision_of_id))}</button>
+    </div>` : '';
   return `${rcDocumentDownloadsHtml(doc, newestFirst)}
-    <div class="rc-document-list">${items}${rcDocumentItem(doc, true, false)}</div>`;
+    <div class="rc-document-list">${items}${rcDocumentItem(doc, true, false)}</div>
+    ${previousRecordLink}`;
 }
 
 // One slide: a short kicker, a plain sentence about what is going on, then the part itself.
@@ -13723,12 +13753,13 @@ function renderRecordsList(records, tabKey, append = false) {
     const finalChip = isLocked ? `<span class="rc-chip rc-chip--locked">${rcIcon('lock')}Final</span>` : '';
 
     const dueLate = !!doc.respond_by && !isLocked && new Date(doc.respond_by).getTime() < Date.now();
+    const warningHtml = rcRecordWarningHtml(doc, dueLate);
     const cueText = rcCueText(doc);
 
     const detailRenderer = () => {
     const act = rcActionParts(doc);
     // Actions stay at the bottom of the card on every tab, so a reviewer can read the record and then act
-    const actionBarHtml = act.buttons
+    const actionBarHtml = act.buttons && !doc.superseded_by_id
       ? `<div class="rc-footbar"><div class="rc-actionbar">${act.buttons}</div></div>`
       : '';
 
@@ -13883,10 +13914,10 @@ function renderRecordsList(records, tabKey, append = false) {
       { key: 'progress', label: 'Progress', count: ownOpen ? `${ownOpen} open` : '',
         html: outcomeHtml + statusSection + decisionsSection + (hasQueries ? queriesHtml : '') + othersSection },
       { key: 'document', label: 'Document', count: notices.length + 1, dot: noticeIsNew,
-        html: rcDocumentTabHtml(doc, noticesSorted) },
+        html: rcDocumentTabHtml(doc, noticesSorted, tabKey) },
     ];
     const deckHtml = rcDeckHtml(tabSlides, noticeIsNew ? 'document' : 'progress');
-    return `${deckHtml}${actionBarHtml}`;
+    return `${warningHtml}${deckHtml}${actionBarHtml}`;
     };
     RC_RECORD_DETAIL_RENDERERS.set(`${tabKey}:${doc.id}`, detailRenderer);
 
@@ -14024,6 +14055,12 @@ bottomContent.addEventListener('click', (e) => {
   const tabKey   = item.getAttribute('data-tab-key');
 
   switch (action) {
+    case 'open-previous-record':
+      openPreviousRecordCard(
+        actionEl.getAttribute('data-target-record-id'),
+        actionEl.getAttribute('data-target-tab-key') || tabKey,
+      );
+      break;
     case 'approve': {
       const reviewAction = actionEl.getAttribute('data-review-action') || 'approved';
       openDecisionPanel(recordId, tabKey, reviewAction);
@@ -14141,6 +14178,20 @@ function restoreBottomList() {
     card.querySelector('[data-action="toggle"]')?.setAttribute('aria-expanded', 'false');
   });
   list.scrollTop = 0;
+}
+
+function openPreviousRecordCard(recordId, tabKey) {
+  const cards = Array.from(document.querySelectorAll('#recordsList > .doc-item'));
+  const target = cards.find(card => card.dataset.id === String(recordId) && card.dataset.tabKey === tabKey);
+  if (!target) {
+    alert('The rejected record is not loaded in this list. Reload the records and try again.');
+    return false;
+  }
+  recordsFilterState[tabKey] = 'all';
+  rcApplyRecordsFilter();
+  restoreBottomList();
+  toggleRecordDetail(recordId, tabKey);
+  return true;
 }
 
 document.addEventListener('click', (event) => {
