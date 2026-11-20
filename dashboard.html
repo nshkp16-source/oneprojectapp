@@ -6795,6 +6795,31 @@ Object.assign(OPA_FR, {
   };
 })();
 
+/* ═══ RECORD CARD: French entries ═══ */
+Object.assign(OPA_FR, {
+  "Your decision is needed": "Votre décision est requise",
+  "Your review is needed": "Votre examen est requis",
+  "Your review needs updating": "Votre examen doit être mis à jour",
+  "Needs a corrected version from you": "Une version corrigée de votre part est requise",
+  "Show more": "Voir plus",
+  "Show less": "Voir moins",
+  "Approved or accepted": "Approuvé ou accepté",
+  "Still pending": "Toujours en attente",
+  "Viewed by": "Vu par",
+  "This record could not be opened. Reload the list and try again.": "Ce dossier n’a pas pu être ouvert. Rechargez la liste et réessayez."
+});
+(function () {
+  const side = x => ({ client: 'le client', contractor: 'l’entrepreneur', consultant: 'le consultant' }[String(x).toLowerCase()] || x);
+  const sideBare = x => ({ client: 'client', contractor: 'entrepreneur', consultant: 'consultant' }[String(x).toLowerCase()] || x);
+  OPA_PATTERNS.push(
+    [/^You (approved|accepted|rejected|decided on) this record, and notice #(\d+) was issued\.$/, (m, v, n) =>
+      `Vous avez ${{ approved: 'approuvé', accepted: 'accepté', rejected: 'rejeté', 'decided on': 'pris une décision sur' }[v]} ce dossier, et l’avis n° ${n} a été émis.`],
+    [/^This record was rejected before the (.+) could decide\.$/, (m, r) => `Ce dossier a été rejeté avant que ${side(r)} puisse décider.`],
+    [/^(\d+) named signers? (?:has|have) signed for the (.+) side\.$/, (m, n, r) =>
+      `${n} signataire${+n > 1 ? 's' : ''} désigné${+n > 1 ? 's' : ''} ${+n > 1 ? 'ont' : 'a'} signé pour le côté ${sideBare(r)}.`],
+    [/^(\d+) comments?$/, (m, n) => `${n} commentaire${+n > 1 ? 's' : ''}`]
+  );
+})();
 const OPA_ATTRS = ['placeholder', 'title', 'aria-label', 'data-label-open', 'data-label-closed'];
 const OPA_ATTR_ONLY = {
   placeholder: { Block: 'Bloc', Floor: 'Étage', Zone: 'Zone', Grid: 'Grille', Drawing: 'Plan' }
@@ -13422,7 +13447,11 @@ const RC_RECORD_DETAIL_RENDERERS = new Map();
 function renderRecordsList(records, tabKey, append = false) {
   const ws = WORKSPACE_TABS[tabKey];
   if (ws && ws.list) { ws.list(records); return; }
-  if (!append) RC_RECORD_DETAIL_RENDERERS.clear();
+  if (!append) {
+    for (const k of Array.from(RC_RECORD_DETAIL_RENDERERS.keys())) {
+      if (k.startsWith(`${tabKey}:`)) RC_RECORD_DETAIL_RENDERERS.delete(k);
+    }
+  }
   const recordsList    = document.getElementById('recordsList');
   const placeholderDiv = document.querySelector('.no-data-placeholder');
   if (!recordsList || !placeholderDiv) return;
@@ -13567,12 +13596,10 @@ function renderRecordsList(records, tabKey, append = false) {
           rcPlural(comments.length, 'comment', 'comments'))
       : '';
     const seenHtml = seen.length
-      ? rcSection('user', 'Viewed by',
-          `<ul class="rc-seen-list">${seen.map(r => `<li><span>${escapeHtml(reviewName(r))}</span><span>Opened ${escapeHtml(rcDate(r.action_date, true))}</span></li>`).join('')}</ul>`,
-          rcPlural(seen.length, 'person', 'people'))
+      ? `<p class="rc-subtitle">Viewed by</p><ul class="rc-seen-list">${seen.map(r => `<li><span>${escapeHtml(reviewName(r))}</span><span>Opened ${escapeHtml(rcDate(r.action_date, true))}</span></li>`).join('')}</ul>`
       : '';
-    const reviewHtml = rcSection('info', 'Decision overview', decisionSummary) +
-      decisionsGroup + signatureHtml + commentsHtml + seenHtml;
+    const reviewHtml = rcSection('info', 'Decision overview', decisionSummary + seenHtml) +
+      decisionsGroup + signatureHtml + commentsHtml;
 
     // ── Tabs: keep each kind of information in one place ───────────
     const steps = doc.workflow_steps || [];
@@ -13856,7 +13883,10 @@ function rcEnsureRecordDetail(detail, tabKey, recordId) {
   if (detail.dataset.rendered === 'true') return;
   const key = `${tabKey}:${recordId}`;
   const renderDetails = RC_RECORD_DETAIL_RENDERERS.get(key);
-  if (!renderDetails) throw new Error(`Missing lazy record detail renderer for ${key}`);
+  if (!renderDetails) {
+    detail.innerHTML = '<p class="rc-text rc-text--empty" style="padding:16px;margin:0;">This record could not be opened. Reload the list and try again.</p>';
+    return;
+  }
   detail.innerHTML = renderDetails();
   detail.dataset.rendered = 'true';
   RC_RECORD_DETAIL_RENDERERS.delete(key);
