@@ -6904,6 +6904,10 @@ Object.assign(OPA_FR, {
   "Still pending": "Toujours en attente",
   "Viewed by": "Vu par",
   "This record could not be opened. Reload the list and try again.": "Ce dossier n’a pas pu être ouvert. Rechargez la liste et réessayez.",
+  "Recorded with document stamp": "Enregistré avec le tampon du document",
+  "Stamped": "Tamponné",
+  "Submitted and signed by": "Soumis et signé par",
+  "Issued and signed by": "Émis et signé par",
   "Who": "Qui",
   "Note": "Remarque",
   "Note:": "Remarque :",
@@ -13585,25 +13589,24 @@ function rcDocumentItem(doc, isOriginal, isLatest, isNew, canMerge = true) {
   </div>` : '';
   const supporting = rcSupportingZipRow(doc.id, doc.supporting_files);
   const description = rcRichText(doc.description);
-  const signers = isOriginal
-    ? (doc.signing_plan || []).flatMap(stage => stage.signers || []).filter(signer => signer.status === 'signed')
-    : (doc.signatories || []);
-  const signerNames = [...new Set(signers.map(signer => signer.name || signer.position).filter(Boolean))];
-  if (!signerNames.length && doc.signed_by_display_name) signerNames.push(doc.signed_by_display_name);
-  const signingMeta = doc.signed_at
-    ? `Signed by ${signerNames.length ? signerNames.map(escapeHtml).join(', ') : 'Project team'} · ${escapeHtml(rcDate(doc.signed_at, true))}`
-    : '';
+  const noticeSigners = isOriginal ? [] : (doc.signatories || []);
+  const noticeSignerNames = [...new Set(noticeSigners.map(signer => signer.name || signer.position).filter(Boolean))];
+  const finalSignStatus = ['approver', 'both'].includes(doc.stamp_status);
+  const noticeSigned = !isOriginal && doc.signed_at && noticeSignerNames.length > 0;
+  const submissionMeta = finalSignStatus && doc.signed_by_display_name
+    ? `<span>${isOriginal ? 'Submitted and signed by' : 'Issued and signed by'}</span> ${escapeHtml(doc.signed_by_display_name)} · ${escapeHtml(rcDate(doc.signed_at, true))}`
+    : noticeSigned
+      ? `<span>Issued and signed by</span> ${noticeSignerNames.map(escapeHtml).join(', ')} · ${escapeHtml(rcDate(doc.signed_at, true))}`
+      : `<span>${actionWord} by</span> ${escapeHtml(issuer)} · ${escapeHtml(date)}`;
   return `<article class="rc-document-item">
     <div class="rc-document-item-head">
       <span class="rc-tag">${kind}</span>
       ${isLatest ? '<span class="rc-tag rc-tag--latest">Latest</span>' : ''}
       ${isNew ? '<span class="rc-tag rc-tag--new">New</span>' : ''}
-      ${doc.signed_at ? `<span class="rc-chip rc-chip--ok">${rcIcon('check')}Signed</span>` : ''}
+      ${finalSignStatus || noticeSigned ? `<span class="rc-chip rc-chip--ok">${rcIcon('check')}Signed</span>` : ''}
       <h3 class="rc-document-title">${escapeHtml(title)}</h3>
     </div>
-    <p class="rc-document-meta"><span>${actionWord} by</span> ${escapeHtml(issuer)} · ${escapeHtml(date)}</p>
-    ${signingMeta ? `<p class="rc-document-meta">${signingMeta}</p>` : ''}
-    ${doc.stamp_type === 'STAMPED' ? '<p class="rc-document-meta">Document stamp applied</p>' : ''}
+    <p class="rc-document-meta">${submissionMeta}</p>
     ${description ? `<div class="rc-document-description">${description}</div>` : '<p class="rc-muted" style="margin-top:10px;">No description was provided.</p>'}
     <div class="rc-document-files">
       <h4 class="rc-document-files-title">Files</h4>
