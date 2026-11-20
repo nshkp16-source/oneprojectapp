@@ -722,7 +722,17 @@
     .rc-filter-opt .rc-tick { width: 14px; height: 14px; visibility: hidden; flex: none; }
     .rc-filter-opt.is-on .rc-tick { visibility: visible; }
     .rc-filter-note, .rc-filter-empty { font-size: 12px; color: #475569; }
+    .rc-filter-badge, .rc-filter-count { min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 999px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+    .rc-filter-badge[hidden], .rc-filter-count[hidden] { display: none; }
+    .rc-filter-count { margin-left: auto; }
     #recordsList > .rc-filtered-out { display: none !important; }
+    .rc-deck-dot { display: inline-block; width: 8px; height: 8px; margin-left: 6px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+    .rc-tag--new { background: #e6f4f6; color: #00606b; }
+    .rc-outcome { margin: 0 0 14px; padding: 12px 14px; border-radius: 10px; border: 1px solid; font-size: 13.5px; line-height: 1.55; }
+    .rc-outcome--danger { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+    .rc-outcome--success { background: #f0fdf4; border-color: #bbf7d0; color: #166534; }
+    .rc-outcome-line { margin: 0 0 6px; }
+    .rc-outcome .rc-quote { color: #334155; }
     .rc-meta {
       display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px;
       margin-top: 5px; font-size: 13px; line-height: 1.4; color: #64748b;
@@ -11360,6 +11370,19 @@ async function bootstrapUser() {
 // =======================================================================
 //  STATUS BADGE
 // =======================================================================
+function rcStatusBadgeFor(doc, cueText) {
+  const my = doc.my_review || {};
+  const myTurn = ['can_approve', 'sign_review', 'sign_review_again'].includes(doc.btn_state) && doc.is_locked !== true;
+  let label = '', tone = '', full = '';
+  if (myTurn && cueText) { label = 'Waiting for you'; tone = 'pending'; full = 'Waiting for your decision or review'; }
+  else if (doc.status === 'approved_record' && ['approved', 'accepted'].includes(my.action)) { label = 'Approved by you'; tone = 'success'; }
+  else if (doc.status === 'rejected' && my.action === 'rejected') { label = 'Rejected by you'; tone = 'danger'; }
+  if (!label) return statusBadge(doc.status);
+  const when = (tone !== 'pending' && my.action_date) ? ` · ${rcDate(my.action_date)}` : '';
+  full = full || label;
+  return `<span class="rc-status rc-status--${tone}" title="${escapeHtml(full)}" aria-label="Status: ${escapeHtml(full)}">${escapeHtml(label + when)}</span>`;
+}
+
 function statusBadge(status) {
   // label = short text shown in the pill, full = the complete wording (tooltip / screen readers)
   const map = {
@@ -12901,7 +12924,14 @@ function markRecordViewed(recordId, tabKey) {
       if (dot)  dot.remove();
       if (item) item.classList.remove('record-unread');
       const cached = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
-      if (cached) cached.is_viewed = true;
+      if (cached) {
+        cached.is_viewed = true;
+        cached.last_opened_at = new Date().toISOString();
+        cached.has_new_notice = false;
+        cached.new_notice_ids = [];
+      }
+      document.querySelector(`#detail-${recordId} .rc-deck-dot`)?.remove();
+      if (typeof rcApplyRecordsFilter === 'function') rcApplyRecordsFilter();
     }
   })
   .catch(err => console.error('Mark viewed error:', err));
@@ -13427,7 +13457,7 @@ function rcSupportingZipRow(ownerId, files) {
   </div>`;
 }
 
-function rcDocumentItem(doc, isOriginal, isLatest) {
+function rcDocumentItem(doc, isOriginal, isLatest, isNew) {
   const ownerId = escapeHtml(String(doc.id));
   const kind = isOriginal ? 'Original record' : rcNoticeLabel(doc);
   const title = isOriginal ? (doc.title || 'Untitled record') : (doc.title || kind);
@@ -13459,6 +13489,7 @@ function rcDocumentItem(doc, isOriginal, isLatest) {
     <div class="rc-document-item-head">
       <span class="rc-tag">${kind}</span>
       ${isLatest ? '<span class="rc-tag rc-tag--latest">Latest</span>' : ''}
+      ${isNew ? '<span class="rc-tag rc-tag--new">New</span>' : ''}
       ${doc.signed_at ? `<span class="rc-chip rc-chip--ok">${rcIcon('check')}Signed</span>` : ''}
       <h3 class="rc-document-title">${escapeHtml(title)}</h3>
     </div>
@@ -13488,7 +13519,10 @@ function rcDocumentDownloadsHtml(doc, notices) {
 
 function rcDocumentTabHtml(doc, notices) {
   const newestFirst = rcNewestFirst(notices, notice => notice.issued_date || notice.signed_at);
-  const items = newestFirst.map((notice, index) => rcDocumentItem(notice, false, index === 0)).join('');
+  const newNoticeIds = new Set((doc.new_notice_ids || []).map(String));
+  const items = newestFirst.map((notice, index) =>
+    rcDocumentItem(notice, false, index === 0, newNoticeIds.has(String(notice.id)))
+  ).join('');
   return `${rcDocumentDownloadsHtml(doc, newestFirst)}
     <div class="rc-document-list">${items}${rcDocumentItem(doc, true, false)}</div>`;
 }
@@ -13500,7 +13534,7 @@ function rcDeckHtml(slides, startKey) {
   if (start < 0) start = 0;
   const tabs = visibleSlides.map((sl, i) => `
     <button type="button" class="rc-deck-tab${i === start ? ' is-active' : ''}${sl.empty ? ' is-empty' : ''}" data-key="${sl.key}" data-action="slide-go" data-index="${i}" role="tab" aria-selected="${i === start}">
-      <span>${sl.label}</span>${sl.count ? `<span class="rc-deck-count">${sl.count}</span>` : ''}
+      <span>${sl.label}</span>${sl.count ? `<span class="rc-deck-count">${sl.count}</span>` : ''}${sl.dot ? '<span class="rc-deck-dot" role="img" aria-label="New"></span>' : ''}
     </button>`).join('');
   const body = visibleSlides.map((sl, i) => `
     <div class="rc-slide${i === start ? ' is-active' : ''}" data-key="${sl.key}" data-index="${i}" role="tabpanel">
@@ -13565,6 +13599,24 @@ function rcApplyRecordsFilter() {
   });
   bar.querySelector('.rc-filter-empty').hidden = !(key !== 'all' && total > 0 && shown === 0);
   bar.querySelector('.rc-filter-note').hidden = !(key !== 'all' && recordsPageState[tabKey]?.hasMore === true);
+
+  // Unread badge: only records the user has not opened yet (authors never get unread on their own records)
+  const counts = {};
+  list.querySelectorAll(':scope > li.record-card.record-unread').forEach(li => {
+    counts.all = (counts.all || 0) + 1;
+    (li.dataset.fk || '').split(' ').filter(Boolean).forEach(k => { counts[k] = (counts[k] || 0) + 1; });
+  });
+  const fmt = n => n > 9 ? '9+' : String(n);
+  const badge = bar.querySelector('.rc-filter-badge');
+  badge.hidden = !counts.all;
+  badge.textContent = counts.all ? fmt(counts.all) : '';
+  badge.setAttribute('aria-label', counts.all ? `${counts.all} unread` : '');
+  bar.querySelectorAll('.rc-filter-opt').forEach(o => {
+    const c = counts[o.dataset.filter] || 0;
+    const el = o.querySelector('.rc-filter-count');
+    el.hidden = !c;
+    el.textContent = c ? fmt(c) : '';
+  });
 }
 
 function rcSetupRecordsFilter(tabKey) {
@@ -13577,11 +13629,11 @@ function rcSetupRecordsFilter(tabKey) {
     bar.className = 'rc-filterbar';
     bar.innerHTML = `
       <div class="rc-filter">
-        <button type="button" class="rc-filter-btn" aria-haspopup="listbox" aria-expanded="false">Filter: <b>All</b>
+        <button type="button" class="rc-filter-btn" aria-haspopup="listbox" aria-expanded="false">Filter: <b>All</b><span class="rc-filter-badge" hidden></span>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
         <div class="rc-filter-menu" role="listbox" aria-label="Filter records" hidden>
           ${RC_FILTERS.map(([k, l]) => `<button type="button" role="option" class="rc-filter-opt" data-filter="${k}" aria-selected="false">
-            <svg class="rc-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>${l}</button>`).join('')}
+            <svg class="rc-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>${l}<span class="rc-filter-count" hidden></span></button>`).join('')}
         </div>
       </div>
       <span class="rc-filter-note" hidden>Showing from the records loaded so far. Use “Load more” to include others.</span>
@@ -13682,6 +13734,8 @@ function renderRecordsList(records, tabKey, append = false) {
 
     const noticesSorted = rcNewestFirst(notices, n => n.issued_date || n.signed_at);
     const queriesHtml = renderQueriesSection(doc);
+    const newNoticeIds = Array.isArray(doc.new_notice_ids) ? doc.new_notice_ids.map(String) : [];
+    const noticeIsNew = doc.has_new_notice === true && newNoticeIds.length > 0;
 
     // ── Progress tab: Status bar, Decisions table, Queries, Other reviewers ──
     const decisionActions = new Set(['approved', 'accepted', 'rejected']);
@@ -13712,7 +13766,7 @@ function renderRecordsList(records, tabKey, append = false) {
         when: step.at,
         state: step.status === 'done' ? (/accept/i.test(step.label || '') ? 'Accepted' : 'Approved')
           : step.status === 'rejected' ? 'Rejected'
-          : step.status === 'pending' ? 'Waiting'
+          : step.status === 'pending' ? (['can_approve', 'sign_review', 'sign_review_again'].includes(doc.btn_state) && !isLocked ? 'Waiting for you' : 'Waiting')
           : step.status === 'skipped' ? 'Not reached' : 'Not yet'
       })),
       {
@@ -13734,6 +13788,22 @@ function renderRecordsList(records, tabKey, append = false) {
     const nextStep = stepNodes.slice(1).find(node => ['pending', 'waiting', 'idle'].includes(node.status));
     const statusSummary = doc.status === 'rejected' ? 'Rejected'
       : `${completedSteps} of 4 steps finished${nextStep ? ` · Next: ${nextStep.title}` : ''}`;
+    const myRev = doc.my_review || {};
+    const isMineReview = r => (myRev.reviewer_id != null && r.reviewer_id != null && String(myRev.reviewer_id) === String(r.reviewer_id))
+      || (myRev.id != null && r.id != null && String(myRev.id) === String(r.id));
+    const finalDecision = doc.status === 'rejected'
+      ? decisions.find(r => r.action === 'rejected')
+      : doc.status === 'approved_record' ? decisions.find(r => r.action === 'approved' || r.action === 'accepted') : null;
+    let outcomeHtml = '';
+    if (finalDecision) {
+      const rej = finalDecision.action === 'rejected';
+      const byWho = isMineReview(finalDecision) ? 'you' : (rcRoleLabel(finalDecision.reviewer_role) || reviewName(finalDecision));
+      const reason = String(finalDecision.comment || '').trim();
+      outcomeHtml = `<div class="rc-outcome rc-outcome--${rej ? 'danger' : 'success'}">
+        <p class="rc-outcome-line"><strong>${rej ? 'Rejected' : 'Approved'} by ${escapeHtml(byWho)}</strong>${finalDecision.action_date ? ` on ${escapeHtml(rcDate(finalDecision.action_date, true))}` : ''}.</p>
+        ${reason ? rcCommentHtml(reason, 'Reason: ') : (rej ? '<p class="rc-text rc-text--empty">No reason was written.</p>' : '')}
+      </div>`;
+    }
     const statusSection = rcSection('workflow', 'Status',
       steps.length
         ? statusBarHtml
@@ -13811,11 +13881,11 @@ function renderRecordsList(records, tabKey, append = false) {
 
     const tabSlides = [
       { key: 'progress', label: 'Progress', count: ownOpen ? `${ownOpen} open` : '',
-        html: statusSection + decisionsSection + (hasQueries ? queriesHtml : '') + othersSection },
-      { key: 'document', label: 'Document', count: notices.length + 1,
+        html: outcomeHtml + statusSection + decisionsSection + (hasQueries ? queriesHtml : '') + othersSection },
+      { key: 'document', label: 'Document', count: notices.length + 1, dot: noticeIsNew,
         html: rcDocumentTabHtml(doc, noticesSorted) },
     ];
-    const deckHtml = rcDeckHtml(tabSlides, 'progress');
+    const deckHtml = rcDeckHtml(tabSlides, noticeIsNew ? 'document' : 'progress');
     return `${deckHtml}${actionBarHtml}`;
     };
     RC_RECORD_DETAIL_RENDERERS.set(`${tabKey}:${doc.id}`, detailRenderer);
@@ -13831,14 +13901,14 @@ function renderRecordsList(records, tabKey, append = false) {
             </div>
             ${(revisionChip || replacedChip || finalChip) ? `<div class="rc-record-state">${revisionChip}${replacedChip}${finalChip}</div>` : ''}
             <div class="rc-meta">
-              <span class="rc-meta-item">${rcIcon('user')}<span>Submitted by <span>${escapeHtml(rcRoleLabel(doc.uploader_role) || 'a project member')}</span></span></span>
+              <span class="rc-meta-item">${rcIcon('user')}<span>${isUploader ? 'Recorded by <strong>you</strong>' : `Recorded by <span>${escapeHtml(rcRoleLabel(doc.uploader_role) || 'a project member')}</span>`}</span></span>
               <span class="rc-meta-item" title="${escapeHtml(rcDate(doc.issued_date, true))}">${rcIcon('calendar')}<span>${rcDate(doc.issued_date)}</span></span>
               ${doc.respond_by ? `<span class="rc-meta-item rc-meta-due${dueLate ? ' is-late' : ''}" title="Date a reply is needed by">${rcIcon('clock')}<span>Reply by ${escapeHtml(rcDate(doc.respond_by))}${dueLate ? ' · overdue' : ''}</span></span>` : ''}
             </div>
             ${cueText ? `<div class="rc-progress"><span class="rc-cue">${escapeHtml(cueText)}</span></div>` : ''}
           </div>
           <div class="rc-side">
-            ${statusBadge(doc.status)}
+            ${rcStatusBadgeFor(doc, cueText)}
             <span class="rc-chevron chevron-${doc.id}" aria-hidden="true"></span>
           </div>
         </div>
@@ -13890,6 +13960,10 @@ bottomContent.addEventListener('click', (e) => {
       slidesEls.forEach((el, i) => el.classList.toggle('is-active', i === idx));
       deck.querySelectorAll('.rc-deck-tab').forEach((el, i) => { el.classList.toggle('is-active', i === idx); el.setAttribute('aria-selected', String(i === idx)); });
       const tab = deck.querySelectorAll('.rc-deck-tab')[idx]; if (tab && tab.scrollIntoView) tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      if (tab && tab.dataset.key === 'document') {
+        tab.querySelector('.rc-deck-dot')?.remove();
+        deck.querySelectorAll('.rc-tag--new').forEach(tag => tag.remove());
+      }
     }
     return;
   }
@@ -14017,9 +14091,7 @@ function toggleRecordDetail(recordId, tabKey) {
   if (!isOpen) {
     const cached = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
     rcEnsureRecordDetail(detail, tabKey, recordId);
-    if (cached && !cached.is_uploader && !cached.is_viewed) {
-      markRecordViewed(recordId, tabKey);
-    }
+    if (cached) markRecordViewed(recordId, tabKey);
     if (cached) flowRecordView(recordId, tabKey);
   }
   card?.classList.toggle('record-expanded', !isOpen);
