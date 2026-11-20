@@ -1424,6 +1424,8 @@
     .meeting-card.open .meeting-chevron { transform:rotate(180deg); }
     .meeting-card-body { display:none; padding:14px 16px; border-top:1px solid var(--border); }
     .meeting-card.open .meeting-card-body { display:block; }
+    .meeting-list-back { display:block; margin:0 0 10px; padding:8px 0; border:0; background:transparent; color:var(--accent-dark); font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
+    .meeting-list-back:hover { color:var(--accent); text-decoration:underline; }
     .meeting-section-title { margin:14px 0 6px; color:#334155; font-size:12px; letter-spacing:.04em; text-transform:uppercase; }
     .meeting-section-title:first-of-type { margin-top:6px; }
     .meeting-minute-section { margin-top:14px; padding-top:12px; border-top:1px solid var(--border); }
@@ -7296,9 +7298,54 @@ function applyDashboardSearch() {
   const term = document.getElementById('searchBox')?.value.toLowerCase() || '';
   const isDocumentFolderView = Boolean(document.getElementById('recordsList')?.dataset.dcTab);
   const selector = isDocumentFolderView ? '#bottomContent .meeting-card' : '#bottomContent .doc-item, #bottomContent .meeting-card';
-  document.querySelectorAll(selector).forEach(item => {
-    item.style.display = item.textContent.toLowerCase().includes(term) ? '' : 'none';
+  const cards = Array.from(document.querySelectorAll(selector));
+  const focusedMeeting = document.querySelector('#mtgList .meeting-card--focused');
+  cards.forEach(item => {
+    if (focusedMeeting && item.classList.contains('meeting-card')) {
+      item.style.display = item === focusedMeeting && item.textContent.toLowerCase().includes(term) ? '' : 'none';
+    } else {
+      item.style.display = item.textContent.toLowerCase().includes(term) ? '' : 'none';
+    }
   });
+}
+
+function focusMeetingCard(list, card) {
+  if (!list || !card || !list.contains(card)) return;
+  list.querySelectorAll('.meeting-card').forEach(item => {
+    const selected = item === card;
+    item.style.display = selected ? '' : 'none';
+    item.classList.toggle('open', selected);
+    item.classList.toggle('meeting-card--focused', selected);
+    item.querySelector('.meeting-card-header')?.setAttribute('aria-expanded', String(selected));
+  });
+  const more = list.querySelector('.meeting-show-more');
+  if (more) more.style.display = 'none';
+  let back = list.querySelector('.meeting-list-back');
+  if (!back) {
+    back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'meeting-list-back';
+    back.innerHTML = '<span data-translate="← Back to list">← Back to list</span>';
+    back.addEventListener('click', event => {
+      event.stopPropagation();
+      restoreMeetingList(list);
+    });
+  }
+  list.insertBefore(back, card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function restoreMeetingList(list) {
+  if (!list) return;
+  list.querySelectorAll('.meeting-card').forEach(card => {
+    card.style.display = '';
+    card.classList.remove('open', 'meeting-card--focused');
+    card.querySelector('.meeting-card-header')?.setAttribute('aria-expanded', 'false');
+  });
+  const more = list.querySelector('.meeting-show-more');
+  if (more) more.style.display = '';
+  list.querySelector('.meeting-list-back')?.remove();
+  applyDashboardSearch();
 }
 
 // =========================
@@ -11843,8 +11890,9 @@ async function displayMeetingList(view, scope, scopeValue, context) {
       const header = event.target.closest('.meeting-card-header');
       if (header) {
         const card = header.closest('.meeting-card');
-        const open = card.classList.toggle('open');
-        header.setAttribute('aria-expanded', String(open));
+        const list = document.getElementById('mtgList');
+        if (card.classList.contains('meeting-card--focused')) restoreMeetingList(list);
+        else focusMeetingCard(list, card);
         return;
       }
       if (event.target.closest('#mtgMore')) { state.shown += MEETING_PAGE_SIZE; paint(); return; }
