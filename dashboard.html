@@ -739,6 +739,9 @@
     .rc-record-warning { margin: 0 0 12px; padding: 11px 14px; border: 1px solid; border-radius: 8px; font-size: 13px; line-height: 1.5; }
     .rc-record-warning--amber { color: #854d0e; background: #fffbeb; border-color: #fcd34d; }
     .rc-record-warning--final { color: #475569; background: #f8fafc; border-color: #cbd5e1; }
+    .rc-record-warning--link { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: #334155; background: #f8fafc; border-color: #cbd5e1; }
+    .rc-record-warning--link button { padding: 0; border: 0; background: transparent; color: var(--accent-dark); font: inherit; font-weight: 600; text-align: left; text-decoration: underline; cursor: pointer; }
+    .rc-record-warning--link button:hover { color: var(--accent); }
     .rc-previous-record-link { margin: 14px 0 2px; padding-top: 12px; border-top: 1px solid #e2e8f0; }
     .rc-previous-record-link button { padding: 0; border: 0; background: transparent; color: var(--accent-dark); font: inherit; font-size: 13px; font-weight: 600; text-align: left; text-decoration: underline; cursor: pointer; }
     .rc-previous-record-link button:hover { color: var(--accent); }
@@ -989,6 +992,27 @@
     .rc-table--decisions { min-width: 560px; }
     .rc-table--decisions .rc-sig-name { font-weight: 600; color: #0f172a; }
     .rc-table-group td { background: #f8fafc; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #475569; }
+    /* "Show who signed" fold: the Status bar already tells the story, the names are one tap away */
+    .rc-fold { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; }
+    .rc-fold > summary { display: flex; align-items: center; gap: 8px; padding: 13px 16px; list-style: none; cursor: pointer; font-size: 13.5px; font-weight: 600; color: var(--accent-dark); }
+    .rc-fold > summary::-webkit-details-marker { display: none; }
+    .rc-fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 10px; }
+    .rc-fold > summary::after { content: ""; flex: none; margin-left: auto; width: 7px; height: 7px; border-right: 2px solid #64748b; border-bottom: 2px solid #64748b; transform: translateY(-2px) rotate(45deg); transition: transform .15s; }
+    .rc-fold[open] > summary::after { transform: translateY(2px) rotate(-135deg); }
+    .rc-fold-count { font-size: 12px; font-weight: 600; color: #64748b; }
+    .rc-fold-body { display: flex; flex-direction: column; gap: 10px; padding: 0 12px 12px; }
+    /* Phones: each person becomes a small stacked block instead of a wide 4-column table */
+    @media (max-width: 640px) {
+      .rc-table--decisions { min-width: 0; }
+      .rc-table--decisions thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      .rc-table--decisions, .rc-table--decisions tbody { display: block; }
+      .rc-table--decisions tr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 12px; border-top: 1px solid #eef2f6; }
+      .rc-table--decisions tbody tr:first-child { border-top: 0; }
+      .rc-table--decisions td { display: block; padding: 0; border-top: 0; }
+      .rc-table--decisions td:nth-child(1), .rc-table--decisions td:nth-child(4) { flex: 1 0 100%; }
+      .rc-table--decisions td.rc-note-cell.is-empty { display: none; }
+      .rc-table--decisions tr.rc-table-group { padding: 8px 12px; }
+    }
     .rc-pbar { display: flex; gap: 6px; margin: 0; padding: 0; list-style: none; }
     .rc-pbar-step { flex: 1 1 0; min-width: 0; }
     .rc-pbar-step::before { content: ""; display: block; height: 8px; border-radius: 4px; background: #cbd5e1; }
@@ -13537,7 +13561,7 @@ function rcSupportingZipRow(ownerId, files) {
   </div>`;
 }
 
-function rcDocumentItem(doc, isOriginal, isLatest, isNew) {
+function rcDocumentItem(doc, isOriginal, isLatest, isNew, canMerge = true) {
   const ownerId = escapeHtml(String(doc.id));
   const kind = isOriginal ? 'Original record' : rcNoticeLabel(doc);
   const title = isOriginal ? (doc.title || 'Untitled record') : (doc.title || kind);
@@ -13550,9 +13574,9 @@ function rcDocumentItem(doc, isOriginal, isLatest, isNew) {
   const filename = String(doc.file_path || '').split('/').pop().split('?')[0];
   const isPdf = /\.pdf$/i.test(filename);
   const officialRow = filename ? `<div class="rc-download-choice">
-    ${isPdf
+    ${isPdf && canMerge
       ? `<label class="rc-download-select"><input type="checkbox" data-download-select="pdf" data-owner-id="${ownerId}" data-file-name="${escapeHtml(filename)}"><span><strong>${escapeHtml(filename)}</strong><small>PDF · Select to merge</small></span></label>`
-      : `<span class="rc-download-select"><span><strong>${escapeHtml(filename)}</strong><small>PDF merge is available for PDF files only</small></span></span>`}
+      : `<span class="rc-download-select"><span><strong>${escapeHtml(filename)}</strong>${isPdf ? '' : '<small>PDF merge is available for PDF files only</small>'}</span></span>`}
     ${rcBtn('file-view', 'View', null, 'sm', `data-file-record="${ownerId}" data-filename="${escapeHtml(filename)}"`)}
   </div>` : '';
   const supporting = rcSupportingZipRow(doc.id, doc.supporting_files);
@@ -13585,14 +13609,23 @@ function rcDocumentItem(doc, isOriginal, isLatest, isNew) {
   </article>`;
 }
 
+function rcDocumentPdfCount(doc, notices) {
+  return [doc, ...notices].filter(item => /\.pdf$/i.test(String(item.file_path || '').split('/').pop().split('?')[0])).length;
+}
+
+// Download tools: shown only when they can do something (merging needs 2 or more PDFs)
 function rcDocumentDownloadsHtml(doc, notices) {
-  const documents = [doc, ...notices];
-  const hasPdf = documents.some(item => /\.pdf$/i.test(String(item.file_path || '').split('/').pop().split('?')[0]));
-  const hasSupporting = documents.some(item => rcSupportingEntries(item.supporting_files).length);
-  return rcSection('download', 'Merge and download', `
-    <p class="rc-download-hint">Select document PDFs to merge or supporting ZIPs to download.</p>
+  const pdfCount = rcDocumentPdfCount(doc, notices);
+  const canMerge = pdfCount >= 2;
+  const hasSupporting = [doc, ...notices].some(item => rcSupportingEntries(item.supporting_files).length);
+  if (!canMerge && !hasSupporting) return '';
+  const hint = canMerge && hasSupporting ? 'Tick the files you want, then merge the PDFs or download the supporting files as a ZIP.'
+    : canMerge ? 'Tick the PDFs you want to put together in one file.'
+    : 'Tick the supporting files you want to download.';
+  return rcSection('download', 'Download', `
+    <p class="rc-download-hint">${hint}</p>
     <div class="rc-document-toolbar">
-      ${hasPdf ? rcBtn('download-selected-pdfs', 'Merge selected PDFs', 'download', 'sm', 'disabled') : ''}
+      ${canMerge ? rcBtn('download-selected-pdfs', 'Merge selected PDFs', 'download', 'sm', 'disabled') : ''}
       ${hasSupporting ? rcBtn('download-selected-support-zip', 'Download selected ZIPs', 'download', 'sm', 'disabled') : ''}
     </div>`);
 }
@@ -13600,18 +13633,24 @@ function rcDocumentDownloadsHtml(doc, notices) {
 function rcDocumentTabHtml(doc, notices, tabKey) {
   const newestFirst = rcNewestFirst(notices, notice => notice.issued_date || notice.signed_at);
   const newNoticeIds = new Set((doc.new_notice_ids || []).map(String));
+  const canMerge = rcDocumentPdfCount(doc, newestFirst) >= 2;
   const items = newestFirst.map((notice, index) =>
-    rcDocumentItem(notice, false, index === 0, newNoticeIds.has(String(notice.id)))
+    rcDocumentItem(notice, false, index === 0, newNoticeIds.has(String(notice.id)), canMerge)
   ).join('');
-  const previousRecordLink = doc.revision_of_id ? `
-    <div class="rc-previous-record-link">
-      <button type="button" data-action="open-previous-record"
-        data-target-record-id="${escapeHtml(String(doc.revision_of_id))}"
-        data-target-tab-key="${escapeHtml(tabKey || '')}">Open rejected record #${escapeHtml(String(doc.revision_of_id))}</button>
-    </div>` : '';
-  return `${rcDocumentDownloadsHtml(doc, newestFirst)}
-    <div class="rc-document-list">${items}${rcDocumentItem(doc, true, false)}</div>
-    ${previousRecordLink}`;
+  // The documents come first; download tools (only when useful) come after them
+  return `<div class="rc-document-list">${items}${rcDocumentItem(doc, true, false, false, canMerge)}</div>
+    ${rcDocumentDownloadsHtml(doc, newestFirst)}`;
+}
+
+// Link to the rejected record this one corrects, shown at the top of the card
+function rcPreviousRecordNoticeHtml(doc, tabKey) {
+  if (!doc.revision_of_id) return '';
+  return `<aside class="rc-record-warning rc-record-warning--link" role="status">
+    <span>This is a corrected version of a rejected record.</span>
+    <button type="button" data-action="open-previous-record"
+      data-target-record-id="${escapeHtml(String(doc.revision_of_id))}"
+      data-target-tab-key="${escapeHtml(tabKey || '')}">Open rejected record #${escapeHtml(String(doc.revision_of_id))}</button>
+  </aside>`;
 }
 
 // One slide: a short kicker, a plain sentence about what is going on, then the part itself.
@@ -13876,6 +13915,9 @@ function renderRecordsList(records, tabKey, append = false) {
     const ownOpen = own.filter(q => q.status === 'open' || q.status === 'reopened').length;
     const teamPending = rcPendingTeamQueries(doc);
     const hasQueries = own.length + teamPending.length + (doc.revision_queries || []).length > 0;
+    // Anything still waiting on someone is counted, not only this record's own queries
+    const revisionOpen = (doc.revision_queries || []).filter(q => q.status !== 'resolved').length;
+    const queriesWaiting = ownOpen + teamPending.length + revisionOpen;
 
     // Status stays deliberately brief: submission, both approval stages, and finalization.
     const stepNodes = [
@@ -13965,7 +14007,7 @@ function renderRecordsList(records, tabKey, append = false) {
         if (decision) displayedDecisionKeys.add(key);
         dRows.push(`<tr>
           <td><span class="rc-sig-name">${escapeHtml(x.name || x.position || roleLabel)}</span>${x.is_me ? '<span class="rc-tag rc-tag--me">You</span>' : ''}<div class="rc-sig-sub">${[x.name && x.position ? escapeHtml(x.position) : '', `${escapeHtml(flowCap(x.side))} side`, roleLabel].filter(Boolean).join(' · ')}</div></td>
-          <td>${state}</td><td>${when ? escapeHtml(rcDate(when, true)) : 'None'}</td><td>${notes.join('') || 'None'}</td></tr>`);
+          <td>${state}</td><td>${when ? escapeHtml(rcDate(when, true)) : 'None'}</td><td class="rc-note-cell${notes.length ? '' : ' is-empty'}">${notes.join('') || 'None'}</td></tr>`);
       });
     });
     decisions.forEach(r => {                       // newest first: one row per person, their latest decision
@@ -13973,7 +14015,7 @@ function renderRecordsList(records, tabKey, append = false) {
       if (displayedDecisionKeys.has(key)) return;
       displayedDecisionKeys.add(key);
       const d = rcDecision(r.action);
-      dRows.push(`<tr>${whoCell(r)}<td><span class="rc-status rc-status--${d.tone}">${d.label}</span></td><td>${r.action_date ? escapeHtml(rcDate(r.action_date, true)) : 'None'}</td><td>${r.comment ? rcCommentHtml(r.comment, 'Decision reason / note:') : 'None'}</td></tr>`);
+      dRows.push(`<tr>${whoCell(r)}<td><span class="rc-status rc-status--${d.tone}">${d.label}</span></td><td>${r.action_date ? escapeHtml(rcDate(r.action_date, true)) : 'None'}</td><td class="rc-note-cell${r.comment ? '' : ' is-empty'}">${r.comment ? rcCommentHtml(r.comment, 'Decision reason / note:') : 'None'}</td></tr>`);
     });
     steps.forEach((step, index) => {
       const stage = plan.find(item => Number(item.stage) === index + 1);
@@ -13981,32 +14023,42 @@ function renderRecordsList(records, tabKey, append = false) {
       if (hasDecider || ['done', 'rejected', 'skipped'].includes(step.status)) return;
       dRows.push(`<tr>
         <td><span class="rc-sig-name">${escapeHtml(rcSideWord(step.side))}</span><div class="rc-sig-sub">Decision maker</div></td>
-        <td>${chip('muted', 'Not opened')}</td><td>None</td><td>None</td>
+        <td>${chip('muted', 'Not opened')}</td><td>None</td><td class="rc-note-cell is-empty">None</td>
       </tr>`);
     });
     const remindHtml = doc.can_remind && plan.some(st => st.stage === doc.current_stage && (st.signers || []).some(x => x.status === 'pending'))
       ? `<div class="rc-item-actions"><button type="button" class="rc-btn rc-btn--sm" data-action="remind">Send a reminder to the signers who have not signed</button></div>` : '';
     const signedAll = plan.reduce((a, x) => a + (x.signed_count || 0), 0);
     const totalAll = plan.reduce((a, x) => a + (x.total || 0), 0);
-    const decisionsSection = rcSection('check', 'Decisions',
-      (dRows.length ? tableOf('Decisions', dRows.join('')) : `<p class="rc-text rc-text--empty">Nobody has been asked to decide on this record yet.</p>`) + remindHtml,
-      plan.length ? `${signedAll} of ${totalAll} signed` : '');
+    const signedCount = plan.length ? `${signedAll} of ${totalAll} signed` : '';
+    // With people listed, the names sit behind one tap. They open by default for someone who has to act.
+    const decisionsSection = dRows.length
+      ? `<details class="rc-fold"${(remindHtml || cueText) ? ' open' : ''}>
+          <summary><span>Show who signed</span>${signedCount ? `<span class="rc-fold-count">· ${signedCount}</span>` : ''}</summary>
+          <div class="rc-fold-body">${tableOf('Decisions', dRows.join(''))}${remindHtml}</div>
+        </details>`
+      : rcSection('check', 'Decisions',
+          `<p class="rc-text rc-text--empty">Nobody has been asked to decide on this record yet.</p>${remindHtml}`, signedCount);
 
     // Other reviewers: opened or commented, shown only when someone has acted
     const othersSection = others.length
       ? rcSection('chat', 'Other reviewers',
-          tableOf('Other reviewers', others.map(r => `<tr>${whoCell(r)}<td>${chip('muted', r.comment ? 'Commented' : 'Opened')}</td><td>${r.action_date ? escapeHtml(rcDate(r.action_date, true)) : 'None'}</td><td>${r.comment ? rcCommentHtml(r.comment) : 'None'}</td></tr>`).join('')),
+          tableOf('Other reviewers', others.map(r => `<tr>${whoCell(r)}<td>${chip('muted', r.comment ? 'Commented' : 'Opened')}</td><td>${r.action_date ? escapeHtml(rcDate(r.action_date, true)) : 'None'}</td><td class="rc-note-cell${r.comment ? '' : ' is-empty'}">${r.comment ? rcCommentHtml(r.comment) : 'None'}</td></tr>`).join('')),
           rcPlural(others.length, 'person', 'people'))
       : '';
 
     const tabSlides = [
-      { key: 'progress', label: 'Progress', count: ownOpen ? `${ownOpen} open` : '',
-        html: outcomeHtml + statusSection + decisionsSection + (hasQueries ? queriesHtml : '') + othersSection },
+      { key: 'progress', label: 'Progress', count: queriesWaiting ? `${queriesWaiting} open` : '',
+        html: outcomeHtml
+          + (hasQueries && queriesWaiting ? queriesHtml : '')      // queries that need action come first
+          + statusSection + decisionsSection
+          + (hasQueries && !queriesWaiting ? queriesHtml : '')     // finished queries stay as history
+          + othersSection },
       { key: 'document', label: 'Document', count: notices.length + 1, dot: noticeIsNew,
         html: rcDocumentTabHtml(doc, noticesSorted, tabKey) },
     ];
     const deckHtml = rcDeckHtml(tabSlides, noticeIsNew ? 'document' : 'progress');
-    return `${warningHtml}${deckHtml}${actionBarHtml}`;
+    return `${warningHtml}${rcPreviousRecordNoticeHtml(doc, tabKey)}${deckHtml}${actionBarHtml}`;
     };
     RC_RECORD_DETAIL_RENDERERS.set(`${tabKey}:${doc.id}`, detailRenderer);
 
