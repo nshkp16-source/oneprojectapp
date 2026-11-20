@@ -952,6 +952,18 @@
     .rc-sig-sub { margin-top: 4px; font-size: 12px; line-height: 1.45; color: #64748b; }
     .rc-sig-sub--warn { color: #b45309; }
     .rc-sig-sub--danger { color: #b91c1c; }
+    .rc-table--decisions { min-width: 560px; }
+    .rc-table--decisions .rc-sig-name { font-weight: 600; color: #0f172a; }
+    .rc-table-group td { background: #f8fafc; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #475569; }
+    .rc-pbar { display: flex; gap: 6px; margin: 0; padding: 0; list-style: none; }
+    .rc-pbar-step { flex: 1 1 0; min-width: 0; }
+    .rc-pbar-step::before { content: ""; display: block; height: 8px; border-radius: 4px; background: #cbd5e1; }
+    .rc-pbar-step.is-done::before { background: #166534; }
+    .rc-pbar-step.is-pending::before { background: #d97706; }
+    .rc-pbar-step.is-rejected::before { background: #b91c1c; }
+    .rc-pbar-name { display: block; margin-top: 6px; font-size: 13.5px; font-weight: 600; line-height: 1.35; color: #0f172a; overflow-wrap: anywhere; }
+    .rc-pbar-state { display: block; font-size: 12.5px; line-height: 1.4; color: #475569; }
+    @media (max-width: 560px) { .rc-pbar { flex-wrap: wrap; } .rc-pbar-step { flex: 1 1 40%; } }
     .rc-dash { color: #64748b; }
     .rc-bar { height: 6px; margin: 8px 0 12px; border-radius: 999px; background: #e2e8f0; overflow: hidden; }
     .rc-bar > span { display: block; height: 100%; border-radius: inherit; background: #16a34a; }
@@ -6806,7 +6818,19 @@ Object.assign(OPA_FR, {
   "Approved or accepted": "Approuvé ou accepté",
   "Still pending": "Toujours en attente",
   "Viewed by": "Vu par",
-  "This record could not be opened. Reload the list and try again.": "Ce dossier n’a pas pu être ouvert. Rechargez la liste et réessayez."
+  "This record could not be opened. Reload the list and try again.": "Ce dossier n’a pas pu être ouvert. Rechargez la liste et réessayez.",
+  "Who": "Qui",
+  "Note": "Remarque",
+  "Not opened": "Non ouvert",
+  "Commented": "A commenté",
+  "Waiting": "En attente",
+  "Not reached": "Non atteint",
+  "Not yet": "Pas encore",
+  "Other reviewers": "Autres relecteurs",
+  "Nobody has been asked to decide on this record yet.": "Personne n’a encore été invité à décider sur ce dossier.",
+  "Client side": "Côté client",
+  "Contractor side": "Côté entrepreneur",
+  "Consultant side": "Côté consultant"
 });
 (function () {
   const side = x => ({ client: 'le client', contractor: 'l’entrepreneur', consultant: 'le consultant' }[String(x).toLowerCase()] || x);
@@ -6817,7 +6841,10 @@ Object.assign(OPA_FR, {
     [/^This record was rejected before the (.+) could decide\.$/, (m, r) => `Ce dossier a été rejeté avant que ${side(r)} puisse décider.`],
     [/^(\d+) named signers? (?:has|have) signed for the (.+) side\.$/, (m, n, r) =>
       `${n} signataire${+n > 1 ? 's' : ''} désigné${+n > 1 ? 's' : ''} ${+n > 1 ? 'ont' : 'a'} signé pour le côté ${sideBare(r)}.`],
-    [/^(\d+) comments?$/, (m, n) => `${n} commentaire${+n > 1 ? 's' : ''}`]
+    [/^(\d+) comments?$/, (m, n) => `${n} commentaire${+n > 1 ? 's' : ''}`],
+    [/^(\d+) open$/, (m, n) => `${n} en attente`],
+    [/^(\d+) (?:person|people)$/, (m, n) => `${n} personne${+n > 1 ? 's' : ''}`],
+    [/^Raised (\d+) quer(?:y|ies)(, still open)?$/, (m, n, o) => `${n} question${+n > 1 ? 's' : ''} soulevée${+n > 1 ? 's' : ''}${o ? ', toujours ouverte' + (+n > 1 ? 's' : '') : ''}`]
   );
 })();
 const OPA_ATTRS = ['placeholder', 'title', 'aria-label', 'data-label-open', 'data-label-closed'];
@@ -13515,8 +13542,6 @@ function renderRecordsList(records, tabKey, append = false) {
             : `<div class="rc-rich">${rcRichText(doc.description)}</div>`)
         : `<p class="rc-text rc-text--empty">No description was written for this record.</p>`);
 
-    // ── Section 3: progress and named signers ─────────────────────
-    const workflowHtml = renderWorkflowSteps(doc);
 
     // ── Section 4: notices ────────────────────────────────────────
     const noticesSorted = rcNewestFirst(notices, n => n.issued_date || n.signed_at);
@@ -13532,31 +13557,20 @@ function renderRecordsList(records, tabKey, append = false) {
     const noticeBarHtml = (notices.length && doc.file_path)
       ? `<div class="rc-earlier-bar">${rcBtn('preview-combined', 'View record and notice together', null, 'sm')}</div>` : '';
 
-    // ── Section 5: decisions, comments and signing ────────────────
+    // ── Progress tab: Status bar, Decisions table, Queries, Other reviewers ──
     const decisionActions = new Set(['approved', 'accepted', 'rejected']);
     const decisions = rcNewestFirst(allReviews.filter(r => decisionActions.has(r.action)), r => r.action_date);
-    const comments = rcNewestFirst(allReviews.filter(r => r.action === 'no_action' && r.comment), r => r.action_date);
-    const seen = rcNewestFirst(allReviews.filter(r => r.action === 'no_action' && !r.comment), r => r.action_date);
-    const approvedCount = decisions.filter(r => r.action === 'approved' || r.action === 'accepted').length;
-    const rejectedCount = decisions.filter(r => r.action === 'rejected').length;
-    const pendingCount = Math.max(0, (doc.workflow_steps || []).filter(x => x.status !== 'done' && x.status !== 'rejected').length);
-
+    const others = rcNewestFirst(allReviews.filter(r => r.action === 'no_action'), r => r.action_date);
     const reviewName = r => r.is_decision_maker === true
       ? (rcRoleLabel(r.reviewer_role) || 'Decision maker')
       : (r.reviewer_email || 'Team member');
     const reviewSub = r => r.is_decision_maker === true
       ? (r.reviewer_email || '')
       : [r.reviewer_position, r.reviewer_assigned_part].filter(Boolean).join(' · ');
-    const decisionRow = r => {
-      const d = rcDecision(r.action);
-      const sub = reviewSub(r);
-      return `<div class="rc-decision-row">
-        <div class="rc-decision-person"><strong>${escapeHtml(reviewName(r))}</strong>${sub ? `<span>${escapeHtml(sub)}</span>` : ''}</div>
-        <span class="rc-status rc-status--${d.tone}">${d.label}</span>
-        <span class="rc-decision-date">${escapeHtml(rcDate(r.action_date, true))}</span>
-        ${r.comment ? `<div class="rc-decision-comment">${rcCommentHtml(r.comment, 'Decision reason / note:')}</div>` : ''}
-      </div>`;
-    };
+    const dash = '<span class="rc-dash">\u2014</span>';
+    const chip = (cls, text) => `<span class="rc-chip rc-chip--${cls}">${text}</span>`;
+    const whoCell = r => `<td><span class="rc-sig-name">${escapeHtml(reviewName(r))}</span>${reviewSub(r) ? `<div class="rc-sig-sub">${escapeHtml(reviewSub(r))}</div>` : ''}</td>`;
+    const tableOf = (label, rows) => `<div class="rc-table-wrap"><table class="rc-table rc-table--decisions" aria-label="${label}"><thead><tr><th scope="col">Who</th><th scope="col">Status</th><th scope="col">Date</th><th scope="col">Note</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 
     const signer = doc.signed_by_display_name || rcRoleLabel(doc.signed_by_role);
     const signatureFacts = [];
@@ -13568,83 +13582,101 @@ function renderRecordsList(records, tabKey, append = false) {
       ? rcSection('check', 'Signature and stamp',
           `<div class="rc-factgroups"><section class="rc-factgroup"><dl class="rc-factlist">${signatureFacts.map(([k,v]) => `<div class="rc-fact"><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl></section></div>`)
       : '';
-    const signoffCount = signatureHtml ? 1 : 0;
-    const decisionTabCount = allReviews.length + signoffCount;
 
-    const decisionSummary = `
-      <div class="rc-decision-summary">
-        <div class="rc-decision-stat"><strong>${approvedCount}</strong><span>Approved or accepted</span></div>
-        <div class="rc-decision-stat"><strong>${rejectedCount}</strong><span>Rejected</span></div>
-        <div class="rc-decision-stat"><strong>${pendingCount}</strong><span>Still pending</span></div>
-      </div>`;
-    const decisionsHtml = decisions.length
-      ? rcLatestAndEarlier(decisions.map(r => ({
-          html: decisionRow(r),
-          label: `Earlier decision, ${rcDate(r.action_date, true)}`
-        })), 'decision', 'decisions')
-      : `<p class="rc-text rc-text--empty">No formal decision has been made yet.</p>`;
-    const decisionsGroup = rcSection('check', 'Decision history', decisionsHtml,
-      decisions.length ? rcPlural(decisions.length, 'decision', 'decisions') : '');
-    const commentsHtml = comments.length
-      ? rcSection('chat', 'Comments',
-          comments.map(r => `<div class="rc-decision-row">
-            <div class="rc-decision-person"><strong>${escapeHtml(reviewName(r))}</strong><span>${escapeHtml(reviewSub(r))}</span></div>
-            <span class="rc-status rc-status--neutral">Comment</span>
-            <span class="rc-decision-date">${escapeHtml(rcDate(r.action_date, true))}</span>
-            <div class="rc-decision-comment">${rcCommentHtml(r.comment)}</div>
-          </div>`).join(''),
-          rcPlural(comments.length, 'comment', 'comments'))
-      : '';
-    const seenHtml = seen.length
-      ? `<p class="rc-subtitle">Viewed by</p><ul class="rc-seen-list">${seen.map(r => `<li><span>${escapeHtml(reviewName(r))}</span><span>Opened ${escapeHtml(rcDate(r.action_date, true))}</span></li>`).join('')}</ul>`
-      : '';
-    const reviewHtml = rcSection('info', 'Decision overview', decisionSummary + seenHtml) +
-      decisionsGroup + signatureHtml + commentsHtml;
-
-    // ── Tabs: keep each kind of information in one place ───────────
     const steps = doc.workflow_steps || [];
     const decided = steps.filter(x => x.status === 'done').length;
-    const nextStep = steps.find(x => x.status === 'pending');
     const own = doc.queries || [];
     const ownOpen = own.filter(q => q.status === 'open' || q.status === 'reopened').length;
+    const teamPending = rcPendingTeamQueries(doc);
+    const hasQueries = own.length + teamPending.length + (doc.revision_queries || []).length > 0;
     const filesCount = (doc.file_path ? 1 : 0) + (Array.isArray(doc.supporting_files) ? doc.supporting_files.length : 0);
     const noticesFileCount = notices.reduce((count, notice) =>
       count + (notice.file_path ? 1 : 0) + (Array.isArray(notice.supporting_files) ? notice.supporting_files.length : 0), 0);
     const documentsCount = filesCount + noticesFileCount;
     const downloadsHtml = rcDownloadsHtml(doc, notices);
-    const teamPending = rcPendingTeamQueries(doc);
-    const progressHeadline = !steps.length ? 'No approval steps have been set for this record.'
-      : steps.some(x => x.status === 'rejected') ? 'This record was rejected.'
-      : decided === steps.length ? 'All approval steps are finished.'
-      : `${decided} of ${steps.length} approval steps are finished.`;
-    const stateHtml = reviewChip
-      ? rcSection('info', 'Record state', `<div class="rc-progress" style="margin-top:0;">${reviewChip}</div>`) : '';
+
+    // Status: a short progress bar, one segment per step
+    const stepNodes = [{ title: 'Submitted', status: 'done', state: '', when: doc.issued_date }].concat(steps.map(step => ({
+      title: step.label, status: step.status, when: step.at,
+      state: step.status === 'done' ? (/accept/i.test(step.label || '') ? 'Accepted' : 'Approved')
+        : step.status === 'rejected' ? 'Rejected'
+        : step.status === 'pending' ? 'Waiting'
+        : step.status === 'skipped' ? 'Not reached' : 'Not yet'
+    })));
+    const stepTone = st => st === 'done' ? 'done' : st === 'rejected' ? 'rejected' : st === 'pending' ? 'pending' : 'idle';
+    const statusBarHtml = `<ol class="rc-pbar">${stepNodes.map(n => `
+      <li class="rc-pbar-step is-${stepTone(n.status)}">
+        <span class="rc-pbar-name">${escapeHtml(n.title)}</span>
+        <span class="rc-pbar-state">${n.state ? `<span>${n.state}</span> ` : ''}${n.when ? `<span>${escapeHtml(rcDate(n.when))}</span>` : ''}</span>
+      </li>`).join('')}</ol>`;
+    const statusSummary = !steps.length ? ''
+      : steps.some(x => x.status === 'rejected') ? 'Rejected'
+      : decided === steps.length ? 'Fully approved'
+      : `${decided} of ${steps.length} decisions made`;
+    const statusSection = rcSection('workflow', 'Status',
+      steps.length
+        ? statusBarHtml + (reviewChip ? `<div class="rc-progress">${reviewChip}</div>` : '')
+        : `<p class="rc-text rc-text--empty">No approval steps have been set for this record.</p>`,
+      statusSummary);
+
+    // Decisions: everyone who has to decide is listed, even with no action yet
+    const plan = doc.signing_plan || [];
+    const dRows = [];
+    plan.forEach(st => {
+      if (plan.length > 1) dRows.push(`<tr class="rc-table-group"><td colspan="4">${escapeHtml(st.label || `Stage ${st.stage}`)}</td></tr>`);
+      (st.signers || []).forEach(x => {
+        const roleLabel = x.is_decider ? 'Final decision maker' : x.is_team_member ? 'Team member' : 'Leader';
+        const state = x.status === 'signed' ? `<span class="rc-chip rc-chip--ok">${rcIcon('check')}Signed</span>`
+          : x.first_viewed_at ? chip('notice', 'Opened') : chip('muted', 'Not opened');
+        const when = x.status === 'signed' ? x.signed_at : x.first_viewed_at;
+        let note = '';
+        if (x.queries_raised) {
+          const stillOpen = x.open_queries && !x.left_project;
+          note += `<div class="rc-sig-sub${stillOpen ? ' rc-sig-sub--warn' : ''}">Raised ${rcPlural(x.queries_raised, 'query', 'queries')}${stillOpen ? ', still open' : ''}</div>`;
+        }
+        if (x.left_project) note += `<div class="rc-sig-sub rc-sig-sub--danger">No longer on the project</div>`;
+        if (x.can_replace) note += `<button type="button" class="rc-btn rc-btn--sm" data-action="replace-signer" data-signer-id="${x.id}">Replace</button>`;
+        dRows.push(`<tr>
+          <td><span class="rc-sig-name">${escapeHtml(x.name || x.position || roleLabel)}</span>${x.is_me ? '<span class="rc-tag rc-tag--me">You</span>' : ''}<div class="rc-sig-sub">${[x.name && x.position ? escapeHtml(x.position) : '', `${escapeHtml(flowCap(x.side))} side`, roleLabel].filter(Boolean).join(' · ')}</div></td>
+          <td>${state}</td><td>${when ? escapeHtml(rcDate(when, true)) : dash}</td><td>${note || dash}</td></tr>`);
+      });
+    });
+    const doneKeys = new Set();
+    decisions.forEach(r => {                       // newest first: one row per person, their latest decision
+      const key = `${r.reviewer_email || ''}|${r.reviewer_role || ''}`;
+      if (key !== '|') { if (doneKeys.has(key)) return; doneKeys.add(key); }
+      const d = rcDecision(r.action);
+      dRows.push(`<tr>${whoCell(r)}<td><span class="rc-status rc-status--${d.tone}">${d.label}</span></td><td>${escapeHtml(rcDate(r.action_date, true))}</td><td>${r.comment ? rcCommentHtml(r.comment, 'Decision reason / note:') : dash}</td></tr>`);
+    });
+    if (!plan.length) steps.filter(x => x.status === 'pending').forEach(x => dRows.push(
+      `<tr><td><span class="rc-sig-name">${escapeHtml(rcSideWord(x.side))}</span><div class="rc-sig-sub">Decision maker</div></td><td>${chip('notice', 'Waiting')}</td><td>${dash}</td><td>${dash}</td></tr>`));
+    const remindHtml = doc.can_remind && plan.some(st => st.stage === doc.current_stage && (st.signers || []).some(x => x.status === 'pending'))
+      ? `<div class="rc-item-actions"><button type="button" class="rc-btn rc-btn--sm" data-action="remind">Send a reminder to the signers who have not signed</button></div>` : '';
+    const signedAll = plan.reduce((a, x) => a + (x.signed_count || 0), 0);
+    const totalAll = plan.reduce((a, x) => a + (x.total || 0), 0);
+    const decisionsSection = rcSection('check', 'Decisions',
+      (dRows.length ? tableOf('Decisions', dRows.join('')) : `<p class="rc-text rc-text--empty">Nobody has been asked to decide on this record yet.</p>`) + remindHtml,
+      plan.length ? `${signedAll} of ${totalAll} signed` : '');
+
+    // Other reviewers: opened or commented, shown only when someone has acted
+    const othersSection = others.length
+      ? rcSection('chat', 'Other reviewers',
+          tableOf('Other reviewers', others.map(r => `<tr>${whoCell(r)}<td>${chip('muted', r.comment ? 'Commented' : 'Opened')}</td><td>${escapeHtml(rcDate(r.action_date, true))}</td><td>${r.comment ? rcCommentHtml(r.comment) : dash}</td></tr>`).join('')),
+          rcPlural(others.length, 'person', 'people'))
+      : '';
+
     const tabSlides = [
-      { key: 'status', label: 'Status', headline: progressHeadline,
-        sub: nextStep ? `The ${escapeHtml(rcSideWord(nextStep.side))} is the next to decide.` : '',
-        html: standingHtml + workflowHtml + stateHtml },
+      { key: 'progress', label: 'Progress', count: ownOpen ? `${ownOpen} open` : '',
+        html: standingHtml + statusSection + decisionsSection + (hasQueries ? queriesHtml : '') + othersSection },
       { key: 'record', label: 'Record', count: documentsCount || '',
-        html: descriptionHtml + downloadsHtml },
+        html: descriptionHtml + downloadsHtml + signatureHtml },
     ];
-    if (decisionTabCount) tabSlides.push({ key: 'decisions', label: 'Decisions', count: decisionTabCount,
-        headline: 'Formal decisions and sign-off',
-        sub: 'Latest decision first. Comments and earlier decisions are below.',
-        html: reviewHtml });
     if (notices.length) tabSlides.push({
       key: 'notices', label: 'Notices', count: notices.length,
       headline: `${rcPlural(notices.length, 'notice has', 'notices have')} been issued on this record.`,
       html: noticeBarHtml + noticesHtml
     });
-    if (own.length + teamPending.length) tabSlides.push({
-      key: 'queries', label: 'Queries', count: own.length + teamPending.length,
-      headline: own.length
-        ? `${rcPlural(own.length, 'query has', 'queries have')} been raised on this record.`
-        : `${rcPlural(teamPending.length, 'query has', 'queries have')} been raised by the review team so far.`,
-      sub: own.length ? (ownOpen ? `${rcPlural(ownOpen, 'query is', 'queries are')} still waiting for an answer.` : 'All of them have been answered or resolved.')
-        : 'They have not been issued to the contractor yet.',
-      html: queriesHtml
-    });
-    const deckHtml = rcDeckHtml(tabSlides, 'status');
+    const deckHtml = rcDeckHtml(tabSlides, 'progress');
     return `${deckHtml}${actionBarHtml}`;
     };
     RC_RECORD_DETAIL_RENDERERS.set(`${tabKey}:${doc.id}`, detailRenderer);
@@ -13694,63 +13726,6 @@ function rcRoleLabel(role) {
   return String(role || '').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
 }
 
-function renderWorkflowSteps(doc) {
-  const steps = doc.workflow_steps;
-  if (!steps || !steps.length) return rcSection('workflow', 'Progress of this record', `<p class="rc-text rc-text--empty">No approval steps have been set for this record.</p>`) +
-    rcSection('user', 'Named signers of this record', `<p class="rc-text rc-text--empty">No named signers have been set for this record.</p>`);
-  const uploader = rcRoleLabel(doc.uploader_role) || 'A project member';
-
-  // The first point is the submission itself, so the timeline reads from the person
-  // who added the record through every decision that follows.
-  const nodes = [{
-    title: 'Submitted', status: 'done',
-    text: `${uploader} submitted this record.`, when: doc.issued_date
-  }].concat(steps.map(step => {
-    const acc  = /accept/i.test(step.label || '');
-    const by   = step.by ? rcRoleLabel(step.by) : '';
-    const side = rcSideWord(step.side);
-    let text;
-    if (step.status === 'done')          text = `${acc ? 'Accepted' : 'Approved'} by the ${by || side}.`;
-    else if (step.status === 'rejected') text = by ? `Rejected by the ${by}.` : `This record was rejected before the ${side} could decide.`;
-    else if (step.status === 'pending')  text = `Waiting for the ${side} to ${acc ? 'accept' : 'approve'} this record.`;
-    else if (step.status === 'skipped')  text = doc.status === 'rejected' ? 'Not reached, because the record was rejected.' : 'Not reached.';
-    else                                 text = 'Starts after the step before it is finished.';
-    return { title: step.label, status: step.status, text, when: step.at };
-  }));
-
-  const html = nodes.map((n, idx) => {
-    const cls = { done: 'is-done', rejected: 'is-rejected', pending: 'is-pending', skipped: 'is-skipped' }[n.status] || 'is-waiting';
-    const icon = n.status === 'done' ? rcIcon('check')
-               : n.status === 'rejected' ? rcIcon('x')
-               : n.status === 'pending' ? rcIcon('clock')
-               : n.status === 'skipped' ? '&ndash;' : String(idx);
-    return `
-      <li class="rc-tl ${cls}">
-        <span class="rc-tl-dot">${icon}</span>
-        <div class="rc-tl-body">
-          <div class="rc-tl-title">${escapeHtml(n.title)}</div>
-          <p class="rc-tl-text">${escapeHtml(n.text)}</p>
-          ${n.when ? `<p class="rc-tl-date">${escapeHtml(rcDate(n.when, true))}</p>` : ''}
-        </div>
-      </li>`;
-  }).join('');
-
-  const decided = steps.filter(s => s.status === 'done').length;
-  const summary = steps.some(s => s.status === 'rejected') ? 'Rejected'
-                : decided === steps.length ? 'Fully approved'
-                : `${decided} of ${steps.length} decisions made`;
-  let out = rcSection('workflow', 'Progress of this record', `<ol class="rc-timeline">${html}</ol>`, summary);
-
-  const plan = doc.signing_plan || [];
-  if (plan.length) {
-    const signed = plan.reduce((a, s) => a + (s.signed_count || 0), 0);
-    const total  = plan.reduce((a, s) => a + (s.total || 0), 0);
-    out += rcSection('user', 'Named signers of this record', renderSigningStages(doc), `${signed} of ${total} signed`);
-  } else {
-    out += rcSection('user', 'Named signers of this record', `<p class="rc-text rc-text--empty">No named signers have been set for this record.</p>`);
-  }
-  return out;
-}
 
 // =======================================================================
 //  EVENT DELEGATE — bottomContent
@@ -15176,66 +15151,6 @@ function flowReviewChip(doc) {
   return doc.is_uploader ? '<span class="rc-chip rc-chip--muted">Not opened yet</span>' : '';
 }
 
-function renderSigningStages(doc) {
-  const plan = doc.signing_plan || [];
-  if (!plan.length) return '';
-  return plan.map(st => {
-    const current = st.stage === doc.current_stage;
-    const opened = st.signers.map(x => x.first_viewed_at).filter(Boolean).sort()[0];
-    const pending = st.signers.filter(x => x.status === 'pending');
-    const anyActions = st.signers.some(x => x.can_replace);
-    const anyHiddenName = st.signers.some(x => !x.name);
-
-    const rows = st.signers.map(x => {
-      const roleLabel = x.is_decider ? 'Final decision maker' : x.is_team_member ? 'Team member' : 'Leader';
-      let status;
-      if (x.status === 'signed') {
-        status = `<span class="rc-chip rc-chip--ok">${rcIcon('check')}Signed</span><div class="rc-sig-sub">${escapeHtml(rcDate(x.signed_at, true))}</div>`;
-      } else if (x.first_viewed_at) {
-        status = `<span class="rc-chip rc-chip--notice">Opened, not signed</span><div class="rc-sig-sub">Opened ${escapeHtml(rcDate(x.first_viewed_at, true))}</div>`;
-      } else {
-        status = `<span class="rc-chip rc-chip--muted">Not opened yet</span>`;
-      }
-      if (x.queries_raised) {
-        const stillOpen = x.open_queries && !x.left_project;
-        status += `<div class="rc-sig-sub${stillOpen ? ' rc-sig-sub--warn' : ''}">Raised ${rcPlural(x.queries_raised, 'query', 'queries')}${stillOpen ? ', still open' : ''}</div>`;
-      }
-      if (x.left_project) status += `<div class="rc-sig-sub rc-sig-sub--danger">No longer on the project</div>`;
-      return `<tr>
-        <td>${x.name ? `<span class="rc-sig-name">${escapeHtml(x.name)}</span>` : '<span class="rc-dash" title="Names are shown to the signer\'s own side only">\u2014</span>'}${x.is_me ? '<span class="rc-tag rc-tag--me">You</span>' : ''}</td>
-        <td>${escapeHtml(x.position || '')}</td>
-        <td>${escapeHtml(flowCap(x.side))} side</td>
-        <td>${roleLabel}</td>
-        <td>${status}</td>
-        ${anyActions ? `<td>${x.can_replace ? `<button type="button" class="rc-btn rc-btn--sm" data-action="replace-signer" data-signer-id="${x.id}">Replace</button>` : ''}</td>` : ''}
-      </tr>`;
-    }).join('');
-
-    const days = opened ? flowDaysAgo(opened) : 0;
-    const wait = current && opened && pending.length
-      ? `<p class="rc-item-text rc-item-text--warn">${days >= 1 ? `Opened ${rcPlural(days, 'day', 'days')} ago and there is still no decision.` : 'Under review. There is no decision yet.'}</p>` : '';
-    const remind = current && doc.can_remind && pending.length
-      ? `<div class="rc-item-actions"><button type="button" class="rc-btn rc-btn--sm" data-action="remind">Send a reminder to the signers who have not signed</button></div>` : '';
-    const replaced = st.replaced.length
-      ? `<p class="rc-item-text">Replaced earlier: ${st.replaced.map(r => `${escapeHtml(r.position)} (${escapeHtml(rcDate(r.replaced_at))})`).join(', ')}.</p>` : '';
-    const pct = st.total ? Math.round((st.signed_count / st.total) * 100) : 0;
-    return `<div class="rc-item${current ? ' is-current' : ''}">
-      <div class="rc-item-head">
-        <span class="rc-item-title">${escapeHtml(st.label || `Stage ${st.stage}`)}</span>
-        ${current ? '<span class="rc-chip rc-chip--notice">In progress</span>' : ''}
-      </div>
-      <p class="rc-item-text">${st.signed_count} of ${st.total} named ${st.total === 1 ? 'signer has' : 'signers have'} signed for the ${escapeHtml(flowCap(st.side))} side.</p>
-      <div class="rc-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${st.total}" aria-valuenow="${st.signed_count}"><span style="width:${pct}%"></span></div>
-      ${wait}
-      <div class="rc-table-wrap"><table class="rc-table rc-table--signers" aria-label="Named signers, ${escapeHtml(st.label || `stage ${st.stage}`)}">
-        <thead><tr><th scope="col">Name</th><th scope="col">Position</th><th scope="col">Side</th><th scope="col">Role</th><th scope="col">Status</th>${anyActions ? '<th scope="col"></th>' : ''}</tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div>
-      ${anyHiddenName ? '<p class="rc-muted" style="margin-top:8px;font-size:12.5px;">A name is shown only to people on the signer\'s own side. Everyone else sees the position and side.</p>' : ''}
-      ${remind}${replaced}
-    </div>`;
-  }).join('');
-}
 
 function flowQueryChip(status) {
   const m = { open: ['Waiting for an answer', 'reject'], reopened: ['Reopened', 'reject'], answered: ['Answered', 'notice'], resolved: ['Resolved', 'ok'], draft: ['Not issued yet', 'muted'] }[status] || [status, 'muted'];
