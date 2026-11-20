@@ -710,6 +710,9 @@
     .rc-unread-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
     .rc-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 10px; }
     .rc-filter { position: relative; }
+    .rc-date-filter { display: inline-flex; align-items: center; gap: 6px; color: #64748b; font-size: 12px; }
+    .rc-date-filter input { min-height: 40px; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #334155; font: inherit; font-size: 13px; }
+    .rc-date-filter input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
     .rc-filter-btn { min-height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; color: #334155; font-family: inherit; font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
     .rc-filter-btn b { color: #0f172a; }
     .rc-filter-btn[aria-expanded="true"] { border-color: var(--accent); }
@@ -1392,7 +1395,6 @@
       background:#fff; color:var(--text); font-size:13px; min-width:0;
     }
     .meeting-toolbar .meeting-filter:focus { outline:2px solid var(--accent); outline-offset:-1px; }
-    .meeting-toolbar .meeting-filter-search { flex:1 1 200px; }
     .meeting-toolbar label { color:var(--muted); font-size:12px; display:flex; align-items:center; gap:6px; }
     .meeting-count { margin:0 0 8px; color:var(--muted); font-size:12px; }
     .meeting-alert {
@@ -7287,13 +7289,17 @@ sidebarItems.forEach(item => {
 // Search
 // =========================
 document.getElementById('searchBox').addEventListener('input', () => _dcRefreshForSearch());
-document.getElementById('searchBox').addEventListener('keyup', (e) => {
-  if (document.getElementById('recordsList')?.dataset.dcTab) return;   // folders handle their own search
-  const term = e.target.value.toLowerCase();
-  document.querySelectorAll('#bottomContent .doc-item').forEach(item => {
+document.getElementById('searchBox').addEventListener('input', applyDashboardSearch);
+document.getElementById('searchBox').addEventListener('keyup', applyDashboardSearch);
+
+function applyDashboardSearch() {
+  const term = document.getElementById('searchBox')?.value.toLowerCase() || '';
+  const isDocumentFolderView = Boolean(document.getElementById('recordsList')?.dataset.dcTab);
+  const selector = isDocumentFolderView ? '#bottomContent .meeting-card' : '#bottomContent .doc-item, #bottomContent .meeting-card';
+  document.querySelectorAll(selector).forEach(item => {
     item.style.display = item.textContent.toLowerCase().includes(term) ? '' : 'none';
   });
-});
+}
 
 // =========================
 // EXPANDED CHART MODAL
@@ -11784,14 +11790,13 @@ async function displayMeetingList(view, scope, scopeValue, context) {
       return;
     }
 
-    const state = { q: '', type: '', status: '', from: '', to: '', shown: MEETING_PAGE_SIZE };
+    const state = { type: '', status: '', from: '', to: '', shown: MEETING_PAGE_SIZE };
     const statusOptions = view === 'scheduled'
       ? [['', 'All statuses'], ['upcoming', 'Upcoming'], ['cancelled', 'Cancelled']]
       : [['', 'All statuses'], ['done', 'Report added'], ['missing', 'Report missing'], ['cancelled', 'Cancelled']];
 
     container.innerHTML = `
       <div class="meeting-toolbar">
-        <input type="search" class="meeting-filter meeting-filter-search" id="mtgSearch" placeholder="Search title, location, purpose…" aria-label="Search meetings">
         <select class="meeting-filter" id="mtgType" aria-label="Filter by meeting type">
           <option value="">All types</option><option value="site">Site</option><option value="office">Office</option><option value="virtual">Virtual</option>
         </select>
@@ -11810,10 +11815,6 @@ async function displayMeetingList(view, scope, scopeValue, context) {
       const when = meetingWhen(m);
       if (state.from && when < new Date(`${state.from}T00:00:00`)) return false;
       if (state.to && when > new Date(`${state.to}T23:59:59`)) return false;
-      if (state.q) {
-        const hay = [m.title, m.location, m.purpose, m.agenda].filter(Boolean).join(' ').toLowerCase();
-        if (!hay.includes(state.q.toLowerCase())) return false;
-      }
       return true;
     };
 
@@ -11830,11 +11831,12 @@ async function displayMeetingList(view, scope, scopeValue, context) {
         ? visible.map(m => renderMeetingCard(m, view)).join('')
           + (filtered.length > visible.length ? `<button type="button" class="btn meeting-more meeting-show-more" id="mtgMore">Show more (${filtered.length - visible.length} remaining)</button>` : '')
         : `<p class="meeting-empty">No meetings match your filters.</p>`;
+      applyDashboardSearch();
     };
     paint();
 
     const bind = (id, key, evt = 'input') => document.getElementById(id).addEventListener(evt, e => { state[key] = e.target.value; state.shown = MEETING_PAGE_SIZE; paint(); });
-    bind('mtgSearch', 'q'); bind('mtgType', 'type', 'change'); bind('mtgStatus', 'status', 'change');
+    bind('mtgType', 'type', 'change'); bind('mtgStatus', 'status', 'change');
     bind('mtgFrom', 'from', 'change'); bind('mtgTo', 'to', 'change');
 
     container.addEventListener('click', async event => {
@@ -13601,6 +13603,22 @@ const RC_FILTERS = [
   ['approved', 'Approved'], ['rejected', 'Rejected'], ['mine', 'Recorded by me']
 ];
 const recordsFilterState = {};
+const recordsDateFilterState = {};
+
+function rcRecordDateKey(value) {
+  const raw = String(value || '');
+  const isoDate = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoDate) return isoDate[1];
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function rcRecordDateMatches(value, from, to) {
+  const date = rcRecordDateKey(value);
+  if (!date) return !from && !to;
+  return (!from || date >= from) && (!to || date <= to);
+}
 
 function rcFilterKeys(doc) {
   const keys = [];
@@ -13620,10 +13638,13 @@ function rcApplyRecordsFilter() {
   if (!bar || !list) return;
   const tabKey = bar.dataset.tabKey;
   const key = recordsFilterState[tabKey] || 'all';
+  const dateFilter = recordsDateFilterState[tabKey] || { from: '', to: '' };
+  const hasDateFilter = Boolean(dateFilter.from || dateFilter.to);
   let shown = 0, total = 0;
   list.querySelectorAll(':scope > li.record-card').forEach(li => {
     total++;
-    const hide = key !== 'all' && !(li.dataset.fk || '').split(' ').includes(key);
+    const hide = (key !== 'all' && !(li.dataset.fk || '').split(' ').includes(key))
+      || (hasDateFilter && !rcRecordDateMatches(li.dataset.date, dateFilter.from, dateFilter.to));
     li.classList.toggle('rc-filtered-out', hide);
     if (!hide) shown++;
   });
@@ -13635,7 +13656,11 @@ function rcApplyRecordsFilter() {
     o.setAttribute('aria-selected', String(on));
   });
   bar.querySelector('.rc-filter-empty').hidden = !(key !== 'all' && total > 0 && shown === 0);
-  bar.querySelector('.rc-filter-note').hidden = !(key !== 'all' && recordsPageState[tabKey]?.hasMore === true);
+  bar.querySelector('.rc-filter-note').hidden = !((key !== 'all' || hasDateFilter) && recordsPageState[tabKey]?.hasMore === true);
+  const fromInput = bar.querySelector('[data-record-date="from"]');
+  const toInput = bar.querySelector('[data-record-date="to"]');
+  if (fromInput && fromInput.value !== dateFilter.from) fromInput.value = dateFilter.from;
+  if (toInput && toInput.value !== dateFilter.to) toInput.value = dateFilter.to;
 
   // Unread badge: only records the user has not opened yet (authors never get unread on their own records)
   const counts = {};
@@ -13673,11 +13698,20 @@ function rcSetupRecordsFilter(tabKey) {
             <svg class="rc-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>${l}<span class="rc-filter-count" hidden></span></button>`).join('')}
         </div>
       </div>
+      <label class="rc-date-filter">From <input type="date" data-record-date="from" aria-label="Records from date"></label>
+      <label class="rc-date-filter">To <input type="date" data-record-date="to" aria-label="Records to date"></label>
       <span class="rc-filter-note" hidden>Showing from the records loaded so far. Use “Load more” to include others.</span>
       <span class="rc-filter-empty" hidden>No loaded records match this filter.</span>`;
     list.insertAdjacentElement('beforebegin', bar);
   }
   bar.dataset.tabKey = tabKey;
+  bar.querySelectorAll('[data-record-date]').forEach(input => {
+    input.onchange = () => {
+      const state = recordsDateFilterState[bar.dataset.tabKey] || (recordsDateFilterState[bar.dataset.tabKey] = { from: '', to: '' });
+      state[input.dataset.recordDate] = input.value;
+      rcApplyRecordsFilter();
+    };
+  });
   rcApplyRecordsFilter();
 }
 
@@ -13929,7 +13963,7 @@ function renderRecordsList(records, tabKey, append = false) {
     RC_RECORD_DETAIL_RENDERERS.set(`${tabKey}:${doc.id}`, detailRenderer);
 
     return `
-      <li class="doc-item record-card${isUnread ? ' record-unread' : ''}${doc.superseded_by_id ? ' record-card--replaced' : ''}" data-id="${doc.id}" data-tab-key="${tabKey}" data-fk="${rcFilterKeys(doc)}">
+      <li class="doc-item record-card${isUnread ? ' record-unread' : ''}${doc.superseded_by_id ? ' record-card--replaced' : ''}" data-id="${doc.id}" data-tab-key="${tabKey}" data-fk="${rcFilterKeys(doc)}" data-date="${rcRecordDateKey(doc.issued_date)}">
         <div class="doc-item-header record-card-header" data-action="toggle" aria-expanded="false" role="button" tabindex="0">
           <div class="rc-main">
             <div class="rc-title-row">
