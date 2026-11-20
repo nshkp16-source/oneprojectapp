@@ -6906,6 +6906,10 @@ Object.assign(OPA_FR, {
   "This record could not be opened. Reload the list and try again.": "Ce dossier n’a pas pu être ouvert. Rechargez la liste et réessayez.",
   "Who": "Qui",
   "Note": "Remarque",
+  "Note:": "Remarque :",
+  "Final approver": "Approbateur final",
+  "Seen": "Vu",
+  "Not seen": "Non vu",
   "Not opened": "Non ouvert",
   "Commented": "A commenté",
   "Waiting": "En attente",
@@ -13655,11 +13659,11 @@ function rcPreviousRecordNoticeHtml(doc, tabKey) {
 
 // One slide: a short kicker, a plain sentence about what is going on, then the part itself.
 function rcDeckHtml(slides, startKey) {
-  const visibleSlides = slides.filter(sl => !sl.empty);
+  const visibleSlides = slides;
   let start = visibleSlides.findIndex(sl => sl.key === startKey);
   if (start < 0) start = 0;
   const tabs = visibleSlides.map((sl, i) => `
-    <button type="button" class="rc-deck-tab${i === start ? ' is-active' : ''}${sl.empty ? ' is-empty' : ''}" data-key="${sl.key}" data-action="slide-go" data-index="${i}" role="tab" aria-selected="${i === start}">
+    <button type="button" class="rc-deck-tab${i === start ? ' is-active' : ''}" data-key="${sl.key}" data-action="slide-go" data-index="${i}" role="tab" aria-selected="${i === start}">
       <span>${sl.label}</span>${sl.count ? `<span class="rc-deck-count">${sl.count}</span>` : ''}${sl.dot ? '<span class="rc-deck-dot" role="img" aria-label="New"></span>' : ''}
     </button>`).join('');
   const body = visibleSlides.map((sl, i) => `
@@ -13929,7 +13933,7 @@ function renderRecordsList(records, tabKey, append = false) {
         state: step.status === 'done' ? (/accept/i.test(step.label || '') ? 'Accepted' : 'Approved')
           : step.status === 'rejected' ? 'Rejected'
           : step.status === 'pending' ? (['can_approve', 'sign_review', 'sign_review_again'].includes(doc.btn_state) && !isLocked ? 'Waiting for you' : 'Waiting')
-          : step.status === 'skipped' ? 'Not reached' : 'Not yet'
+          : 'Not yet'
       })),
       {
         title: 'Final',
@@ -13987,17 +13991,17 @@ function renderRecordsList(records, tabKey, append = false) {
     plan.forEach(st => {
       if (plan.length > 1) dRows.push(`<tr class="rc-table-group"><td colspan="4">${escapeHtml(st.label || `Stage ${st.stage}`)}</td></tr>`);
       (st.signers || []).forEach(x => {
-        const roleLabel = x.is_decider ? 'Final decision maker' : x.is_team_member ? 'Team member' : 'Leader';
+        const roleLabel = x.is_decider ? 'Final approver' : x.is_team_member ? 'Team member' : 'Leader';
         const key = `${x.role}:${x.user_id}`;
         const decision = decisionsByKey.get(key);
         const decisionStatus = decision ? rcDecision(decision.action) : null;
         const state = decision
           ? `<span class="rc-status rc-status--${decisionStatus.tone}">${decisionStatus.label}</span>`
           : x.status === 'signed' ? `<span class="rc-chip rc-chip--ok">${rcIcon('check')}Signed</span>`
-          : x.first_viewed_at ? chip('notice', 'Opened') : chip('muted', 'Not opened');
+          : x.first_viewed_at ? chip('notice', 'Seen') : chip('muted', 'Not seen');
         const when = decision ? decision.action_date : x.status === 'signed' ? x.signed_at : x.first_viewed_at;
         const notes = [];
-        if (decision?.comment) notes.push(rcCommentHtml(decision.comment, 'Decision reason / note:'));
+        if (decision?.comment) notes.push(rcCommentHtml(decision.comment, 'Note:'));
         if (x.queries_raised) {
           const stillOpen = x.open_queries && !x.left_project;
           notes.push(`<div class="rc-sig-sub${stillOpen ? ' rc-sig-sub--warn' : ''}">Raised ${rcPlural(x.queries_raised, 'query', 'queries')}${stillOpen ? ', still open' : ''}</div>`);
@@ -14015,7 +14019,7 @@ function renderRecordsList(records, tabKey, append = false) {
       if (displayedDecisionKeys.has(key)) return;
       displayedDecisionKeys.add(key);
       const d = rcDecision(r.action);
-      dRows.push(`<tr>${whoCell(r)}<td><span class="rc-status rc-status--${d.tone}">${d.label}</span></td><td>${r.action_date ? escapeHtml(rcDate(r.action_date, true)) : 'None'}</td><td class="rc-note-cell${r.comment ? '' : ' is-empty'}">${r.comment ? rcCommentHtml(r.comment, 'Decision reason / note:') : 'None'}</td></tr>`);
+      dRows.push(`<tr>${whoCell(r)}<td><span class="rc-status rc-status--${d.tone}">${d.label}</span></td><td>${r.action_date ? escapeHtml(rcDate(r.action_date, true)) : 'None'}</td><td class="rc-note-cell${r.comment ? '' : ' is-empty'}">${r.comment ? rcCommentHtml(r.comment, 'Note:') : 'None'}</td></tr>`);
     });
     steps.forEach((step, index) => {
       const stage = plan.find(item => Number(item.stage) === index + 1);
@@ -14023,7 +14027,7 @@ function renderRecordsList(records, tabKey, append = false) {
       if (hasDecider || ['done', 'rejected', 'skipped'].includes(step.status)) return;
       dRows.push(`<tr>
         <td><span class="rc-sig-name">${escapeHtml(rcSideWord(step.side))}</span><div class="rc-sig-sub">Decision maker</div></td>
-        <td>${chip('muted', 'Not opened')}</td><td>None</td><td class="rc-note-cell is-empty">None</td>
+        <td>${chip('muted', 'Not seen')}</td><td>None</td><td class="rc-note-cell is-empty">None</td>
       </tr>`);
     });
     const remindHtml = doc.can_remind && plan.some(st => st.stage === doc.current_stage && (st.signers || []).some(x => x.status === 'pending'))
@@ -14043,7 +14047,7 @@ function renderRecordsList(records, tabKey, append = false) {
     // Other reviewers: opened or commented, shown only when someone has acted
     const othersSection = others.length
       ? rcSection('chat', 'Other reviewers',
-          tableOf('Other reviewers', others.map(r => `<tr>${whoCell(r)}<td>${chip('muted', r.comment ? 'Commented' : 'Opened')}</td><td>${r.action_date ? escapeHtml(rcDate(r.action_date, true)) : 'None'}</td><td class="rc-note-cell${r.comment ? '' : ' is-empty'}">${r.comment ? rcCommentHtml(r.comment) : 'None'}</td></tr>`).join('')),
+          tableOf('Other reviewers', others.map(r => `<tr>${whoCell(r)}<td>${chip('muted', r.comment ? 'Commented' : 'Seen')}</td><td>${r.action_date ? escapeHtml(rcDate(r.action_date, true)) : 'None'}</td><td class="rc-note-cell${r.comment ? '' : ' is-empty'}">${r.comment ? rcCommentHtml(r.comment) : 'None'}</td></tr>`).join('')),
           rcPlural(others.length, 'person', 'people'))
       : '';
 
