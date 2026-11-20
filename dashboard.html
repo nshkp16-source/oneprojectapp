@@ -4585,6 +4585,13 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Team members": "Membres de l'équipe",
   "Team sign-off": "Validation de l'équipe",
   "Their queries and comments are already in the schedule below. Edit or remove any of them.": "Leurs questions et commentaires figurent déjà dans le tableau ci-dessous. Modifiez-les ou supprimez-les.",
+  "Signature on the original record *": "Signature sur l'enregistrement original *",
+  "Choose signature position": "Choisir l'emplacement de la signature",
+  "No position selected.": "Aucun emplacement sélectionné.",
+  "Signature position selected.": "Emplacement de la signature sélectionné.",
+  "Choose a signature position on the original record first.": "Choisissez d'abord l'emplacement de la signature sur l'enregistrement original.",
+  "Your signature is added to the record at the position you choose. Your name, position and signing time are recorded automatically. The deciding leader signs after you.": "Votre signature est ajoutée à l'enregistrement à l'emplacement choisi. Votre nom, votre poste et l'heure de signature sont enregistrés automatiquement. Le responsable décideur signe après vous.",
+  "Your signature was added to the record and your review is signed. The deciding leader has been notified.": "Votre signature a été ajoutée à l'enregistrement et votre examen est signé. Le responsable décideur a été informé.",
   "Notice": "Avis",
   "System letter": "Lettre générée par le système",
   "Built from this form, with the signatures": "Générée à partir de ce formulaire, avec les signatures",
@@ -15267,6 +15274,7 @@ async function openSignoffPanel(recordId, tabKey) {
   if (!doc) return;
   const setupMsg = await flowCheckSigningReady({ recordId, tabKey, mode: 'review' });
   if (setupMsg) { flowShowSetupNeeded(setupMsg); return; }
+  let signaturePlacement = null;
   expandGrayPart(`
     <div class="fl-panel">
       <div class="fl-head"><h3>Review and sign</h3><div class="fl-sub">#${escapeHtml(doc.id)} ${escapeHtml(doc.title)}</div></div>
@@ -15277,8 +15285,11 @@ async function openSignoffPanel(recordId, tabKey) {
             <label><input type="radio" name="soOutcome" value="queries">Queries raised<small>The leader will see them when deciding</small></label>
           </div></div>
         <div class="fl-field" id="soQueriesWrap" style="display:none;"><div class="fl-label">Your queries</div><div class="fl-hint" style="margin:0 0 8px;">Add one entry for each point. You can add as many queries as you need.</div><div id="soQueries"></div></div>
+        <div class="fl-field"><div class="fl-label">Signature on the original record *</div>
+          <div class="fl-hint">Your signature is added to the record at the position you choose. Your name, position and signing time are recorded automatically. The deciding leader signs after you.</div>
+          <button type="button" class="fl-btn fl-btn--ghost" id="soStampChoose">Choose signature position</button>
+          <div class="fl-hint" id="soStampPlacement">No position selected.</div></div>
         <div class="fl-field"><label class="fl-label" for="soNote">Note (optional)</label><textarea class="fl-input" id="soNote" rows="3"></textarea></div>
-        <div class="fl-box">Your signature, name, position and the time are added automatically. The deciding leader signs after you.</div>
       </div>
       <div class="fl-err" id="soErr" role="alert"></div>
       <div class="fl-foot">
@@ -15287,6 +15298,25 @@ async function openSignoffPanel(recordId, tabKey) {
       </div>
     </div>`);
   mountQueryEditor('soQueries', []);
+  const placementButton = document.getElementById('soStampChoose');
+  placementButton.addEventListener('click', async () => {
+    flowError('soErr', '');
+    placementButton.disabled = true;
+    try {
+      const blob = await fetchRecordFileBlob(doc.id, tabKey, 'record.pdf');
+      const file = new File([blob], 'record.pdf', { type: blob.type || 'application/pdf' });
+      const selected = await new Promise(resolve => {
+        openStampPlacementModal(file, resolve, () => resolve(null), 'SIGNED');
+      });
+      if (!selected) return;
+      signaturePlacement = { page: selected.page, x: selected.x, y: selected.y, scale: selected.scale };
+      document.getElementById('soStampPlacement').textContent = 'Signature position selected.';
+    } catch (error) {
+      flowError('soErr', error.message || 'The record PDF could not be opened for signing.');
+    } finally {
+      placementButton.disabled = false;
+    }
+  });
   const seg = document.getElementById('soOutcome');
   seg.addEventListener('change', () => {
     const v = seg.querySelector('input:checked').value;
@@ -15300,10 +15330,11 @@ async function openSignoffPanel(recordId, tabKey) {
     const outcome = seg.querySelector('input:checked').value;
     const queries = outcome === 'queries' ? readQueryEditor('soQueries') : [];
     if (outcome === 'queries' && !queries.length) { flowError('soErr', 'Add at least one query, or choose "No queries".'); return; }
+    if (!signaturePlacement) { flowError('soErr', 'Choose a signature position on the original record first.'); placementButton.focus(); return; }
     btn.disabled = true; btn.textContent = 'Signing...';
-    const { ok, data } = await flowPost('record-signoff', { projectId: flowProjectId(), recordId: doc.id, recordType: tabToTable(tabKey), outcome, note: document.getElementById('soNote').value.trim(), queries });
+    const { ok, data } = await flowPost('record-signoff', { projectId: flowProjectId(), recordId: doc.id, recordType: tabToTable(tabKey), outcome, note: document.getElementById('soNote').value.trim(), queries, stampPlacement: signaturePlacement });
     if (!ok) { flowError('soErr', data.message || data.error || 'Your review could not be signed.'); btn.disabled = false; btn.textContent = 'Sign review'; return; }
-    alert('Your review is signed. The deciding leader has been notified.');
+    alert('Your signature was added to the record and your review is signed. The deciding leader has been notified.');
     flowReload(tabKey);
     collapseGrayPart();
   });
