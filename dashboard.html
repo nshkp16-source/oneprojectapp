@@ -7014,6 +7014,17 @@ Object.assign(OPA_FR, {
   "No reason was written.": "Aucun motif n'a été rédigé.",
   "Supporting files": "Fichiers justificatifs"
 });
+Object.assign(OPA_FR, {
+  "Written": "Rédigé",
+  "Leader signature": "Signature du responsable",
+  "Returned to you": "Retourné à vous",
+  "Needs your correction": "À corriger par vous",
+  "Signatures": "Signatures",
+  "Upload a corrected file": "Téléverser un fichier corrigé",
+  "Send to a folder": "Envoyer vers un dossier",
+  "Corrected file signed": "Fichier corrigé signé",
+  "Uploaded": "Téléversé"
+});
 OPA_PATTERNS.push(
   [/^(· )?(\d+) of (\d+) signed$/, (m, separator, signed, total) =>
     `${separator || ''}${signed} sur ${total} ${+signed === 1 ? 'a signé' : 'ont signé'}`],
@@ -13741,7 +13752,8 @@ function rcPreviousRecordNoticeHtml(doc, tabKey) {
   </aside>`;
 }
 
-// The tabs of the expanded card, and the content of each
+// The tabs of an expanded card and the content of each. A tab may carry an optional headline and sub line
+// (the Document & Approval and Control & Reports cards use them).
 function rcDeckHtml(slides, startKey) {
   const visibleSlides = slides;
   let start = visibleSlides.findIndex(sl => sl.key === startKey);
@@ -13752,6 +13764,8 @@ function rcDeckHtml(slides, startKey) {
     </button>`).join('');
   const body = visibleSlides.map((sl, i) => `
     <div class="rc-slide${i === start ? ' is-active' : ''}" data-key="${sl.key}" data-index="${i}" role="tabpanel">
+      ${sl.headline ? `<h3 class="rc-slide-head">${sl.headline}</h3>` : ''}
+      ${sl.sub ? `<p class="rc-slide-sub">${sl.sub}</p>` : ''}
       <div class="rc-slide-body">${sl.html}</div>
     </div>`).join('');
   return `
@@ -24372,6 +24386,13 @@ function _daBadge(status) {
   return `<span class="rc-status rc-status--${cls}">${escapeHtml(label)}</span>`;
 }
 
+// "Waiting for you" when this person has to act, like the record card
+function _daBadgeFor(doc) {
+  if (doc.can_review === true && doc.status === 'pending_approval') return '<span class="rc-status rc-status--pending">Waiting for you</span>';
+  if (_dcIsAuthor(doc) && doc.status === 'rejected') return '<span class="rc-status rc-status--danger">Returned to you</span>';
+  return _daBadge(doc.status);
+}
+
 function _daLabelStyle() {
   return 'display:block;font-size:11px;font-weight:700;color:#6b7280;' +
          'text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;';
@@ -24750,7 +24771,7 @@ function _daCardHtml(doc, open, v) {
               </div>
             </div>
             <div class="rc-side">
-              ${_daBadge(doc.status)}
+              ${_daBadgeFor(doc)}
               <span class="rc-chevron chevron-${doc.id}" aria-hidden="true"></span>
             </div>
           </div>
@@ -24779,7 +24800,7 @@ function _crCardHtml(doc) {
             </div>
           </div>
           <div class="rc-side">
-            ${_crBadge(doc.cr_status)}
+            ${_crBadgeFor(doc)}
             <span class="rc-chevron chevron-cr-${doc.id}" aria-hidden="true"></span>
           </div>
         </div>
@@ -25160,6 +25181,8 @@ async function _daLoadDetail(recordId) {
   const container = document.getElementById(`da-detail-inner-${recordId}`);
   if (!container) return;
   _dcMarkRead(recordId, 'document-approval');
+  // Opened before: keep what is there (same tab, nothing typed is lost)
+  if (container.dataset.loaded === 'true') return;
 
   const doc = (recordsCache['document-approval'] || []).find(r => String(r.id) === String(recordId));
   if (!doc) {
@@ -25173,10 +25196,15 @@ async function _daLoadDetail(recordId) {
     : (userSide !== null && userSide.toLowerCase() === (doc.side || '').toLowerCase());
   const isCreator = _dcIsAuthor(doc);
 
-  const events = await _dcLoadEvents(recordId);
-  container.innerHTML = _daDetailHtml(doc, leader, isCreator, events);
+  // The card opens straight away; the History tab fills in when its data arrives
+  container.innerHTML = _daDetailHtml(doc, leader, isCreator, null);
+  container.dataset.loaded = 'true';
   _dcWireFileButtons(container, doc);
   _daWireDetailButtons(recordId, doc, leader, isCreator);
+  _dcLoadEvents(recordId).then(events => {
+    const slot = container.querySelector('[data-history-slot]');
+    if (slot) slot.innerHTML = _dcHistorySection(events);
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -25277,7 +25305,7 @@ function _dcPerson(name, role) {
 }
 function _dcFactGroups(groups) {
   const html = Object.entries(groups).filter(([, rows]) => rows.some(r => r[1] !== null && r[1] !== undefined && r[1] !== '')).map(([name, rows]) =>
-    `<section class="rc-factgroup"><h4 class="rc-factgroup-title">${name}</h4><dl class="rc-factlist">${
+    `<section class="rc-factgroup">${name ? `<h4 class="rc-factgroup-title">${name}</h4>` : ''}<dl class="rc-factlist">${
       rows.filter(r => r[1] !== null && r[1] !== undefined && r[1] !== '').map(([k, v]) => `<div class="rc-fact"><dt>${k}</dt><dd>${v}</dd></div>`).join('')
     }</dl></section>`).join('');
   return `<div class="rc-factgroups">${html}</div>`;
@@ -25319,10 +25347,13 @@ function _dcHistoryHtml(events) {
     return { state: 'done', icon, text: `${_dcIsMe(e.actor_id, e.actor_role) ? 'You' : (e.actor_name || rcRoleLabel(e.actor_role) || 'Someone')} ${verb}.`, when: e.created_at, sub: e.detail || '' };
   }));
 }
+function _dcHistorySection(events) {
+  return rcSection('history', 'History of this document', _dcHistoryHtml(events), events.length ? rcPlural(events.length, 'entry', 'entries') : '');
+}
+// events = null while the history is still loading; it is filled in once it arrives
 function _dcHistorySlide(events) {
-  return { key: 'history', label: 'History', count: events.length || '',
-    headline: events.length ? 'Everything that happened to this document, newest first.' : 'Nothing has been recorded for this document yet.', sub: 'Who did what, and when.',
-    html: rcSection('history', 'History of this document', _dcHistoryHtml(events), events.length ? rcPlural(events.length, 'entry', 'entries') : '') };
+  return { key: 'history', label: 'History',
+    html: `<div data-history-slot>${events ? _dcHistorySection(events) : '<p class="dc-loading">Loading…</p>'}</div>` };
 }
 async function _dcLoadEvents(recordId) {
   try {
@@ -25363,94 +25394,60 @@ function _dcEvents(list) {
       </div>
     </li>`).join('')}</ol>`;
 }
-function _dcTimeline(steps) {
-  return `<ol class="rc-timeline">${steps.map((n, idx) => {
-    const cls = { done: 'is-done', rejected: 'is-rejected', pending: 'is-pending' }[n.status] || 'is-waiting';
-    const icon = n.status === 'done' ? rcIcon('check') : n.status === 'rejected' ? rcIcon('x') : n.status === 'pending' ? rcIcon('clock') : String(idx + 1);
-    return `<li class="rc-tl ${cls}"><span class="rc-tl-dot">${icon}</span><div class="rc-tl-body">
-      <div class="rc-tl-title">${escapeHtml(n.title)}</div><p class="rc-tl-text">${escapeHtml(n.text)}</p>
-      ${n.when ? `<p class="rc-tl-date">${escapeHtml(rcDate(n.when, true))}</p>` : ''}</div></li>`;
-  }).join('')}</ol>`;
-}
-
-// What happened to the document so far, in order. Works for both cards.
-function _dcStory(doc, inControl) {
-  const author = _dcIsAuthor(doc) ? 'You' : _dcPerson(doc.creator_name, doc.creator_role);
-  const ev = [];
-  const signer = _dcIsMe(doc.approved_by_id, doc.approved_by_role) ? 'You' : _dcPerson(doc.signed_by_name, doc.approved_by_role);
-  const stampSub = id => id ? `Stamp ID ${id}` : '';
-  ev.push({ state: 'start', icon: 'file', text: `${author} wrote this document.`, when: doc.created_at,
-            sub: doc.author_stamp_id ? `The submitter signed it with a stamp. ${stampSub(doc.author_stamp_id)}` : '' });
-  const signedOff = doc.status === 'approved' || doc.status === 'shared' || inControl;
-  if (signedOff) ev.push({ state: 'done', icon: 'check', text: `${signer} signed this document.`, when: doc.reviewed_at, sub: doc.signer_stamp_id ? `Stamp on the document. ${stampSub(doc.signer_stamp_id)}` : 'Signed without a stamp.' });
-  if (!inControl) {
-    if (doc.status === 'draft') ev.push({ state: 'pending', icon: 'clock', text: 'This document has not been sent to the leader yet.' });
-    else if (doc.status === 'pending_approval') ev.push({ state: 'pending', icon: 'clock', text: `Waiting for the leader of the ${rcSideWord(doc.side)} side to review it.` });
-    else if (doc.status === 'rejected') ev.push({ state: 'rejected', icon: 'x', text: 'The leader returned this document to the submitter.' });
-    else if (doc.status === 'approved') ev.push({ state: 'pending', icon: 'clock', text: 'Signed. The leader has not shared it to Control & Reports yet.' });
-    else if (doc.status === 'shared') ev.push({ state: 'done', icon: 'check', text: 'Shared to Control & Reports. The whole side can now read it and comment.', when: doc.shared_at });
-  } else {
-    const cr = doc.cr_status || 'shared';
-    ev.push({ state: 'done', icon: 'check', text: 'Shared to Control & Reports. The whole side can read it and comment.', when: doc.shared_at });
-    if (cr === 'rejected') ev.push({ state: 'rejected', icon: 'x', text: `The ${rcRoleLabel(doc.cr_rejected_by_role) || 'leader'} rejected this document.`, when: doc.cr_rejected_at });
-    if (cr === 'replacement_pending') ev.push({ state: 'pending', icon: 'clock', text: 'The submitter uploaded a corrected file. Waiting for the leader to sign it.', when: doc.replaced_at });
-  }
-  return ev;
-}
-function _dcProgress(doc, inControl) {
+// The steps of a document, in the same short bar the record card uses
+function _dcProgress(doc, inControl, leader) {
   const signedOff = doc.status === 'approved' || doc.status === 'shared' || inControl;
   const shared = doc.status === 'shared' || inControl;
-  const steps = [
-    { title: 'Written by the submitter', status: 'done', text: `${_dcPerson(doc.creator_name, doc.creator_role)} wrote this document.`, when: doc.created_at },
-    doc.status === 'rejected' && !inControl
-      ? { title: 'Review by the leader', status: 'rejected', text: 'The leader returned it. The submitter can correct it and send it again.' }
-      : { title: 'Signed by the leader', status: signedOff ? 'done' : (doc.status === 'pending_approval' ? 'pending' : 'waiting'),
-          text: signedOff ? `${_dcPerson(doc.signed_by_name, doc.approved_by_role)} signed it.` : doc.status === 'pending_approval' ? 'Waiting for the leader to sign it or return it.' : 'Starts after the submitter sends it to the leader.',
-          when: signedOff ? doc.reviewed_at : null },
-    { title: 'Shared to Control & Reports', status: shared ? 'done' : (signedOff ? 'pending' : 'waiting'),
-      text: shared ? 'Everyone on this side can read it and comment.' : signedOff ? 'Waiting for the leader to share it.' : 'Starts after the leader signs it.', when: shared ? doc.shared_at : null },
-  ];
-  if (inControl) {
-    const cr = doc.cr_status || 'shared';
-    if (cr === 'rejected' || cr === 'replacement_pending' || doc.replaced_at) {
-      steps.push({ title: 'Rejected by the leader', status: 'rejected', text: doc.cr_reject_reason ? `Reason: ${doc.cr_reject_reason}` : 'The leader rejected this document.', when: doc.cr_rejected_at });
-      steps.push({ title: 'Corrected file from the submitter', status: cr === 'rejected' ? 'pending' : 'done', text: cr === 'rejected' ? 'Waiting for the submitter to upload a corrected file.' : 'The submitter uploaded a corrected file.', when: doc.replaced_at });
-      steps.push({ title: 'Corrected file signed by the leader', status: cr === 'replacement_pending' ? 'pending' : (cr === 'shared' && doc.replaced_at ? 'done' : 'waiting'),
-                  text: cr === 'replacement_pending' ? 'Waiting for the leader to sign the corrected file.' : (cr === 'shared' && doc.replaced_at ? 'The corrected file is signed and visible to the side again.' : 'Starts after the corrected file is uploaded.') });
-    }
+  const cr = doc.cr_status || 'shared';
+  const me = _dcIsAuthor(doc);
+  const steps = [{ title: 'Written', status: 'done', state: doc.status === 'draft' ? 'Draft' : '', when: doc.created_at }];
+  if (doc.status === 'rejected' && !inControl) {
+    steps.push({ title: 'Leader review', status: 'rejected', state: 'Returned', when: doc.reviewed_at });
+  } else {
+    const pending = doc.status === 'pending_approval';
+    steps.push({ title: 'Leader signature', status: signedOff ? 'done' : (pending ? 'pending' : 'waiting'),
+      state: signedOff ? 'Signed' : pending ? (leader ? 'Waiting for you' : 'Waiting') : 'Not yet', when: signedOff ? doc.reviewed_at : null });
   }
-  const done = steps.filter(s => s.status === 'done').length;
-  const rejected = steps.some(s => s.status === 'rejected' && s === steps[steps.length - 1]);
-  const headline = doc.status === 'rejected' && !inControl ? 'This document was returned to the submitter.'
-    : (inControl && (doc.cr_status === 'rejected' || doc.cr_status === 'replacement_pending')) ? 'This document is being corrected.'
-    : done === steps.length ? 'Every step is finished.' : `${done} of ${steps.length} steps are finished.`;
-  return { steps, done, headline };
+  steps.push({ title: 'Control & Reports', status: shared ? 'done' : (signedOff ? 'pending' : 'waiting'),
+    state: shared ? 'Shared' : signedOff ? (leader ? 'Waiting for you' : 'Waiting') : 'Not yet', when: shared ? doc.shared_at : null });
+  if (inControl && (cr === 'rejected' || cr === 'replacement_pending' || doc.replaced_at)) {
+    steps.push({ title: 'Rejected', status: 'rejected', state: 'Rejected', when: doc.cr_rejected_at });
+    steps.push({ title: 'Corrected file', status: cr === 'rejected' ? 'pending' : 'done',
+      state: cr === 'rejected' ? (me ? 'Waiting for you' : 'Waiting') : 'Uploaded', when: doc.replaced_at });
+    steps.push({ title: 'Corrected file signed', status: cr === 'replacement_pending' ? 'pending' : (cr === 'shared' && doc.replaced_at ? 'done' : 'waiting'),
+      state: cr === 'replacement_pending' ? (leader ? 'Waiting for you' : 'Waiting') : (cr === 'shared' && doc.replaced_at ? 'Signed' : 'Not yet') });
+  }
+  return steps;
+}
+function _dcStatusBar(steps) {
+  const tone = st => st === 'done' ? 'done' : st === 'rejected' ? 'rejected' : st === 'pending' ? 'pending' : 'idle';
+  return `<ol class=\"rc-pbar\">${steps.map(n => `
+      <li class=\"rc-pbar-step is-${tone(n.status)}\">
+        <span class=\"rc-pbar-name\">${escapeHtml(n.title)}</span>
+        <span class=\"rc-pbar-state\">${n.state ? `<span>${n.state}</span> ` : ''}${n.when ? `<span>${escapeHtml(rcDate(n.when))}</span>` : ''}</span>
+      </li>`).join('')}</ol>`;
 }
 
-function _dcDetailsHtml(doc, inControl) {
-  const status = inControl ? _crBadge(doc.cr_status) : _daBadge(doc.status);
-  const groups = {
-    Document: [['Reference', escapeHtml(doc.doc_number || ('#' + doc.id))], ['Revision', doc.doc_number ? `Rev ${_dcRevLetter(doc.revision_no)}` : ''],
-               ['Type', escapeHtml(doc.doc_type || 'Not given')],
-               ['Review by', doc.deadline ? escapeHtml(_dcDay(doc.deadline)) : ''],
-               ['Version', doc.replaced_at ? 'Corrected file' : 'First file']],
-    Submission: [['Written by', _dcIsAuthor(doc) ? 'You' : escapeHtml(_dcPerson(doc.creator_name, doc.creator_role))], ['Date written', escapeHtml(rcDate(doc.created_at, true))],
-                 ['Submitter\'s stamp', doc.author_stamp_id ? `Stamped and signed (${escapeHtml(doc.author_stamp_id)})` : 'Not stamped']],
-    'Sign-off': [['Current status', status],
-                 ['Signed by', doc.reviewed_at && (doc.signed_by_name || doc.approved_by_role) ? (_dcIsMe(doc.approved_by_id, doc.approved_by_role) ? 'You' : escapeHtml(_dcPerson(doc.signed_by_name, doc.approved_by_role))) : ''],
-                 ['Signed on', doc.reviewed_at && (doc.signed_by_name || doc.approved_by_role) ? escapeHtml(rcDate(doc.reviewed_at, true)) : ''],
-                 ['Leader\'s stamp', doc.reviewed_at && (doc.signed_by_name || doc.approved_by_role) ? (doc.signer_stamp_id ? `Stamped and signed (${escapeHtml(doc.signer_stamp_id)})` : 'Not stamped') : ''],
-                 ['Shared on', doc.shared_at ? escapeHtml(rcDate(doc.shared_at, true)) : '']],
-  };
-  return rcSection('file', 'Title of this document', `<p class="rc-record-title">${escapeHtml(doc.title || 'Untitled')}</p>`)
-       + rcSection('list', 'About this document', _dcFactGroups(groups))
-       + rcSection('notice', 'Description of this document', doc.description
-           ? `<div class="rc-rich"><p class="rc-text">${escapeHtml(doc.description)}</p></div>`
-           : `<p class="rc-text rc-text--empty">No description was written for this document.</p>`);
+// Who signed and with which stamp. Title, reference, type and dates are already on the collapsed card.
+function _dcSignaturesHtml(doc) {
+  const stampText = id => id ? `Stamped and signed (${escapeHtml(id)})` : 'Not stamped';
+  const signed = !!(doc.reviewed_at && (doc.signed_by_name || doc.approved_by_role));
+  const signer = !signed ? '' : (_dcIsMe(doc.approved_by_id, doc.approved_by_role) ? 'You' : escapeHtml(_dcPerson(doc.signed_by_name, doc.approved_by_role)));
+  return rcSection('check', 'Signatures', _dcFactGroups({ '': [
+    ['Submitter\'s stamp', stampText(doc.author_stamp_id)],
+    ['Signed by the leader', signed ? `${signer} · ${escapeHtml(rcDate(doc.reviewed_at, true))}` : ''],
+    ['Leader\'s stamp', signed ? stampText(doc.signer_stamp_id) : ''],
+  ] }));
+}
+function _dcDocumentTabHtml(doc, filesHtml) {
+  const description = rcSection('notice', 'Description of this document', doc.description
+    ? `<div class=\"rc-rich\"><p class=\"rc-text\">${escapeHtml(doc.description)}</p></div>`
+    : `<p class=\"rc-text rc-text--empty\">No description was written for this document.</p>`);
+  return description + filesHtml + _dcSignaturesHtml(doc);
 }
 
 // ── Document & Approval ───────────────────────────────────────────────────
-function _daDetailHtml(doc, leader, isCreator, events = []) {
+function _daDetailHtml(doc, leader, isCreator, events = null) {
   const id = doc.id;
   let note = '', bar = '', before = '', stampOption = '';
   if (doc.status === 'rejected') {
@@ -25483,24 +25480,19 @@ function _daDetailHtml(doc, leader, isCreator, events = []) {
     note = rcNote('This document is now in Control &amp; Reports, where everyone on this side can read it and comment.', 'check', 'success');
   }
   const actionBar = bar ? `<div class="rc-actionbar">${bar}</div>` : '';
-  const standing = rcSection('info', 'Where this document stands',
-    _dcEvents(_dcStory(doc, false)) + note + (!stampOption ? before + actionBar : ''));
-  const review = stampOption
-    ? rcSection('check', 'Leader review', stampOption + before + actionBar)
-    : '';
-
-  const prog = _dcProgress(doc, false);
+  const standing = rcSection('workflow', 'Where this document stands', _dcStatusBar(_dcProgress(doc, false, leader)) + note);
+  const files = rcSection('paperclip', 'File attached to this document',
+    _dcFileItem('da', doc, 'Document', `Written by ${_dcIsAuthor(doc) ? 'you' : _dcPerson(doc.creator_name, doc.creator_role)} on ${rcDate(doc.created_at, true)}.`) + _dcSupportingHtml(doc),
+    doc.file_name ? '1 file' : '');
   const slides = [
-    { key: 'details', label: 'Details', headline: `This is the summary of document ${escapeHtml(doc.doc_number || ('#' + id))}.`, sub: '', html: _dcDetailsHtml(doc, false) },
-    { key: 'documents', label: 'Document', count: ((doc.file_name ? 1 : 0) + (doc.supporting_files || []).length) || '',
-      headline: doc.file_name ? ((doc.supporting_files || []).length ? 'The main file and its supporting files are attached.' : 'One file is attached to this document.') : 'No file is attached to this document.',
-      sub: 'You can preview or download each file.',
-      html: rcSection('paperclip', 'File attached to this document', _dcFileItem('da', doc, 'Document', `Written by ${_dcIsAuthor(doc) ? 'you' : _dcPerson(doc.creator_name, doc.creator_role)} on ${rcDate(doc.created_at, true)}.`) + _dcSupportingHtml(doc), doc.file_name ? '1 file' : '') },
-    { key: 'progress', label: 'Progress', headline: prog.headline, sub: '',
-      html: rcSection('workflow', 'Progress of this document', _dcTimeline(prog.steps), `${prog.done} of ${prog.steps.length} steps`) },
+    { key: 'documents', label: 'Document', count: ((doc.file_name ? 1 : 0) + (doc.supporting_files || []).length) || '', html: _dcDocumentTabHtml(doc, files) },
     _dcHistorySlide(events),
   ];
-  return standing + review + rcDeckHtml(slides, 'details');
+  // Actions come after the document, so the leader reads it and then acts
+  const footer = stampOption ? rcSection('check', 'Leader review', stampOption + before + actionBar)
+    : before ? rcSection('inbox', 'Send to a folder', before + actionBar)
+    : bar ? `<div class="rc-footbar">${actionBar}</div>` : '';
+  return standing + rcDeckHtml(slides, 'documents') + footer;
 }
 
 // ── Control & Reports ─────────────────────────────────────────────────────
@@ -25562,8 +25554,8 @@ function _crDetailHtml(doc, ctx) {
       <div style="margin-bottom:4px;">${_dcSignOption('cr-replace-sign-' + id)}</div>`;
     bar = _dcBtn('cr-replace', 'Upload corrected file', 'warn', 'history');
   }
-  const standing = rcSection('info', 'Where this document stands',
-    _dcEvents(_dcStory(doc, true)) + note + before + (bar ? `<div class="rc-actionbar">${bar}</div>` : ''));
+  const standing = rcSection('workflow', 'Where this document stands', _dcStatusBar(_dcProgress(doc, true, leader)) + note);
+  const actionBar = bar ? `<div class="rc-actionbar">${bar}</div>` : '';
 
   const earlier = versions.length ? `<div class="rc-earlier-bar" style="margin-top:12px;"><p class="rc-text">Earlier revisions (rejected)</p></div>` + versions.map((v, vi) => `
       <div class="rc-item rc-item--file"><span class="rc-file-icon">${rcIcon('paperclip')}</span><div class="rc-item-body">
@@ -25582,23 +25574,18 @@ function _crDetailHtml(doc, ctx) {
       </div>
       ${_dcBtn('cr-comment', 'Post', 'warn', 'chat')}
     </div>` : '';
-  const recs = comments.filter(c => c.kind === 'recommendation').length;
-  const prog = _dcProgress(doc, true);
+  const files = rcSection('paperclip', 'File attached to this document',
+    _dcFileItem('cr', doc, cr === 'shared' ? `Current file (Rev ${_dcRevLetter(doc.revision_no)})` : 'Under correction', `Shared on ${rcDate(doc.shared_at, true)}.`) + _dcSupportingHtml(doc) + earlier);
   const slides = [
-    { key: 'details', label: 'Details', headline: `This is the summary of document ${escapeHtml(doc.doc_number || ('#' + id))}.`, sub: '', html: _dcDetailsHtml(doc, true) },
-    { key: 'documents', label: 'Document', count: (doc.file_name ? 1 : 0) + versions.length || '',
-      headline: doc.file_name ? 'The current file is attached to this document.' : 'No file is attached to this document.',
-      sub: versions.length ? `${rcPlural(versions.length, 'earlier file was', 'earlier files were')} rejected.` : 'You can download the file.',
-      html: rcSection('paperclip', 'File attached to this document', _dcFileItem('cr', doc, cr === 'shared' ? `Current file (Rev ${_dcRevLetter(doc.revision_no)})` : 'Under correction', `Shared on ${rcDate(doc.shared_at, true)}.`) + _dcSupportingHtml(doc) + earlier) },
-    { key: 'progress', label: 'Progress', headline: prog.headline, sub: '',
-      html: rcSection('workflow', 'Progress of this document', _dcTimeline(prog.steps), `${prog.done} of ${prog.steps.length} steps`) },
+    { key: 'documents', label: 'Document', count: (doc.file_name ? 1 : 0) + versions.length || '', html: _dcDocumentTabHtml(doc, files) },
     { key: 'comments', label: 'Queries', count: comments.length || '',
-      headline: comments.length ? `${rcPlural(comments.length, 'entry has', 'entries have')} been written on this document.` : 'Nobody has raised a query on this document yet.',
-      sub: comments.length ? `${rcPlural(recs, 'recommendation', 'recommendations')} so far. Colleagues on this side only ask queries, there is no approval between them.` : 'Everyone on this side can raise a query here.',
-      html: rcSection('chat', 'Queries and recommendations', `<div id="cr-thread-${id}">${_crThreadHtml(comments, doc, leader)}</div>${box}`, comments.length ? rcPlural(comments.length, 'entry', 'entries') : '') },
+      html: rcSection('chat', 'Queries and recommendations', `<div id=\"cr-thread-${id}\">${_crThreadHtml(comments, doc, leader)}</div>${box}`, comments.length ? rcPlural(comments.length, 'entry', 'entries') : '') },
     _dcHistorySlide(events),
   ];
-  return standing + rcDeckHtml(slides, comments.length && cr === 'shared' ? 'comments' : 'details');
+  // Actions come after the document and the queries, so the leader reads and then acts
+  const footerTitle = (cr === 'rejected' && author) ? 'Upload a corrected file' : 'Leader review';
+  const footer = (before || bar) ? rcSection('check', footerTitle, before + actionBar) : '';
+  return standing + rcDeckHtml(slides, comments.length && cr === 'shared' ? 'comments' : 'documents') + footer;
 }
 
 async function _crLoadDetail(recordId) {
@@ -26038,6 +26025,12 @@ async function _crLoadRecords() {
 // ═══════════════════════════════════════════════════════════════════════
 //  CONTROL & REPORTS — badge, list, detail card, comments, correction flow
 // ═══════════════════════════════════════════════════════════════════════
+function _crBadgeFor(doc) {
+  const cr = doc.cr_status || 'shared';
+  if (cr === 'replacement_pending' && _dcIsLeaderOf(doc)) return '<span class="rc-status rc-status--pending">Waiting for you</span>';
+  if (cr === 'rejected' && _dcIsAuthor(doc)) return '<span class="rc-status rc-status--danger">Needs your correction</span>';
+  return _crBadge(cr);
+}
 function _crBadge(cr) {
   const map = {
     shared:              ['neutral', 'Shared'],
