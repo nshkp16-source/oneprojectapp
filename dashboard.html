@@ -13301,22 +13301,6 @@ function rcNewestFirst(list, dateOf) {
   return list.map((x, i) => ({ x, i, t: new Date(dateOf(x) || 0).getTime() || 0 }))
     .sort((a, b) => (b.t - a.t) || (b.i - a.i)).map(o => o.x);
 }
-// Shows the newest item. Earlier ones stay closed until the person asks, and each opens as its own dated box.
-// items: [{ html, label }] already sorted newest first.
-function rcLatestAndEarlier(items, noun, nounPlural) {
-  if (!items.length) return '';
-  let out = items[0].html;
-  if (items.length > 1) {
-    const rest = items.slice(1);
-    const closed = `Show earlier ${rest.length === 1 ? noun : nounPlural} (${rest.length})`;
-    const opened = `Hide earlier ${rest.length === 1 ? noun : nounPlural}`;
-    out += `<div class="rc-earlier-bar">${rcBtn('show-earlier', closed, null, 'sm',
-      `aria-expanded="false" data-label-closed="${escapeHtml(closed)}" data-label-open="${escapeHtml(opened)}"`)}</div>
-      <div class="rc-earlier" hidden>${rest.map(it => `<p class="rc-earlier-label">${escapeHtml(it.label)}</p>${it.html}`).join('')}</div>`;
-  }
-  return out;
-}
-
 function rcBtn(action, label, icon, variant, attrs) {
   return `<button type="button" class="rc-btn${variant ? ' rc-btn--' + variant : ''}" data-action="${action}" ${attrs || ''}>${icon ? rcIcon(icon) : ''}<span>${label}</span></button>`;
 }
@@ -13385,76 +13369,6 @@ function rcReviewRow(name, sub, r) {
       <p class="rc-item-text">${escapeHtml(rcReviewSentence(r))}</p>
       ${r.comment ? rcCommentHtml(r.comment) : ''}
     </li>`;
-}
-
-// What happened to the record so far: a short list of events in order, each with its date
-function rcStandingEventsHtml(doc) {
-  const who = rcRoleLabel(doc.uploader_role);
-  const subject = who ? `The ${who}` : 'A project member';
-  const ev = [];
-  if (doc.is_notice_record || doc.btn_state === 'notice_final') {
-    ev.push({ state: 'start', icon: 'file', text: `${subject} issued this notice.`, when: doc.issued_date });
-    if (doc.signed_at) ev.push({ state: 'done', icon: 'check', text: 'The notice was signed.', when: doc.signed_at });
-  } else {
-    ev.push({ state: 'start', icon: 'file', text: `${subject} submitted this record.`, when: doc.issued_date });
-    const steps = doc.workflow_steps || [];
-    steps.filter(x => x.status === 'done').forEach(x => {
-      const acc = /accept/i.test(x.label || '');
-      ev.push({ state: 'done', icon: 'check', text: `The ${rcRoleLabel(x.by) || rcSideWord(x.side)} ${acc ? 'accepted' : 'approved'} this record.`, when: x.at });
-    });
-    const rej = steps.find(x => x.status === 'rejected');
-    if (rej && rej.by) ev.push({ state: 'rejected', icon: 'x', text: `The ${rcRoleLabel(rej.by)} rejected this record.`, when: rej.at });
-    else if (doc.status === 'rejected') ev.push({ state: 'rejected', icon: 'x', text: 'This record was rejected.' });
-    else if (doc.status !== 'approved_record' && doc.is_locked !== true) {
-      const pend = steps.find(x => x.status === 'pending');
-      if (pend) {
-        const cur = (doc.signing_plan || []).find(x => x.stage === doc.current_stage);
-        ev.push({
-          state: 'pending', icon: 'clock',
-          text: `Waiting for the ${rcSideWord(pend.side)} to ${/accept/i.test(pend.label || '') ? 'accept' : 'approve'} this record.`,
-          sub: cur ? `${cur.signed_count} of ${rcPlural(cur.total, 'named signer has', 'named signers have')} signed for the ${rcSideWord(cur.side)} side.` : '',
-        });
-      }
-    }
-  }
-  return `<ol class="rc-events">${ev.map(e => `
-    <li class="rc-event is-${e.state}">
-      <span class="rc-event-dot">${rcIcon(e.icon)}</span>
-      <div class="rc-event-body">
-        <p class="rc-event-text">${escapeHtml(e.text)}</p>
-        ${e.when ? `<p class="rc-event-date">${escapeHtml(rcDate(e.when, true))}</p>` : ''}
-        ${e.sub ? `<p class="rc-event-date">${escapeHtml(e.sub)}</p>` : ''}
-      </div>
-    </li>`).join('')}</ol>`;
-}
-
-// (older sentence version, no longer used by the card)
-function rcStandingText(doc) {
-  const who = rcRoleLabel(doc.uploader_role) || 'A project member';
-  const when = rcDate(doc.issued_date, true);
-  const parts = [];
-  if (doc.is_notice_record || doc.btn_state === 'notice_final') {
-    parts.push(`${who} issued this notice on ${when}.`);
-    if (doc.signed_at) parts.push(`It was signed on ${rcDate(doc.signed_at, true)}.`);
-    return parts;
-  }
-  parts.push(`${who} submitted this record on ${when}.`);
-  const steps = doc.workflow_steps || [];
-  steps.filter(s => s.status === 'done').forEach(s => {
-    const acc = /accept/i.test(s.label || '');
-    parts.push(`The ${rcRoleLabel(s.by) || rcSideWord(s.side)} ${acc ? 'accepted' : 'approved'} it${s.at ? ` on ${rcDate(s.at, true)}` : ''}.`);
-  });
-  const rej = steps.find(s => s.status === 'rejected');
-  if (rej && rej.by) parts.push(`The ${rcRoleLabel(rej.by)} rejected it${rej.at ? ` on ${rcDate(rej.at, true)}` : ''}.`);
-  else if (doc.status === 'rejected') parts.push('It was rejected.');
-  else if (doc.status === 'approved_record') parts.push('All approvals are complete, so this record is final.');
-  else {
-    const pend = steps.find(s => s.status === 'pending');
-    if (pend) parts.push(`It is now waiting for the ${rcSideWord(pend.side)} to ${/accept/i.test(pend.label || '') ? 'accept' : 'approve'} it.`);
-    const cur = (doc.signing_plan || []).find(s => s.stage === doc.current_stage);
-    if (cur) parts.push(`${cur.signed_count} of ${rcPlural(cur.total, 'named signer has', 'named signers have')} signed for the ${rcSideWord(cur.side)} side.`);
-  }
-  return parts;
 }
 
 function rcRecordWarningHtml(doc, dueLate) {
@@ -13827,7 +13741,7 @@ function rcPreviousRecordNoticeHtml(doc, tabKey) {
   </aside>`;
 }
 
-// One slide: a short kicker, a plain sentence about what is going on, then the part itself.
+// The tabs of the expanded card, and the content of each
 function rcDeckHtml(slides, startKey) {
   const visibleSlides = slides;
   let start = visibleSlides.findIndex(sl => sl.key === startKey);
@@ -13838,8 +13752,6 @@ function rcDeckHtml(slides, startKey) {
     </button>`).join('');
   const body = visibleSlides.map((sl, i) => `
     <div class="rc-slide${i === start ? ' is-active' : ''}" data-key="${sl.key}" data-index="${i}" role="tabpanel">
-      ${sl.headline ? `<h3 class="rc-slide-head">${sl.headline}</h3>` : ''}
-      ${sl.sub ? `<p class="rc-slide-sub">${sl.sub}</p>` : ''}
       <div class="rc-slide-body">${sl.html}</div>
     </div>`).join('');
   return `
@@ -14122,31 +14034,10 @@ function renderRecordsList(records, tabKey, append = false) {
         <span class="rc-pbar-name">${escapeHtml(n.title)}</span>
         <span class="rc-pbar-state">${n.state ? `<span>${n.state}</span> ` : ''}${n.when ? `<span>${escapeHtml(rcDate(n.when))}</span>` : ''}</span>
       </li>`).join('')}</ol>`;
-    const completedSteps = 1 + steps.filter(step => step.status === 'done').length + (doc.status === 'approved_record' ? 1 : 0);
-    const nextStep = stepNodes.slice(1).find(node => ['pending', 'waiting', 'idle'].includes(node.status));
-    const statusSummary = doc.status === 'rejected' ? 'Rejected'
-      : `${completedSteps} of 4 steps finished${nextStep ? ` · Next: ${nextStep.title}` : ''}`;
-    const myRev = doc.my_review || {};
-    const isMineReview = r => (myRev.reviewer_id != null && r.reviewer_id != null && String(myRev.reviewer_id) === String(r.reviewer_id))
-      || (myRev.id != null && r.id != null && String(myRev.id) === String(r.id));
-    const finalDecision = doc.status === 'rejected'
-      ? decisions.find(r => r.action === 'rejected')
-      : doc.status === 'approved_record' ? decisions.find(r => r.action === 'approved' || r.action === 'accepted') : null;
-    let outcomeHtml = '';
-    if (finalDecision) {
-      const rej = finalDecision.action === 'rejected';
-      const byWho = isMineReview(finalDecision) ? 'you' : (rcRoleLabel(finalDecision.reviewer_role) || reviewName(finalDecision));
-      const reason = String(finalDecision.comment || '').trim();
-      outcomeHtml = `<div class="rc-outcome rc-outcome--${rej ? 'danger' : 'success'}">
-        <p class="rc-outcome-line"><strong>${rej ? 'Rejected' : 'Approved'} by ${escapeHtml(byWho)}</strong>${finalDecision.action_date ? ` on ${escapeHtml(rcDate(finalDecision.action_date, true))}` : ''}.</p>
-        ${reason ? rcCommentHtml(reason, 'Reason: ') : (rej ? '<p class="rc-text rc-text--empty">No reason was written.</p>' : '')}
-      </div>`;
-    }
     const statusSection = rcSection('workflow', 'Where it stands',
       steps.length
         ? statusBarHtml
-        : `<p class="rc-text rc-text--empty">No approval steps have been set for this record.</p>`,
-      steps.length ? statusSummary : '');
+        : `<p class="rc-text rc-text--empty">No approval steps have been set for this record.</p>`);
 
     // Decisions: everyone who has to decide is listed, even with no action yet
     const plan = doc.signing_plan || [];
@@ -14207,14 +14098,11 @@ function renderRecordsList(records, tabKey, append = false) {
     const signedAll = plan.reduce((a, x) => a + (x.signed_count || 0), 0);
     const totalAll = plan.reduce((a, x) => a + (x.total || 0), 0);
     const signedCount = plan.length ? `${signedAll} of ${totalAll} signed` : '';
-    // With people listed, the names sit behind one tap. They open by default for someone who has to act.
-    const decisionsSection = dRows.length
-      ? `<details class="rc-fold"${(remindHtml || cueText) ? ' open' : ''}>
-          <summary><span>Show who signed</span>${signedCount ? `<span class="rc-fold-count">· ${signedCount}</span>` : ''}</summary>
-          <div class="rc-fold-body">${tableOf('Decisions', dRows.join(''))}${remindHtml}</div>
-        </details>`
-      : rcSection('check', 'Decisions',
-          `<p class="rc-text rc-text--empty">Nobody has been asked to decide on this record yet.</p>${remindHtml}`, signedCount);
+    const decisionsSection = rcSection('check', 'Decisions',
+      dRows.length
+        ? `${tableOf('Decisions', dRows.join(''))}${remindHtml}`
+        : `<p class="rc-text rc-text--empty">Nobody has been asked to decide on this record yet.</p>${remindHtml}`,
+      signedCount);
 
     // Other reviewers: opened or commented, shown only when someone has acted
     const othersSection = others.length
@@ -14225,8 +14113,7 @@ function renderRecordsList(records, tabKey, append = false) {
 
     const tabSlides = [
       { key: 'progress', label: 'Progress', count: queriesWaiting ? `${queriesWaiting} open` : '',
-        html: outcomeHtml
-          + (hasQueries && queriesWaiting ? queriesHtml : '')      // queries that need action come first
+        html: (hasQueries && queriesWaiting ? queriesHtml : '')      // queries that need action come first
           + statusSection + decisionsSection
           + (hasQueries && !queriesWaiting ? queriesHtml : '')     // finished queries stay as history
           + othersSection },
@@ -15753,11 +15640,11 @@ function rcPendingTeamQueries(doc) {
 }
 
 // One row per query: what was raised, what is needed, and the response to that same query beside it
-function flowQueryTable(list, { withActions }) {
+function flowQueryTable(list) {
   const rows = [...list].sort((x, y) => (Number(x.seq) || 0) - (Number(y.seq) || 0));
-  const showActions = withActions && rows.some(q => q.can_review);
+  const showActions = rows.some(q => q._from && q.can_review);
   const body = rows.map(q => {
-    const act = withActions && q.can_review
+    const act = q._from && q.can_review
       ? `<div class="rc-table-actions">${q.status === 'answered' ? `<button type="button" class="rc-btn rc-btn--sm" data-action="query-resolve" data-query-id="${q.id}">Mark as resolved</button>` : ''}<button type="button" class="rc-btn rc-btn--sm" data-action="query-reopen" data-query-id="${q.id}">Reopen</button></div>`
       : '';
     const respBy = q.responded_by || q.answered_by;
@@ -15767,7 +15654,7 @@ function flowQueryTable(list, { withActions }) {
       : `<span class="rc-resp-none">${q.status === 'open' || q.status === 'reopened' ? 'No response yet.' : q.status === 'draft' ? 'Not issued to the contractor yet.' : '\u2014'}</span>`;
     return `<tr>
         <td class="rc-col-no">${escapeHtml(String(q.seq))}</td>
-        <td>${escapeHtml(q.ref || 'Not given')}</td>
+        <td>${escapeHtml(q.ref || 'Not given')}${q._from ? `<div class="rc-sig-sub">From record #${escapeHtml(String(q._from))}</div>` : ''}</td>
         <td>${escapeHtml(q.raised_by || q.by || 'Not recorded')}</td>
         <td class="rc-col-long"><div class="rc-q-text">${escapeHtml(q.query || '')}</div>${q.required_action ? `<div class="rc-q-action"><strong>Action needed:</strong> ${escapeHtml(q.required_action)}</div>` : ''}</td>
         <td class="rc-col-long">${response}</td>
@@ -15781,32 +15668,20 @@ function flowQueryTable(list, { withActions }) {
     </table></div>`;
 }
 function renderQueriesSection(doc) {
+  // One table for every query: earlier record's queries, this record's, then the review team's not yet issued
+  const prev = (doc.revision_queries || []).map(q => ({ ...q, _from: doc.revision_of_id }));
   const own = doc.queries || [];
-  const prev = doc.revision_queries || [];
   const pending = rcPendingTeamQueries(doc);
-  let html = '';
-  if (own.length) {
-    const done = own.filter(q => q.status === 'resolved').length;
-    html += rcSection('list', 'Queries raised on this record',
-      flowQueryTable(own, { withActions: false }) +
-      (doc.superseded_by_id ? `<p class="rc-muted" style="margin-top:10px;">These queries were answered in the corrected record #${escapeHtml(doc.superseded_by_id)}.</p>` : ''),
-      `${rcPlural(own.length, 'query', 'queries')}, ${done} resolved`);
-  } else if (!pending.length) {
-    html += rcSection('list', 'Queries raised on this record', `<p class="rc-text rc-text--empty">No queries have been raised on this record.</p>`);
+  const all = [...prev, ...own, ...pending].map((q, i) => ({ ...q, seq: i + 1 }));
+  if (!all.length) {
+    return rcSection('list', 'Queries', `<p class="rc-text rc-text--empty">No queries have been raised on this record.</p>`);
   }
-  if (pending.length) {
-    html += rcSection('list', 'Queries raised by the review team so far',
-      `<p class="rc-table-note">These come from the signing team members. If the deciding leader rejects this record, they are added to the query schedule of the notice.</p>` +
-      flowQueryTable(pending, { withActions: false }),
-      rcPlural(pending.length, 'query', 'queries'));
-  }
-  if (prev.length) {
-    const done = prev.filter(q => q.status === 'resolved').length;
-    html += rcSection('list', `Queries from record #${escapeHtml(doc.revision_of_id)} answered here`,
-      flowQueryTable(prev, { withActions: true }),
-      `${rcPlural(prev.length, 'query', 'queries')}, ${done} resolved`);
-  }
-  return html;
+  const done = all.filter(q => q.status === 'resolved').length;
+  return rcSection('list', 'Queries',
+    flowQueryTable(all) +
+    (pending.length ? `<p class="rc-table-note">Queries marked "Not issued yet" come from the signing team members. If the deciding leader rejects this record, they are added to the query schedule of the notice.</p>` : '') +
+    (doc.superseded_by_id && own.length ? `<p class="rc-muted" style="margin-top:10px;">These queries were answered in the corrected record #${escapeHtml(doc.superseded_by_id)}.</p>` : ''),
+    `${rcPlural(all.length, 'query', 'queries')}, ${done} resolved`);
 }
 
 function openAddRecordPanel(noticeConfig = null, tabKey = null, options = {}) {
