@@ -14749,16 +14749,26 @@ async function previewRecordFile(recordId, tabKey, fileName, supportingIndex) {
   const existing = document.getElementById('recordPreviewModal');
   if (existing) existing.remove();
   flowRecordView(recordId, tabKey);   // previewing the PDF counts as opening it (named signers only)
+  // Phones cannot show a PDF inside the preview window: open a tab right at the tap and fill it in once the file has loaded
+  const phoneTab = _dcIsPhone() ? window.open('', '_blank') : null;
+  if (phoneTab) { try { phoneTab.document.write('<p style="font-family:sans-serif;padding:16px;color:#475569;">Loading…</p>'); } catch (e) { /* ignore */ } }
   try {
     const res = await authFetch(
       `${API}/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}&disposition=inline${fileName ? `&filename=${encodeURIComponent(fileName)}` : ''}${supportingIndex != null && supportingIndex !== '' ? `&supportingIndex=${encodeURIComponent(supportingIndex)}` : ''}`,
       { method: 'GET' }
     );
-    if (!res || !res.ok) { alert('Failed to preview the official document.'); return; }
+    if (!res || !res.ok) { phoneTab?.close(); alert('Failed to preview the official document.'); return; }
     const blob = await res.blob();
-    if (!blob.size) { alert('The document is empty.'); return; }
+    if (!blob.size) { phoneTab?.close(); alert('The document is empty.'); return; }
     const url = URL.createObjectURL(blob);
     const mime = blob.type || 'application/pdf';
+    if (phoneTab) {
+      if (/^(application\/pdf|image\/|video\/|audio\/)/.test(mime)) {
+        phoneTab.location.href = url;   // the phone's own viewer shows it
+        return;
+      }
+      phoneTab.close();                  // other file types: the message in the window below
+    }
     const modal = document.createElement('div');
     modal.id = 'recordPreviewModal';
     modal.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.72);display:flex;align-items:center;justify-content:center;padding:20px;';
@@ -14793,6 +14803,7 @@ async function previewRecordFile(recordId, tabKey, fileName, supportingIndex) {
     modal.addEventListener('click', event => { if (event.target === modal) close(); });
   } catch (err) {
     console.error('Preview error:', err);
+    phoneTab?.close();
     alert('Failed to preview the official document.');
   }
 }
@@ -28265,6 +28276,6 @@ async function createStampArtworkCanvas(draft, stampType = 'APPROVED', targetWid
 })();
 
 </script>
-<script src="language-switcher.js"></script>
+<!-- language is changed from Settings; the old language-switcher.js dropdown is no longer loaded -->
 </body>
 </html>
