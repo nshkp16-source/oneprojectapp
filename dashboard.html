@@ -1613,6 +1613,18 @@
     .meeting-detail-row > strong { color: #66747f; font-weight: 600; }
     .meeting-detail-row > span { min-width: 0; color: #263640; white-space: pre-wrap; overflow-wrap: anywhere; }
     .meeting-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+    .meeting-actions--foot { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--border); }
+    .meeting-card-body .meeting-minute-section--first { margin-top: 0; margin-bottom: 14px; padding: 0 0 14px; border-top: 0; border-bottom: 1px solid var(--border); }
+    .mtg-cue-chip { display: inline-flex; margin-top: 4px; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; background: #fef3c7; color: #92400e; }
+    .meeting-rsvp-box { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: #f8fafc; font-size: 13px; color: #263640; }
+    .meeting-rsvp-box.needs { background: #fffbeb; border-color: #fde68a; }
+    .meeting-rsvp-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .mtg-reply { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: #f1f5f9; color: #475569; }
+    .mtg-reply--yes { background: #dcfce7; color: #166534; }
+    .mtg-reply--no { background: #fee2e2; color: #991b1b; }
+    .meeting-ref { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 0; }
+    .meeting-role-line + .meeting-role-line { margin-top: 2px; }
+    .meeting-role-line b { margin-right: 6px; font-weight: 600; color: #66747f; }
     .meeting-download-link { color: #126c76; font-size: 12px; font-weight: 600; text-decoration: none; }
     .meeting-download-link:hover { text-decoration: underline; }
     @media (max-width: 560px) {
@@ -7038,6 +7050,21 @@ Object.assign(OPA_FR, {
   "Uploaded": "Téléversé"
 });
 Object.assign(OPA_FR, {
+  "RSVP needed": "Réponse attendue",
+  "Add the report": "Ajouter le compte rendu",
+  "Please tell the organiser if you can attend.": "Merci d'indiquer à l'organisateur si vous pouvez participer.",
+  "You accepted this meeting.": "Vous avez accepté cette réunion.",
+  "You declined this meeting.": "Vous avez refusé cette réunion.",
+  "Decline instead": "Refuser plutôt",
+  "Accept instead": "Accepter plutôt",
+  "No reply yet": "Pas encore de réponse",
+  "Declined": "Refusé",
+  "Roles": "Rôles",
+  "Ends": "Fin",
+  "Access": "Accès",
+  "The meeting has taken place and no report has been added yet.": "La réunion a eu lieu et aucun compte rendu n'a encore été ajouté."
+});
+Object.assign(OPA_FR, {
   "Answer": "Répondre",
   "Reject document": "Rejeter le document",
   "Reject new file": "Rejeter le nouveau fichier",
@@ -12053,10 +12080,12 @@ async function displayMeetingList(view, scope, scopeValue, context) {
       const cancelMeeting = event.target.closest('.cancel-meeting-btn');
       const rsvpButton = event.target.closest('.meeting-rsvp');
       const minuteButton = event.target.closest('.add-minute-btn, .edit-minute-btn');
-      const button = downloadPlan || downloadReport || downloadIcs || editMeeting || cancelMeeting || rsvpButton || minuteButton;
+      const previewButton = event.target.closest('.meeting-preview');
+      const button = downloadPlan || downloadReport || downloadIcs || editMeeting || cancelMeeting || rsvpButton || minuteButton || previewButton;
       if (!button) return;
       event.stopPropagation();
       const meeting = meetings.find(item => String(item.id) === button.getAttribute('data-meeting-id'));
+      if (previewButton) { meetingPreview(previewButton); return; }
       if (downloadPlan) downloadMeetingPdf(button.getAttribute('data-meeting-id'), 'plan');
       else if (downloadReport) downloadMeetingPdf(button.getAttribute('data-meeting-id'), 'minutes');
       else if (downloadIcs) downloadMeetingCalendar(button.getAttribute('data-meeting-id'));
@@ -12739,6 +12768,27 @@ function isMeetingPlanner(meeting) {
     && String(meeting.created_role).toLowerCase() === String(window.currentUserRole).toLowerCase();
 }
 
+// Preview of the meeting report or of a reference file (same window as the other cards; new tab on phones)
+function meetingPreview(btn) {
+  const name = btn.dataset.name || 'Meeting file';
+  if (btn.dataset.kind === 'report') {
+    const id = btn.dataset.meetingId;
+    _dcPreview('', name, async () => {
+      const r = await authFetch(`${API}/meetings/${id}/minute/pdf`);
+      if (!r || !r.ok) throw new Error('The file could not be loaded.');
+      return r.blob();
+    });
+    return;
+  }
+  const url = btn.dataset.url;
+  _dcPreview('', name, async () => {
+    try { const r = await authFetch(url); if (r && r.ok) return await r.blob(); } catch (e) { /* try a plain request next */ }
+    const r2 = await fetch(url);
+    if (!r2.ok) throw new Error('The file could not be loaded.');
+    return r2.blob();
+  });
+}
+
 async function downloadMeetingPdf(meetingId, kind) {
   try {
     const path = kind === 'minutes' ? `${API}/meetings/${meetingId}/minute/pdf` : `${API}/meetings/${meetingId}/pdf`;
@@ -12798,10 +12848,6 @@ function renderMeetingCard(meeting, view) {
   const when = meetingWhen(meeting);
   const dateStr = meeting.is_draft ? 'Not scheduled yet' : formatMeetingDate(when, meeting.time_zone);
   const status = getMeetingStatus(meeting);
-  const participantList = Array.isArray(meeting.participant_details) && meeting.participant_details.length
-    ? meeting.participant_details.map(person => `<li>${escapeHtml(person.name || 'Participant')} <span class="meeting-roster-meta">${escapeHtml(person.email || person.role || 'External participant')} · ${escapeHtml(({ required: 'Required', optional: 'Optional', information: 'For information' })[person.attendance_type] || 'Required')}</span></li>`).join('')
-    : (meeting.participants || '').split(/\r?\n/).filter(Boolean).map(name => `<li>${escapeHtml(name)}</li>`).join('');
-  const references = (meeting.attachments || []).map(file => `<a href="${escapeHtml(file.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(file.name)}</a>`).join(' · ');
   const planner = isMeetingPlanner(meeting);
   const id = escapeHtml(String(meeting.id));
   let day = '—', mon = '';
@@ -12828,6 +12874,50 @@ function renderMeetingCard(meeting, view) {
       : escapeHtml(meeting.virtual_link || 'Virtual meeting')
     : escapeHtml(meeting.location || '—');
 
+  // ── participants and their replies in ONE list ──
+  const attendanceLabel = { required: 'Required', optional: 'Optional', information: 'For information' };
+  const rsvps = Array.isArray(meeting.rsvps) ? meeting.rsvps : [];
+  const lowName = x => String(x || '').trim().toLowerCase();
+  const rsvpFor = person => rsvps.find(r => r.participant_source === 'project' && person.source === 'project'
+      && normalizeRoleKey(r.participant_role) === normalizeRoleKey(person.role) && String(r.participant_role_id) === String(person.role_id))
+    || (person.name ? rsvps.find(r => lowName(r.participant_name) === lowName(person.name)) : undefined);
+  const replyChip = r => !r ? '' : r.response === 'accepted' ? '<span class="mtg-reply mtg-reply--yes">Accepted</span>'
+    : r.response === 'declined' ? '<span class="mtg-reply mtg-reply--no">Declined</span>' : '<span class="mtg-reply">No reply yet</span>';
+  const usedRsvps = new Set();
+  const details = Array.isArray(meeting.participant_details) ? meeting.participant_details : [];
+  const detailItems = details.map(person => {
+    const r = rsvpFor(person); if (r) usedRsvps.add(r);
+    return `<li>${escapeHtml(person.name || 'Participant')} <span class="meeting-roster-meta">${escapeHtml(person.email || person.role || 'External participant')} · ${escapeHtml(attendanceLabel[person.attendance_type] || 'Required')}</span>${replyChip(r)}</li>`;
+  });
+  const plainItems = details.length ? [] : (meeting.participants || '').split(/\r?\n/).filter(Boolean).map(name => `<li>${escapeHtml(name)}</li>`);
+  const extraItems = rsvps.filter(r => !usedRsvps.has(r)).map(r => `<li>${escapeHtml(r.participant_name || 'Participant')}${replyChip(r)}</li>`);
+  const participantList = [...detailItems, ...plainItems, ...extraItems].join('');
+
+  // ── what the current person still has to do ──
+  const answered = !!currentRsvp && ['accepted', 'declined'].includes(currentRsvp.response);
+  const canReply = !!currentRsvp && !meeting.is_draft && status.key === 'upcoming';
+  const needsRsvp = canReply && !answered;
+  const needsReport = planner && status.key === 'missing';
+  const cueChip = needsRsvp ? '<span class="mtg-cue-chip" data-cue="rsvp">RSVP needed</span>'
+    : needsReport ? '<span class="mtg-cue-chip" data-cue="report">Add the report</span>' : '';
+  const rsvpBtn = (response, label) => `<button type="button" class="btn meeting-rsvp" data-response="${response}" data-meeting-id="${id}">${label}</button>`;
+  const rsvpBox = !canReply ? '' : `<div class="meeting-rsvp-box${needsRsvp ? ' needs' : ''}">
+          <span>${!answered ? 'Please tell the organiser if you can attend.' : currentRsvp.response === 'accepted' ? 'You accepted this meeting.' : 'You declined this meeting.'}</span>
+          <span class="meeting-rsvp-actions">${!answered ? rsvpBtn('accepted', 'Accept') + rsvpBtn('declined', 'Decline') : currentRsvp.response === 'accepted' ? rsvpBtn('declined', 'Decline instead') : rsvpBtn('accepted', 'Accept instead')}</span>
+        </div>`;
+
+  // ── plan rows: only what the collapsed row does not already say ──
+  const roleLines = [
+    meeting.chairperson ? `<div class="meeting-role-line"><b>Chairperson</b>${escapeHtml(meeting.chairperson)}</div>` : '',
+    meeting.minute_taker ? `<div class="meeting-role-line"><b>Minute-taker</b>${escapeHtml(meeting.minute_taker)}</div>` : '',
+    meeting.planned_by_name ? `<div class="meeting-role-line"><b>Planned by</b>${escapeHtml(meeting.planned_by_name)}</div>` : '',
+  ].join('');
+  const accessParts = [meeting.meeting_type === 'virtual' ? locationText : '', meeting.safety_notes ? escapeHtml(meeting.safety_notes) : ''].filter(Boolean).join('<br>');
+  const references = (meeting.attachments || []).map(file => file.url
+    ? `<div class="meeting-ref"><span>${escapeHtml(file.name)}</span><button type="button" class="btn meeting-preview" data-kind="ref" data-url="${escapeHtml(file.url)}" data-name="${escapeHtml(file.name)}">Preview</button></div>`
+    : `<div class="meeting-ref"><span>${escapeHtml(file.name)}</span></div>`).join('');
+  const showReport = view === 'minutes' && status.key !== 'cancelled';
+
   return `
     <div class="meeting-card ${status.key === 'cancelled' ? 'cancelled' : ''}" data-id="${id}">
       <button type="button" class="meeting-card-header" aria-expanded="false" aria-controls="meeting-body-${id}">
@@ -12837,6 +12927,7 @@ function renderMeetingCard(meeting, view) {
             <span class="meeting-card-title" style="display:block;">${escapeHtml(meeting.title)}</span>
             <span class="meeting-card-meta" style="display:block;">${escapeHtml(typeLabel)} · ${escapeHtml(dateStr)} · ${meeting.meeting_type === 'virtual' ? 'Online' : escapeHtml(meeting.location || 'Location not set')}</span>
             <span class="mtg-badge ${status.key} meeting-card-badge-mobile">${escapeHtml(status.label)}</span>
+            ${cueChip}
           </span>
         </span>
         <span class="meeting-card-side">
@@ -12845,31 +12936,25 @@ function renderMeetingCard(meeting, view) {
         </span>
       </button>
       <div class="meeting-card-body" id="meeting-body-${id}">
-        <div class="meeting-actions">
+        ${rsvpBox}
+        ${showReport ? renderMinuteSection(meeting) : ''}
+        <h4 class="meeting-section-title">Meeting plan</h4>
+        ${status.key === 'cancelled' ? `<div class="meeting-detail-row"><strong>Cancelled</strong><span>${escapeHtml(meeting.cancelled_at ? formatMeetingDate(meeting.cancelled_at) : 'Yes')}${meeting.cancel_reason ? ` — ${escapeHtml(meeting.cancel_reason)}` : ''}</span></div>` : ''}
+        ${meeting.meeting_number ? `<div class="meeting-detail-row"><strong>Meeting number</strong><span>${escapeHtml(meeting.meeting_number)}</span></div>` : ''}
+        <div class="meeting-detail-row"><strong>Purpose</strong><span class="meeting-rich-display">${safeMeetingRichHtml(meeting.purpose || '—')}</span></div>
+        ${roleLines ? `<div class="meeting-detail-row"><strong>Roles</strong><span>${roleLines}</span></div>` : ''}
+        ${meeting.end_at ? `<div class="meeting-detail-row"><strong>Ends</strong><span>${escapeHtml(formatMeetingDate(meeting.end_at, meeting.time_zone))}</span></div>` : ''}
+        ${accessParts ? `<div class="meeting-detail-row"><strong>Access</strong><span>${accessParts}</span></div>` : ''}
+        <div class="meeting-detail-row"><strong>Participants</strong><span><ul style="margin:0;padding-left:18px;">${participantList || '<li>—</li>'}</ul></span></div>
+        <div class="meeting-detail-row"><strong>Agenda</strong><span>${agenda}</span></div>
+        ${meeting.recurrence_group ? `<div class="meeting-detail-row"><strong>Recurring series</strong><span>${escapeHtml(meeting.recurrence_rule?.frequency || 'Recurring')} · occurrence ${escapeHtml(String(meeting.series_index || ''))}</span></div>` : ''}
+        ${references ? `<div class="meeting-detail-row"><strong>References</strong><span>${references}</span></div>` : ''}
+        <div class="meeting-actions meeting-actions--foot">
           <button type="button" class="btn meeting-download-plan" data-meeting-id="${id}">Download meeting plan (PDF)</button>
           ${!meeting.is_draft ? `<button type="button" class="btn meeting-download-ics" data-meeting-id="${id}">Add to calendar (.ics)</button>` : ''}
           ${planner && status.key !== 'cancelled' ? `<button type="button" class="btn edit-meeting-btn" data-meeting-id="${id}">${meeting.is_draft ? 'Edit draft' : 'Edit meeting'}</button>` : ''}
           ${canCancel ? `<button type="button" class="btn danger cancel-meeting-btn" data-meeting-id="${id}">Cancel meeting</button>` : ''}
-          ${currentRsvp && !meeting.is_draft ? `<span class="meeting-roster-meta">Your RSVP: ${escapeHtml(currentRsvp.response)}</span>
-            <button type="button" class="btn meeting-rsvp" data-response="accepted" data-meeting-id="${id}">Accept</button>
-            <button type="button" class="btn meeting-rsvp" data-response="declined" data-meeting-id="${id}">Decline</button>` : ''}
         </div>
-        <h4 class="meeting-section-title">Meeting plan</h4>
-        ${meeting.project_name ? `<div class="meeting-detail-row"><strong>Project</strong><span>${escapeHtml(meeting.project_name)}${meeting.project_reference ? ` · ${escapeHtml(meeting.project_reference)}` : ''}</span></div>` : ''}
-        ${meeting.meeting_number ? `<div class="meeting-detail-row"><strong>Meeting number</strong><span>${escapeHtml(meeting.meeting_number)}</span></div>` : ''}
-        ${meeting.planned_by_name ? `<div class="meeting-detail-row"><strong>Planned by</strong><span>${escapeHtml(meeting.planned_by_name)}</span></div>` : ''}
-        ${status.key === 'cancelled' ? `<div class="meeting-detail-row"><strong>Cancelled</strong><span>${escapeHtml(meeting.cancelled_at ? formatMeetingDate(meeting.cancelled_at) : 'Yes')}${meeting.cancel_reason ? ` — ${escapeHtml(meeting.cancel_reason)}` : ''}</span></div>` : ''}
-        ${meeting.chairperson ? `<div class="meeting-detail-row"><strong>Chairperson</strong><span>${escapeHtml(meeting.chairperson)}</span></div>` : ''}
-        ${meeting.minute_taker ? `<div class="meeting-detail-row"><strong>Minute-taker</strong><span>${escapeHtml(meeting.minute_taker)}</span></div>` : ''}
-        <div class="meeting-detail-row"><strong>Purpose</strong><span class="meeting-rich-display">${safeMeetingRichHtml(meeting.purpose || '—')}</span></div>
-        <div class="meeting-detail-row"><strong>Date and time</strong><span>${escapeHtml(dateStr)}${meeting.end_at ? ` – ${escapeHtml(formatMeetingDate(meeting.end_at, meeting.time_zone))}` : ''}</span></div>
-        <div class="meeting-detail-row"><strong>Location / access</strong><span>${locationText}${meeting.safety_notes ? `<br>${escapeHtml(meeting.safety_notes)}` : ''}</span></div>
-        <div class="meeting-detail-row"><strong>Participants</strong><span><ul style="margin:0;padding-left:18px;">${participantList || '<li>—</li>'}</ul></span></div>
-        <div class="meeting-detail-row"><strong>Agenda</strong><span>${agenda}</span></div>
-        ${meeting.recurrence_group ? `<div class="meeting-detail-row"><strong>Recurring series</strong><span>${escapeHtml(meeting.recurrence_rule?.frequency || 'Recurring')} · occurrence ${escapeHtml(String(meeting.series_index || ''))}</span></div>` : ''}
-        ${meeting.rsvps?.length ? `<div class="meeting-detail-row"><strong>RSVPs</strong><span>${meeting.rsvps.map(rsvp => `${escapeHtml(rsvp.participant_name)}: ${escapeHtml(rsvp.response)}`).join('<br>')}</span></div>` : ''}
-        ${references ? `<div class="meeting-detail-row"><strong>References</strong><span>${references}</span></div>` : ''}
-        ${view === 'minutes' && status.key !== 'cancelled' ? renderMinuteSection(meeting) : ''}
       </div>
     </div>
   `;
@@ -12903,13 +12988,14 @@ async function cancelPlannedMeeting(meeting, view, context) {
 function renderMinuteSection(meeting) {
   const planner = isMeetingPlanner(meeting);
   return `
-    <div class="meeting-minute-section" id="minute-section-${meeting.id}">
+    <div class="meeting-minute-section meeting-minute-section--first" id="minute-section-${meeting.id}">
       ${meeting.has_minute
         ? renderMinuteDetail(meeting.minute, meeting.id, planner)
         : planner
           ? `<h4 class="meeting-section-title" style="margin-top:0;">Meeting report</h4>
+             <div class="meeting-roster-meta" style="margin-bottom:8px;">The meeting has taken place and no report has been added yet.</div>
              <button class="btn primary add-minute-btn" data-meeting-id="${meeting.id}">Add meeting report (PDF)</button>`
-          : `<div class="meeting-roster-meta" style="padding:6px 0;">No meeting report has been added yet.</div>`}
+          : `<h4 class="meeting-section-title" style="margin-top:0;">Meeting report</h4><div class="meeting-roster-meta" style="padding:6px 0;">No meeting report has been added yet.</div>`}
     </div>
   `;
 }
@@ -12920,16 +13006,18 @@ function renderMinuteDetail(minute, meetingId, canEdit = false) {
   const at = minute?.uploaded_at || minute?.updated_at || minute?.created_at;
   const uploadedLine = (by || at)
     ? `<div class="meeting-roster-meta">Uploaded${by ? ` by ${escapeHtml(by)}` : ''}${at ? ` on ${escapeHtml(formatMeetingDate(at))}` : ''}</div>` : '';
+  const mid = escapeHtml(String(meetingId));
   return `
     <div>
       <h4 class="meeting-section-title" style="margin-top:0;">Meeting report</h4>
-      <div class="meeting-actions">
-        <button type="button" class="btn meeting-download-report" data-meeting-id="${escapeHtml(String(meetingId))}">Download full report (plan + minutes)</button>
-        ${canEdit ? `<button type="button" class="btn edit-minute-btn" data-meeting-id="${escapeHtml(String(meetingId))}">Replace report (PDF)</button>` : ''}
-      </div>
       ${report ? `<div class="meeting-roster-meta">File: ${escapeHtml(report.name)}</div>` : ''}
       ${uploadedLine}
       ${Number(minute?.version) > 1 ? `<div class="meeting-roster-meta">Version ${escapeHtml(String(minute.version))} (replaced ${Number(minute.version) - 1} time${Number(minute.version) > 2 ? 's' : ''})</div>` : ''}
+      <div class="meeting-actions">
+        <button type="button" class="btn primary meeting-preview" data-kind="report" data-meeting-id="${mid}" data-name="meeting-${mid}-report.pdf">Preview</button>
+        <button type="button" class="btn meeting-download-report" data-meeting-id="${mid}">Download full report (plan + minutes)</button>
+        ${canEdit ? `<button type="button" class="btn edit-minute-btn" data-meeting-id="${mid}">Replace report (PDF)</button>` : ''}
+      </div>
     </div>
   `;
 }
@@ -12976,6 +13064,7 @@ async function saveMinute(meeting, scope, scopeValue, replace = false) {
     const card = document.querySelector(`.meeting-card[data-id="${CSS.escape(String(meetingId))}"]`);
     if (card) {
       const st = getMeetingStatus(meeting);
+      card.querySelectorAll('.mtg-cue-chip[data-cue="report"]').forEach(c => c.remove());
       card.querySelectorAll('.mtg-badge').forEach(b => { b.className = `mtg-badge ${st.key}` + (b.classList.contains('meeting-card-badge-mobile') ? ' meeting-card-badge-mobile' : ''); b.textContent = st.label; });
     }
     meetingToast(replace ? 'Report replaced.' : 'Report saved.');
@@ -25044,14 +25133,14 @@ function _dcSaveBlob(blob, name) {
 }
 // Phones cannot show a PDF inside the preview window, so there a PDF opens in the phone's own viewer in a new tab.
 const _dcIsPhone = () => window.matchMedia('(pointer: coarse) and (max-width: 900px)').matches;
-async function _dcPreview(path, name) {
+async function _dcPreview(path, name, loader) {
   if (_dcIsPhone() && /\.pdf$/i.test(String(name))) {
     // the tab must be opened right at the tap; it is filled in once the file has loaded
     const tab = window.open('', '_blank');
     if (tab) {
       try { tab.document.write('<p style="font-family:sans-serif;padding:16px;color:#475569;">Loading…</p>'); } catch (e) { /* ignore */ }
       try {
-        const pdf = await _dcFetchBlob(path);
+        const pdf = await (loader ? loader() : _dcFetchBlob(path));
         tab.location.href = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }));
       } catch (e) { tab.close(); alert(e.message); }
       return;
@@ -25062,7 +25151,7 @@ async function _dcPreview(path, name) {
   const m = _dcModal(name, '<p class="dc-loading">Loading…</p>', { wide: true, foot: '<button type="button" class="dc-btn" id="dc-pv-dl" disabled>Download</button><button type="button" class="dc-btn dc-btn--dark" id="dc-pv-x">Close</button>', onClose: () => { if (url) URL.revokeObjectURL(url); } });
   m.foot.querySelector('#dc-pv-x').addEventListener('click', m.close);
   try {
-    blob = await _dcFetchBlob(path);
+    blob = await (loader ? loader() : _dcFetchBlob(path));
     url = URL.createObjectURL(blob);
     const ext = String(name).toLowerCase().split('.').pop();
     const isPdf = blob.type === 'application/pdf' || ext === 'pdf';
