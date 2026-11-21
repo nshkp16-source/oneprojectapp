@@ -25351,9 +25351,8 @@ function _dcHistorySection(events) {
   return rcSection('history', 'History of this document', _dcHistoryHtml(events), events.length ? rcPlural(events.length, 'entry', 'entries') : '');
 }
 // events = null while the history is still loading; it is filled in once it arrives
-function _dcHistorySlide(events) {
-  return { key: 'history', label: 'History',
-    html: `<div data-history-slot>${events ? _dcHistorySection(events) : '<p class="dc-loading">Loading…</p>'}</div>` };
+function _dcHistoryBlock(events) {
+  return `<div data-history-slot>${events ? _dcHistorySection(events) : '<p class="dc-loading">Loading…</p>'}</div>`;
 }
 async function _dcLoadEvents(recordId) {
   try {
@@ -25480,19 +25479,20 @@ function _daDetailHtml(doc, leader, isCreator, events = null) {
     note = rcNote('This document is now in Control &amp; Reports, where everyone on this side can read it and comment.', 'check', 'success');
   }
   const actionBar = bar ? `<div class="rc-actionbar">${bar}</div>` : '';
-  const standing = rcSection('workflow', 'Where this document stands', _dcStatusBar(_dcProgress(doc, false, leader)) + note);
+  const standing = rcSection('workflow', 'Where this document stands', _dcStatusBar(_dcProgress(doc, false, leader)));
   const files = rcSection('paperclip', 'File attached to this document',
     _dcFileItem('da', doc, 'Document', `Written by ${_dcIsAuthor(doc) ? 'you' : _dcPerson(doc.creator_name, doc.creator_role)} on ${rcDate(doc.created_at, true)}.`) + _dcSupportingHtml(doc),
     doc.file_name ? '1 file' : '');
+  // Two tabs, like the record card: Progress first, then Document
   const slides = [
+    { key: 'progress', label: 'Progress', html: standing + _dcHistoryBlock(events) },
     { key: 'documents', label: 'Document', count: ((doc.file_name ? 1 : 0) + (doc.supporting_files || []).length) || '', html: _dcDocumentTabHtml(doc, files) },
-    _dcHistorySlide(events),
   ];
   // Actions come after the document, so the leader reads it and then acts
   const footer = stampOption ? rcSection('check', 'Leader review', stampOption + before + actionBar)
     : before ? rcSection('inbox', 'Send to a folder', before + actionBar)
     : bar ? `<div class="rc-footbar">${actionBar}</div>` : '';
-  return standing + rcDeckHtml(slides, 'documents') + footer;
+  return note + rcDeckHtml(slides, 'progress') + footer;
 }
 
 // ── Control & Reports ─────────────────────────────────────────────────────
@@ -25554,7 +25554,7 @@ function _crDetailHtml(doc, ctx) {
       <div style="margin-bottom:4px;">${_dcSignOption('cr-replace-sign-' + id)}</div>`;
     bar = _dcBtn('cr-replace', 'Upload corrected file', 'warn', 'history');
   }
-  const standing = rcSection('workflow', 'Where this document stands', _dcStatusBar(_dcProgress(doc, true, leader)) + note);
+  const standing = rcSection('workflow', 'Where this document stands', _dcStatusBar(_dcProgress(doc, true, leader)));
   const actionBar = bar ? `<div class="rc-actionbar">${bar}</div>` : '';
 
   const earlier = versions.length ? `<div class="rc-earlier-bar" style="margin-top:12px;"><p class="rc-text">Earlier revisions (rejected)</p></div>` + versions.map((v, vi) => `
@@ -25576,16 +25576,17 @@ function _crDetailHtml(doc, ctx) {
     </div>` : '';
   const files = rcSection('paperclip', 'File attached to this document',
     _dcFileItem('cr', doc, cr === 'shared' ? `Current file (Rev ${_dcRevLetter(doc.revision_no)})` : 'Under correction', `Shared on ${rcDate(doc.shared_at, true)}.`) + _dcSupportingHtml(doc) + earlier);
+  const queriesSection = rcSection('chat', 'Queries and recommendations', `<div id=\"cr-thread-${id}\">${_crThreadHtml(comments, doc, leader)}</div>${box}`, comments.length ? rcPlural(comments.length, 'entry', 'entries') : '');
+  const openQueries = comments.filter(c => c.kind === 'query' && c.status === 'open').length;
+  // Two tabs, like the record card: Progress (status, queries, history) and Document
   const slides = [
+    { key: 'progress', label: 'Progress', count: openQueries ? `${openQueries} open` : '', html: standing + queriesSection + _dcHistoryBlock(events) },
     { key: 'documents', label: 'Document', count: (doc.file_name ? 1 : 0) + versions.length || '', html: _dcDocumentTabHtml(doc, files) },
-    { key: 'comments', label: 'Queries', count: comments.length || '',
-      html: rcSection('chat', 'Queries and recommendations', `<div id=\"cr-thread-${id}\">${_crThreadHtml(comments, doc, leader)}</div>${box}`, comments.length ? rcPlural(comments.length, 'entry', 'entries') : '') },
-    _dcHistorySlide(events),
   ];
   // Actions come after the document and the queries, so the leader reads and then acts
   const footerTitle = (cr === 'rejected' && author) ? 'Upload a corrected file' : 'Leader review';
   const footer = (before || bar) ? rcSection('check', footerTitle, before + actionBar) : '';
-  return standing + rcDeckHtml(slides, comments.length && cr === 'shared' ? 'comments' : 'documents') + footer;
+  return note + rcDeckHtml(slides, 'progress') + footer;
 }
 
 async function _crLoadDetail(recordId) {
