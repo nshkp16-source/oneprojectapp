@@ -25031,7 +25031,22 @@ function _dcSaveBlob(blob, name) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
+// Phones cannot show a PDF inside the preview window, so there a PDF opens in the phone's own viewer in a new tab.
+const _dcIsPhone = () => window.matchMedia('(pointer: coarse) and (max-width: 900px)').matches;
 async function _dcPreview(path, name) {
+  if (_dcIsPhone() && /\.pdf$/i.test(String(name))) {
+    // the tab must be opened right at the tap; it is filled in once the file has loaded
+    const tab = window.open('', '_blank');
+    if (tab) {
+      try { tab.document.write('<p style="font-family:sans-serif;padding:16px;color:#475569;">Loading…</p>'); } catch (e) { /* ignore */ }
+      try {
+        const pdf = await _dcFetchBlob(path);
+        tab.location.href = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }));
+      } catch (e) { tab.close(); alert(e.message); }
+      return;
+    }
+    // the browser blocked the new tab: fall through to the preview window
+  }
   let url = null, blob = null;
   const m = _dcModal(name, '<p class="dc-loading">Loading…</p>', { wide: true, foot: '<button type="button" class="dc-btn" id="dc-pv-dl" disabled>Download</button><button type="button" class="dc-btn dc-btn--dark" id="dc-pv-x">Close</button>', onClose: () => { if (url) URL.revokeObjectURL(url); } });
   m.foot.querySelector('#dc-pv-x').addEventListener('click', m.close);
