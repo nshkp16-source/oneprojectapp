@@ -819,6 +819,18 @@
     .dc-sign-option input { width: 20px; height: 20px; flex: none; margin: 1px 0 0; accent-color: #007b8a; }
     .dc-sign-option strong { display: block; font-size: 15px; line-height: 1.4; }
     .dc-sign-option-hint { display: block; margin-top: 3px; font-size: 13px; line-height: 1.5; color: #475569; }
+    /* Hidden box that opens under a button (reason, query, corrected file …) */
+    .dc-reveal { margin: 12px 0 0; padding: 14px 16px; border: 1px solid #cbd5e1; border-radius: 10px; background: #f8fafc; }
+    .dc-reveal[hidden] { display: none; }
+    .dc-reveal-label { display: block; margin: 0 0 6px; font-size: 13px; font-weight: 600; color: #334155; }
+    .dc-reveal-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .rc-footbar + .dc-reveal { margin: 0 16px 14px; }
+    /* Button bar at the bottom of a Document & Approval / Control & Reports card */
+    .record-card-detail .rc-footbar { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid #e2e8f0; }
+    .record-card-detail .rc-footbar .rc-actionbar { margin: 0 0 0 auto; padding: 0; border: 0; justify-content: flex-end; }
+    .record-card-detail .rc-footbar + .dc-reveal { margin: 12px 0 0; }
+    .record-card-detail .rc-btn[data-reveal][aria-expanded="true"] { box-shadow: inset 0 0 0 2px currentColor; }
+    .rc-table td .dc-reveal { margin-top: 8px; padding: 10px 12px; }
     .rc-section { padding: 16px; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; }
     .rc-section-title {
       display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 0 0 12px;
@@ -7025,6 +7037,20 @@ Object.assign(OPA_FR, {
   "Corrected file signed": "Fichier corrigé signé",
   "Uploaded": "Téléversé"
 });
+Object.assign(OPA_FR, {
+  "Answer": "Répondre",
+  "Reject document": "Rejeter le document",
+  "Reject new file": "Rejeter le nouveau fichier",
+  "Reason for rejecting": "Motif du rejet",
+  "Reason for rejecting the new file": "Motif du rejet du nouveau fichier",
+  "Reason for returning": "Motif du retour",
+  "Send": "Envoyer"
+});
+OPA_PATTERNS.push(
+  [/^Written and stamped by (.+) on (.+)\.$/, (m, who, d) => `Rédigé et cacheté par ${who === 'you' ? 'vous' : who} le ${d}.`],
+  [/^Signed on (.+) by (.+)\.$/, (m, d, who) => `Signé le ${d} par ${who === 'you' ? 'vous' : who}.`],
+  [/^Signed and stamped on (.+) by (.+)\.$/, (m, d, who) => `Signé et cacheté le ${d} par ${who === 'you' ? 'vous' : who}.`]
+);
 OPA_PATTERNS.push(
   [/^(· )?(\d+) of (\d+) signed$/, (m, separator, signed, total) =>
     `${separator || ''}${signed} sur ${total} ${+signed === 1 ? 'a signé' : 'ont signé'}`],
@@ -25201,6 +25227,7 @@ async function _daLoadDetail(recordId) {
   container.dataset.loaded = 'true';
   _dcWireFileButtons(container, doc);
   _daWireDetailButtons(recordId, doc, leader, isCreator);
+  _dcWireReveal(container);
   _dcLoadEvents(recordId).then(events => {
     const slot = container.querySelector('[data-history-slot]');
     if (slot) slot.innerHTML = _dcHistorySection(events);
@@ -25298,17 +25325,47 @@ function _dcBtn(action, label, kind = 'primary', icon = null, attrs = '') {
   const variant = { ok: 'approve', danger: 'danger', warn: 'warn' }[kind] || '';
   return rcBtn(action, label, icon, variant, attrs);
 }
+// A button that opens a hidden box under it, so a form only shows when it is needed
+function _dcRevealBtn(boxId, label, kind = 'primary', icon = null, size = '') {
+  const variant = size === 'sm' ? 'sm' : ({ ok: 'approve', danger: 'danger', warn: 'warn' }[kind] || '');
+  return rcBtn('dc-reveal', label, icon, variant, `data-reveal="${boxId}" aria-expanded="false" aria-controls="${boxId}"`);
+}
+function _dcRevealBox(boxId, fieldsHtml, confirmBtnHtml) {
+  return `<div class="dc-reveal" id="${boxId}" hidden>${fieldsHtml}<div class="dc-reveal-actions">${confirmBtnHtml}${rcBtn('dc-reveal-cancel', 'Cancel', null, 'sm', `data-reveal-close="${boxId}"`)}</div></div>`;
+}
+function _dcWireReveal(container) {
+  const field = box => box.querySelector('textarea, select, input:not([type=checkbox]):not([type=radio])');
+  container.querySelectorAll('[data-reveal]').forEach(btn => btn.addEventListener('click', () => {
+    const box = container.querySelector('#' + btn.dataset.reveal);
+    if (!box) return;
+    const open = box.hidden;
+    box.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
+    if (open) field(box)?.focus();
+  }));
+  container.querySelectorAll('[data-reveal-close]').forEach(btn => btn.addEventListener('click', () => {
+    const id = btn.dataset.revealClose;
+    const box = container.querySelector('#' + id);
+    if (box) box.hidden = true;
+    container.querySelector(`[data-reveal="${id}"]`)?.setAttribute('aria-expanded', 'false');
+  }));
+}
+// What happened to the file, in plain sentences (no stamp numbers)
+function _dcFileLines(doc, inControl) {
+  const lines = [];
+  const writer = _dcIsAuthor(doc) ? 'you' : _dcPerson(doc.creator_name, doc.creator_role);
+  lines.push(`Written${doc.author_stamp_id ? ' and stamped' : ''} by ${writer} on ${rcDate(doc.created_at, true)}.`);
+  if (doc.reviewed_at && (doc.signed_by_name || doc.approved_by_role)) {
+    const signer = _dcIsMe(doc.approved_by_id, doc.approved_by_role) ? 'you' : _dcPerson(doc.signed_by_name, doc.approved_by_role);
+    lines.push(`Signed${doc.signer_stamp_id ? ' and stamped' : ''} on ${rcDate(doc.reviewed_at, true)} by ${signer}.`);
+  }
+  if (inControl && doc.shared_at) lines.push(`Shared on ${rcDate(doc.shared_at, true)}.`);
+  return lines;
+}
 function _dcPerson(name, role) {
   const r = rcRoleLabel(role);
   if (name && r) return `${name} (${r})`;
   return name || (r ? `The ${r}` : 'A project member');
-}
-function _dcFactGroups(groups) {
-  const html = Object.entries(groups).filter(([, rows]) => rows.some(r => r[1] !== null && r[1] !== undefined && r[1] !== '')).map(([name, rows]) =>
-    `<section class="rc-factgroup">${name ? `<h4 class="rc-factgroup-title">${name}</h4>` : ''}<dl class="rc-factlist">${
-      rows.filter(r => r[1] !== null && r[1] !== undefined && r[1] !== '').map(([k, v]) => `<div class="rc-fact"><dt>${k}</dt><dd>${v}</dd></div>`).join('')
-    }</dl></section>`).join('');
-  return `<div class="rc-factgroups">${html}</div>`;
 }
 function _dcFileItem(prefix, doc, tag, text) {
   if (!doc.file_name) return `<p class="rc-text rc-text--empty">No file was attached to this document.</p>`;
@@ -25317,7 +25374,7 @@ function _dcFileItem(prefix, doc, tag, text) {
       <span class="rc-file-icon">${rcIcon('file')}</span>
       <div class="rc-item-body">
         <div class="rc-item-head"><span class="rc-item-title" title="${escapeHtml(doc.file_name)}">${escapeHtml(doc.file_name)}</span>${tag ? `<span class="rc-tag">${escapeHtml(tag)}</span>` : ''}</div>
-        ${text ? `<p class="rc-item-text">${escapeHtml(text)}</p>` : ''}
+        ${(Array.isArray(text) ? text : (text ? [text] : [])).map(t => `<p class="rc-item-text">${escapeHtml(t)}</p>`).join('')}
         <div class="rc-item-actions">${rcBtn(`${prefix}-preview`, 'Preview', 'file', 'sm', `data-doc-id="${escapeHtml(String(doc.id))}" data-filename="${escapeHtml(doc.file_name)}"`)}${rcBtn(`${prefix}-download`, 'Download', 'download', 'sm', `data-doc-id="${escapeHtml(String(doc.id))}" data-filename="${escapeHtml(doc.file_name)}"`)}</div>
       </div>
     </div>`;
@@ -25427,50 +25484,39 @@ function _dcStatusBar(steps) {
       </li>`).join('')}</ol>`;
 }
 
-// Who signed and with which stamp. Title, reference, type and dates are already on the collapsed card.
-function _dcSignaturesHtml(doc) {
-  const stampText = id => id ? `Stamped and signed (${escapeHtml(id)})` : 'Not stamped';
-  const signed = !!(doc.reviewed_at && (doc.signed_by_name || doc.approved_by_role));
-  const signer = !signed ? '' : (_dcIsMe(doc.approved_by_id, doc.approved_by_role) ? 'You' : escapeHtml(_dcPerson(doc.signed_by_name, doc.approved_by_role)));
-  return rcSection('check', 'Signatures', _dcFactGroups({ '': [
-    ['Submitter\'s stamp', stampText(doc.author_stamp_id)],
-    ['Signed by the leader', signed ? `${signer} · ${escapeHtml(rcDate(doc.reviewed_at, true))}` : ''],
-    ['Leader\'s stamp', signed ? stampText(doc.signer_stamp_id) : ''],
-  ] }));
-}
 function _dcDocumentTabHtml(doc, filesHtml) {
   const description = rcSection('notice', 'Description of this document', doc.description
-    ? `<div class=\"rc-rich\"><p class=\"rc-text\">${escapeHtml(doc.description)}</p></div>`
-    : `<p class=\"rc-text rc-text--empty\">No description was written for this document.</p>`);
-  return description + filesHtml + _dcSignaturesHtml(doc);
+    ? `<div class="rc-rich"><p class="rc-text">${escapeHtml(doc.description)}</p></div>`
+    : `<p class="rc-text rc-text--empty">No description was written for this document.</p>`);
+  return description + filesHtml;
 }
 
 // ── Document & Approval ───────────────────────────────────────────────────
 function _daDetailHtml(doc, leader, isCreator, events = null) {
   const id = doc.id;
-  let note = '', bar = '', before = '', stampOption = '';
+  let note = '', bar = '', reveal = '', stampOption = '';
   if (doc.status === 'rejected') {
     note = rcNote(`The leader asked for a correction: <strong>${escapeHtml(doc.rejection_reason || 'No reason was written.')}</strong>`, 'x', 'danger');
   }
   if (leader && doc.status === 'pending_approval') {
-    before = `
-      <div id="da-reason-box-${id}" style="display:none;">
-        <label style="${_daLabelStyle()}">Reason for returning *</label>
-        <textarea id="da-review-comment-${id}" placeholder="Say what must be corrected…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:6px;"></textarea>
-        <div style="font-size:11px;color:#6b7280;margin-bottom:10px;">Press <strong>Send back to submitter</strong> to return it, or <a href="#" data-action-link="da-reason-cancel" style="color:#374151;">cancel</a>.</div>
-      </div>`;
-    stampOption = _dcSignOption('da-sign-stamp-' + id, 'Optional: your approval is recorded either way. If selected, you will choose where the stamp goes before signing.');
-    bar = _dcBtn('da-approve', 'Sign document', 'ok', 'check') + _dcBtn('da-reject', 'Return to submitter', 'danger', 'x');
+    stampOption = _dcSignOption('da-sign-stamp-' + id);
+    reveal = _dcRevealBox(`da-return-box-${id}`,
+      `<label class="dc-reveal-label" for="da-review-comment-${id}">Reason for returning</label>
+       <textarea id="da-review-comment-${id}" placeholder="Say what must be corrected…" style="${_daInputStyle()} min-height:70px;resize:vertical;"></textarea>`,
+      _dcBtn('da-reject', 'Send back to submitter', 'danger', 'x'));
+    bar = _dcBtn('da-approve', 'Sign document', 'ok', 'check') + _dcRevealBtn(`da-return-box-${id}`, 'Return to submitter', 'danger', 'x');
   } else if (leader && doc.status === 'approved') {
     bar = _dcBtn('da-share', 'Share to Control &amp; Reports', 'warn', 'inbox') + (isCreator ? _dcBtn('da-delete', 'Delete', 'danger', 'trash') : '');
   } else if (isCreator && doc.status === 'draft') {
-    before = `<label style="${_daLabelStyle()}">Choose a folder to send it</label>
-      <select id="da-send-type-${id}" style="${_daInputStyle()} cursor:pointer;"><option value="">— Select folder —</option>${DA_DOC_TYPES.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}</select>
-      ${_dcTypeInputHtml('da-send-type-' + id, '')}
-      <div style="font-size:11px;color:#6b7280;margin:6px 0 4px;">Choosing a folder makes the document readable by your leader. Until then it stays private in your Draft folder.</div>
-      <label style="${_daLabelStyle()}">Review by (optional)</label>
-      <input type="date" id="da-send-deadline-${id}" style="${_daInputStyle()} width:auto;"/>`;
-    bar = _dcBtn('da-send', 'Send to folder', 'warn', 'inbox') + _dcBtn('da-delete', 'Delete', 'danger', 'trash');
+    reveal = _dcRevealBox(`da-send-box-${id}`,
+      `<label class="dc-reveal-label" for="da-send-type-${id}">Send to a folder</label>
+       <select id="da-send-type-${id}" style="${_daInputStyle()} cursor:pointer;"><option value="">— Select folder —</option>${DA_DOC_TYPES.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}</select>
+       ${_dcTypeInputHtml('da-send-type-' + id, '')}
+       <div style="font-size:11px;color:#6b7280;margin:6px 0 10px;">Choosing a folder makes the document readable by your leader. Until then it stays private in your Draft folder.</div>
+       <label class="dc-reveal-label" for="da-send-deadline-${id}">Review by (optional)</label>
+       <input type="date" id="da-send-deadline-${id}" style="${_daInputStyle()} width:auto;"/>`,
+      _dcBtn('da-send', 'Send', 'warn', 'inbox'));
+    bar = _dcRevealBtn(`da-send-box-${id}`, 'Send to folder', 'warn', 'inbox') + _dcBtn('da-delete', 'Delete', 'danger', 'trash');
   } else if (isCreator && doc.status === 'rejected') {
     bar = _dcBtn('da-resubmit', 'Resubmit corrected file', 'warn', 'history') + _dcBtn('da-delete', 'Delete', 'danger', 'trash');
   } else if (doc.status === 'pending_approval') {
@@ -25481,17 +25527,15 @@ function _daDetailHtml(doc, leader, isCreator, events = null) {
   const actionBar = bar ? `<div class="rc-actionbar">${bar}</div>` : '';
   const standing = rcSection('workflow', 'Where this document stands', _dcStatusBar(_dcProgress(doc, false, leader)));
   const files = rcSection('paperclip', 'File attached to this document',
-    _dcFileItem('da', doc, 'Document', `Written by ${_dcIsAuthor(doc) ? 'you' : _dcPerson(doc.creator_name, doc.creator_role)} on ${rcDate(doc.created_at, true)}.`) + _dcSupportingHtml(doc),
+    _dcFileItem('da', doc, 'Document', _dcFileLines(doc, false)) + _dcSupportingHtml(doc),
     doc.file_name ? '1 file' : '');
   // Two tabs, like the record card: Progress first, then Document
   const slides = [
     { key: 'progress', label: 'Progress', html: standing + _dcHistoryBlock(events) },
     { key: 'documents', label: 'Document', count: ((doc.file_name ? 1 : 0) + (doc.supporting_files || []).length) || '', html: _dcDocumentTabHtml(doc, files) },
   ];
-  // Actions come after the document, so the leader reads it and then acts
-  const footer = stampOption ? rcSection('check', 'Leader review', stampOption + before + actionBar)
-    : before ? rcSection('inbox', 'Send to a folder', before + actionBar)
-    : bar ? `<div class="rc-footbar">${actionBar}</div>` : '';
+  // Buttons come after the document; a form opens under its button only when it is pressed
+  const footer = (bar || reveal) ? `<div class="rc-footbar">${stampOption}${actionBar}</div>${reveal}` : '';
   return note + rcDeckHtml(slides, 'progress') + footer;
 }
 
@@ -25500,62 +25544,89 @@ function _crThreadHtml(comments, doc, leader) {
   if (!comments.length) return `<p class="rc-text rc-text--empty">Nobody has raised a query yet. If a detail is missing or unclear in this document, ask it here.</p>`;
   const norm = x => String(x || '').toLowerCase().replace(/[\s_-]+/g, '');
   const canAct = (doc.cr_status || 'shared') === 'shared';
-  return `<ul class="rc-reviews" style="padding:0;">${comments.map(c => {
+  const isMine = c => String(c.author_id) === String(window.currentUserId) && norm(c.author_role) === norm(window.currentUserRole);
+  const canClose = c => c.kind === 'query' && canAct && (isMine(c) || leader);
+  const showActions = comments.some(canClose);
+  const rows = comments.map((c, i) => {
     const isQuery = c.kind === 'query';
-    const mine = String(c.author_id) === String(window.currentUserId) && norm(c.author_role) === norm(window.currentUserRole);
+    const mine = isMine(c);
     const late = isQuery && c.status === 'open' ? _dcDaysLate(c.respond_by) : null;
-    const stateChip = !isQuery ? '' : (c.status === 'closed' ? '<span class="dc-chip">Closed</span>' : c.status === 'answered' ? '<span class="dc-chip">Answered</span>' : `<span class="dc-chip ${late ? 'dc-chip--late' : ''}">Open</span>`);
-    const byChip = isQuery && c.respond_by && c.status !== 'closed' ? `<span class="dc-chip ${late ? 'dc-chip--late' : ''}">${late ? `Reply was due ${escapeHtml(_dcDay(c.respond_by))}` : `Reply by ${escapeHtml(_dcDay(c.respond_by))}`}</span>` : '';
-    const att = c.attachment_name ? `<div class="rc-item-actions" style="margin-top:6px;">${rcBtn('q-preview', 'Preview', 'file', 'sm', `data-q-file="${c.id}" data-q-act="preview" data-name="${escapeHtml(c.attachment_name)}"`)}${rcBtn('q-download', 'Download ' + escapeHtml(c.attachment_name), 'download', 'sm', `data-q-file="${c.id}" data-q-act="download" data-name="${escapeHtml(c.attachment_name)}"`)}</div>` : '';
-    const ans = isQuery && c.answer ? `<div class="dc-q-ans"><strong>${_dcIsMe(c.answered_by_id, c.answered_by_role) ? 'You' : escapeHtml(c.answered_by_name || rcRoleLabel(c.answered_by_role) || 'A colleague')}</strong> answered ${escapeHtml(rcDate(c.answered_at, true))}:<br>${escapeHtml(c.answer)}</div>` : '';
-    const acts = [];
-    if (isQuery && canAct && c.status === 'open') acts.push(`<textarea id="dc-ans-${c.id}" placeholder="Write your answer…"></textarea>`, `<button type="button" class="dc-tool" data-q-do="answer" data-q-id="${c.id}">Send answer</button>`);
-    if (isQuery && canAct && c.status !== 'closed' && (mine || leader)) acts.push(`<button type="button" class="dc-tool" data-q-do="close" data-q-id="${c.id}">Close query</button>`);
-    if (isQuery && canAct && c.status === 'closed' && (mine || leader)) acts.push(`<button type="button" class="dc-tool" data-q-do="reopen" data-q-id="${c.id}">Reopen</button>`);
-    return `
-    <li class="rc-review dc-q">
-      <div class="dc-q-head">
-        <span class="rc-review-name">${mine ? 'You' : escapeHtml(c.author_name || rcRoleLabel(c.author_role) || 'A project member')}</span>
-        <span class="rc-status rc-status--${c.kind === 'recommendation' ? 'pending' : 'neutral'}">${c.kind === 'recommendation' ? 'Recommendation' : (isQuery ? 'Query' : 'Comment')}</span>
-        ${stateChip}${byChip}
-      </div>
-      <div class="rc-review-sub">${escapeHtml([c.author_name && !mine ? rcRoleLabel(c.author_role) : '', rcDate(c.created_at, true)].filter(Boolean).join(' · '))}${c.closed_at ? ` · closed ${escapeHtml(rcDate(c.closed_at, true))}${_dcIsMe(c.closed_by_id, c.closed_by_role) ? ' by you' : (c.closed_by_name ? ' by ' + escapeHtml(c.closed_by_name) : '')}` : ''}</div>
-      <p class="rc-text">${escapeHtml(c.body)}</p>${att}${ans}
-      ${acts.length ? `<div class="dc-q-acts" style="flex-direction:column;align-items:stretch;">${acts.join('')}</div>` : ''}
-    </li>`;
-  }).join('')}</ul>`;
+    const kindLabel = c.kind === 'recommendation' ? 'Recommendation' : (isQuery ? 'Query' : 'Comment');
+    const who = mine ? 'You' : escapeHtml(c.author_name || rcRoleLabel(c.author_role) || 'A project member');
+    const sub = [c.author_name && !mine ? rcRoleLabel(c.author_role) : '', rcDate(c.created_at, true)].filter(Boolean).join(' · ');
+    const due = isQuery && c.respond_by && c.status !== 'closed'
+      ? `<div class="rc-sig-sub${late ? ' rc-sig-sub--warn' : ''}">${late ? 'Reply was due ' : 'Reply by '}${escapeHtml(_dcDay(c.respond_by))}</div>` : '';
+    const att = c.attachment_name ? `<div class="rc-item-actions" style="margin-top:6px;">${rcBtn('q-preview', 'Preview', 'file', 'sm', `data-q-file="${c.id}" data-q-act="preview" data-name="${escapeHtml(c.attachment_name)}"`)}${rcBtn('q-download', 'Download', 'download', 'sm', `data-q-file="${c.id}" data-q-act="download" data-name="${escapeHtml(c.attachment_name)}"`)}</div>` : '';
+    let response;
+    if (isQuery && c.answer) {
+      const by = _dcIsMe(c.answered_by_id, c.answered_by_role) ? 'you' : (c.answered_by_name || rcRoleLabel(c.answered_by_role) || 'a colleague');
+      response = `<div class="rc-resp">${escapeHtml(c.answer)}</div><div class="rc-resp-meta">Answered by ${escapeHtml(by)} on ${escapeHtml(rcDate(c.answered_at, true))}</div>`;
+    } else if (isQuery && canAct && c.status === 'open') {
+      const boxId = `cr-ans-box-${c.id}`;
+      response = _dcRevealBtn(boxId, 'Answer', null, 'chat', 'sm') + _dcRevealBox(boxId,
+        `<textarea id="dc-ans-${c.id}" placeholder="Write your answer…" style="${_daInputStyle()} min-height:60px;resize:vertical;"></textarea>`,
+        rcBtn('q-answer', 'Send answer', null, 'sm', `data-q-do="answer" data-q-id="${c.id}"`));
+    } else {
+      response = `<span class="rc-resp-none">${isQuery && c.status !== 'closed' ? 'No response yet.' : '\u2014'}</span>`;
+    }
+    const status = !isQuery ? '<span class="rc-resp-none">\u2014</span>'
+      : c.status === 'closed' ? '<span class="rc-chip rc-chip--ok">Closed</span>'
+      : c.status === 'answered' ? '<span class="rc-chip rc-chip--notice">Answered</span>'
+      : '<span class="rc-chip rc-chip--reject">Waiting for an answer</span>';
+    const acts = canClose(c)
+      ? (c.status === 'closed'
+          ? rcBtn('q-reopen', 'Reopen', null, 'sm', `data-q-do="reopen" data-q-id="${c.id}"`)
+          : rcBtn('q-close', 'Close query', null, 'sm', `data-q-do="close" data-q-id="${c.id}"`))
+      : '';
+    return `<tr>
+        <td class="rc-col-no">${i + 1}</td>
+        <td><span class="rc-sig-name">${who}</span><div class="rc-sig-sub">${escapeHtml(sub)}</div></td>
+        <td class="rc-col-long"><span class="rc-chip rc-chip--muted">${kindLabel}</span><div class="rc-q-text">${escapeHtml(c.body)}</div>${due}${att}</td>
+        <td class="rc-col-long">${response}</td>
+        <td class="rc-col-status">${status}</td>
+        ${showActions ? `<td>${acts}</td>` : ''}
+      </tr>`;
+  }).join('');
+  return `<div class="rc-table-wrap"><table class="rc-table" aria-label="Queries">
+      <thead><tr><th scope="col">No.</th><th scope="col">Raised by</th><th scope="col">Query</th><th scope="col">Response</th><th scope="col">Status</th>${showActions ? '<th scope="col">Actions</th>' : ''}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
 }
 
 function _crDetailHtml(doc, ctx) {
   const { leader, author, comments, versions, events = [] } = ctx;
   const id = doc.id, cr = doc.cr_status || 'shared';
-  let note = '', before = '', bar = '';
+  let note = '', bar = '', reveal = '', stampOption = '';
   if (cr === 'rejected') {
     note = rcNote(`The leader rejected this document. Reason: <strong>${escapeHtml(doc.cr_reject_reason || 'No reason was written.')}</strong> Only the submitter and the leader can see it until a corrected file is signed.`, 'x', 'danger');
   } else if (cr === 'replacement_pending') {
     note = rcNote('The submitter uploaded a corrected file. The side will see it again once the leader signs it.', 'clock');
   }
+  const rejectBox = (labelText, placeholder) => _dcRevealBox(`cr-reject-box-${id}`,
+    `<label class="dc-reveal-label" for="cr-reject-reason-${id}">${labelText}</label>
+     <textarea id="cr-reject-reason-${id}" placeholder="${placeholder}" style="${_daInputStyle()} min-height:70px;resize:vertical;"></textarea>`,
+    _dcBtn('cr-reject', 'Reject with reason', 'danger', 'x'));
   if (leader && cr === 'shared') {
-    before = `<label style="${_daLabelStyle()}">Reject this document</label>
-      <textarea id="cr-reject-reason-${id}" placeholder="Say what is wrong, based on the comments…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:4px;"></textarea>`;
-    bar = _dcBtn('cr-reject', 'Reject with reason', 'danger', 'x');
+    reveal = rejectBox('Reason for rejecting', 'Say what is wrong, based on the comments…');
+    bar = _dcRevealBtn(`cr-reject-box-${id}`, 'Reject document', 'danger', 'x');
   } else if (leader && cr === 'replacement_pending') {
-    before = `<div style="margin-bottom:12px;">${_dcSignOption('cr-sign-stamp-' + id, 'Puts your stamp on the new PDF. You choose the position next.')}</div>
-      <label style="${_daLabelStyle()}">Or reject the new file</label>
-      <textarea id="cr-reject-reason-${id}" placeholder="Say what is still wrong…" style="${_daInputStyle()} min-height:60px;resize:vertical;margin-bottom:4px;"></textarea>`;
-    bar = _dcBtn('cr-accept', 'Sign and accept new file', 'ok', 'check') + _dcBtn('cr-reject', 'Reject with reason', 'danger', 'x');
+    stampOption = _dcSignOption('cr-sign-stamp-' + id);
+    reveal = rejectBox('Reason for rejecting the new file', 'Say what is still wrong…');
+    bar = _dcBtn('cr-accept', 'Sign and accept new file', 'ok', 'check') + _dcRevealBtn(`cr-reject-box-${id}`, 'Reject new file', 'danger', 'x');
   } else if (author && cr === 'rejected') {
-    before = `<label style="${_daLabelStyle()}">Corrected file</label>
-      <input type="file" id="cr-replace-file-${id}" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png" style="margin-bottom:10px;"/>
-      <div style="margin-bottom:10px;font-size:13px;color:#374151;">
-        <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;cursor:pointer;"><input type="radio" name="cr-replace-mode-${id}" value="revision" checked style="margin-top:3px;"/><span><strong>Keep as a revision</strong><br><span style="font-size:11px;color:#6b7280;">Same card. The earlier file stays in the history.</span></span></label>
-        <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;"><input type="radio" name="cr-replace-mode-${id}" value="replace" style="margin-top:3px;"/><span><strong>Replace the first file completely</strong><br><span style="font-size:11px;color:#6b7280;">The earlier file is removed from the history.</span></span></label>
-      </div>
-      <div style="margin-bottom:4px;">${_dcSignOption('cr-replace-sign-' + id)}</div>`;
-    bar = _dcBtn('cr-replace', 'Upload corrected file', 'warn', 'history');
+    reveal = _dcRevealBox(`cr-replace-box-${id}`,
+      `<label class="dc-reveal-label" for="cr-replace-file-${id}">Corrected file</label>
+       <input type="file" id="cr-replace-file-${id}" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png" style="margin-bottom:10px;"/>
+       <div style="margin-bottom:10px;font-size:13px;color:#374151;">
+         <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;cursor:pointer;"><input type="radio" name="cr-replace-mode-${id}" value="revision" checked style="margin-top:3px;"/><span><strong>Keep as a revision</strong><br><span style="font-size:11px;color:#6b7280;">Same card. The earlier file stays in the history.</span></span></label>
+         <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;"><input type="radio" name="cr-replace-mode-${id}" value="replace" style="margin-top:3px;"/><span><strong>Replace the first file completely</strong><br><span style="font-size:11px;color:#6b7280;">The earlier file is removed from the history.</span></span></label>
+       </div>
+       <div>${_dcSignOption('cr-replace-sign-' + id)}</div>`,
+      _dcBtn('cr-replace', 'Upload corrected file', 'warn', 'history'));
+    bar = _dcRevealBtn(`cr-replace-box-${id}`, 'Upload corrected file', 'warn', 'history');
   }
-  const standing = rcSection('workflow', 'Where this document stands', _dcStatusBar(_dcProgress(doc, true, leader)));
   const actionBar = bar ? `<div class="rc-actionbar">${bar}</div>` : '';
+  const standing = rcSection('workflow', 'Where this document stands', _dcStatusBar(_dcProgress(doc, true, leader)));
 
   const earlier = versions.length ? `<div class="rc-earlier-bar" style="margin-top:12px;"><p class="rc-text">Earlier revisions (rejected)</p></div>` + versions.map((v, vi) => `
       <div class="rc-item rc-item--file"><span class="rc-file-icon">${rcIcon('paperclip')}</span><div class="rc-item-body">
@@ -25563,29 +25634,26 @@ function _crDetailHtml(doc, ctx) {
         <p class="rc-item-text">Rejected on ${escapeHtml(rcDate(v.created_at, true))}. Reason: ${escapeHtml(v.reason || 'Not written')}</p></div></div>`).join('') : '';
 
   const canComment = cr === 'shared' || leader || author;
-  const box = canComment ? `
-    <div class="rc-actionbar" style="display:block;">
-      <label style="${_daLabelStyle()}">Raise a query</label>
-      <select id="cr-comment-kind-${id}" style="${_daInputStyle()} margin-bottom:8px;"><option value="query">Query (ask about something missing or unclear)</option><option value="recommendation">Recommendation</option></select>
-      <textarea id="cr-comment-body-${id}" placeholder="e.g. The beam detail is missing on this drawing…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:8px;"></textarea>
-      <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:10px;">
-        <label style="font-size:12px;color:#374151;">Reply needed by (optional)<br><input type="date" id="cr-comment-by-${id}" style="${_daInputStyle()} width:auto;margin-top:4px;"></label>
-        <label style="font-size:12px;color:#374151;">Attach a photo or marked-up drawing (optional)<br><input type="file" id="cr-comment-file-${id}" accept=".pdf,.png,.jpg,.jpeg,.webp" style="margin-top:6px;"></label>
-      </div>
-      ${_dcBtn('cr-comment', 'Post', 'warn', 'chat')}
-    </div>` : '';
+  const raise = canComment ? `<div class="rc-item-actions">${_dcRevealBtn(`cr-query-box-${id}`, 'Raise a query', 'warn', 'chat')}</div>` + _dcRevealBox(`cr-query-box-${id}`,
+    `<label class="dc-reveal-label" for="cr-comment-body-${id}">Raise a query</label>
+     <select id="cr-comment-kind-${id}" style="${_daInputStyle()} margin-bottom:8px;"><option value="query">Query (ask about something missing or unclear)</option><option value="recommendation">Recommendation</option></select>
+     <textarea id="cr-comment-body-${id}" placeholder="e.g. The beam detail is missing on this drawing…" style="${_daInputStyle()} min-height:70px;resize:vertical;margin-bottom:8px;"></textarea>
+     <div style="display:flex;flex-wrap:wrap;gap:12px;">
+       <label style="font-size:12px;color:#374151;">Reply needed by (optional)<br><input type="date" id="cr-comment-by-${id}" style="${_daInputStyle()} width:auto;margin-top:4px;"></label>
+       <label style="font-size:12px;color:#374151;">Attach a photo or marked-up drawing (optional)<br><input type="file" id="cr-comment-file-${id}" accept=".pdf,.png,.jpg,.jpeg,.webp" style="margin-top:6px;"></label>
+     </div>`,
+    _dcBtn('cr-comment', 'Post', 'warn', 'chat')) : '';
   const files = rcSection('paperclip', 'File attached to this document',
-    _dcFileItem('cr', doc, cr === 'shared' ? `Current file (Rev ${_dcRevLetter(doc.revision_no)})` : 'Under correction', `Shared on ${rcDate(doc.shared_at, true)}.`) + _dcSupportingHtml(doc) + earlier);
-  const queriesSection = rcSection('chat', 'Queries and recommendations', `<div id=\"cr-thread-${id}\">${_crThreadHtml(comments, doc, leader)}</div>${box}`, comments.length ? rcPlural(comments.length, 'entry', 'entries') : '');
+    _dcFileItem('cr', doc, cr === 'shared' ? `Current file (Rev ${_dcRevLetter(doc.revision_no)})` : 'Under correction', _dcFileLines(doc, true)) + _dcSupportingHtml(doc) + earlier);
+  const queriesSection = rcSection('chat', 'Queries and recommendations', `<div id="cr-thread-${id}">${_crThreadHtml(comments, doc, leader)}</div>${raise}`, comments.length ? rcPlural(comments.length, 'entry', 'entries') : '');
   const openQueries = comments.filter(c => c.kind === 'query' && c.status === 'open').length;
   // Two tabs, like the record card: Progress (status, queries, history) and Document
   const slides = [
     { key: 'progress', label: 'Progress', count: openQueries ? `${openQueries} open` : '', html: standing + queriesSection + _dcHistoryBlock(events) },
     { key: 'documents', label: 'Document', count: (doc.file_name ? 1 : 0) + versions.length || '', html: _dcDocumentTabHtml(doc, files) },
   ];
-  // Actions come after the document and the queries, so the leader reads and then acts
-  const footerTitle = (cr === 'rejected' && author) ? 'Upload a corrected file' : 'Leader review';
-  const footer = (before || bar) ? rcSection('check', footerTitle, before + actionBar) : '';
+  // Buttons come after the tabs; a form opens under its button only when it is pressed
+  const footer = (bar || reveal) ? `<div class="rc-footbar">${stampOption}${actionBar}</div>${reveal}` : '';
   return note + rcDeckHtml(slides, 'progress') + footer;
 }
 
@@ -25610,6 +25678,7 @@ async function _crLoadDetail(recordId) {
 
   container.innerHTML = _crDetailHtml(doc, { leader, author, comments, versions, events });
   _dcWireFileButtons(container, doc);
+  _dcWireReveal(container);
   container.querySelectorAll('[data-q-do]').forEach(b => b.addEventListener('click', () => _crQueryAction(recordId, b.dataset.qId, b.dataset.qDo)));
 
   const q = sel => container.querySelector(sel);
@@ -25624,23 +25693,7 @@ function _daWireDetailButtons(recordId, doc, leader, isCreator) {
   const container = document.getElementById(`da-detail-inner-${recordId}`);
   if (!container) return;
   container.querySelector('[data-action="da-approve"]')  ?.addEventListener('click', () => _daReview(recordId, 'approved'));
-  const _reasonBox = container.querySelector(`#da-reason-box-${recordId}`);
-  const _rejectBtn = container.querySelector('[data-action="da-reject"]');
-  const _setRejectLabel = txt => { if (_rejectBtn) { const kids = _rejectBtn.children; if (kids.length) kids[kids.length - 1].textContent = txt; } };
-  _rejectBtn?.addEventListener('click', () => {
-    if (_reasonBox && _reasonBox.style.display === 'none') {   // first press only opens the reason box
-      _reasonBox.style.display = 'block';
-      container.querySelector(`#da-review-comment-${recordId}`)?.focus();
-      _setRejectLabel('Send back to submitter');
-      return;
-    }
-    _daReview(recordId, 'rejected');
-  });
-  container.querySelector('[data-action-link="da-reason-cancel"]')?.addEventListener('click', e => {
-    e.preventDefault();
-    if (_reasonBox) _reasonBox.style.display = 'none';
-    _setRejectLabel('Return to submitter');
-  });
+  container.querySelector('[data-action="da-reject"]')?.addEventListener('click', () => _daReview(recordId, 'rejected'));
   _dcWireTypeField(`da-send-type-${recordId}`);
   container.querySelector('[data-action="da-send"]')?.addEventListener('click', () => _daSendDraft(recordId));
   container.querySelector('[data-action="da-share"]')    ?.addEventListener('click', () => _daShare(recordId));
