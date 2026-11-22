@@ -1619,6 +1619,13 @@
     .meeting-rsvp-box { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: #f8fafc; font-size: 13px; color: #263640; }
     .meeting-rsvp-box.needs { background: #fffbeb; border-color: #fde68a; }
     .meeting-rsvp-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .meeting-side-head { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; color: #0e6f7a; }
+    .meeting-side-head:first-child { margin-top: 0; }
+    .mtg-count { min-width: 18px; padding: 0 6px; border-radius: 999px; background: #e6f1f3; font-size: 11px; font-weight: 700; text-align: center; color: #0e6f7a; }
+    .meeting-people { margin: 0 0 4px; padding-left: 18px; }
+    .meeting-people li { margin: 0 0 6px; }
+    .meeting-people .meeting-roster-meta { display: block; }
+    .meeting-people .mtg-reply { margin: 3px 0 0; }
     .meeting-rsvp-note { margin: -4px 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: #f8fafc; font-size: 13px; }
     .meeting-rsvp-note[hidden] { display: none; }
     .meeting-rsvp-note label { display: block; margin-bottom: 6px; font-weight: 600; color: #334155; }
@@ -7055,6 +7062,7 @@ Object.assign(OPA_FR, {
 });
 Object.assign(OPA_FR, {
   "RSVP needed": "Réponse attendue",
+  "External guests": "Invités externes",
   "Please tell the planner if you can attend.": "Merci d'indiquer à l'organisateur si vous pouvez participer.",
   "Reason (optional). Only the planner can read it.": "Motif (facultatif). Seul l'organisateur peut le lire.",
   "Send reply": "Envoyer la réponse",
@@ -12903,13 +12911,23 @@ function renderMeetingCard(meeting, view) {
     : r.response === 'declined' ? '<span class="mtg-reply mtg-reply--no">Declined</span>' : '<span class="mtg-reply">No reply yet</span>';
   const usedRsvps = new Set();
   const details = Array.isArray(meeting.participant_details) ? meeting.participant_details : [];
-  const detailItems = details.map(person => {
+  const sideNames = { client: 'Client', consultant: 'Consultant', contractor: 'Contractor' };
+  const personLi = person => {
     const r = rsvpFor(person); if (r) usedRsvps.add(r);
-    return `<li>${escapeHtml(person.name || 'Participant')} <span class="meeting-roster-meta">${escapeHtml(person.email || person.role || 'External participant')} · ${escapeHtml(attendanceLabel[person.attendance_type] || 'Required')}</span>${replyChip(r)}${showReplies && r?.note ? `<span class="meeting-roster-meta"><b>Reason</b> ${escapeHtml(r.note)}</span>` : ''}</li>`;
+    return `<li>${escapeHtml(person.name || 'Participant')} <span class="meeting-roster-meta">${escapeHtml([person.email || (person.source === 'manual' ? 'External participant' : ''), attendanceLabel[person.attendance_type] || 'Required'].filter(Boolean).join(' · '))}</span>${replyChip(r)}${showReplies && r?.note ? `<span class="meeting-roster-meta"><b>Reason</b> ${escapeHtml(r.note)}</span>` : ''}</li>`;
+  };
+  const groups = [];
+  details.forEach(person => {
+    const key = person.side || 'external';
+    let group = groups.find(g => g.key === key);
+    if (!group) { group = { key, items: [] }; groups.push(group); }
+    group.items.push(personLi(person));
   });
+  const groupHtml = groups.map(g => `<div class="meeting-side-head"><b>${g.key === 'external' ? 'External guests' : sideNames[g.key]}</b><span class="mtg-count">${g.items.length}</span></div><ul class="meeting-people">${g.items.join('')}</ul>`).join('');
   const plainItems = details.length ? [] : (meeting.participants || '').split(/\r?\n/).filter(Boolean).map(name => `<li>${escapeHtml(name)}</li>`);
   const extraItems = !showReplies ? [] : rsvps.filter(r => !usedRsvps.has(r)).map(r => `<li>${escapeHtml(r.participant_name || 'Participant')}${replyChip(r)}${r.note ? `<span class="meeting-roster-meta"><b>Reason</b> ${escapeHtml(r.note)}</span>` : ''}</li>`);
-  const participantList = [...detailItems, ...plainItems, ...extraItems].join('');
+  const looseItems = [...plainItems, ...extraItems];
+  const participantList = groupHtml + (looseItems.length ? `<ul class="meeting-people">${looseItems.join('')}</ul>` : '');
 
   // ── what the current person still has to do ──
   const answered = !!currentRsvp && ['accepted', 'declined'].includes(currentRsvp.response);
@@ -12970,7 +12988,7 @@ function renderMeetingCard(meeting, view) {
         ${roleLines ? `<div class="meeting-detail-row"><strong>Roles</strong><span>${roleLines}</span></div>` : ''}
         ${meeting.end_at ? `<div class="meeting-detail-row"><strong>Ends</strong><span>${escapeHtml(formatMeetingDate(meeting.end_at, meeting.time_zone))}</span></div>` : ''}
         ${accessParts ? `<div class="meeting-detail-row"><strong>Access</strong><span>${accessParts}</span></div>` : ''}
-        <div class="meeting-detail-row"><strong>Participants</strong><span><ul style="margin:0;padding-left:18px;">${participantList || '<li>—</li>'}</ul></span></div>
+        <div class="meeting-detail-row"><strong>Participants</strong><span>${participantList || '—'}</span></div>
         <div class="meeting-detail-row"><strong>Agenda</strong><span>${agenda}</span></div>
         ${meeting.recurrence_group ? `<div class="meeting-detail-row"><strong>Recurring series</strong><span>${escapeHtml(meeting.recurrence_rule?.frequency || 'Recurring')} · occurrence ${escapeHtml(String(meeting.series_index || ''))}</span></div>` : ''}
         ${references ? `<div class="meeting-detail-row"><strong>References</strong><span>${references}</span></div>` : ''}
