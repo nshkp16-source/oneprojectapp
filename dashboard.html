@@ -1619,6 +1619,10 @@
     .meeting-rsvp-box { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: #f8fafc; font-size: 13px; color: #263640; }
     .meeting-rsvp-box.needs { background: #fffbeb; border-color: #fde68a; }
     .meeting-rsvp-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .meeting-rsvp-note { margin: -4px 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: #f8fafc; font-size: 13px; }
+    .meeting-rsvp-note[hidden] { display: none; }
+    .meeting-rsvp-note label { display: block; margin-bottom: 6px; font-weight: 600; color: #334155; }
+    .meeting-rsvp-note textarea { width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font: inherit; resize: vertical; }
     .mtg-reply { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: #f1f5f9; color: #475569; }
     .mtg-reply--yes { background: #dcfce7; color: #166534; }
     .mtg-reply--no { background: #fee2e2; color: #991b1b; }
@@ -7051,6 +7055,10 @@ Object.assign(OPA_FR, {
 });
 Object.assign(OPA_FR, {
   "RSVP needed": "Réponse attendue",
+  "Please tell the planner if you can attend.": "Merci d'indiquer à l'organisateur si vous pouvez participer.",
+  "Reason (optional). Only the planner can read it.": "Motif (facultatif). Seul l'organisateur peut le lire.",
+  "Send reply": "Envoyer la réponse",
+  "Reason": "Motif",
   "Add the report": "Ajouter le compte rendu",
   "Please tell the organiser if you can attend.": "Merci d'indiquer à l'organisateur si vous pouvez participer.",
   "You accepted this meeting.": "Vous avez accepté cette réunion.",
@@ -12068,6 +12076,13 @@ async function displayMeetingList(view, scope, scopeValue, context) {
         else focusMeetingCard(list, card);
         return;
       }
+      const rsvpOpen = event.target.closest('.meeting-rsvp-open');
+      if (rsvpOpen) {
+        event.stopPropagation();
+        const box = container.querySelector(`#mtg-rsvp-note-${CSS.escape(rsvpOpen.dataset.meetingId)}`);
+        if (box) { box.hidden = !box.hidden; if (!box.hidden) box.querySelector('textarea')?.focus(); }
+        return;
+      }
       if (event.target.closest('#mtgMore')) { state.shown += MEETING_PAGE_SIZE; paint(); return; }
       if (event.target.closest('#mtgShowMissing')) {
         state.status = 'missing'; state.shown = MEETING_PAGE_SIZE;
@@ -12091,7 +12106,7 @@ async function displayMeetingList(view, scope, scopeValue, context) {
       else if (downloadIcs) downloadMeetingCalendar(button.getAttribute('data-meeting-id'));
       else if (editMeeting && meeting) renderPlanMeetingForm(context, scope, scopeValue, meeting);
       else if (cancelMeeting && meeting) cancelPlannedMeeting(meeting, view, context);
-      else if (rsvpButton && meeting) submitMeetingRsvp(meeting.id, rsvpButton.dataset.response, context);
+      else if (rsvpButton && meeting) submitMeetingRsvp(meeting.id, rsvpButton.dataset.response, context, container.querySelector(`#mtg-rsvp-text-${CSS.escape(String(meeting.id))}`)?.value.trim() || '');
       else if (minuteButton && meeting) openAddMinuteInline(meeting, scope, scopeValue, button.classList.contains('edit-minute-btn'));
     });
 
@@ -12781,11 +12796,11 @@ function meetingPreview(btn) {
     return;
   }
   const url = btn.dataset.url;
+  // reference files are stored on an outside file service, so the request carries no login token
   _dcPreview('', name, async () => {
-    try { const r = await authFetch(url); if (r && r.ok) return await r.blob(); } catch (e) { /* try a plain request next */ }
-    const r2 = await fetch(url);
-    if (!r2.ok) throw new Error('The file could not be loaded.');
-    return r2.blob();
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('The file could not be loaded.');
+    return r.blob();
   });
 }
 
@@ -12826,12 +12841,12 @@ async function downloadMeetingCalendar(meetingId) {
   }
 }
 
-async function submitMeetingRsvp(meetingId, response, context) {
+async function submitMeetingRsvp(meetingId, response, context, note = '') {
   try {
     const result = await authFetch(`${API}/meetings/${meetingId}/rsvp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ response }),
+      body: JSON.stringify({ response, note: response === 'declined' ? note : '' }),
     });
     const data = result && await result.json().catch(() => ({}));
     if (!result?.ok) throw new Error(data?.error || 'Could not save your RSVP.');
@@ -12878,19 +12893,22 @@ function renderMeetingCard(meeting, view) {
   const attendanceLabel = { required: 'Required', optional: 'Optional', information: 'For information' };
   const rsvps = Array.isArray(meeting.rsvps) ? meeting.rsvps : [];
   const lowName = x => String(x || '').trim().toLowerCase();
-  const rsvpFor = person => rsvps.find(r => r.participant_source === 'project' && person.source === 'project'
+  const keyOf = person => person.source === 'project' ? `project:${person.role}:${person.role_id}` : `manual:${String(person.email || '').toLowerCase()}`;
+  const rsvpFor = person => rsvps.find(r => r.participant_key && r.participant_key === keyOf(person))
+    || rsvps.find(r => r.participant_source === 'project' && person.source === 'project'
       && normalizeRoleKey(r.participant_role) === normalizeRoleKey(person.role) && String(r.participant_role_id) === String(person.role_id))
     || (person.name ? rsvps.find(r => lowName(r.participant_name) === lowName(person.name)) : undefined);
-  const replyChip = r => !r ? '' : r.response === 'accepted' ? '<span class="mtg-reply mtg-reply--yes">Accepted</span>'
+  const showReplies = planner;   // the server sends everyone's replies to the planner only
+  const replyChip = r => (!r || !showReplies) ? '' : r.response === 'accepted' ? '<span class="mtg-reply mtg-reply--yes">Accepted</span>'
     : r.response === 'declined' ? '<span class="mtg-reply mtg-reply--no">Declined</span>' : '<span class="mtg-reply">No reply yet</span>';
   const usedRsvps = new Set();
   const details = Array.isArray(meeting.participant_details) ? meeting.participant_details : [];
   const detailItems = details.map(person => {
     const r = rsvpFor(person); if (r) usedRsvps.add(r);
-    return `<li>${escapeHtml(person.name || 'Participant')} <span class="meeting-roster-meta">${escapeHtml(person.email || person.role || 'External participant')} · ${escapeHtml(attendanceLabel[person.attendance_type] || 'Required')}</span>${replyChip(r)}</li>`;
+    return `<li>${escapeHtml(person.name || 'Participant')} <span class="meeting-roster-meta">${escapeHtml(person.email || person.role || 'External participant')} · ${escapeHtml(attendanceLabel[person.attendance_type] || 'Required')}</span>${replyChip(r)}${showReplies && r?.note ? `<span class="meeting-roster-meta"><b>Reason</b> ${escapeHtml(r.note)}</span>` : ''}</li>`;
   });
   const plainItems = details.length ? [] : (meeting.participants || '').split(/\r?\n/).filter(Boolean).map(name => `<li>${escapeHtml(name)}</li>`);
-  const extraItems = rsvps.filter(r => !usedRsvps.has(r)).map(r => `<li>${escapeHtml(r.participant_name || 'Participant')}${replyChip(r)}</li>`);
+  const extraItems = !showReplies ? [] : rsvps.filter(r => !usedRsvps.has(r)).map(r => `<li>${escapeHtml(r.participant_name || 'Participant')}${replyChip(r)}${r.note ? `<span class="meeting-roster-meta"><b>Reason</b> ${escapeHtml(r.note)}</span>` : ''}</li>`);
   const participantList = [...detailItems, ...plainItems, ...extraItems].join('');
 
   // ── what the current person still has to do ──
@@ -12901,9 +12919,16 @@ function renderMeetingCard(meeting, view) {
   const cueChip = needsRsvp ? '<span class="mtg-cue-chip" data-cue="rsvp">RSVP needed</span>'
     : needsReport ? '<span class="mtg-cue-chip" data-cue="report">Add the report</span>' : '';
   const rsvpBtn = (response, label) => `<button type="button" class="btn meeting-rsvp" data-response="${response}" data-meeting-id="${id}">${label}</button>`;
+  const declineOpen = label => `<button type="button" class="btn meeting-rsvp-open" data-meeting-id="${id}">${label}</button>`;
+  const myNote = currentRsvp?.note ? `<span class="meeting-roster-meta" style="display:block;"><b>Reason</b> ${escapeHtml(currentRsvp.note)}</span>` : '';
   const rsvpBox = !canReply ? '' : `<div class="meeting-rsvp-box${needsRsvp ? ' needs' : ''}">
-          <span>${!answered ? 'Please tell the organiser if you can attend.' : currentRsvp.response === 'accepted' ? 'You accepted this meeting.' : 'You declined this meeting.'}</span>
-          <span class="meeting-rsvp-actions">${!answered ? rsvpBtn('accepted', 'Accept') + rsvpBtn('declined', 'Decline') : currentRsvp.response === 'accepted' ? rsvpBtn('declined', 'Decline instead') : rsvpBtn('accepted', 'Accept instead')}</span>
+          <span>${!answered ? 'Please tell the planner if you can attend.' : currentRsvp.response === 'accepted' ? 'You accepted this meeting.' : 'You declined this meeting.'}${answered && currentRsvp.response === 'declined' ? myNote : ''}</span>
+          <span class="meeting-rsvp-actions">${!answered ? rsvpBtn('accepted', 'Accept') + declineOpen('Decline') : currentRsvp.response === 'accepted' ? declineOpen('Decline instead') : rsvpBtn('accepted', 'Accept instead')}</span>
+        </div>
+        <div class="meeting-rsvp-note" id="mtg-rsvp-note-${id}" hidden>
+          <label for="mtg-rsvp-text-${id}">Reason (optional). Only the planner can read it.</label>
+          <textarea id="mtg-rsvp-text-${id}" maxlength="300" rows="2"></textarea>
+          <button type="button" class="btn danger meeting-rsvp" data-response="declined" data-meeting-id="${id}">Send reply</button>
         </div>`;
 
   // ── plan rows: only what the collapsed row does not already say ──
