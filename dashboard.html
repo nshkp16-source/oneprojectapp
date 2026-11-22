@@ -5168,6 +5168,19 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Attach File *": "Joindre un fichier *",
   "💾 Save Record": "💾 Enregistrer l'enregistrement",
   "Save Record": "Enregistrer l'enregistrement",
+  "Your folders": "Vos dossiers",
+  "Suggested folders": "Dossiers suggérés",
+  "+ New folder…": "+ Nouveau dossier…",
+  "— Choose a folder —": "— Choisir un dossier —",
+  "Folder in Control & Reports": "Dossier dans Contrôle et rapports",
+  "Please type the folder name.": "Veuillez saisir le nom du dossier.",
+  "Please choose a folder.": "Veuillez choisir un dossier.",
+  "Choose a folder, add the details and attach the file.": "Choisissez un dossier, ajoutez les détails et joignez le fichier.",
+  "Type or pick a name, e.g. Variation Order": "Saisissez ou choisissez un nom, ex. Ordre de modification",
+  "This folder already exists. Your document will go into it.": "Ce dossier existe déjà. Votre document y sera classé.",
+  "Draft keeps it private. Any other folder sends it to your leader. Pick an existing folder, or <strong>+ New folder…</strong> to create one.": "Brouillon le garde privé. Tout autre dossier l'envoie à votre responsable. Choisissez un dossier existant, ou <strong>+ Nouveau dossier…</strong> pour en créer un.",
+  "Pick an existing folder, or <strong>+ New folder…</strong> to create one.": "Choisissez un dossier existant, ou <strong>+ Nouveau dossier…</strong> pour en créer un.",
+  "Share": "Partager",
   "Resubmit": "Soumettre à nouveau",
   "Submit": "Soumettre",
   "Save to Draft": "Enregistrer dans Brouillon",
@@ -24904,16 +24917,58 @@ function _dcRenderSummary(tab, records) {
   box.querySelector('[data-dc-register]')?.addEventListener('click', () => _dcExportRegister(tab));
 }
 
-// "Other" suggestions: the folder names that already exist
-function _dcUpdateFolderDatalist() {
+// Folder names, kept apart for each tab: Document & Approval and Control & Reports have their own folders
+// (a leader can file a shared document under a different folder in Control & Reports).
+const _dcSessionFolders = { 'document-approval': new Map(), 'control-reports': new Map() };
+function _dcNorm(name) { return String(name || '').replace(/\s+/g, ' ').trim(); }
+function _dcRememberFolder(name, tab = 'document-approval') {
+  const clean = _dcNorm(name);
+  if (clean && _dcSessionFolders[tab]) _dcSessionFolders[tab].set(clean.toLowerCase(), clean);
+}
+// Folders that already exist in one tab (private drafts are not folders), keyed by lower case so "variation order" = "Variation Order"
+function _dcFolderMap(tab = 'document-approval') {
   const names = new Map();
-  DA_DOC_TYPES.filter(t => t !== 'Other').forEach(t => names.set(t.toLowerCase(), t));
-  ['document-approval', 'control-reports'].forEach(t => (recordsCache[t] || []).forEach(d => {
-    if (d.status !== 'draft' && d.doc_type) names.set(String(d.doc_type).toLowerCase(), d.doc_type);
-  }));
-  let dl = document.getElementById('dc-folder-list');
-  if (!dl) { dl = document.createElement('datalist'); dl.id = 'dc-folder-list'; document.body.appendChild(dl); }
-  dl.innerHTML = [...names.values()].sort().map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
+  (recordsCache[tab] || []).forEach(d => {
+    const n = _dcNorm(d.doc_type);
+    if (d.status !== 'draft' && n && !names.has(n.toLowerCase())) names.set(n.toLowerCase(), n);
+  });
+  (_dcSessionFolders[tab] || new Map()).forEach((v, k) => { if (!names.has(k)) names.set(k, v); });
+  return names;
+}
+const _dcStdTypes = () => DA_DOC_TYPES.filter(t => t !== 'Other');
+// The name as the folder already spells it, so a re-typed folder never creates a duplicate
+function _dcCanonicalFolder(name, tab = 'document-approval') {
+  const clean = _dcNorm(name), key = clean.toLowerCase();
+  return _dcFolderMap(tab).get(key) || _dcStdTypes().find(t => t.toLowerCase() === key) || clean;
+}
+// Dropdown for choosing a folder: only the folders that exist in that tab, then "+ New folder…".
+// The standard types fill the list only while the tab has no folders yet; otherwise they are suggestions for a new name.
+function _dcTypeOptionsHtml(current, tab = 'document-approval') {
+  const all = _dcFolderMap(tab);
+  const cur = _dcNorm(current).toLowerCase();
+  const std = _dcStdTypes();
+  const stdHit = std.find(t => t.toLowerCase() === cur);
+  const known = !!cur && (all.has(cur) || !!stdHit);
+  const names = [...all.values()];
+  if (stdHit && !all.has(cur) && names.length) names.push(stdHit);
+  names.sort((x, y) => x.localeCompare(y));
+  const opt = n => `<option value="${escapeHtml(n)}" ${cur && cur === n.toLowerCase() ? 'selected' : ''}>${escapeHtml(n)}</option>`;
+  const list = names.length
+    ? `<optgroup label="Your folders">${names.map(opt).join('')}</optgroup>`
+    : `<optgroup label="Suggested folders">${std.map(opt).join('')}</optgroup>`;
+  return `${list}<option value="Other" ${cur && !known ? 'selected' : ''}>+ New folder…</option>`;
+}
+// Suggestions in the "new folder" box: this tab's folders plus the standard types
+function _dcUpdateFolderDatalist() {
+  ['document-approval', 'control-reports'].forEach(tab => {
+    const names = new Map();
+    _dcStdTypes().forEach(t => names.set(t.toLowerCase(), t));
+    _dcFolderMap(tab).forEach((v, k) => names.set(k, v));
+    const id = `dc-folder-list-${tab}`;
+    let dl = document.getElementById(id);
+    if (!dl) { dl = document.createElement('datalist'); dl.id = id; document.body.appendChild(dl); }
+    dl.innerHTML = [...names.values()].sort().map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
+  });
 }
 
 // read / unread
@@ -25062,7 +25117,7 @@ async function _dcBulkRun(act, v) {
   const eligible = chosen.filter(d => d.can_review && d.status === (share ? 'approved' : 'pending_approval'));
   if (!eligible.length) { alert(share ? 'Select signed documents to share.' : 'Select documents that are waiting for your signature.'); return; }
   const skipped = chosen.length - eligible.length;
-  if (!confirm(share ? `Share ${eligible.length} document(s) to Control & Reports?` : `Sign ${eligible.length} document(s) without a stamp?`) ) return;
+  if (!confirm(share ? `Share ${eligible.length} document(s) to Control & Reports? Each one keeps its folder name there. To file a document under another folder, open it and share it from its card.` : `Sign ${eligible.length} document(s) without a stamp?`) ) return;
   let ok = 0; const errors = [];
   for (const d of eligible) {
     const res = await _daAuthFetch(`${API}/document-approval/${d.id}/${share ? 'share' : 'review'}`, { method: 'POST', body: share ? { projectId } : { projectId, action: 'approved', comment: '' } });
@@ -25076,7 +25131,7 @@ async function _dcRenameFolder(tab, open) {
   const to = prompt(`New name for the folder "${open.label}".\nType the name of an existing folder to merge into it.`, open.label);
   if (!to || !to.trim() || to.trim() === open.label) return;
   const projectId = localStorage.getItem('activeProjectId');
-  const res = await _daAuthFetch(`${API}/document-folders/rename`, { method: 'POST', body: { projectId, from: open.label, to: to.trim() } });
+  const res = await _daAuthFetch(`${API}/document-folders/rename`, { method: 'POST', body: { projectId, from: open.label, to: to.trim(), tab } });
   const j = res ? await res.json().catch(() => ({})) : {};
   if (!res || !res.ok) { alert('Error: ' + (j.error || 'Could not rename the folder.')); return; }
   alert(`${j.moved} document(s) are now in the "${j.folder}" folder.`);
@@ -25414,26 +25469,36 @@ async function _daLoadDetail(recordId) {
 //  DOCUMENT FLOW — shared card pieces (Document & Approval + Control & Reports)
 //  One look for both cards: every part has its own title, same spacing, same border.
 // ═══════════════════════════════════════════════════════════════════════
-function _dcTypeInputHtml(selectId, current) {
-  const known = DA_DOC_TYPES.includes(current);
-  const typed = current && !known ? current : '';
+function _dcTypeInputHtml(selectId, current, tab = 'document-approval') {
+  const key = _dcNorm(current).toLowerCase();
+  const typed = key && !_dcFolderMap(tab).has(key) && !_dcStdTypes().some(t => t.toLowerCase() === key) ? current : '';
   arEnsureFormStyles();
-  return `<input id="${selectId}-other" type="text" maxlength="60" list="dc-folder-list" autocomplete="off" class="ar-input" value="${escapeHtml(typed)}" placeholder="Type the folder name, e.g. Variation Order"
-    style="margin-top:8px;display:${typed ? 'block' : 'none'};"/>`;
+  _dcUpdateFolderDatalist();
+  return `<input id="${selectId}-other" type="text" maxlength="60" list="dc-folder-list-${tab}" autocomplete="off" class="ar-input" value="${escapeHtml(typed)}" placeholder="Type or pick a name, e.g. Variation Order"
+    style="margin-top:8px;display:${typed ? 'block' : 'none'};"/>
+    <div id="${selectId}-match" class="ar-hint" style="display:none;color:#15803d;">This folder already exists. Your document will go into it.</div>`;
 }
-function _dcWireTypeField(selectId) {
+function _dcWireTypeField(selectId, tab = 'document-approval') {
   const sel = document.getElementById(selectId), other = document.getElementById(`${selectId}-other`);
   if (!sel || !other) return;
-  const sync = () => { other.style.display = sel.value === 'Other' ? 'block' : 'none'; if (sel.value === 'Other') other.focus(); };
+  const match = document.getElementById(`${selectId}-match`);
+  const check = () => {
+    const name = _dcNorm(other.value);
+    if (match) match.style.display = (sel.value === 'Other' && name && _dcFolderMap(tab).has(name.toLowerCase())) ? 'block' : 'none';
+  };
+  const sync = () => { other.style.display = sel.value === 'Other' ? 'block' : 'none'; if (sel.value === 'Other') other.focus(); check(); };
   sel.addEventListener('change', sync);
+  other.addEventListener('input', check);
+  other.addEventListener('blur', () => { other.value = _dcCanonicalFolder(other.value, tab); check(); });
+  check();
 }
-function _dcReadType(selectId) {
+function _dcReadType(selectId, tab = 'document-approval') {
   const v = document.getElementById(selectId)?.value || '';
   if (v !== 'Other') return v;
-  return (document.getElementById(`${selectId}-other`)?.value || '').trim();
+  return _dcCanonicalFolder(document.getElementById(`${selectId}-other`)?.value || '', tab);
 }
 function _dcTypeMissingMsg(selectId) {
-  return document.getElementById(selectId)?.value === 'Other' ? 'Please type the document type.' : 'Please select a document type.';
+  return document.getElementById(selectId)?.value === 'Other' ? 'Please type the folder name.' : 'Please choose a folder.';
 }
 
 function _dcDate(v) {
@@ -25683,11 +25748,18 @@ function _daDetailHtml(doc, leader, isCreator, events = null) {
       _dcBtn('da-reject', 'Send back to submitter', 'danger', 'x'));
     bar = _dcBtn('da-approve', 'Sign document', 'ok', 'check') + _dcRevealBtn(`da-return-box-${id}`, 'Return to submitter', 'danger', 'x');
   } else if (leader && doc.status === 'approved') {
-    bar = _dcBtn('da-share', 'Share to Control &amp; Reports', 'warn', 'inbox') + (isCreator ? _dcBtn('da-delete', 'Delete', 'danger', 'trash') : '');
+    const here = escapeHtml(_dcNorm(doc.doc_type));
+    reveal = _dcRevealBox(`da-share-box-${id}`,
+      `<label class="dc-reveal-label" for="da-share-type-${id}">Folder in Control &amp; Reports</label>
+       <select id="da-share-type-${id}" style="${_daInputStyle()} cursor:pointer;"><option value="">Keep “${here}”</option><option value="Other">+ New folder…</option></select>
+       ${_dcTypeInputHtml('da-share-type-' + id, '', 'control-reports')}
+       <div style="font-size:11px;color:#6b7280;margin:6px 0 4px;">Everyone on your side will be able to read it and comment. The folder you choose is used in Control &amp; Reports only. In Document &amp; Approval the document stays in “${here}”.</div>`,
+      _dcBtn('da-share', 'Share', 'warn', 'inbox'));
+    bar = _dcRevealBtn(`da-share-box-${id}`, 'Share to Control &amp; Reports', 'warn', 'inbox') + (isCreator ? _dcBtn('da-delete', 'Delete', 'danger', 'trash') : '');
   } else if (isCreator && doc.status === 'draft') {
     reveal = _dcRevealBox(`da-send-box-${id}`,
       `<label class="dc-reveal-label" for="da-send-type-${id}">Send to a folder</label>
-       <select id="da-send-type-${id}" style="${_daInputStyle()} cursor:pointer;"><option value="">— Select folder —</option>${DA_DOC_TYPES.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}</select>
+       <select id="da-send-type-${id}" style="${_daInputStyle()} cursor:pointer;"><option value="">— Select folder —</option>${_dcTypeOptionsHtml('', 'document-approval')}</select>
        ${_dcTypeInputHtml('da-send-type-' + id, '')}
        <div style="font-size:11px;color:#6b7280;margin:6px 0 10px;">Choosing a folder makes the document readable by your leader. Until then it stays private in your Draft folder.</div>
        <label class="dc-reveal-label" for="da-send-deadline-${id}">Review by (optional)</label>
@@ -25873,6 +25945,8 @@ function _daWireDetailButtons(recordId, doc, leader, isCreator) {
   container.querySelector('[data-action="da-reject"]')?.addEventListener('click', () => _daReview(recordId, 'rejected'));
   _dcWireTypeField(`da-send-type-${recordId}`);
   container.querySelector('[data-action="da-send"]')?.addEventListener('click', () => _daSendDraft(recordId));
+  _dcWireTypeField(`da-share-type-${recordId}`, 'control-reports');
+  container.querySelector(`[data-reveal="da-share-box-${recordId}"]`)?.addEventListener('click', () => _daLoadShareFolders(recordId, doc));
   container.querySelector('[data-action="da-share"]')    ?.addEventListener('click', () => _daShare(recordId));
   container.querySelector('[data-action="da-resubmit"]') ?.addEventListener('click', () => _daOpenCreateForm(doc));
   container.querySelector('[data-action="da-delete"]')   ?.addEventListener('click', () => _daDelete(recordId));
@@ -25907,15 +25981,43 @@ async function _daSendDraft(docId) {
   if (!type) { alert(_dcTypeMissingMsg(`da-send-type-${docId}`)); return; }
   const deadline = document.getElementById(`da-send-deadline-${docId}`)?.value || undefined;
   const ok = await _dcPost(`/document-approval/${docId}/submit`, { projectId, doc_type: type, deadline }, `📤 Sent to the "${type}" folder.`);
-  if (ok) { delete recordsCache['document-approval']; _daLoadRecords(); }
+  if (ok) { _dcRememberFolder(type, 'document-approval'); delete recordsCache['document-approval']; _daLoadRecords(); }
+}
+
+// Fills the share box with the folders that already exist in Control & Reports (loaded when the box is opened).
+async function _daLoadShareFolders(docId, doc) {
+  const sel = document.getElementById(`da-share-type-${docId}`);
+  if (!sel || sel.dataset.loaded) return;
+  sel.dataset.loaded = '1';
+  const projectId = localStorage.getItem('activeProjectId');
+  const res = await _daAuthFetch(`${API}/control-reports/folders`, { method: 'POST', body: { projectId } });
+  const j = res && res.ok ? await res.json().catch(() => ({})) : {};
+  const folders = Array.isArray(j.folders) ? j.folders : [];
+  folders.forEach(n => _dcRememberFolder(n, 'control-reports'));
+  _dcUpdateFolderDatalist();
+  const mine = _dcNorm(doc && doc.doc_type).toLowerCase();
+  const others = folders.filter(n => _dcNorm(n).toLowerCase() !== mine);
+  if (!others.length) return;
+  const grp = document.createElement('optgroup');
+  grp.label = 'Your folders';
+  others.forEach(n => { const o = document.createElement('option'); o.value = n; o.textContent = n; grp.appendChild(o); });
+  sel.insertBefore(grp, sel.querySelector('option[value="Other"]'));
 }
 
 async function _daShare(docId) {
   const projectId = localStorage.getItem('activeProjectId');
   if (!projectId) { alert('No project selected.'); return; }
-  if (!confirm('Share this signed document to Control & Reports? Everyone on your side will be able to read it and comment.')) return;
-  const ok = await _dcPost(`/document-approval/${docId}/share`, { projectId }, '📤 Document shared to Control & Reports.');
-  if (ok) { delete recordsCache['document-approval']; delete recordsCache['control-reports']; _daLoadRecords(); }
+  const selId = `da-share-type-${docId}`;
+  const picked = document.getElementById(selId)?.value || '';
+  const crFolder = picked ? _dcReadType(selId, 'control-reports') : '';
+  if (picked && !crFolder) { alert(_dcTypeMissingMsg(selId)); return; }
+  const body = { projectId };
+  if (crFolder) body.cr_folder = crFolder;
+  const ok = await _dcPost(`/document-approval/${docId}/share`, body, '📤 Document shared to Control & Reports.');
+  if (ok) {
+    if (crFolder) _dcRememberFolder(crFolder, 'control-reports');
+    delete recordsCache['document-approval']; delete recordsCache['control-reports']; _daLoadRecords();
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -26022,31 +26124,28 @@ function _daOpenCreateForm(existingDoc = null) {
   const openLabel = (!isEdit && _daFolder && _daFolder !== DC_DRAFT_KEY)
     ? ((_dcBuildFolders(recordsCache['document-approval'] || [], true).find(f => f.key === _daFolder) || {}).label || null) : null;
   const curType     = existingDoc?.doc_type ?? openLabel;
-  const knownType   = DA_DOC_TYPES.includes(curType);
-  const typeOptions = DA_DOC_TYPES.map(t =>
-    `<option value="${t}" ${(curType === t || (!knownType && curType && t === 'Other')) ? 'selected' : ''}>${escapeHtml(t)}</option>`
-  ).join('');
+  const typeOptions = _dcTypeOptionsHtml(curType, 'document-approval');
 
   arEnsureFormStyles();
   expandGrayPart(`
     <div class="ar-panel" style="--ar-accent:#007B8A;">
       <div class="ar-head">
         <h3>${isEdit ? 'Resubmit Document' : 'Submit Document'}</h3>
-        <div class="ar-sub">${isEdit ? 'Upload the corrected file if needed, then resubmit.' : 'Choose where it goes, add the details and attach the file.'}</div>
+        <div class="ar-sub">${isEdit ? 'Upload the corrected file if needed, then resubmit.' : 'Choose a folder, add the details and attach the file.'}</div>
       </div>
       <div class="ar-body">
 
         <section class="ar-card">
           <div class="ar-card-h"><span class="ar-step">1</span><span class="ar-card-t">Details</span></div>
           <div class="ar-field">
-            <label class="ar-label" for="da-cr-type">${isEdit ? 'Folder (document type)' : 'Submit as'}<span class="ar-req">*</span></label>
+            <label class="ar-label" for="da-cr-type">Folder<span class="ar-req">*</span></label>
             <select id="da-cr-type" class="ar-input" style="cursor:pointer;">
-              <option value="">— Select —</option>
+              <option value="">— Choose a folder —</option>
               ${isEdit ? '' : `<option value="${DC_DRAFT_KEY}" ${inDraftFolder ? 'selected' : ''}>🔒 Draft (keep private in my Draft folder)</option>`}
               ${typeOptions}
             </select>
-            ${_dcTypeInputHtml('da-cr-type', curType)}
-            ${isEdit ? '' : `<div class="ar-hint">Draft keeps it private. Any folder shares it with your leader. Choose <strong>Other</strong> to type a new folder name.</div>`}
+            ${_dcTypeInputHtml('da-cr-type', curType, 'document-approval')}
+            ${isEdit ? '' : `<div class="ar-hint">Draft keeps it private. Any other folder sends it to your leader. Pick an existing folder, or <strong>+ New folder…</strong> to create one.</div>`}
           </div>
           <div class="ar-field">
             <label class="ar-label" for="da-cr-title">Title<span class="ar-req">*</span></label>
@@ -26117,14 +26216,14 @@ function _daOpenCreateForm(existingDoc = null) {
   });
   fileInput.addEventListener('change', _updateFileDisplay);
 
-  _dcWireTypeField('da-cr-type');
+  _dcWireTypeField('da-cr-type', 'document-approval');
   document.getElementById('da-cr-type')?.addEventListener('change', e => {
     const lab = document.getElementById('da-cr-save-label');
     if (lab && !isEdit) lab.textContent = e.target.value === DC_DRAFT_KEY ? 'Save to Draft' : 'Submit';
   });
   document.getElementById('da-cr-save')?.addEventListener('click', async () => {
     const toDraft = !isEdit && document.getElementById('da-cr-type')?.value === DC_DRAFT_KEY;
-    const type  = toDraft ? '' : _dcReadType('da-cr-type');
+    const type  = toDraft ? '' : _dcReadType('da-cr-type', 'document-approval');
     const title = document.getElementById('da-cr-title')?.value.trim();
     const desc  = document.getElementById('da-cr-desc')?.value.trim();
     const file  = fileInput.files?.[0];
@@ -26169,6 +26268,7 @@ function _daOpenCreateForm(existingDoc = null) {
       if (!res) return;
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || 'Failed to save document');
+      if (type) _dcRememberFolder(type, 'document-approval');
 
       const _leaderSelf = typeof wcSide === 'function' && wcSide(window.currentUserRole) !== null;
       alert(isEdit ? '✓ Document resubmitted.'
@@ -26370,28 +26470,27 @@ function _crOpenCreateForm() {
   const projectId = localStorage.getItem('activeProjectId');
   if (!projectId) { alert('No project selected.'); return; }
 
-  const typeOptions = DA_DOC_TYPES.map(t =>
-    `<option value="${t}">${escapeHtml(t)}</option>`
-  ).join('');
+  const typeOptions = _dcTypeOptionsHtml('', 'control-reports');
 
   arEnsureFormStyles();
   expandGrayPart(`
     <div class="ar-panel" style="--ar-accent:#007B8A;">
       <div class="ar-head">
         <h3>Add Record</h3>
-        <div class="ar-sub">Choose a document type, add the details and attach the file.</div>
+        <div class="ar-sub">Choose a folder, add the details and attach the file.</div>
       </div>
       <div class="ar-body">
 
         <section class="ar-card">
           <div class="ar-card-h"><span class="ar-step">1</span><span class="ar-card-t">Details</span></div>
           <div class="ar-field">
-            <label class="ar-label" for="cr-add-type">Document type<span class="ar-req">*</span></label>
+            <label class="ar-label" for="cr-add-type">Folder<span class="ar-req">*</span></label>
             <select id="cr-add-type" class="ar-input" style="cursor:pointer;">
-              <option value="">— Select type —</option>
+              <option value="">— Choose a folder —</option>
               ${typeOptions}
             </select>
-            ${_dcTypeInputHtml('cr-add-type', '')}
+            ${_dcTypeInputHtml('cr-add-type', '', 'control-reports')}
+            <div class="ar-hint">Pick an existing folder, or <strong>+ New folder…</strong> to create one.</div>
           </div>
           <div class="ar-field">
             <label class="ar-label" for="cr-add-title">Title<span class="ar-req">*</span></label>
@@ -26457,9 +26556,9 @@ function _crOpenCreateForm() {
   });
   fileInput.addEventListener('change', _updateFileDisplay);
 
-  _dcWireTypeField('cr-add-type');
+  _dcWireTypeField('cr-add-type', 'control-reports');
   document.getElementById('cr-add-save')?.addEventListener('click', async () => {
-    const type  = _dcReadType('cr-add-type');
+    const type  = _dcReadType('cr-add-type', 'control-reports');
     const title = document.getElementById('cr-add-title')?.value.trim();
     const desc  = document.getElementById('cr-add-desc')?.value.trim();
     const file  = fileInput.files?.[0];
@@ -26495,6 +26594,7 @@ function _crOpenCreateForm() {
       if (!res) return;
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || 'Failed to save record');
+      _dcRememberFolder(type, 'control-reports');
 
       alert('✓ Record added to Control & Report.');
       delete recordsCache['control-reports'];
