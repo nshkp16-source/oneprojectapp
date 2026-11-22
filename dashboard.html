@@ -5168,6 +5168,19 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Attach File *": "Joindre un fichier *",
   "💾 Save Record": "💾 Enregistrer l'enregistrement",
   "Save Record": "Enregistrer l'enregistrement",
+  "Resubmit": "Soumettre à nouveau",
+  "Submit": "Soumettre",
+  "Save to Draft": "Enregistrer dans Brouillon",
+  "Folder (document type)": "Dossier (type de document)",
+  "Submit as": "Soumettre en tant que",
+  "Document type": "Type de document",
+  "Attach file": "Joindre un fichier",
+  "Review and signature": "Examen et signature",
+  "Choose where it goes, add the details and attach the file.": "Choisissez la destination, ajoutez les détails et joignez le fichier.",
+  "Upload the corrected file if needed, then resubmit.": "Téléversez le fichier corrigé si nécessaire, puis soumettez à nouveau.",
+  "Choose a document type, add the details and attach the file.": "Choisissez un type de document, ajoutez les détails et joignez le fichier.",
+  "PDF, Word, Excel, JPG or PNG, up to 20 MB": "PDF, Word, Excel, JPG ou PNG, 20 Mo maximum",
+  "PDF, Word, Excel, CAD, images, ZIP or CSV. Up to 5 files.": "PDF, Word, Excel, CAD, images, ZIP ou CSV. 5 fichiers maximum.",
   "Notice title": "Titre de l'avis",
   "Notice text": "Texte de l'avis",
   "Respond by": "Répondre avant le",
@@ -25404,8 +25417,9 @@ async function _daLoadDetail(recordId) {
 function _dcTypeInputHtml(selectId, current) {
   const known = DA_DOC_TYPES.includes(current);
   const typed = current && !known ? current : '';
-  return `<input id="${selectId}-other" type="text" maxlength="60" list="dc-folder-list" autocomplete="off" value="${escapeHtml(typed)}" placeholder="Type the folder name, e.g. Variation Order"
-    style="${_daInputStyle()} margin-top:8px;display:${typed ? 'block' : 'none'};"/>`;
+  arEnsureFormStyles();
+  return `<input id="${selectId}-other" type="text" maxlength="60" list="dc-folder-list" autocomplete="off" class="ar-input" value="${escapeHtml(typed)}" placeholder="Type the folder name, e.g. Variation Order"
+    style="margin-top:8px;display:${typed ? 'block' : 'none'};"/>`;
 }
 function _dcWireTypeField(selectId) {
   const sel = document.getElementById(selectId), other = document.getElementById(`${selectId}-other`);
@@ -25960,6 +25974,36 @@ async function _daDownload(docId, fileName) {
 // ═══════════════════════════════════════════════════════════════════════
 //  DOCUMENT & APPROVAL — Create / Resubmit form
 // ═══════════════════════════════════════════════════════════════════════
+// ── Shared pieces for the simple add/submit forms (D&A, C&R) ─────────────
+function arDropHtml({ dropId, inputId, nameId, accept, hint }) {
+  return `<div id="${dropId}" class="ar-drop">
+      <div class="ar-drop-ic">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div class="ar-drop-t">Click to upload or drag &amp; drop</div>
+        <div class="ar-drop-s">${hint}</div>
+        <input type="file" id="${inputId}" style="display:none;" accept="${accept}"/>
+      </div>
+    </div>
+    <div id="${nameId}" class="ar-file-ok" style="display:none;"></div>`;
+}
+function arSupportHtml(inputId, listId, accept, hint) {
+  return `<button type="button" id="${inputId}-pick" class="ar-btn ar-btn--ghost" style="padding:8px 14px;font-size:13px;">+ Add files</button>
+    <input type="file" id="${inputId}" multiple accept="${accept}" style="display:none;"/>
+    <div class="ar-hint">${hint}</div>
+    <div id="${listId}" class="fl-files" style="margin-top:8px;"></div>`;
+}
+function arWireSupport(inputId, listId) {
+  const inp = document.getElementById(inputId), btn = document.getElementById(`${inputId}-pick`), list = document.getElementById(listId);
+  if (!inp || !btn) return;
+  btn.addEventListener('click', () => inp.click());
+  inp.addEventListener('change', () => {
+    if (!list) return;
+    list.innerHTML = Array.from(inp.files).map(f => `<div class="fl-file"><span>${escapeHtml(f.name)}</span><span class="fl-muted">${(f.size / 1048576).toFixed(2)} MB</span></div>`).join('');
+  });
+}
+
 function _daOpenCreateForm(existingDoc = null) {
   if (projectLifecycleReadOnly) {
     showProjectLifecycleNotice(projectLifecycleReadOnlyReason);
@@ -25983,90 +26027,71 @@ function _daOpenCreateForm(existingDoc = null) {
     `<option value="${t}" ${(curType === t || (!knownType && curType && t === 'Other')) ? 'selected' : ''}>${escapeHtml(t)}</option>`
   ).join('');
 
+  arEnsureFormStyles();
   expandGrayPart(`
-    <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
-
-      <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
-        <h3 style="margin:0;color:#333;font-size:20px;">
-          ${isEdit ? '🔄 Resubmit Document' : '📄 Submit Document'}</h3>
+    <div class="ar-panel" style="--ar-accent:#007B8A;">
+      <div class="ar-head">
+        <h3>${isEdit ? 'Resubmit Document' : 'Submit Document'}</h3>
+        <div class="ar-sub">${isEdit ? 'Upload the corrected file if needed, then resubmit.' : 'Choose where it goes, add the details and attach the file.'}</div>
       </div>
+      <div class="ar-body">
 
-      <div style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
-
-        <div>
-          <label style="${_daLabelStyle()}">${isEdit ? 'Folder (document type) *' : 'Submit as *'}</label>
-          <select id="da-cr-type" style="${_daInputStyle()} cursor:pointer;">
-            <option value="">— Select —</option>
-            ${isEdit ? '' : `<option value="${DC_DRAFT_KEY}" ${inDraftFolder ? 'selected' : ''}>🔒 Draft (keep private in my Draft folder)</option>`}
-            ${typeOptions}
-          </select>
-          ${_dcTypeInputHtml('da-cr-type', curType)}
-          ${isEdit ? '' : `<div style="font-size:11px;color:#6b7280;margin-top:6px;">Draft keeps it private. Any folder shares it with your leader. Choose <strong>Other</strong> to type a new folder name.</div>`}
-        </div>
-
-        <div>
-          <label style="${_daLabelStyle()}">Title *</label>
-          <input id="da-cr-title" type="text" value="${v('title')}"
-            placeholder="e.g. Weekly Progress Report — Week 12"
-            style="${_daInputStyle()} font-size:14px;"/>
-        </div>
-
-        <div>
-          <label style="${_daLabelStyle()}">Description *</label>
-          <textarea id="da-cr-desc"
-            placeholder="Briefly describe the content and purpose of this document…"
-            style="width:100%;min-height:100px;padding:10px 12px;border:1px solid #d1d5db;
-            border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box;">${v('description')}</textarea>
-        </div>
-
-        <div>
-          <label style="${_daLabelStyle()}">
-            Attach File ${isEdit ? '<span style="font-weight:400;text-transform:none;">(leave empty to keep existing)</span>' : '*'}
-          </label>
-          <div id="da-drop-zone"
-            style="display:flex;align-items:center;gap:12px;padding:14px;
-            border:2px dashed #d1d5db;border-radius:8px;background:#fafafa;cursor:pointer;">
-            <span style="font-size:24px;">📎</span>
-            <div style="flex:1;">
-              <div style="font-weight:600;color:#374151;font-size:13px;">Click to upload or drag &amp; drop</div>
-              <div style="font-size:11px;color:#9ca3af;margin-top:2px;">PDF, DOC, DOCX, XLS, XLSX, JPG, PNG — max 20 MB</div>
-              <input type="file" id="da-cr-file" style="display:none;"
-                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"/>
-            </div>
+        <section class="ar-card">
+          <div class="ar-card-h"><span class="ar-step">1</span><span class="ar-card-t">Details</span></div>
+          <div class="ar-field">
+            <label class="ar-label" for="da-cr-type">${isEdit ? 'Folder (document type)' : 'Submit as'}<span class="ar-req">*</span></label>
+            <select id="da-cr-type" class="ar-input" style="cursor:pointer;">
+              <option value="">— Select —</option>
+              ${isEdit ? '' : `<option value="${DC_DRAFT_KEY}" ${inDraftFolder ? 'selected' : ''}>🔒 Draft (keep private in my Draft folder)</option>`}
+              ${typeOptions}
+            </select>
+            ${_dcTypeInputHtml('da-cr-type', curType)}
+            ${isEdit ? '' : `<div class="ar-hint">Draft keeps it private. Any folder shares it with your leader. Choose <strong>Other</strong> to type a new folder name.</div>`}
           </div>
-          <div id="da-file-display" style="display:none;margin-top:6px;font-size:12px;color:#10b981;font-weight:600;"></div>
-          ${isEdit && existingDoc?.file_name
-            ? `<div style="font-size:11px;color:#6b7280;margin-top:4px;">
-                Current: <strong>${escapeHtml(existingDoc.file_name)}</strong></div>` : ''}
-        </div>
+          <div class="ar-field">
+            <label class="ar-label" for="da-cr-title">Title<span class="ar-req">*</span></label>
+            <input id="da-cr-title" type="text" class="ar-input" value="${v('title')}" placeholder="e.g. Weekly Progress Report — Week 12"/>
+          </div>
+          <div class="ar-field">
+            <label class="ar-label" for="da-cr-desc">Description<span class="ar-req">*</span></label>
+            <textarea id="da-cr-desc" class="ar-input" rows="4" style="min-height:100px;resize:vertical;line-height:1.5;"
+              placeholder="Briefly describe the content and purpose of this document…">${v('description')}</textarea>
+          </div>
+        </section>
 
-        ${isEdit ? '' : `
-        <div>
-          <label style="${_daLabelStyle()}">Supporting files <span style="font-weight:400;text-transform:none;">(optional, up to 5)</span></label>
-          <input type="file" id="da-cr-support" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv" style="width:100%;"/>
-        </div>
-        <div>
-          <label style="${_daLabelStyle()}">Review by <span style="font-weight:400;text-transform:none;">(optional)</span></label>
-          <input type="date" id="da-cr-deadline" style="${_daInputStyle()} width:auto;"/>
-          <div style="font-size:11px;color:#6b7280;margin-top:4px;">Your leader sees this date and is reminded when it passes.</div>
-        </div>`}
+        <section class="ar-card">
+          <div class="ar-card-h"><span class="ar-step">2</span><span class="ar-card-t">Files</span></div>
+          <div class="ar-field">
+            <label class="ar-label">Attach file${isEdit ? '<span class="ar-opt">(leave empty to keep existing)</span>' : '<span class="ar-req">*</span>'}</label>
+            ${arDropHtml({ dropId: 'da-drop-zone', inputId: 'da-cr-file', nameId: 'da-file-display', accept: '.pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png', hint: 'PDF, Word, Excel, JPG or PNG, up to 20 MB' })}
+            ${isEdit && existingDoc?.file_name ? `<div class="ar-hint">Current: <strong>${escapeHtml(existingDoc.file_name)}</strong></div>` : ''}
+          </div>
+          ${isEdit ? '' : `
+          <div class="ar-field">
+            <label class="ar-label">Supporting files<span class="ar-opt">(optional)</span></label>
+            ${arSupportHtml('da-cr-support', 'da-support-list', '.pdf,.doc,.docx,.xls,.xlsx,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv', 'PDF, Word, Excel, CAD, images, ZIP or CSV. Up to 5 files.')}
+          </div>`}
+        </section>
+
+        <section class="ar-card">
+          <div class="ar-card-h"><span class="ar-step">3</span><span class="ar-card-t">${isEdit ? 'Signature' : 'Review and signature'}</span></div>
+          ${isEdit ? '' : `
+          <div class="ar-field">
+            <label class="ar-label" for="da-cr-deadline">Review by<span class="ar-opt">(optional)</span></label>
+            <input type="date" id="da-cr-deadline" class="ar-input" style="max-width:220px;"/>
+            <div class="ar-hint">Your leader sees this date and is reminded when it passes.</div>
+          </div>`}
+          <div class="ar-field">${_dcSignOption('da-sign-own')}</div>
+        </section>
 
       </div>
-
-      <div style="padding:0 20px 14px;">${_dcSignOption('da-sign-own')}</div>
-
-      <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
-        background:#fff;display:flex;gap:12px;">
-        <button type="button" id="da-cr-save"
-          style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#007B8A;
-          color:#fff;border:none;border-radius:8px;cursor:pointer;">
-          <span id="da-cr-save-label">${isEdit ? '💾 Resubmit' : (inDraftFolder ? '💾 Save to Draft' : '📤 Submit')}</span></button>
-        <button type="button" onclick="collapseGrayPart()"
-          style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#f5f5f5;
-          color:#333;border:1px solid #ddd;border-radius:8px;cursor:pointer;">
-          ✕ Cancel</button>
+      <div class="ar-foot">
+        <button type="button" class="ar-btn ar-btn--ghost" onclick="collapseGrayPart()">Cancel</button>
+        <button type="button" id="da-cr-save" class="ar-btn ar-btn--primary">
+          <span id="da-cr-save-label">${isEdit ? 'Resubmit' : (inDraftFolder ? 'Save to Draft' : 'Submit')}</span></button>
       </div>
     </div>`);
+  arWireSupport('da-cr-support', 'da-support-list');
 
   const dropZone    = document.getElementById('da-drop-zone');
   const fileInput   = document.getElementById('da-cr-file');
@@ -26095,7 +26120,7 @@ function _daOpenCreateForm(existingDoc = null) {
   _dcWireTypeField('da-cr-type');
   document.getElementById('da-cr-type')?.addEventListener('change', e => {
     const lab = document.getElementById('da-cr-save-label');
-    if (lab && !isEdit) lab.textContent = e.target.value === DC_DRAFT_KEY ? '💾 Save to Draft' : '📤 Submit';
+    if (lab && !isEdit) lab.textContent = e.target.value === DC_DRAFT_KEY ? 'Save to Draft' : 'Submit';
   });
   document.getElementById('da-cr-save')?.addEventListener('click', async () => {
     const toDraft = !isEdit && document.getElementById('da-cr-type')?.value === DC_DRAFT_KEY;
@@ -26156,7 +26181,7 @@ function _daOpenCreateForm(existingDoc = null) {
     } catch (err) {
       console.error('DA save error:', err);
       alert('Error: ' + err.message);
-      if (btn) { btn.disabled = false; btn.innerHTML = '<span id="da-cr-save-label">' + (isEdit ? '💾 Resubmit' : (toDraft ? '💾 Save to Draft' : '📤 Submit')) + '</span>'; }
+      if (btn) { btn.disabled = false; btn.innerHTML = '<span id="da-cr-save-label">' + (isEdit ? 'Resubmit' : (toDraft ? 'Save to Draft' : 'Submit')) + '</span>'; }
     }
   });
 }
@@ -26349,80 +26374,64 @@ function _crOpenCreateForm() {
     `<option value="${t}">${escapeHtml(t)}</option>`
   ).join('');
 
+  arEnsureFormStyles();
   expandGrayPart(`
-    <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
-
-      <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
-        <h3 style="margin:0;color:#333;font-size:20px;">📋 Add Record</h3>
+    <div class="ar-panel" style="--ar-accent:#007B8A;">
+      <div class="ar-head">
+        <h3>Add Record</h3>
+        <div class="ar-sub">Choose a document type, add the details and attach the file.</div>
       </div>
+      <div class="ar-body">
 
-      <div style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;">
-
-        <div>
-          <label style="${_daLabelStyle()}">Document Type *</label>
-          <select id="cr-add-type" style="${_daInputStyle()} cursor:pointer;">
-            <option value="">— Select type —</option>
-            ${typeOptions}
-          </select>
-          ${_dcTypeInputHtml('cr-add-type', '')}
-        </div>
-
-        <div>
-          <label style="${_daLabelStyle()}">Title *</label>
-          <input id="cr-add-title" type="text"
-            placeholder="Record title"
-            style="${_daInputStyle()} font-size:14px;"/>
-        </div>
-
-        <div>
-          <label style="${_daLabelStyle()}">Description *</label>
-          <textarea id="cr-add-desc"
-            placeholder="Describe this record…"
-            style="width:100%;min-height:100px;padding:10px 12px;border:1px solid #d1d5db;
-            border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box;"></textarea>
-        </div>
-
-        <div>
-          <label style="${_daLabelStyle()}">Attach File *</label>
-          <div id="cr-drop-zone"
-            style="display:flex;align-items:center;gap:12px;padding:14px;
-            border:2px dashed #d1d5db;border-radius:8px;background:#fafafa;cursor:pointer;">
-            <span style="font-size:24px;">📎</span>
-            <div style="flex:1;">
-              <div style="font-weight:600;color:#374151;font-size:13px;">Click to upload or drag &amp; drop</div>
-              <div style="font-size:11px;color:#9ca3af;margin-top:2px;">PDF, DOC, DOCX, XLS, XLSX, JPG, PNG — max 20 MB</div>
-              <input type="file" id="cr-add-file" style="display:none;"
-                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"/>
-            </div>
+        <section class="ar-card">
+          <div class="ar-card-h"><span class="ar-step">1</span><span class="ar-card-t">Details</span></div>
+          <div class="ar-field">
+            <label class="ar-label" for="cr-add-type">Document type<span class="ar-req">*</span></label>
+            <select id="cr-add-type" class="ar-input" style="cursor:pointer;">
+              <option value="">— Select type —</option>
+              ${typeOptions}
+            </select>
+            ${_dcTypeInputHtml('cr-add-type', '')}
           </div>
-          <div id="cr-file-display" style="display:none;margin-top:6px;font-size:12px;color:#10b981;font-weight:600;"></div>
-        </div>
+          <div class="ar-field">
+            <label class="ar-label" for="cr-add-title">Title<span class="ar-req">*</span></label>
+            <input id="cr-add-title" type="text" class="ar-input" placeholder="Record title"/>
+          </div>
+          <div class="ar-field">
+            <label class="ar-label" for="cr-add-desc">Description<span class="ar-req">*</span></label>
+            <textarea id="cr-add-desc" class="ar-input" rows="4" style="min-height:100px;resize:vertical;line-height:1.5;"
+              placeholder="Describe this record…"></textarea>
+          </div>
+        </section>
 
-        <div>
-          <label style="${_daLabelStyle()}">Supporting files <span style="font-weight:400;text-transform:none;">(optional, up to 5)</span></label>
-          <input type="file" id="cr-add-support" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv" style="width:100%;"/>
-        </div>
-        <div>
-          <label style="${_daLabelStyle()}">Review by <span style="font-weight:400;text-transform:none;">(optional)</span></label>
-          <input type="date" id="cr-add-deadline" style="${_daInputStyle()} width:auto;"/>
-        </div>
+        <section class="ar-card">
+          <div class="ar-card-h"><span class="ar-step">2</span><span class="ar-card-t">Files</span></div>
+          <div class="ar-field">
+            <label class="ar-label">Attach file<span class="ar-req">*</span></label>
+            ${arDropHtml({ dropId: 'cr-drop-zone', inputId: 'cr-add-file', nameId: 'cr-file-display', accept: '.pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png', hint: 'PDF, Word, Excel, JPG or PNG, up to 20 MB' })}
+          </div>
+          <div class="ar-field">
+            <label class="ar-label">Supporting files<span class="ar-opt">(optional)</span></label>
+            ${arSupportHtml('cr-add-support', 'cr-support-list', '.pdf,.doc,.docx,.xls,.xlsx,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv', 'PDF, Word, Excel, CAD, images, ZIP or CSV. Up to 5 files.')}
+          </div>
+        </section>
+
+        <section class="ar-card">
+          <div class="ar-card-h"><span class="ar-step">3</span><span class="ar-card-t">Review and signature</span></div>
+          <div class="ar-field">
+            <label class="ar-label" for="cr-add-deadline">Review by<span class="ar-opt">(optional)</span></label>
+            <input type="date" id="cr-add-deadline" class="ar-input" style="max-width:220px;"/>
+          </div>
+          <div class="ar-field">${_dcSignOption('cr-sign-own')}</div>
+        </section>
 
       </div>
-
-      <div style="padding:0 20px 14px;">${_dcSignOption('cr-sign-own')}</div>
-
-      <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
-        background:#fff;display:flex;gap:12px;">
-        <button type="button" id="cr-add-save"
-          style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#007B8A;
-          color:#fff;border:none;border-radius:8px;cursor:pointer;">
-          💾 Save Record</button>
-        <button type="button" onclick="collapseGrayPart()"
-          style="flex:1;padding:12px;font-size:14px;font-weight:700;background:#f5f5f5;
-          color:#333;border:1px solid #ddd;border-radius:8px;cursor:pointer;">
-          ✕ Cancel</button>
+      <div class="ar-foot">
+        <button type="button" class="ar-btn ar-btn--ghost" onclick="collapseGrayPart()">Cancel</button>
+        <button type="button" id="cr-add-save" class="ar-btn ar-btn--primary">Save Record</button>
       </div>
     </div>`);
+  arWireSupport('cr-add-support', 'cr-support-list');
 
   const dropZone    = document.getElementById('cr-drop-zone');
   const fileInput   = document.getElementById('cr-add-file');
