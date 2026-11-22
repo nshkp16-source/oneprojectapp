@@ -5168,6 +5168,17 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Attach File *": "Joindre un fichier *",
   "💾 Save Record": "💾 Enregistrer l'enregistrement",
   "Save Record": "Enregistrer l'enregistrement",
+  "Add the details, attach the official PDF, then choose who must sign.": "Ajoutez les détails, joignez le PDF officiel, puis choisissez qui doit signer.",
+  "Write the notice, attach the signed PDF, then choose who must sign.": "Rédigez l'avis, joignez le PDF signé, puis choisissez qui doit signer.",
+  "Official record (PDF)": "Dossier officiel (PDF)",
+  "Notice content": "Contenu de l'avis",
+  "+ Add files": "+ Ajouter des fichiers",
+  "PDF only, up to 10 MB": "PDF uniquement, 10 Mo maximum",
+  "PDF, Excel, Word, CAD, images, ZIP or CSV. Up to 10 files, 10 MB each.": "PDF, Excel, Word, CAD, images, ZIP ou CSV. 10 fichiers maximum, 10 Mo chacun.",
+  "Describe what this record is and why it matters…": "Décrivez ce qu'est ce dossier et pourquoi il compte…",
+  "Write the full notice here…": "Rédigez ici l'avis complet…",
+  "Text": "Texte",
+  "Link address (e.g. https://example.com)": "Adresse du lien (ex. https://example.com)",
   "Choose how you sign. This only applies to": "Choisissez comment vous signez. Cela s'applique uniquement à",
   "1. How do you want to sign?": "1. Comment voulez-vous signer ?",
   "Pen colour": "Couleur du stylo",
@@ -7063,6 +7074,7 @@ Object.assign(OPA_FR, {
 Object.assign(OPA_FR, {
   "RSVP needed": "Réponse attendue",
   "External guests": "Invités externes",
+  "Planner": "Organisateur",
   "Please tell the planner if you can attend.": "Merci d'indiquer à l'organisateur si vous pouvez participer.",
   "Reason (optional). Only the planner can read it.": "Motif (facultatif). Seul l'organisateur peut le lire.",
   "Send reply": "Envoyer la réponse",
@@ -12910,11 +12922,11 @@ function renderMeetingCard(meeting, view) {
   const replyChip = r => (!r || !showReplies) ? '' : r.response === 'accepted' ? '<span class="mtg-reply mtg-reply--yes">Accepted</span>'
     : r.response === 'declined' ? '<span class="mtg-reply mtg-reply--no">Declined</span>' : '<span class="mtg-reply">No reply yet</span>';
   const usedRsvps = new Set();
-  const details = Array.isArray(meeting.participant_details) ? meeting.participant_details : [];
+  const details = Array.isArray(meeting.participants_display) ? meeting.participants_display : (Array.isArray(meeting.participant_details) ? meeting.participant_details : []);
   const sideNames = { client: 'Client', consultant: 'Consultant', contractor: 'Contractor' };
   const personLi = person => {
     const r = rsvpFor(person); if (r) usedRsvps.add(r);
-    return `<li>${escapeHtml(person.name || 'Participant')} <span class="meeting-roster-meta">${escapeHtml([person.email || (person.source === 'manual' ? 'External participant' : ''), attendanceLabel[person.attendance_type] || 'Required'].filter(Boolean).join(' · '))}</span>${replyChip(r)}${showReplies && r?.note ? `<span class="meeting-roster-meta"><b>Reason</b> ${escapeHtml(r.note)}</span>` : ''}</li>`;
+    return `<li>${escapeHtml(person.name || 'Participant')} <span class="meeting-roster-meta">${escapeHtml([person.email || (person.source === 'manual' ? 'External participant' : ''), person.is_planner ? (person.attendance_type === 'planner' ? 'Planner' : 'Planner · ' + (attendanceLabel[person.attendance_type] || 'Required')) : (attendanceLabel[person.attendance_type] || 'Required')].filter(Boolean).join(' · '))}</span>${replyChip(r)}${showReplies && r?.note ? `<span class="meeting-roster-meta"><b>Reason</b> ${escapeHtml(r.note)}</span>` : ''}</li>`;
   };
   const groups = [];
   details.forEach(person => {
@@ -12953,7 +12965,6 @@ function renderMeetingCard(meeting, view) {
   const roleLines = [
     meeting.chairperson ? `<div class="meeting-role-line"><b>Chairperson</b>${escapeHtml(meeting.chairperson)}</div>` : '',
     meeting.minute_taker ? `<div class="meeting-role-line"><b>Minute-taker</b>${escapeHtml(meeting.minute_taker)}</div>` : '',
-    meeting.planned_by_name ? `<div class="meeting-role-line"><b>Planned by</b>${escapeHtml(meeting.planned_by_name)}</div>` : '',
   ].join('');
   const accessParts = [meeting.meeting_type === 'virtual' ? locationText : '', meeting.safety_notes ? escapeHtml(meeting.safety_notes) : ''].filter(Boolean).join('<br>');
   const references = (meeting.attachments || []).map(file => file.url
@@ -15923,194 +15934,139 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null, options = {}) {
         <textarea class="fl-input fl-answer" rows="2" placeholder="Your answer: what changed and where"></textarea></div>`).join('')}
     </div>` : '';
 
+  if (!document.getElementById('arFormStyle')) {
+    const st = document.createElement('style'); st.id = 'arFormStyle';
+    st.textContent = `
+      .ar-panel{display:flex;flex-direction:column;width:100%;height:100%;overflow:hidden;background:#fff;color:#0f172a}
+      .ar-head{flex-shrink:0;padding:18px 24px 14px;border-bottom:1px solid #e2e8f0;background:#fff}
+      .ar-head h3{margin:0;font-size:19px;font-weight:700;color:#0f172a}
+      .ar-sub{margin-top:4px;font-size:13px;color:#64748b;line-height:1.5}
+      .ar-body{flex:1;overflow-y:auto;padding:20px 24px;background:#f8fafc}
+      .ar-card{margin-bottom:14px;padding:16px 18px;border:1px solid #e2e8f0;border-radius:10px;background:#fff}
+      .ar-card-h{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+      .ar-step{flex:none;display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--ar-accent);color:#fff;font-size:12px;font-weight:700}
+      .ar-card-t{font-size:14px;font-weight:700;color:#0f172a}
+      .ar-field{margin-bottom:16px}.ar-field:last-child{margin-bottom:0}
+      .ar-label{display:block;margin-bottom:6px;font-size:13px;font-weight:600;color:#334155}
+      .ar-req{margin-left:2px;color:#dc2626}.ar-opt{margin-left:4px;font-weight:400;color:#94a3b8}
+      .ar-input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#0f172a;font:inherit;font-size:14px}
+      .ar-input:focus{outline:none;border-color:var(--ar-accent);box-shadow:0 0 0 3px rgba(0,123,138,.15)}
+      .ar-hint{margin-top:6px;font-size:12px;line-height:1.5;color:#64748b}
+      .ar-rte{overflow:hidden;border:1px solid #cbd5e1;border-radius:8px;background:#fff}
+      .ar-rte:focus-within{border-color:var(--ar-accent);box-shadow:0 0 0 3px rgba(0,123,138,.15)}
+      #editorToolbar{display:flex;flex-wrap:wrap;align-items:center;gap:2px;padding:6px 8px;border-bottom:1px solid #e2e8f0;background:#f8fafc}
+      #editorToolbar button{min-width:30px;height:30px;padding:0 9px;border:0;border-radius:6px;background:transparent;color:#334155;font-size:13px;cursor:pointer}
+      #editorToolbar button:hover{background:#e2e8f0}
+      #editorToolbar button.active{background:#e0f2f4;color:#007B8A}
+      .ar-sep{width:1px;height:18px;margin:0 5px;background:#e2e8f0}
+      #recordDescription{min-height:170px;max-height:320px;overflow-y:auto;padding:12px 14px;outline:none;color:#1e293b;font-size:14px;line-height:1.65}
+      #recordDescription:empty:before{content:attr(placeholder);color:#94a3b8;pointer-events:none;display:block}
+      #recordDescription h1{margin:6px 0;font-size:20px}#recordDescription h2{margin:6px 0;font-size:16px}
+      #recordDescription ul,#recordDescription ol{margin:4px 0 8px 22px}
+      .ar-drop{display:flex;align-items:center;gap:14px;padding:16px 18px;border:1.5px dashed #cbd5e1;border-radius:10px;background:#f8fafc;cursor:pointer;transition:background .15s,border-color .15s}
+      .ar-drop:hover{background:#f0f9fa;border-color:var(--ar-accent)}
+      .ar-drop-ic{flex:none;display:flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:10px;background:#e0f2f4;color:#007B8A}
+      .ar-drop-t{font-size:14px;font-weight:600;color:#1e293b}
+      .ar-drop-s{margin-top:2px;font-size:12px;color:#64748b}
+      .ar-file-ok{margin-top:8px;font-size:13px;font-weight:600;color:#15803d}
+      .ar-foot{flex-shrink:0;display:flex;justify-content:flex-end;gap:10px;padding:14px 24px;border-top:1px solid #e2e8f0;background:#fff}
+      .ar-btn{padding:10px 20px;border:1px solid transparent;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}
+      .ar-btn--ghost{background:#fff;border-color:#cbd5e1;color:#334155}.ar-btn--ghost:hover{background:#f1f5f9}
+      .ar-btn--primary{min-width:140px;background:var(--ar-accent);color:#fff}.ar-btn--primary:hover{filter:brightness(.92)}
+      .ar-btn:disabled{opacity:.6;cursor:default}
+      @media(max-width:600px){.ar-head,.ar-body,.ar-foot{padding-left:16px;padding-right:16px}.ar-foot .ar-btn{flex:1;min-width:0}}`;
+    document.head.appendChild(st);
+  }
+  const arAccent = recordKind === 'rejection_notice' ? '#b91c1c' : recordKind === 'notice' ? '#b45309' : '#007B8A';
+  const arSubtitle = isNotice
+    ? 'Write the notice, attach the signed PDF, then choose who must sign.'
+    : 'Add the details, attach the official PDF, then choose who must sign.';
+
   const html = `
-    <div style="width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;">
-      <div style="padding:16px 20px 12px;border-bottom:2px solid #007B8A;flex-shrink:0;background:#fff;">
-        <h3 style="margin:0;color:#333;font-size:20px;">${panelTitle}</h3>
+    <div class="ar-panel" style="--ar-accent:${arAccent};">
+      <div class="ar-head">
+        <h3>${panelTitle}</h3>
+        <div class="ar-sub">${arSubtitle}</div>
       </div>
-      <div style="flex:1;overflow-y:auto;padding:16px 20px;">
-        ${noticeInfoBanner}${categoryInfo}${revisionBanner}${queriesToAnswerHtml}
-        <form id="addRecordForm">
+      <div class="ar-body">
+        ${noticeInfoBanner}${revisionBanner}${queriesToAnswerHtml ? `<div class="ar-card">${queriesToAnswerHtml}</div>` : ''}
+        <form id="addRecordForm" novalidate>
           <input type="hidden" id="formTabKey"        value="${resolvedTab}"/>
           <input type="hidden" id="formRecordType"    value="${tabToTable(resolvedTab)}"/>
           <input type="hidden" id="recordKindField"   value="${recordKind}"/>
           <input type="hidden" id="noticeTiedIdField" value="${noticeTiedId || ''}"/>
 
-          <div style="margin-bottom:20px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
-              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
-              ${isNotice ? 'Notice Title *' : 'Title *'}</label>
-            <input type="text" id="recordTitle" required
-              value="${revision ? escapeHtml(`${revision.title} (Rev ${revision.revision_no + 1})`) : ''}"
-              placeholder="${isNotice ? 'e.g. Determination of Claim #12' : 'e.g. Foundation Agreement'}"
-              style="width:100%;padding:12px;border:1px solid #ddd;border-radius:6px;
-              font-size:14px;box-sizing:border-box;"/>
-          </div>
-
-          <div style="margin-bottom:20px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
-              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">
-              ${isNotice ? 'Notice Content *' : 'Description *'}</label>
-            <div id="editorToolbar" style="display:flex;flex-wrap:wrap;gap:4px;padding:8px;
-              background:#f5f5f5;border:1px solid #ddd;border-bottom:none;border-radius:6px 6px 0 0;">
-              <button type="button" data-cmd="bold"
-                style="width:32px;height:32px;font-weight:bold;background:#fff;
-                border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">B</button>
-              <button type="button" data-cmd="italic"
-                style="width:32px;height:32px;font-style:italic;background:#fff;
-                border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">I</button>
-              <button type="button" data-cmd="underline"
-                style="width:32px;height:32px;text-decoration:underline;background:#fff;
-                border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:13px;">U</button>
-              <button type="button" data-cmd="strikeThrough"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:13px;text-decoration:line-through;">S</button>
-              <button type="button" data-cmd="subscript"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;">X₂</button>
-              <button type="button" data-cmd="superscript"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;">X²</button>
-              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
-              <button type="button" data-cmd="formatBlock" data-value="<h1>"
-                style="width:36px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:11px;font-weight:700;">H1</button>
-              <button type="button" data-cmd="formatBlock" data-value="<h2>"
-                style="width:36px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:11px;font-weight:700;">H2</button>
-              <button type="button" data-cmd="formatBlock" data-value="<p>"
-                style="width:36px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:11px;">P</button>
-              <button type="button" data-cmd="formatBlock" data-value="<blockquote>"
-                style="width:42px;height:32px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;font-size:11px;">Quote</button>
-              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
-              <select id="recordFontNamePicker" style="height:32px;padding:0 6px;border:1px solid #ddd;border-radius:4px;background:#fff;font-size:12px;">
-                <option value="Arial">Arial</option>
-                <option value="Calibri">Calibri</option>
-                <option value="Times New Roman">Times New Roman</option>
-                <option value="Verdana">Verdana</option>
-              </select>
-              <select id="recordFontSizePicker" style="height:32px;padding:0 6px;border:1px solid #ddd;border-radius:4px;background:#fff;font-size:12px;">
-                <option value="3">12px</option>
-                <option value="4">14px</option>
-                <option value="5">18px</option>
-                <option value="6">24px</option>
-                <option value="7">32px</option>
-              </select>
-              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
-              <button type="button" data-cmd="insertUnorderedList"
-                style="width:42px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;">List</button>
-              <button type="button" data-cmd="insertOrderedList"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:13px;">1.</button>
-              <button type="button" data-cmd="indent"
-                style="width:48px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;">Indent</button>
-              <button type="button" data-cmd="outdent"
-                style="width:56px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;">Outdent</button>
-              <button type="button" data-cmd="createLink"
-                style="width:48px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;">Link</button>
-              <button type="button" data-cmd="unlink"
-                style="width:54px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;">Unlink</button>
-              <button type="button" data-cmd="insertHorizontalRule"
-                style="width:32px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:13px;">—</button>
-              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
-              <label title="Text color" style="display:flex;align-items:center;gap:2px;background:#fff;border:1px solid #ddd;border-radius:4px;padding:2px 4px;">
-                <input type="color" id="recordTextColorPicker" value="#2563eb" style="width:20px;height:20px;border:none;background:transparent;padding:0;cursor:pointer;" />
-                <button type="button" data-cmd="foreColor" data-color-target="recordTextColorPicker"
-                  style="width:28px;height:28px;background:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:700;">A</button>
-              </label>
-              <label title="Highlight color" style="display:flex;align-items:center;gap:2px;background:#fff;border:1px solid #ddd;border-radius:4px;padding:2px 4px;">
-                <input type="color" id="recordHighlightColorPicker" value="#fde68a" style="width:20px;height:20px;border:none;background:transparent;padding:0;cursor:pointer;" />
-                <button type="button" data-cmd="hiliteColor" data-color-target="recordHighlightColorPicker"
-                  style="width:28px;height:28px;background:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:700;">H</button>
-              </label>
-              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
-              <button type="button" data-cmd="justifyLeft"
-                style="width:42px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;">Left</button>
-              <button type="button" data-cmd="justifyCenter"
-                style="width:52px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;">Center</button>
-              <button type="button" data-cmd="justifyRight"
-                style="width:48px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;">Right</button>
-              <button type="button" data-cmd="justifyFull"
-                style="width:58px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;">Justify</button>
-              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
-              <button type="button" data-cmd="undo"
-                style="width:48px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;">Undo</button>
-              <button type="button" data-cmd="redo"
-                style="width:48px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;">Redo</button>
-              <div style="width:1px;background:#ddd;margin:4px 2px;"></div>
-              <button type="button" data-cmd="removeFormat"
-                style="width:82px;height:32px;background:#fff;border:1px solid #ddd;
-                border-radius:4px;cursor:pointer;font-size:11px;color:#e53e3e;">Clear format</button>
+          <section class="ar-card">
+            <div class="ar-card-h"><span class="ar-step">1</span><span class="ar-card-t">Details</span></div>
+            <div class="ar-field">
+              <label class="ar-label" for="recordTitle">${isNotice ? 'Notice title' : 'Title'}<span class="ar-req">*</span></label>
+              <input type="text" id="recordTitle" class="ar-input" required
+                value="${revision ? escapeHtml(`${revision.title} (Rev ${revision.revision_no + 1})`) : ''}"
+                placeholder="${isNotice ? 'e.g. Determination of Claim #12' : 'e.g. Foundation Agreement'}"/>
             </div>
-            <div id="recordDescription" contenteditable="true"
-              style="width:100%;min-height:220px;padding:12px;border:1px solid #ddd;
-              border-radius:0 0 6px 6px;font-size:14px;color:#333;line-height:1.7;
-              background:#fff;outline:none;box-sizing:border-box;overflow-y:auto;"
-              placeholder="${isNotice ? 'Provide the full notice content…' : 'Provide detailed description…'}">${revision ? rcRichText(revision.description || '') : ''}</div>
-            <style>
-              #recordDescription:empty:before { content:attr(placeholder);color:#64748b;pointer-events:none;display:block; }
-              #editorToolbar button[data-cmd].active { background:#e0f0ff;border-color:#4299e1; }
-            </style>
-          </div>
-
-          <div style="margin-bottom:18px;">
-            <label style="display:block;font-weight:bold;color:#007B8A;text-transform:uppercase;
-              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Official Record PDF <span style="color:#dc2626;">*</span></label>
-            <div id="attachmentDropZone"
-              style="display:flex;align-items:center;gap:12px;padding:16px;border:2px dashed #ddd;
-              border-radius:6px;background:rgba(0,123,138,0.02);cursor:pointer;">
-              <div style="font-size:12px;font-weight:700;color:#007B8A;border:1px solid #b7dce1;border-radius:4px;padding:5px 7px;">PDF</div>
-              <div style="flex:1;">
-                <div style="font-weight:bold;color:#333;font-size:14px;">Click to upload or drag &amp; drop</div>
-                <div style="font-size:12px;color:#64748b;margin-top:4px;">PDF only (Max 10MB)</div>
-                <input type="file" id="recordAttachment" name="officialDocument" style="display:none;" accept="application/pdf,.pdf"/>
+            <div class="ar-field">
+              <label class="ar-label">${isNotice ? 'Notice content' : 'Description'}<span class="ar-req">*</span></label>
+              <div class="ar-rte">
+                <div id="editorToolbar">
+                  <button type="button" data-cmd="bold" title="Bold"><b>B</b></button>
+                  <button type="button" data-cmd="italic" title="Italic"><i>I</i></button>
+                  <button type="button" data-cmd="underline" title="Underline"><u>U</u></button>
+                  <span class="ar-sep"></span>
+                  <button type="button" data-cmd="formatBlock" data-value="<h2>" title="Heading">Heading</button>
+                  <button type="button" data-cmd="formatBlock" data-value="<p>" title="Normal text">Text</button>
+                  <span class="ar-sep"></span>
+                  <button type="button" data-cmd="insertUnorderedList" title="Bulleted list">&bull; List</button>
+                  <button type="button" data-cmd="insertOrderedList" title="Numbered list">1. List</button>
+                  <span class="ar-sep"></span>
+                  <button type="button" data-cmd="createLink" title="Add link">Link</button>
+                  <button type="button" data-cmd="removeFormat" title="Clear formatting">Clear</button>
+                </div>
+                <div id="recordDescription" contenteditable="true"
+                  placeholder="${isNotice ? 'Write the full notice here…' : 'Describe what this record is and why it matters…'}">${revision ? rcRichText(revision.description || '') : ''}</div>
               </div>
             </div>
-            <div id="attachmentName" style="margin-top:8px;font-size:12px;color:#15803d;font-weight:bold;display:none;"></div>
-          </div>
+          </section>
 
-          <div style="margin-bottom:24px;">
-            <label style="display:block;font-weight:bold;color:#52707c;text-transform:uppercase;
-              font-size:12px;letter-spacing:0.5px;margin-bottom:8px;">Supporting Files <span style="font-weight:normal;text-transform:none;letter-spacing:0;">(optional)</span></label>
-            <input type="file" id="supportingFiles" name="supportingFiles" multiple
-              accept=".pdf,.xlsx,.xls,.docx,.doc,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv"
-              style="width:100%;padding:10px;border:1px solid #d7e7eb;border-radius:6px;background:#fff;" />
-            <div style="font-size:12px;color:#64748b;margin-top:5px;">PDF, Excel, Word, CAD, images, ZIP, or CSV. Supporting uploads are stored together as a ZIP. Up to 10 files, 10MB each.</div>
-            <div id="supportingFilesName" style="margin-top:8px;font-size:12px;color:#52707c;display:none;"></div>
-          </div>
+          <section class="ar-card">
+            <div class="ar-card-h"><span class="ar-step">2</span><span class="ar-card-t">Documents</span></div>
+            <div class="ar-field">
+              <label class="ar-label">Official record (PDF)<span class="ar-req">*</span></label>
+              <div id="attachmentDropZone" class="ar-drop">
+                <div class="ar-drop-ic">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                </div>
+                <div style="flex:1;min-width:0;">
+                  <div class="ar-drop-t">Click to upload or drag &amp; drop</div>
+                  <div class="ar-drop-s">PDF only, up to 10 MB</div>
+                  <input type="file" id="recordAttachment" name="officialDocument" style="display:none;" accept="application/pdf,.pdf"/>
+                </div>
+              </div>
+              <div id="attachmentName" class="ar-file-ok" style="display:none;"></div>
+            </div>
+            <div class="ar-field">
+              <label class="ar-label">Supporting files<span class="ar-opt">(optional)</span></label>
+              <button type="button" id="supportingPick" class="ar-btn ar-btn--ghost" style="padding:8px 14px;font-size:13px;">+ Add files</button>
+              <input type="file" id="supportingFiles" name="supportingFiles" multiple style="display:none;"
+                accept=".pdf,.xlsx,.xls,.docx,.doc,.dwg,.dxf,.jpg,.jpeg,.png,.webp,.zip,.csv"/>
+              <div class="ar-hint">PDF, Excel, Word, CAD, images, ZIP or CSV. Up to 10 files, 10 MB each.</div>
+              <div id="supportingFilesName" style="margin-top:8px;font-size:13px;color:#334155;display:none;"></div>
+            </div>
+            <!-- Optional stamp step: available only for decision makers with a stamp profile -->
+            <div id="stampStepContainer" style="display:none;"></div>
+          </section>
 
-          <div id="recordSigners" style="margin-bottom:18px;"></div>
-
-          <!-- Optional stamp step: available only for decision makers with a stamp profile -->
-          <div id="stampStepContainer" style="display:none;margin-bottom:16px;"></div>
-
+          <section class="ar-card">
+            <div class="ar-card-h"><span class="ar-step">3</span><span class="ar-card-t">Signatures</span></div>
+            <div id="recordSigners"></div>
+          </section>
         </form>
       </div>
 
       <div id="recordFormError" role="alert"
-        style="display:none;flex-shrink:0;padding:10px 20px;background:#fef2f2;
-        border-top:1px solid #fecaca;color:#991b1b;font-size:13px;line-height:1.5;"></div>
-      <div style="flex-shrink:0;padding:16px 20px;border-top:1px solid #e5e7eb;
-        background:#fff;display:flex;gap:12px;">
-        <button type="button" id="saveRecordBtn"
-          style="flex:1;padding:12px;font-size:14px;font-weight:bold;
-          background:${recordKind === 'rejection_notice' ? '#dc2626' : recordKind === 'notice' ? '#d97706' : '#15803d'};
-          color:#fff;border:none;border-radius:6px;cursor:pointer;">
-          ${revision ? 'Submit revision' : 'Save Record'}
-        </button>
-        <button type="button" id="cancelRecordBtn"
-          style="flex:1;padding:12px;font-size:14px;font-weight:bold;background:#f5f5f5;
-          color:#333;border:1px solid #ddd;border-radius:6px;cursor:pointer;">Cancel</button>
+        style="display:none;flex-shrink:0;padding:10px 24px;background:#fef2f2;border-top:1px solid #fecaca;color:#991b1b;font-size:13px;line-height:1.5;"></div>
+      <div class="ar-foot">
+        <button type="button" id="cancelRecordBtn" class="ar-btn ar-btn--ghost">Cancel</button>
+        <button type="button" id="saveRecordBtn" class="ar-btn ar-btn--primary">${revision ? 'Submit revision' : 'Save Record'}</button>
       </div>
     </div>`;
 
@@ -16125,7 +16081,12 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null, options = {}) {
     if (!btn) return;
     e.preventDefault();
     const cmd = btn.getAttribute('data-cmd');
-    const value = btn.getAttribute('data-value') || null;
+    let value = btn.getAttribute('data-value') || null;
+    if (cmd === 'createLink') {
+      value = (prompt('Link address (e.g. https://example.com)') || '').trim();
+      if (!value) return;
+      if (!/^(https?:|mailto:)/i.test(value)) value = 'https://' + value;
+    }
     const colorTargetId = btn.getAttribute('data-color-target');
     const colorValue = colorTargetId ? document.getElementById(colorTargetId)?.value : null;
     document.execCommand(cmd, false, colorValue || value);
@@ -16154,6 +16115,7 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null, options = {}) {
   const attachNameEl = document.getElementById('attachmentName');
   const supportingInput = document.getElementById('supportingFiles');
   const supportingNameEl = document.getElementById('supportingFilesName');
+  document.getElementById('supportingPick')?.addEventListener('click', () => supportingInput.click());
 
   const showFormError = (msg) => {
     const el = document.getElementById('recordFormError');
@@ -16170,12 +16132,12 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null, options = {}) {
       dropZone.style.borderColor = '#15803d';
     } else {
       attachNameEl.style.display = 'none';
-      dropZone.style.borderColor = '#ddd';
+      dropZone.style.borderColor = '#cbd5e1';
     }
   };
   dropZone.addEventListener('click',     () => attachInput.click());
   dropZone.addEventListener('dragover',  (e) => { e.preventDefault(); dropZone.style.borderColor = '#007B8A'; });
-  dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = '#ddd'; });
+  dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = '#cbd5e1'; });
   const onAttachmentSelected = (file) => {
     const isPdf = file
       && /\.pdf$/i.test(file.name || '')
@@ -16198,7 +16160,7 @@ function openAddRecordPanel(noticeConfig = null, tabKey = null, options = {}) {
   };
 
   dropZone.addEventListener('drop', (e) => {
-    e.preventDefault(); dropZone.style.borderColor = '#ddd';
+    e.preventDefault(); dropZone.style.borderColor = '#cbd5e1';
     if (e.dataTransfer.files.length > 0) {
       const dt = new DataTransfer(); dt.items.add(e.dataTransfer.files[0]);
       attachInput.files = dt.files;
