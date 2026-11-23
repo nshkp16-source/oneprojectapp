@@ -4669,6 +4669,8 @@ const OPA_FR = Object.assign(Object.create(null), {
   "No named signers have been set for this record.": "Aucun signataire nommé n'a été défini pour cet enregistrement.",
   "Continue without stamping": "Continuer sans cachet",
   "Your comments": "Vos commentaires",
+  "Only named signers and decision makers can make formal decisions. You can add a comment.": "Seuls les signataires désignés et les décideurs peuvent prendre des décisions formelles. Vous pouvez ajouter un commentaire.",
+  "Your previous response is recorded. You can add a comment.": "Votre réponse précédente est enregistrée. Vous pouvez ajouter un commentaire.",
   "Add another comment": "Ajouter un autre commentaire",
   "Remove this comment": "Supprimer ce commentaire",
   "Save comments": "Enregistrer les commentaires",
@@ -6492,7 +6494,7 @@ Object.assign(OPA_FR, {
     "You have signed. The final decision maker signs next.": "Vous avez signé. Le décideur final signe ensuite.",
     "Edit my comment": "Modifier mon commentaire",
     "Add a comment": "Ajouter un commentaire",
-    "You can comment on this record, approve it or reject it.": "Vous pouvez commenter ce dossier, l'approuver ou le rejeter.",
+    "Only named signers and decision makers can make formal decisions. You can add a comment.": "Seuls les signataires désignés et les décideurs peuvent prendre des décisions formelles. Vous pouvez ajouter un commentaire.",
     "Comment": "Commentaire",
     "You can read this record. There is nothing for you to sign or decide.": "Vous pouvez lire ce dossier. Il n'y a rien à signer ni à décider pour vous.",
     "Version": "Version",
@@ -13778,15 +13780,10 @@ function rcActionParts(doc) {
   } else if (st === 'team_member') {
     const myAction = myReview.action;
     const hasActed = myAction && myAction !== 'no_action';
-    if (hasActed) {
-      note = `You ${esc(myAction)} this record.`;
-      icon = myAction === 'rejected' ? 'x' : 'check';
-      tone = myAction === 'rejected' ? 'danger' : myAction === 'approved' ? 'success' : '';
-      buttons = rcBtn('comment', myReview.comment ? 'Edit my comment' : 'Add a comment', 'chat');
-    } else {
-      note = 'You can comment on this record, approve it or reject it.';
-      buttons = rcBtn('comment', 'Comment', 'chat') + rcBtn('tm-reject', 'Reject', 'x', 'reject') + rcBtn('tm-approve', 'Approve', 'check', 'approve');
-    }
+    note = hasActed
+      ? 'Your previous response is recorded. You can add a comment.'
+      : 'Only named signers and decision makers can make formal decisions. You can add a comment.';
+    buttons = rcBtn('comment', myReview.comment ? 'Edit my comment' : 'Add a comment', 'chat');
 
   } else {
     note = 'You can read this record. There is nothing for you to sign or decide.';
@@ -14545,8 +14542,6 @@ bottomContent.addEventListener('click', (e) => {
     case 'replace-signer': openSignerReplace(actionEl.getAttribute('data-signer-id'), recordId, tabKey); break;
     case 'query-resolve':  flowQueryStatus(actionEl.getAttribute('data-query-id'), 'resolved', tabKey); break;
     case 'query-reopen':   flowQueryStatus(actionEl.getAttribute('data-query-id'), 'reopened', tabKey); break;
-    case 'tm-approve':   handleTeamMemberAction(recordId, tabKey, 'approved');    break;
-    case 'tm-reject':    handleTeamMemberAction(recordId, tabKey, 'rejected');    break;
     case 'comment':      openTeamMemberComment(recordId, tabKey);                 break;
     case 'open-notice': {
       const isRejection = actionEl.getAttribute('data-is-rejection') === 'true';
@@ -14798,90 +14793,6 @@ async function handleDecisionMakerAction(recordId, tabKey, action) {
   } catch (err) {
     console.error('Decision maker action error:', err);
     alert(`Failed to ${action} record.`);
-  }
-}
-
-// =======================================================================
-//  TEAM MEMBER ACTION
-// =======================================================================
-async function handleTeamMemberAction(recordId, tabKey, action) {
-  try {
-    const projectId = localStorage.getItem('activeProjectId');
-    const cached = (recordsCache[tabKey] || []).find(r => String(r.id) === String(recordId));
-    const body = new FormData();
-    body.append('projectId', projectId);
-    body.append('recordId', recordId);
-    body.append('recordType', tabToTable(tabKey));
-    body.append('action', action);
-    body.append('actorType', 'team_member');
-
-    const fileUrl = cached?.file_path || '';
-    const isPdf = /\.pdf$/i.test((fileUrl || '').split('?')[0]) || (fileUrl || '').toLowerCase().includes('.pdf');
-    let stampedFile = null;
-    let didStamp = false;
-
-    if (action === 'approved' && isPdf) {
-      const stampChoice = await promptForStampChoice({
-        title: 'Add your signature before approving?',
-        subtitle: 'Choose whether to add your signature block to the document.',
-        primaryLabel: 'Place your signature on the document',
-        secondaryLabel: 'Add signature on a new page at the end',
-      });
-
-      if (stampChoice === 'cancel') return;
-      if (stampChoice !== 'none') {
-        const stampProfile = await loadStampProfile();
-        const sigSetupMsg = await flowCheckSigningReady({ recordId, tabKey, mode: 'review' });
-        if (sigSetupMsg) { flowShowSetupNeeded(sigSetupMsg); return; }
-        if (!stampProfile) { alert('Your signature could not be loaded just now. Please try again.'); return; }
-        const downloadRes = await authFetch(
-          `${API}/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}&filename=${encodeURIComponent(cached?.title || 'document.pdf')}`,
-          { method: 'GET' }
-        );
-        if (!downloadRes || !downloadRes.ok) {
-          alert('Failed to download the document for signing.');
-          return;
-        }
-        const blob = await downloadRes.blob();
-        if (!blob.size) {
-          alert('The document is empty, so it cannot be signed.');
-          return;
-        }
-        const sourceFile = new File([blob], (cached?.file_path || 'document.pdf').split('/').pop() || 'document.pdf', { type: blob.type || 'application/pdf' });
-        const placement = stampChoice === 'append'
-          ? { page: 'append', x: 0.5, y: 0.5 }
-          : await new Promise((resolve) => {
-              openStampPlacementModal(sourceFile, (placementData) => resolve(placementData), () => resolve(null));
-            });
-        if (!placement) {
-          alert('Signature placement was canceled.');
-          return;
-        }
-        // The server draws the stamp (one renderer). Send the original PDF plus where to put it.
-        const stampedName = `${(sourceFile.name || 'document').replace(/\.[^/.]+$/, '')}-approved.pdf`;
-        stampedFile = new File([sourceFile], stampedName, { type: 'application/pdf' });
-        didStamp = true;
-        body.append('stampDocument', 'true');
-        body.append('stampPage', String(placement.page || 1));
-        body.append('stampX', String(placement.x ?? 0.8));
-        body.append('stampY', String(placement.y ?? 0.08));
-        body.append('stampScale', String(placement.scale || 1));
-      }
-    }
-
-    if (didStamp && stampedFile) {
-      body.append('attachment', stampedFile, stampedFile.name);
-    }
-
-    const res = await authFetch(`${API}/review-record`, { method: 'POST', body });
-    if (!res) return;
-    const data = await res.json();
-    if (!res.ok) { alert(data.error || 'Failed to record your action.'); return; }
-    delete recordsCache[tabKey];
-    loadTabRecords(tabKey);
-  } catch (err) {
-    console.error('Team member action error:', err);
-    alert('Failed to record your action.');
   }
 }
 
