@@ -4736,7 +4736,14 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Check the result: preview notice and record": "Vérifier le résultat : aperçu de la notification et de l'enregistrement",
   "You have not previewed the stamped record yet. Issue the decision anyway?": "Vous n'avez pas encore prévisualisé l'enregistrement avec le cachet. Émettre quand même la décision ?",
   "Also stamp the record as RECEIVED": "Apposer aussi le cachet REÇU sur l'enregistrement",
+  "Also stamp the original record as RECEIVED": "Apposer aussi le cachet REÇU sur l'enregistrement d'origine",
+  "On a new page at the end of the record (recommended)": "Sur une nouvelle page à la fin de l'enregistrement (recommandé)",
+  "Choose the position on the record": "Choisir la position sur l'enregistrement",
+  "Choose where to place the RECEIVED stamp, or untick \"Also stamp the original record as RECEIVED\".": "Choisissez où placer le cachet REÇU, ou décochez « Apposer aussi le cachet REÇU sur l'enregistrement d'origine ».",
   "Choose position": "Choisir la position",
+  "Change position": "Modifier la position",
+  "Your signature and stamp go on a signature page at the end of the notice.": "Votre signature et votre cachet vont sur une page de signature à la fin de l'avis.",
+  "RECEIVED stamp: new page at the end of the record.": "Cachet REÇU : nouvelle page à la fin de l'enregistrement.",
   "Supporting Files": "Fichiers justificatifs",
   "(optional)": "(facultatif)",
   "Excel, Word, CAD, images, ZIP, or CSV. Up to 10 files, 10MB each.": "Excel, Word, CAO, images, ZIP ou CSV. Jusqu'à 10 fichiers, 10 Mo chacun.",
@@ -15483,17 +15490,19 @@ async function openDecisionPanel(recordId, tabKey, decision) {
           ${arStepHead('Attachments and stamp')}
           <div class="ar-field" id="flNoticeStampWrap">
             <label class="ar-label">Stamp on the notice</label>
-            <div class="ar-hint" style="margin:0 0 10px;">Your signature and stamp are always added to the notice. Unless you choose a position, they go on a signature page at the end of the notice.</div>
-            <button type="button" class="ar-btn ar-btn--ghost" id="flNoticeStampChoose" style="padding:8px 14px;font-size:13px;">Choose position on notice</button>
-            <span id="flNoticeStampPicked" class="ar-hint" style="margin-left:8px;"></span>
+            <div class="ar-hint" style="margin:0;"><span id="flNoticeStampPicked">Your signature and stamp go on a signature page at the end of the notice.</span>
+              <button type="button" id="flNoticeStampChoose" style="border:none;background:none;padding:0 0 0 6px;color:#2563eb;cursor:pointer;font-size:inherit;text-decoration:underline;">Change position</button></div>
           </div>
           ${`<div class="ar-field" id="flStampWrap">
             <label class="ar-label">Stamp on the original record<span class="ar-opt">(optional)</span></label>
             <div class="ar-hint" style="margin:0 0 10px;">You can also stamp the original record as RECEIVED, as a sign that you received it.</div>
-            <label class="ar-opt-row"><input type="radio" name="flStampWhere" value="signoff" checked> No RECEIVED stamp on the record (recommended)</label>
-            <label class="ar-opt-row"><input type="radio" name="flStampWhere" value="place"> Also stamp the record as RECEIVED</label>
-            <div id="flStampPick" style="display:none;margin-top:8px;"><button type="button" class="ar-btn ar-btn--ghost" id="flStampChoose" style="padding:8px 14px;font-size:13px;">Choose position on original record</button> <span id="flStampPicked" class="ar-hint" style="margin-left:8px;"></span></div>
-            <label class="ar-opt-row"><input type="radio" name="flStampWhere" value="append"> Also stamp the record as RECEIVED on a new page at the end of the document</label>
+            <label class="ar-opt-row"><input type="checkbox" id="flStampOn"> Also stamp the original record as RECEIVED</label>
+            <div id="flStampOptions" style="display:none;margin:6px 0 0 26px;">
+              <label class="ar-opt-row"><input type="radio" name="flStampWhere" value="append" checked> On a new page at the end of the record (recommended)</label>
+              <label class="ar-opt-row"><input type="radio" name="flStampWhere" value="place"> Choose the position on the record</label>
+              <div id="flStampSummary" class="ar-hint" style="margin-top:6px;"></div>
+              <div id="flStampPick" style="display:none;margin-top:8px;"><button type="button" class="ar-btn ar-btn--ghost" id="flStampChoose" style="padding:8px 14px;font-size:13px;">Choose position on original record</button> <span id="flStampPicked" class="ar-hint" style="margin-left:8px;"></span></div>
+            </div>
           </div>`}
           <div class="ar-field"><button type="button" class="ar-btn ar-btn--ghost" data-fl-preview="1" style="padding:8px 14px;font-size:13px;">Preview notice and record</button></div>
           <div class="ar-field"><label class="ar-label">Supporting files<span class="ar-opt">(optional)</span></label>
@@ -15611,14 +15620,22 @@ async function openDecisionPanel(recordId, tabKey, decision) {
   let previewed = false;   // has the leader opened the combined preview since the last change to the stamp choice
   let noticePlacement = null;   // where the leader chose to stamp the notice itself (optional; default is the signature page)
   const stampPickBox = document.getElementById('flStampPick');
-  document.querySelectorAll('input[name="flStampWhere"]').forEach(r => r.addEventListener('change', () => {
-    const where = document.querySelector('input[name="flStampWhere"]:checked')?.value;
+  const stampOnBox = document.getElementById('flStampOn');
+  const stampOptsBox = document.getElementById('flStampOptions');
+  // Step 1: the checkbox decides whether the record is stamped at all. Step 2 (where) only appears once it is ticked.
+  const stampWhereValue = () => stampOnBox && stampOnBox.checked ? (document.querySelector('input[name="flStampWhere"]:checked')?.value || 'append') : 'signoff';
+  const syncStampChoice = () => {
+    const where = stampWhereValue();
+    stampOptsBox.style.display = stampOnBox.checked ? 'block' : 'none';
     stampPickBox.style.display = where === 'place' ? 'block' : 'none';
     // "new page at the end": no position to choose, the server puts the stamp on the record's signature page
     stampPlacement = where === 'append' ? { page: 1, x: 0.5, y: 0.85, scale: 1, newPage: true, auto: true } : null;
     previewed = false;
     document.getElementById('flStampPicked').textContent = '';
-  }));
+    document.getElementById('flStampSummary').textContent = where === 'append' ? 'RECEIVED stamp: new page at the end of the record.' : '';
+  };
+  stampOnBox.addEventListener('change', syncStampChoice);
+  document.querySelectorAll('input[name="flStampWhere"]').forEach(r => r.addEventListener('change', syncStampChoice));
   document.getElementById('flStampChoose')?.addEventListener('click', async () => {
     try {
       const res = await authFetch(`${API}/download-file?recordId=${recordId}&recordType=${tabToTable(tabKey)}&filename=record.pdf`, { method: 'GET' });
@@ -15629,6 +15646,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
         stampPlacement = { page: st.page, x: st.x, y: st.y, scale: st.scale || 1 };
         previewed = false;
         document.getElementById('flStampPicked').textContent = `Page ${st.page} selected`;
+        document.getElementById('flStampSummary').textContent = `RECEIVED stamp: page ${st.page} of the record.`;
       }, () => {}, 'RECEIVED');
     } catch (err) { flowError('flErr', err.message); }
   });
@@ -15638,7 +15656,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
   const clearNoticePlacement = () => {
     if (!noticePlacement) return;
     noticePlacement = null; previewed = false;
-    noticePickedEl.textContent = 'Position cleared because the notice changed. Choose it again if you still want it.';
+    noticePickedEl.textContent = 'Position cleared because the notice changed. Signature and stamp go on a signature page at the end of the notice.';
   };
   const stampWord = decision === 'accepted' ? 'ACCEPTED' : decision === 'rejected' ? 'REJECTED' : 'APPROVED';
   document.getElementById('flNoticeStampChoose').addEventListener('click', async (ev) => {
@@ -15655,7 +15673,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
       openStampPlacementModal(file, (st) => {
         noticePlacement = { page: st.page, x: st.x, y: st.y, scale: st.scale || 1 };
         previewed = false;
-        noticePickedEl.textContent = `Page ${st.page} selected`;
+        noticePickedEl.textContent = `Signature and stamp: page ${st.page} of the notice.`;
       }, () => {}, stampWord);
     } catch (err) { flowError('flErr', err.message); }
     finally { btn.disabled = false; btn.textContent = label; }
@@ -15674,8 +15692,8 @@ async function openDecisionPanel(recordId, tabKey, decision) {
   const build = (opts = {}) => {
     const title = document.getElementById('flTitle').value.trim();
     syncBody();
-    if (!opts.forPicker && document.querySelector('input[name="flStampWhere"]:checked')?.value === 'place' && !stampPlacement) {
-      throw new Error('Choose where to place the RECEIVED stamp, or select "No RECEIVED stamp on the record".');
+    if (!opts.forPicker && stampWhereValue() === 'place' && !stampPlacement) {
+      throw new Error('Choose where to place the RECEIVED stamp, or untick "Also stamp the original record as RECEIVED".');
     }
     const body = letterText() ? bodyField.value.trim() : '';
     const bodyLen = letterText().length;
