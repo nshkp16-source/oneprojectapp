@@ -5168,6 +5168,9 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Attach File *": "Joindre un fichier *",
   "💾 Save Record": "💾 Enregistrer l'enregistrement",
   "Save Record": "Enregistrer l'enregistrement",
+  "Add my signature on a new page at the end of the document": "Ajouter ma signature sur une nouvelle page à la fin du document",
+  "Also stamp the record as RECEIVED on a new page at the end of the document": "Apposer aussi le cachet REÇU sur une nouvelle page à la fin du document",
+  "Your signature will go on the signature page at the end of the document.": "Votre signature sera placée sur la page de signatures à la fin du document.",
   "Send queries": "Envoyer les questions",
   "Existing page": "Page existante",
   "New signature page": "Nouvelle page de signatures",
@@ -15547,6 +15550,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
             <label class="ar-opt-row"><input type="radio" name="flStampWhere" value="signoff" checked> No stamp on the record itself (recommended)</label>
             <label class="ar-opt-row"><input type="radio" name="flStampWhere" value="place"> Also stamp the record as RECEIVED</label>
             <div id="flStampPick" style="display:none;margin-top:8px;"><button type="button" class="ar-btn ar-btn--ghost" id="flStampChoose" style="padding:8px 14px;font-size:13px;">Choose position</button> <span id="flStampPicked" class="ar-hint" style="margin-left:8px;"></span></div>
+            <label class="ar-opt-row"><input type="radio" name="flStampWhere" value="append"> Also stamp the record as RECEIVED on a new page at the end of the document</label>
           </div>`}
           <div class="ar-field"><label class="ar-label">Supporting files<span class="ar-opt">(optional)</span></label>
             <button type="button" id="flSupportPick" class="ar-btn ar-btn--ghost" style="padding:8px 14px;font-size:13px;">+ Add files</button>
@@ -15663,9 +15667,11 @@ async function openDecisionPanel(recordId, tabKey, decision) {
   let stampPlacement = null;
   const stampPickBox = document.getElementById('flStampPick');
   document.querySelectorAll('input[name="flStampWhere"]').forEach(r => r.addEventListener('change', () => {
-    const place = document.querySelector('input[name="flStampWhere"]:checked')?.value === 'place';
-    stampPickBox.style.display = place ? 'block' : 'none';
-    if (!place) { stampPlacement = null; document.getElementById('flStampPicked').textContent = ''; }
+    const where = document.querySelector('input[name="flStampWhere"]:checked')?.value;
+    stampPickBox.style.display = where === 'place' ? 'block' : 'none';
+    // "new page at the end": no position to choose, the server puts the stamp on the record's signature page
+    stampPlacement = where === 'append' ? { page: 1, x: 0.5, y: 0.85, scale: 1, newPage: true, auto: true } : null;
+    document.getElementById('flStampPicked').textContent = '';
   }));
   document.getElementById('flStampChoose')?.addEventListener('click', async () => {
     try {
@@ -15775,7 +15781,9 @@ async function openSignoffPanel(recordId, tabKey) {
         <div class="fl-field" id="soQueriesWrap" style="display:none;"><div class="fl-label">Your queries</div><div class="fl-hint" style="margin:0 0 8px;">Add one entry for each point. You can add as many queries as you need.</div><div id="soQueries"></div></div>
         <div class="fl-field" id="soSignWrap"><div class="fl-label">Signature on the original record *</div>
           <div class="fl-hint">Your signature is added to the record at the position you choose. Your name, position and signing time are recorded automatically. The deciding leader signs after you.</div>
-          <button type="button" class="fl-btn fl-btn--ghost" id="soStampChoose">Choose signature position</button>
+          <label style="display:flex;align-items:center;gap:8px;margin:8px 0 4px;cursor:pointer;font-size:14px;"><input type="radio" name="soSignWhere" value="place" checked> Choose page &amp; position</label>
+          <label style="display:flex;align-items:center;gap:8px;margin:4px 0 8px;cursor:pointer;font-size:14px;"><input type="radio" name="soSignWhere" value="append"> Add my signature on a new page at the end of the document</label>
+          <button type="button" class="fl-btn fl-btn--ghost" id="soStampChoose">Choose page &amp; position</button>
           <div class="fl-hint" id="soStampPlacement">No position selected.</div></div>
         <div class="fl-field" id="soNoSignNote" style="display:none;"><div class="fl-hint">No signature is added to the record while you raise queries. Your signature is added only when you sign with no queries.</div></div>
         <div class="fl-field"><label class="fl-label" for="soNote">Note (optional)</label><textarea class="fl-input" id="soNote" rows="3"></textarea></div>
@@ -15788,6 +15796,13 @@ async function openSignoffPanel(recordId, tabKey) {
     </div>`);
   mountQueryEditor('soQueries', []);
   const placementButton = document.getElementById('soStampChoose');
+  document.querySelectorAll('input[name="soSignWhere"]').forEach(r => r.addEventListener('change', () => {
+    const append = document.querySelector('input[name="soSignWhere"]:checked')?.value === 'append';
+    placementButton.style.display = append ? 'none' : '';
+    // on the signature page at the end of the record: the server puts each signer under the previous one
+    signaturePlacement = append ? { page: 1, x: 0.5, y: 0.85, scale: 1, newPage: true, auto: true } : null;
+    document.getElementById('soStampPlacement').textContent = append ? 'Your signature will go on the signature page at the end of the document.' : 'No position selected.';
+  }));
   placementButton.addEventListener('click', async () => {
     flowError('soErr', '');
     placementButton.disabled = true;
@@ -15795,7 +15810,7 @@ async function openSignoffPanel(recordId, tabKey) {
       const blob = await fetchRecordFileBlob(doc.id, tabKey, 'record.pdf');
       const file = new File([blob], 'record.pdf', { type: blob.type || 'application/pdf' });
       const selected = await new Promise(resolve => {
-        openStampPlacementModal(file, resolve, () => resolve(null), 'SIGNED', { allowNewPage: true });
+        openStampPlacementModal(file, resolve, () => resolve(null), 'SIGNED');
       });
       if (!selected) return;
       signaturePlacement = { page: selected.page, x: selected.x, y: selected.y, scale: selected.scale, newPage: !!selected.newPage };
@@ -25560,11 +25575,12 @@ function _dcSignOption(id, hint) {
       <span class="dc-sign-option-hint">${hint || 'You will choose where it goes on the page. PDF files only.'}</span></span></label>`;
 }
 function _dcPickPlacement(file) {
-  return new Promise(resolve => openStampPlacementModal(file, p => resolve(p), () => resolve(null)));
+  return new Promise(resolve => openStampPlacementModal(file, p => resolve(p), () => resolve(null), 'APPROVED', { allowNewPage: true }));
 }
 function _dcAppendPlacement(form, p) {
   form.append('applyStamp', 'true');
   form.append('stampPage', String(p.page));
+  if (p.newPage) form.append('stampNewPage', 'true');
   form.append('stampX', String(p.x));
   form.append('stampY', String(p.y));
   form.append('stampScale', String(p.scale || 1));
@@ -26000,7 +26016,7 @@ async function _daReview(docId, action) {
   } else if (document.getElementById(`da-sign-stamp-${docId}`)?.checked) {
     const p = await _dcPlacementForStoredDoc(docId);
     if (!p) return;
-    Object.assign(body, { applyStamp: 'true', stampPage: String(p.page), stampX: String(p.x), stampY: String(p.y), stampScale: String(p.scale || 1) });
+    Object.assign(body, { applyStamp: 'true', stampPage: String(p.page), stampNewPage: p.newPage ? 'true' : 'false', stampX: String(p.x), stampY: String(p.y), stampScale: String(p.scale || 1) });
   }
   const ok = await _dcPost(`/document-approval/${docId}/review`, body, action === 'approved' ? (body.applyStamp ? '✅ Document approved and stamped.' : '✅ Document approved.') : '↩️ Document returned to the submitter.');
   if (ok) { delete recordsCache['document-approval']; _daLoadRecords(); }
@@ -26484,7 +26500,7 @@ async function _crAccept(recordId) {
   if (document.getElementById(`cr-sign-stamp-${recordId}`)?.checked) {
     const p = await _dcPlacementForStoredDoc(recordId);
     if (!p) return;
-    Object.assign(body, { applyStamp: 'true', stampPage: String(p.page), stampX: String(p.x), stampY: String(p.y), stampScale: String(p.scale || 1) });
+    Object.assign(body, { applyStamp: 'true', stampPage: String(p.page), stampNewPage: p.newPage ? 'true' : 'false', stampX: String(p.x), stampY: String(p.y), stampScale: String(p.scale || 1) });
   }
   if (await _dcPost(`/control-reports/${recordId}/accept`, body, '✅ New file approved. It is visible to the side again.')) _crAfterChange(recordId);
 }
