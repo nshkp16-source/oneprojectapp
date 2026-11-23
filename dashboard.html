@@ -4722,6 +4722,11 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Stamp on the original record (optional)": "Cachet sur l'enregistrement original (facultatif)",
   "Your signature and stamp are always added to the notice. You can also stamp the original record as RECEIVED, as a sign that you received it.": "Votre signature et votre cachet sont toujours ajoutés à l'avis. Vous pouvez aussi apposer sur l'enregistrement original le cachet REÇU, pour confirmer sa réception.",
   "No stamp on the record itself (recommended)": "Pas de cachet sur l'enregistrement lui-même (recommandé)",
+  "No RECEIVED stamp on the record (recommended)": "Pas de cachet REÇU sur l'enregistrement (recommandé)",
+  "Place stamp on record": "Placer le cachet sur l'enregistrement",
+  "Preview notice and record": "Aperçu de la notification et de l'enregistrement",
+  "Check the result: preview notice and record": "Vérifier le résultat : aperçu de la notification et de l'enregistrement",
+  "You have not previewed the stamped record yet. Issue the decision anyway?": "Vous n'avez pas encore prévisualisé l'enregistrement avec le cachet. Émettre quand même la décision ?",
   "Also stamp the record as RECEIVED": "Apposer aussi le cachet REÇU sur l'enregistrement",
   "Choose position": "Choisir la position",
   "Supporting Files": "Fichiers justificatifs",
@@ -6547,6 +6552,7 @@ Object.assign(OPA_FR, {
     "Only 10 supporting files are allowed.": "Seuls 10 fichiers justificatifs sont autorisés.",
     "The record could not be opened to choose a position.": "Le dossier n'a pas pu être ouvert pour choisir une position.",
     "Choose where to place the RECEIVED stamp, or select \"No stamp on the record itself\".": "Choisissez où placer le cachet REÇU, ou sélectionnez « Pas de cachet sur le dossier lui-même ».",
+    "Choose where to place the RECEIVED stamp, or select \"No RECEIVED stamp on the record\".": "Choisissez où placer le cachet REÇU, ou sélectionnez « Pas de cachet REÇU sur le dossier ».",
     "Give the notice a title (at least 3 characters).": "Donnez un titre à l'avis (3 caractères minimum).",
     "Write the notice text (at least 10 characters).": "Rédigez le texte de l'avis (10 caractères minimum).",
     "A rejection needs at least one query. Write what is wrong and the action required.": "Un rejet nécessite au moins une question. Indiquez ce qui ne va pas et l'action requise.",
@@ -15470,10 +15476,11 @@ async function openDecisionPanel(recordId, tabKey, decision) {
           ${`<div class="ar-field" id="flStampWrap">
             <label class="ar-label">Stamp on the original record<span class="ar-opt">(optional)</span></label>
             <div class="ar-hint" style="margin:0 0 10px;">Your signature and stamp are always added to the notice. You can also stamp the original record as RECEIVED, as a sign that you received it.</div>
-            <label class="ar-opt-row"><input type="radio" name="flStampWhere" value="signoff" checked> No stamp on the record itself (recommended)</label>
+            <label class="ar-opt-row"><input type="radio" name="flStampWhere" value="signoff" checked> No RECEIVED stamp on the record (recommended)</label>
             <label class="ar-opt-row"><input type="radio" name="flStampWhere" value="place"> Also stamp the record as RECEIVED</label>
-            <div id="flStampPick" style="display:none;margin-top:8px;"><button type="button" class="ar-btn ar-btn--ghost" id="flStampChoose" style="padding:8px 14px;font-size:13px;">Choose position</button> <span id="flStampPicked" class="ar-hint" style="margin-left:8px;"></span></div>
+            <div id="flStampPick" style="display:none;margin-top:8px;"><button type="button" class="ar-btn ar-btn--ghost" id="flStampChoose" style="padding:8px 14px;font-size:13px;">Place stamp on record</button> <span id="flStampPicked" class="ar-hint" style="margin-left:8px;"></span></div>
             <label class="ar-opt-row"><input type="radio" name="flStampWhere" value="append"> Also stamp the record as RECEIVED on a new page at the end of the document</label>
+            <div style="margin-top:10px;"><button type="button" class="ar-btn ar-btn--ghost" data-fl-preview="1" style="padding:8px 14px;font-size:13px;">Preview notice and record</button></div>
           </div>`}
           <div class="ar-field"><label class="ar-label">Supporting files<span class="ar-opt">(optional)</span></label>
             <button type="button" id="flSupportPick" class="ar-btn ar-btn--ghost" style="padding:8px 14px;font-size:13px;">+ Add files</button>
@@ -15485,7 +15492,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
       </div>
       <div class="fl-err" id="flErr" role="alert" style="padding-left:24px;padding-right:24px;"></div>
       <div class="ar-foot">
-        <button type="button" class="ar-btn ar-btn--ghost" id="flPreview" style="margin-right:auto;">Preview with the record</button>
+        <button type="button" class="ar-btn ar-btn--ghost" data-fl-preview="1" style="margin-right:auto;">Preview notice and record</button>
         <button type="button" class="ar-btn ar-btn--ghost" id="flCancel">Cancel</button>
         <button type="button" class="ar-btn ar-btn--primary" id="flSubmit" style="background:${isReject ? '#b91c1c' : '#15803d'};">Sign and ${verb.toLowerCase()}</button>
       </div>
@@ -15588,12 +15595,14 @@ async function openDecisionPanel(recordId, tabKey, decision) {
 
   // ---- optional: stamp the original record as RECEIVED (never automatic, works for approvals and rejections) ----
   let stampPlacement = null;
+  let previewed = false;   // has the leader opened the combined preview since the last change to the stamp choice
   const stampPickBox = document.getElementById('flStampPick');
   document.querySelectorAll('input[name="flStampWhere"]').forEach(r => r.addEventListener('change', () => {
     const where = document.querySelector('input[name="flStampWhere"]:checked')?.value;
     stampPickBox.style.display = where === 'place' ? 'block' : 'none';
     // "new page at the end": no position to choose, the server puts the stamp on the record's signature page
     stampPlacement = where === 'append' ? { page: 1, x: 0.5, y: 0.85, scale: 1, newPage: true, auto: true } : null;
+    previewed = false;
     document.getElementById('flStampPicked').textContent = '';
   }));
   document.getElementById('flStampChoose')?.addEventListener('click', async () => {
@@ -15604,7 +15613,14 @@ async function openDecisionPanel(recordId, tabKey, decision) {
       const file = new File([blob], 'record.pdf', { type: blob.type || 'application/pdf' });
       openStampPlacementModal(file, (st) => {
         stampPlacement = { page: st.page, x: st.x, y: st.y, scale: st.scale || 1 };
-        document.getElementById('flStampPicked').textContent = `Page ${st.page} selected`;
+        previewed = false;
+        const picked = document.getElementById('flStampPicked');
+        picked.textContent = `Page ${st.page} selected. `;
+        const chk = document.createElement('button');
+        chk.type = 'button'; chk.className = 'fl-link'; chk.setAttribute('data-fl-preview', '1');
+        chk.textContent = 'Check the result: preview notice and record';
+        chk.addEventListener('click', () => runPreview(chk));
+        picked.appendChild(chk);
       }, () => {}, 'RECEIVED');
     } catch (err) { flowError('flErr', err.message); }
   });
@@ -15613,7 +15629,7 @@ async function openDecisionPanel(recordId, tabKey, decision) {
     const title = document.getElementById('flTitle').value.trim();
     syncBody();
     if (document.querySelector('input[name="flStampWhere"]:checked')?.value === 'place' && !stampPlacement) {
-      throw new Error('Choose where to place the RECEIVED stamp, or select "No stamp on the record itself".');
+      throw new Error('Choose where to place the RECEIVED stamp, or select "No RECEIVED stamp on the record".');
     }
     const body = letterText() ? bodyField.value.trim() : '';
     const bodyLen = letterText().length;
@@ -15651,25 +15667,28 @@ async function openDecisionPanel(recordId, tabKey, decision) {
     if (dirty && !confirm('Discard this decision? Nothing has been issued yet.')) return;
     collapseGrayPart();
   });
-  document.getElementById('flPreview').addEventListener('click', async () => {
+  const runPreview = async (btn) => {
     flowError('flErr', '');
-    const btn = document.getElementById('flPreview');
+    const label = btn.textContent;
     try {
       const fd = build();
       btn.disabled = true; btn.textContent = 'Building preview...';
       const res = await flowFetch(`${API}/decision-preview`, { method: 'POST', body: fd });
       if (!res || !res.ok) { const j = res ? await res.json().catch(() => ({})) : {}; throw new Error(j.message || 'The preview could not be built.'); }
+      previewed = true;
       flowShowPdfDialog(await res.blob(), `${verb} preview: record and notice`);   // opens in this page, not a new tab
     } catch (err) {
       flowError('flErr', err.message);
-    } finally { btn.disabled = false; btn.textContent = 'Preview with the record'; }
-  });
+    } finally { btn.disabled = false; btn.textContent = label; }
+  };
+  document.querySelectorAll('[data-fl-preview]').forEach(b => b.addEventListener('click', () => runPreview(b)));
   document.getElementById('flSubmit').addEventListener('click', async () => {
     flowError('flErr', '');
     const btn = document.getElementById('flSubmit');
     try {
       const fd = build();
       if (!confirm(`${verb} this record? The notice is signed with your signature and cannot be changed afterwards.`)) return;
+      if (stampPlacement && !previewed && !confirm('You have not previewed the stamped record yet. Issue the decision anyway?')) return;
       btn.disabled = true; btn.textContent = 'Signing and issuing...';
       const res = await flowFetch(`${API}/issue-decision`, { method: 'POST', body: fd });
       const data = res ? await res.json().catch(() => ({})) : {};
