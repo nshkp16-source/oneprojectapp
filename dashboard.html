@@ -4940,6 +4940,7 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Back": "Retour",
   "Continue": "Continuer",
   "Save draft": "Enregistrer le brouillon",
+  "Add site details (optional)": "Ajouter les détails du site (facultatif)",
   "Keep photo:": "Conserver la photo :",
   "Keep attachment:": "Conserver la pièce jointe :",
   "Existing files (uncheck to remove)": "Fichiers existants (décochez pour retirer)",
@@ -19606,92 +19607,62 @@ function _wcInitReportWizard(actionPanel, task) {
     return element;
   };
   const byId = (name) => actionPanel.querySelector(`#wc-pr-${name}-${CSS.escape(taskId)}`);
+  // One short form: what I did, how much, photos, notes, submit.
+  // Everything else (site, resources, delay, safety, next plan, evidence types) sits in one folded section.
   const groups = {
-    progress: ['work', 'qty', 'failed', 'pct', 'stage'],
-    photos: ['photos'],
-    site: ['manpower', 'equipment', 'materials', 'issues', 'notes', 'weather', 'safety',
-      'delay-cause', 'delay-days', 'delay-note'],
-    plan: ['next-plan'],
+    main: ['work', 'qty', 'failed', 'pct', 'stage', 'photos', 'notes'],
+    more: ['manpower', 'equipment', 'materials', 'issues', 'weather', 'safety',
+      'delay-cause', 'delay-days', 'delay-note', 'next-plan'],
   };
   const resourceRoot = rootFor(actionPanel.querySelector(`#wc-pr-resource-plan-manpower-${CSS.escape(taskId)}`));
   const submitButton = actionPanel.querySelector('[data-action="wc-submit-progress"]');
-  const stepRoots = Object.fromEntries(Object.entries(groups).map(([step, ids]) => [
-    step,
-    [...new Set(ids.map((id) => rootFor(byId(id))).filter(Boolean))],
-  ]));
-  stepRoots.photos.push(...[...actionPanel.querySelectorAll('[data-wc-supporting-groups]')]
-    .map(rootFor).filter(Boolean));
-  stepRoots.plan.push(...[resourceRoot, rootFor(submitButton)].filter(Boolean));
-  const firstRoot = stepRoots.progress[0];
+  const submitRoot = rootFor(submitButton);
+  const mainRoots = [...new Set(groups.main.map((id) => rootFor(byId(id))).filter(Boolean))]
+    .filter((root) => root !== submitRoot);
+  const moreRoots = [...new Set([
+    ...groups.more.map((id) => rootFor(byId(id))),
+    resourceRoot,
+    ...[...actionPanel.querySelectorAll('[data-wc-supporting-groups]')].map(rootFor),
+  ].filter(Boolean))].filter((root) => root !== submitRoot && !mainRoots.includes(root));
+  const firstRoot = mainRoots[0];
   if (!firstRoot) return;
 
-  const stepLabels = ['Progress', 'Photos', 'Site', 'Plan'];
   const wizard = document.createElement('section');
   wizard.setAttribute('aria-label', 'Add progress report');
   wizard.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
   wizard.innerHTML = `
     <div data-wc-report-edit-notice hidden role="status" style="padding:10px 12px;border:1px solid #fcd34d;border-radius:8px;background:#fffbeb;color:#92400e;font-size:12px;"></div>
     <div data-wc-existing-report-files hidden style="display:grid;gap:6px;padding:10px;border:1px solid #dbe3ec;border-radius:8px;"></div>
-    <div data-wc-report-step-indicator style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;">
-      ${stepLabels.map((label, index) => `<span data-wc-report-label="${index}" style="font-size:11px;color:#64748b;">${index + 1}. ${label}</span>`).join('')}
-      <strong data-wc-report-step-count style="font-size:11px;color:#475569;">Step 1 of 4</strong>
-    </div>
-    ${stepLabels.map((label, index) => `<section data-wc-report-step="${index}" aria-label="${label}" ${index ? 'hidden' : ''} style="display:flex;flex-direction:column;gap:10px;"></section>`).join('')}
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-      <div style="display:flex;gap:8px;">
-        <button type="button" data-wc-report-back hidden style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#334155;cursor:pointer;">Back</button>
-        <button type="button" data-wc-report-next style="padding:8px 12px;border:0;border-radius:7px;background:#007B8A;color:#fff;cursor:pointer;">Continue</button>
-        <button type="button" data-wc-report-cancel-edit hidden style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#334155;cursor:pointer;">Cancel</button>
-      </div>
+    <section data-wc-report-main style="display:flex;flex-direction:column;gap:10px;"></section>
+    <details data-wc-report-more style="border:1px solid #e2e8f0;border-radius:8px;padding:0 12px;">
+      <summary style="cursor:pointer;padding:10px 0;font-size:13px;font-weight:600;color:#334155;">Add site details (optional)</summary>
+      <div data-wc-report-more-body style="display:flex;flex-direction:column;gap:10px;padding:4px 0 12px;"></div>
+    </details>
+    <div data-wc-report-submit-slot></div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
       <button type="button" data-wc-report-save-draft style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#334155;cursor:pointer;">Save draft</button>
+      <button type="button" data-wc-report-cancel-edit hidden style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#334155;cursor:pointer;">Cancel</button>
     </div>
     <p data-wc-report-draft-status aria-live="polite" style="margin:0;font-size:11px;color:#64748b;"></p>`;
   firstRoot.before(wizard);
 
-  const panels = [...wizard.querySelectorAll('[data-wc-report-step]')];
-  for (const [step, roots] of Object.entries(stepRoots)) {
-    const target = panels[['progress', 'photos', 'site', 'plan'].indexOf(step)];
-    for (const root of roots) target.appendChild(root);
-  }
+  const mainPanel = wizard.querySelector('[data-wc-report-main]');
+  const morePanel = wizard.querySelector('[data-wc-report-more]');
+  const moreBody = wizard.querySelector('[data-wc-report-more-body]');
+  for (const root of mainRoots) mainPanel.appendChild(root);
+  for (const root of moreRoots) moreBody.appendChild(root);
+  if (submitRoot) wizard.querySelector('[data-wc-report-submit-slot]').appendChild(submitRoot);
   const previousSubmissions = [...actionPanel.children].find((element) =>
     /My Previous Submissions|Mes soumissions précédentes/.test(element.textContent));
   if (previousSubmissions) wizard.after(previousSubmissions);
 
+  // Kept for the edit/reset code: 0 = site details folded, 1 = site details open.
   let current = 0;
   const setStep = (next) => {
-    current = Math.max(0, Math.min(3, next));
-    panels.forEach((panel, index) => { panel.hidden = index !== current; });
-    wizard.querySelector('[data-wc-report-back]').hidden = current === 0;
-    wizard.querySelector('[data-wc-report-next]').hidden = current === 3;
-    wizard.querySelector('[data-wc-report-step-count]').textContent = `Step ${current + 1} of 4`;
-    wizard.querySelectorAll('[data-wc-report-label]').forEach((label, index) => {
-      label.style.color = index === current ? '#007B8A' : '#64748b';
-      label.style.fontWeight = index === current ? '700' : '400';
-      label.setAttribute('aria-current', index === current ? 'step' : 'false');
-    });
+    current = next >= 1 ? 1 : 0;
+    morePanel.open = current === 1;
   };
   wizard.__wcSetStep = setStep;
-  const validateProgress = () => {
-    const type = _wcTypeOf(task);
-    if (!byId('work')?.value.trim()) return 'Please describe the work done.';
-    if ((type === 'quantity' || type === 'count') && !(Number(byId('qty')?.value) > 0))
-      return type === 'count' ? 'Enter how many items were completed.' : 'Enter the quantity done.';
-    if (type === 'stages' && !byId('stage')?.value) return 'Choose the stage you completed.';
-    if (!['quantity', 'count', 'stages'].includes(type)) {
-      const percent = Number(byId('pct')?.value);
-      if (!Number.isFinite(percent) || percent < 0 || percent > 100)
-        return 'The percentage must be between 0 and 100.';
-    }
-    return '';
-  };
-  wizard.querySelector('[data-wc-report-next]').addEventListener('click', () => {
-    if (current === 0) {
-      const error = validateProgress();
-      if (error) return alert(error);
-    }
-    setStep(current + 1);
-  });
-  wizard.querySelector('[data-wc-report-back]').addEventListener('click', () => setStep(current - 1));
   wizard.querySelector('[data-wc-report-save-draft]').addEventListener('click', () => {
     const status = wizard.querySelector('[data-wc-report-draft-status]');
     try {
@@ -19713,7 +19684,7 @@ function _wcInitReportWizard(actionPanel, task) {
         if (field.type !== 'file' && field.id && Object.hasOwn(draft.values, field.id))
           field.value = draft.values[field.id];
       });
-      if (Number.isInteger(draft.step)) setStep(draft.step);
+      if (Number.isInteger(draft.step)) setStep(draft.step >= 1 ? 1 : 0);
     }
   } catch (error) {
     wizard.querySelector('[data-wc-report-draft-status]').textContent =
@@ -19803,7 +19774,10 @@ function _wcBeginReportEdit(actionPanel, task, entry) {
   const submitButton = actionPanel.querySelector('[data-action="wc-submit-progress"]');
   if (submitButton) submitButton.textContent = entry.validation_status === 'rejected'
     ? 'Save and resubmit' : 'Save changes';
-  wizard.__wcSetStep(0);
+  const hasSiteDetails = ['manpower', 'equipment', 'materials', 'issues', 'weather', 'safety_note',
+    'next_plan', 'delay_cause', 'delay_note'].some((key) => entry[key])
+    || (entry.resources || []).length > 0 || (entry.supporting_attachments || []).length > 0;
+  wizard.__wcSetStep(hasSiteDetails ? 1 : 0);
   wizard.closest('[data-wc-pane="record-progress"]')
     ?.parentElement?.querySelector('[data-wc-tab="record-progress"]')?.click();
   wizard.scrollIntoView({ behavior: 'smooth', block: 'start' });
