@@ -4965,6 +4965,7 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Choose an activity": "Choisir une activité",
   "No activity (standalone)": "Aucune activité (autonome)",
   "Click to choose an activity…": "Cliquez pour choisir une activité…",
+  "Click to choose team members…": "Cliquez pour choisir les membres de l'équipe…",
   "This task will have its own progress measure, plan and dates.": "Cette tâche aura sa propre mesure de progression, son propre plan et ses propres dates.",
   "Progress measure for standalone task *": "Mesure de progression de la tâche autonome *",
   "Quantity": "Quantité",
@@ -21250,9 +21251,21 @@ async function _wcOpenCreateForm() {
           <label style="display:block;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">
             Assign team members *
           </label>
-          <div id="wc-cr-members"
-            style="padding:4px 0;max-height:180px;overflow-y:auto;">
-            <p style="font-size:12px;color:#9ca3af;text-align:center;padding:12px 0;">Loading team members.</p>
+          <div id="wc-members-display" role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false"
+            onclick="_wcMembersPicker()"
+            onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();_wcMembersPicker();}"
+            style="padding:9px 10px;border:1px solid var(--field-border);border-radius:var(--field-radius);font-size:13px;
+            background:#fff;cursor:pointer;display:flex;justify-content:space-between;align-items:center;color:#374151;">
+            <span id="wc-members-label">Click to choose team members…</span>
+            <span style="color:#9ca3af;">▾</span>
+          </div>
+          <div id="wc-members-dropdown"
+            style="display:none;position:relative;z-index:50;background:#fff;
+            border:1px solid #d1d5db;border-radius:8px;
+            box-shadow:0 4px 16px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;margin-top:2px;padding:0 10px;">
+            <div id="wc-cr-members" style="padding:4px 0;">
+              <p style="font-size:12px;color:#9ca3af;text-align:center;padding:12px 0;">Loading team members.</p>
+            </div>
           </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
@@ -21331,6 +21344,33 @@ async function _wcOpenCreateForm() {
     const dd = document.getElementById('wc-activity-dropdown');
     if (dd) dd.style.display = dd.style.display==='none' ? 'block' : 'none';
   };
+  window._wcMembersPicker = function() {
+    const dd = document.getElementById('wc-members-dropdown');
+    const box = document.getElementById('wc-members-display');
+    if (!dd) return;
+    const open = dd.style.display === 'none';
+    dd.style.display = open ? 'block' : 'none';
+    if (box) box.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  window._wcUpdateMembersLabel = function() {
+    const label = document.getElementById('wc-members-label');
+    if (!label) return;
+    const names = [...document.querySelectorAll('#wc-cr-members input[data-member-id]:checked')]
+      .map((input) => input.getAttribute('data-member-name') || input.getAttribute('data-member-email') || '');
+    label.textContent = !names.length ? 'Click to choose team members…'
+      : names.length === 1 ? names[0]
+      : `${names[0]} +${names.length - 1}`;
+  };
+  document.getElementById('wc-cr-members')?.addEventListener('change', window._wcUpdateMembersLabel);
+  const _mdClose = (e) => {
+    const dd = document.getElementById('wc-members-dropdown');
+    if (!dd) { document.removeEventListener('click', _mdClose); return; }
+    if (!e.target.closest('#wc-members-display') && !e.target.closest('#wc-members-dropdown')) {
+      dd.style.display = 'none';
+      document.getElementById('wc-members-display')?.setAttribute('aria-expanded', 'false');
+    }
+  };
+  document.addEventListener('click', _mdClose);
   window._wcSelectActivity = function(id, label) {
     const hidden  = document.getElementById('wc-cr-activity');
     const display = document.getElementById('wc-activity-label');
@@ -21553,6 +21593,7 @@ async function _wcOpenCreateForm() {
     document.querySelectorAll('#wc-cr-members input[data-member-id]').forEach((input) => {
       input.checked = assignedIds.has(String(input.getAttribute('data-member-id')));
     });
+    window._wcUpdateMembersLabel?.();
     _wcUpdateCreateMeasure();
   });
   document.getElementById('wc-cr-share')?.addEventListener('change', () => {
