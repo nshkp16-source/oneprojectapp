@@ -304,6 +304,43 @@
       .card-head { padding: 12px 12px; }
       .card-ico { width: 36px; height: 36px; font-size: 17px; }
     }
+
+    /* Match the dashboard's neutral canvas, navy surfaces, and teal actions. */
+    :root {
+      --teal: #007b8a;
+      --darkblue: #0d2b4e;
+      --mayablue: #b8d5e8;
+      --softblue: #edf5f9;
+      --text: #1e293b;
+      --muted: #64748b;
+    }
+    body { font-family: 'Segoe UI', Arial, sans-serif; background: #f1f5f9; }
+    body::before { display: none; }
+    .page { max-width: 1180px; padding: 20px 24px 48px; }
+    .topbar, .banner, .search-wrap, .tabs, .section-label, .grid, .quick,
+    .contact, .support-form, .page-foot { max-width: none; }
+    .brand-name { color: var(--darkblue); text-shadow: none; font-size: 14px; }
+    .brand-badge { background: var(--darkblue); }
+    .back-btn { color: var(--darkblue); }
+    .banner { background: linear-gradient(115deg, #0d2b4e, #16436c); }
+    .section-label { color: var(--muted); }
+    .contact { background: #fff; border: 1px solid var(--border); }
+    .support-form { background: #fff; border: 1px solid var(--border); padding: 22px; gap: 12px; box-shadow: 0 4px 16px rgba(15,35,60,.06); }
+    .support-form .row2 { gap: 12px; }
+    .support-form label { display: grid; gap: 6px; color: var(--darkblue); font-size: 12px; font-weight: 700; }
+    .card-head { width: 100%; border: 0; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
+    .card-head:focus-visible { outline: 3px solid rgba(0,123,138,.35); outline-offset: -3px; }
+    .card-text > span { display: block; }
+    .support-form .action:disabled { opacity: .65; cursor: wait; }
+    .form-status { min-height: 1.4em; font-size: 13px; font-weight: 600; }
+    .form-status.success { color: #166534; }
+    .form-status.error { color: #b91c1c; }
+    .website-field { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+    .page-foot { color: var(--muted); }
+    .page-foot a { color: var(--darkblue); }
+    #noResults { color: var(--muted); }
+    @media (max-width: 700px) { .page { padding: 14px 16px 40px; } }
+    @media (max-width: 480px) { .page { padding: 12px 12px 36px; } }
   </style>
 </head>
 <body data-auto-translate>
@@ -353,12 +390,17 @@
 
   <form class="support-form" id="contact" onsubmit="sendSupport(event)">
     <h3>✉️ Contact OneProjectApp support</h3>
-    <p class="hint">No account needed. Tell us what happened and how to reach you — we reply by email.</p>
+    <p class="hint">Send us the details and our support team will reply to your email address.</p>
     <div class="row2">
-      <input id="sfName" type="text" placeholder="Your name" required autocomplete="name">
-      <input id="sfEmail" type="email" placeholder="Your email" required autocomplete="email">
+      <label for="sfName">Your name
+        <input id="sfName" name="name" type="text" placeholder="Full name" required maxlength="100" autocomplete="name">
+      </label>
+      <label for="sfEmail">Email address
+        <input id="sfEmail" name="email" type="email" placeholder="you@example.com" required maxlength="254" autocomplete="email">
+      </label>
     </div>
-    <select id="sfTopic">
+    <label for="sfTopic">What do you need help with?
+    <select id="sfTopic" name="topic" required>
       <option>Creating a project account</option>
       <option>Logging in / first login</option>
       <option>Password reset or verification code</option>
@@ -366,10 +408,19 @@
       <option>Something is not working</option>
       <option>Other question</option>
     </select>
-    <input id="sfRole" type="text" placeholder="Your role (optional) e.g. Contractor PM">
-    <textarea id="sfMsg" rows="4" placeholder="Describe your question or problem" required></textarea>
-    <button type="submit" class="action">Send message</button>
-    <p class="hint">This opens your email app with the message ready to send.</p>
+    </label>
+    <label for="sfRole">Your role <span class="hint">(optional)</span>
+      <input id="sfRole" name="role" type="text" placeholder="e.g. Contractor Project Manager" maxlength="80">
+    </label>
+    <label for="sfMsg">Message
+      <textarea id="sfMsg" name="message" rows="5" minlength="10" maxlength="5000" placeholder="Describe what happened and what you expected to happen." required></textarea>
+    </label>
+    <label class="website-field" aria-hidden="true">Leave this field empty
+      <input name="website" type="text" tabindex="-1" autocomplete="off">
+    </label>
+    <button type="submit" class="action" id="supportSubmit">Send message</button>
+    <p class="hint">Your message is sent securely to the OneProjectApp support team.</p>
+    <p class="form-status" id="supportStatus" role="status" aria-live="polite"></p>
   </form>
 
   <footer class="page-foot">
@@ -385,9 +436,26 @@ function parseJwt(t) {
   try { return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); }
   catch { return null; }
 }
+function normalizeSupportRole(role) {
+  const key = String(role || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  const roles = {
+    client: 'Client',
+    clientpm: 'Client Project Manager',
+    clientprojectmanager: 'Client Project Manager',
+    consultant: 'Consultant',
+    consultantpm: 'Consultant Project Manager',
+    consultantprojectmanager: 'Consultant Project Manager',
+    contractor: 'Contractor',
+    contractorpm: 'Contractor Project Manager',
+    contractorprojectmanager: 'Contractor Project Manager',
+    teammember: 'Team Member',
+  };
+  return roles[key] || 'Guest';
+}
+const API_BASE = 'https://oneprojectapp-backend.onrender.com';
 const token   = localStorage.getItem('authToken');
 const decoded = parseJwt(token);
-const ROLE    = decoded?.role || 'Guest';
+const ROLE    = normalizeSupportRole(decoded?.role);
 const EMAIL   = decoded?.companyEmail || decoded?.email || '–';
 const PROJ    = localStorage.getItem('activeProjectName');
 
@@ -1158,17 +1226,24 @@ function renderCards(list) {
   list.forEach(c => {
     const div = document.createElement('div');
     div.className = 'card';
+    const bodyId = `help-card-${Math.random().toString(36).slice(2)}`;
     div.innerHTML = `
       <div class="card-head">
-        <div class="card-ico" style="background:${c.bg}">${c.ico}</div>
-        <div><div class="card-title">${c.title}</div><div class="card-sub">${c.sub}</div></div>
-        <span class="card-chevron">›</span>
+        <button type="button" class="card-head" aria-expanded="false" aria-controls="${bodyId}">
+          <span class="card-ico" style="background:${c.bg}">${c.ico}</span>
+          <span class="card-text"><span class="card-title">${c.title}</span><span class="card-sub">${c.sub}</span></span>
+          <span class="card-chevron" aria-hidden="true">›</span>
+        </button>
       </div>
-      <div class="card-body">${c.body}</div>`;
-    div.querySelector('.card-head').addEventListener('click', () => {
+      <div class="card-body" id="${bodyId}">${c.body}</div>`;
+    div.querySelector('.card-head').addEventListener('click', event => {
       const wasOpen = div.classList.contains('open');
-      document.querySelectorAll('.card.open').forEach(el => el.classList.remove('open'));
+      document.querySelectorAll('.card.open').forEach(el => {
+        el.classList.remove('open');
+        el.querySelector('.card-head').setAttribute('aria-expanded', 'false');
+      });
       if (!wasOpen) div.classList.add('open');
+      event.currentTarget.setAttribute('aria-expanded', String(!wasOpen));
     });
     grid.appendChild(div);
   });
@@ -1201,9 +1276,43 @@ if (!IS_GUEST) { document.getElementById('sfName').value = ''; document.getEleme
 
 function sendSupport(e) {
   e.preventDefault();
-  const g = id => document.getElementById(id).value.trim();
-  const body = `Name: ${g('sfName')}\nEmail: ${g('sfEmail')}\nRole: ${g('sfRole') || '-'}\nTopic: ${g('sfTopic')}\n\n${g('sfMsg')}`;
-  window.location.href = 'mailto:prooject26@gmail.com?subject=' + encodeURIComponent('OneProjectApp support: ' + g('sfTopic')) + '&body=' + encodeURIComponent(body);
+  const form = document.getElementById('contact');
+  if (!form.reportValidity()) return;
+  const status = document.getElementById('supportStatus');
+  const submit = document.getElementById('supportSubmit');
+  const value = name => form.elements[name].value.trim();
+  const payload = {
+    name: value('name'),
+    email: value('email'),
+    role: value('role') || ROLE,
+    topic: value('topic'),
+    message: value('message'),
+    project: PROJ || '',
+    website: value('website'),
+  };
+  status.textContent = 'Sending your message…';
+  status.className = 'form-status';
+  submit.disabled = true;
+  fetch(`${API_BASE}/api/support/contact`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(async response => {
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Unable to send your message.');
+    status.textContent = result.message;
+    status.classList.add('success');
+    form.reset();
+    if (!IS_GUEST) {
+      document.getElementById('sfEmail').value = EMAIL !== '–' ? EMAIL : '';
+      document.getElementById('sfRole').value = ROLE;
+    }
+  }).catch(error => {
+    status.textContent = error.message || 'Unable to send your message. Please try again.';
+    status.classList.add('error');
+  }).finally(() => {
+    submit.disabled = false;
+  });
 }
 
 /* ── Initial render ── */
