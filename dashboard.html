@@ -23032,7 +23032,7 @@ async function _peDownloadActivityReportPdf(report) {
 // Task report PDF.
 //  - Full report (no onlyEntryId): page 1 is a summary like the Overview (status, plan, totals from approved
 //    reports, checklist), then a table of every report, then every report in full on as many pages as needed.
-//  - Single report (options.onlyEntryId): that one report only, with its details, photos and review.
+//  - Single report (options.onlyEntryId): that one report only, with its details, photos and an approval record.
 async function _wcDownloadTaskPdf(task, entries, checklists, options = {}) {
   if (!window.PDFLib) throw new Error('The PDF library is unavailable. Reload the page and try again.');
   const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
@@ -23370,6 +23370,7 @@ async function _wcDownloadTaskPdf(task, entries, checklists, options = {}) {
     task.activity_id && task.weight_pct != null ? ['Share of activity', `${Number(task.weight_pct)}%`] : null,
   ].filter(Boolean);
 
+  let singleEntry = null;
   // ================= build =================
   newPage();
   // Title block
@@ -23381,8 +23382,9 @@ async function _wcDownloadTaskPdf(task, entries, checklists, options = {}) {
   if (single) {
     const entry = allEntries.find((item) => String(item.id) === onlyId);
     if (!entry) throw new Error('That report is no longer available. Reopen the task and try again.');
+    singleEntry = entry;
     para(`Report of ${fmtDate(entry.report_date)} by ${memberName(entry)}${entry.member_position ? ` (${entry.member_position})` : ''}${fmtDateTime(entry.submitted_at) ? `  |  Submitted ${fmtDateTime(entry.submitted_at)}` : ''}`, { size: 8.5 });
-    para(`Generated ${generated}  |  Assigned ${assigned}`, { size: 8, color: C.muted });
+    para(`Generated ${generated}${window.currentUserName ? ` by ${window.currentUserName}` : ''}  |  Assigned ${assigned}`, { size: 8, color: C.muted });
     y -= 6;
     tiles([
       { label: counted ? 'Quantity reported' : type === 'stages' ? 'Stage reported' : 'Progress reported', value: resultOf(entry) },
@@ -23396,7 +23398,7 @@ async function _wcDownloadTaskPdf(task, entries, checklists, options = {}) {
     section('Report details');
     await reportBody(entry, 9);
   } else {
-    para(`Generated ${generated}  |  Status ${taskStatus}${task.priority ? `  |  Priority ${String(task.priority).charAt(0).toUpperCase()}${String(task.priority).slice(1)}` : ''}`, { size: 8, color: C.muted });
+    para(`Generated ${generated}${window.currentUserName ? ` by ${window.currentUserName}` : ''}  |  Status ${taskStatus}${task.priority ? `  |  Priority ${String(task.priority).charAt(0).toUpperCase()}${String(task.priority).slice(1)}` : ''}`, { size: 8, color: C.muted });
     para(`Assigned to ${assigned}`, { size: 8.5 });
     if (options.scopeNote) para(options.scopeNote, { size: 8, color: C.wait });
 
@@ -23504,13 +23506,18 @@ async function _wcDownloadTaskPdf(task, entries, checklists, options = {}) {
     }
   }
 
-  // Sign-off lines
-  ensure(70);
-  y -= 26;
-  page.drawLine({ start: { x: LEFT, y }, end: { x: LEFT + 230, y }, thickness: 0.7, color: C.muted });
-  page.drawLine({ start: { x: LEFT + 281, y }, end: { x: LEFT + WIDTH, y }, thickness: 0.7, color: C.muted });
-  put('Prepared by (member)', LEFT, y - 12, { size: 7, color: C.muted });
-  put('Reviewed by (leader)', LEFT + 281, y - 12, { size: 7, color: C.muted });
+  // Approval record (single report only): who prepared it and the decision, from the system.
+  // Signing and stamping are handled by the app's own signing tools, so there are no signature lines here.
+  if (singleEntry) {
+    const role = singleEntry.validated_by_role ? String(singleEntry.validated_by_role).replace(/([a-z])([A-Z])/g, '$1 $2') : '';
+    const reviewer = singleEntry.validated_by_name || names.get(String(singleEntry.validated_by)) || role;
+    const preparedBy = [memberName(singleEntry), singleEntry.member_position, fmtDate(singleEntry.submitted_at || singleEntry.report_date)].filter(Boolean).join(', ');
+    const reviewedBy = ['approved', 'rejected', 'voided'].includes(statusOf(singleEntry))
+      ? [reviewer, `${statusLabel(singleEntry)} ${singleEntry.validated_at ? fmtDate(singleEntry.validated_at) : ''}`.trim()].filter(Boolean).join(', ')
+      : 'Not yet reviewed';
+    section('Approval record');
+    grid([['Prepared by', preparedBy], ['Reviewed by', reviewedBy]]);
+  }
 
   // Footer on every page, now that the page count is known
   pages.forEach((pg, index) => {
