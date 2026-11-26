@@ -4920,7 +4920,7 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Other / unplanned": "Autre / non prévu",
   "Assigned group": "Groupe affecté",
   "Site conditions (optional)": "Conditions du chantier (facultatif)",
-  "Weather is filled from the project forecast for the report date. You can edit it.": "La météo est renseignée à partir des prévisions du projet pour la date du rapport. Vous pouvez la modifier.",
+  "Weather is filled from project weather data for the report date. You can edit it.": "La météo est renseignée à partir des données météo du projet pour la date du rapport. Vous pouvez la modifier.",
   "No saved project location is set. Enter weather manually or set the project location in the schedule.": "Aucun emplacement de projet n'est enregistré. Saisissez la météo manuellement ou définissez l'emplacement du projet dans le planning.",
   "Weather forecast is unavailable for this report date. You can enter it manually.": "Les prévisions météo ne sont pas disponibles pour cette date de rapport. Vous pouvez les saisir manuellement.",
   "Project weather is loading…": "Chargement de la météo du projet…",
@@ -7413,6 +7413,7 @@ function opaApplyLanguage(lang) {
   opaInstallFileInputs(document.body);
   opaWalk(document.body, fr);
   if (fr) opaObserver.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: OPA_ATTRS });
+  window.dispatchEvent(new Event('opa:language-updated'));
 }
 /* alert()/confirm()/prompt(): translate the message; "Failed to save: <reason>" keeps the reason as is */
 function opaMsg(msg) {
@@ -7961,6 +7962,30 @@ function closeWeatherForecastDialog() {
   dialog.setAttribute('aria-hidden', 'true');
 }
 
+function _weatherDisplayText(text) {
+  return opaLang === 'French' && typeof opaLookup === 'function' ? opaLookup(text) || text : text;
+}
+
+function renderSummaryWeatherValues() {
+  const data = summaryWeatherData;
+  if (!data?.current || !data?.daily) return;
+  const currentText = document.getElementById('summaryWeatherText');
+  const currentMeta = document.getElementById('summaryWeatherMeta');
+  const tomorrowText = document.getElementById('summaryWeatherTomorrow');
+  const tomorrowMeta = document.getElementById('summaryWeatherTomorrowMeta');
+  const current = data.current;
+  const currentDisplay = `${_weatherCodeIcon(current.weathercode)} ${current.temperature.toFixed(0)}°C · ${_weatherDisplayText(_weatherCodeLabel(current.weathercode))}`;
+  if (currentText) currentText.textContent = currentDisplay;
+  if (currentMeta) currentMeta.textContent = `${_weatherDisplayText('Wind')} ${current.windspeed.toFixed(0)} km/h`;
+  const daily = data.daily;
+  const tomorrowCode = daily.weathercode?.[1];
+  const tomorrowHigh = daily.temperature_2m_max?.[1];
+  const tomorrowLow = daily.temperature_2m_min?.[1];
+  if (tomorrowText) tomorrowText.textContent = `${_weatherCodeIcon(tomorrowCode)} ${Math.round(tomorrowHigh ?? 0)}° / ${Math.round(tomorrowLow ?? 0)}°C`;
+  if (tomorrowMeta) tomorrowMeta.textContent =
+    `${_weatherDisplayText(_weatherCodeLabel(tomorrowCode))} · ${_weatherDisplayText('Rain')} ${daily.precipitation_probability_max?.[1] ?? 0}%`;
+}
+
 function renderWeatherForecastDialog() {
   const currentIconEl = document.getElementById('weatherForecastCurrentIcon');
   const temperatureEl = document.getElementById('weatherForecastTemperature');
@@ -7984,8 +8009,8 @@ function renderWeatherForecastDialog() {
   applyWeatherConditionTheme(current.weathercode);
   if (currentIconEl) currentIconEl.textContent = _weatherCodeIcon(current.weathercode);
   temperatureEl.textContent = `${Math.round(current.temperature)}°C`;
-  conditionEl.textContent = _weatherCodeLabel(current.weathercode);
-  if (detailsEl) detailsEl.innerHTML = `<span>💨 Wind ${Math.round(current.windspeed || 0)} km/h</span><span>🌡️ Feels like ${Math.round(current.temperature)}°C</span><span>🕒 Updated ${current.time ? new Date(current.time).toLocaleTimeString([], { hour:'numeric', minute:'2-digit' }) : 'now'}</span>`;
+  conditionEl.textContent = _weatherDisplayText(_weatherCodeLabel(current.weathercode));
+  if (detailsEl) detailsEl.innerHTML = `<span>💨 ${_weatherDisplayText('Wind')} ${Math.round(current.windspeed || 0)} km/h</span><span>🌡️ ${_weatherDisplayText('Feels like')} ${Math.round(current.temperature)}°C</span><span>🕒 ${_weatherDisplayText('Updated')} ${current.time ? new Date(current.time).toLocaleTimeString(opaLocale() || 'en-US', { hour:'numeric', minute:'2-digit' }) : 'now'}</span>`;
   const daily = data.daily;
   listEl.innerHTML = (daily.time || []).map((date, index) => {
     const code = daily.weathercode?.[index];
@@ -8005,9 +8030,9 @@ function renderWeatherForecastDialog() {
     return `<div style="padding:11px 7px; border:1px solid rgba(255,255,255,0.09); border-radius:8px; background:rgba(255,255,255,0.07); text-align:center;">
       <div style="font-size:11px; font-weight:700; color:#dbeafe;">${day}</div>
       <div style="font-size:25px; margin:9px 0;">${_weatherCodeIcon(code)}</div>
-      <div style="font-size:10px; color:#b6c8dc; min-height:28px;">${_weatherCodeLabel(code)}</div>
+      <div style="font-size:10px; color:#b6c8dc; min-height:28px;">${_weatherDisplayText(_weatherCodeLabel(code))}</div>
       <div style="font-size:12px; margin-top:7px; color:#fff; font-weight:700;">${Math.round(daily.temperature_2m_max?.[index] ?? 0)}° / ${Math.round(daily.temperature_2m_min?.[index] ?? 0)}°C</div>
-      <div style="font-size:10px; margin-top:5px; color:#b6c8dc;">Rain ${rain ?? 0}%</div>
+      <div style="font-size:10px; margin-top:5px; color:#b6c8dc;">${_weatherDisplayText('Rain')} ${rain ?? 0}%</div>
     </div>`;
   }).join('');
 }
@@ -8102,19 +8127,8 @@ async function loadSummaryWeather(location) {
     summaryWeatherLoading = false;
     notifySummaryWeatherUpdated();
     applyWeatherConditionTheme(current.weathercode);
-
-    // Display current weather with icon
-    const currentLabel = _weatherCodeLabel(current.weathercode);
-    const currentIcon = _weatherCodeIcon(current.weathercode);
-    const currentDisplay = `${currentIcon} ${current.temperature.toFixed(0)}°C · ${currentLabel}`;
-    if (weatherText) weatherText.textContent = currentDisplay;
-    if (weatherMeta) weatherMeta.textContent = `Wind ${current.windspeed.toFixed(0)} km/h`;
-    console.log('[Weather] Current:', currentDisplay);
-    const tomorrowCode = daily.weathercode?.[1];
-    const tomorrowHigh = daily.temperature_2m_max?.[1];
-    const tomorrowLow = daily.temperature_2m_min?.[1];
-    if (tomorrowText) tomorrowText.textContent = `${_weatherCodeIcon(tomorrowCode)} ${Math.round(tomorrowHigh ?? 0)}° / ${Math.round(tomorrowLow ?? 0)}°C`;
-    if (tomorrowMeta) tomorrowMeta.textContent = `${_weatherCodeLabel(tomorrowCode)} · Rain ${daily.precipitation_probability_max?.[1] ?? 0}%`;
+    renderSummaryWeatherValues();
+    console.log('[Weather] Current:', weatherText?.textContent);
     renderWeatherForecastDialog();
   } catch (err) {
     console.error('[Weather] Error fetching from Open-Meteo:', err);
@@ -18006,7 +18020,7 @@ function _wcAutoFillReportWeather(taskId) {
     field.dataset.wcWeatherTracking = 'true';
   }
   const message = (text) => {
-    if (status) status.textContent = typeof opaLookup === 'function' ? opaLookup(text) || text : text;
+    if (status) status.textContent = _weatherDisplayText(text);
   };
   const hasLocation = Number.isFinite(summaryWeatherLocation?.lat)
     && Number.isFinite(summaryWeatherLocation?.lng);
@@ -18018,6 +18032,20 @@ function _wcAutoFillReportWeather(taskId) {
       || (field.value.trim() && field.value !== field.dataset.wcWeatherAutoValue)) return;
   const reportDate = window._wcEditingReportByTask?.[String(taskId)]?.reportDate || _wcTodayDate();
   const daily = summaryWeatherData?.daily;
+  const current = summaryWeatherData?.current;
+  const currentDate = String(current?.time || '').slice(0, 10);
+  if (current && currentDate === reportDate) {
+    const pieces = [
+      `${Math.round(Number(current.temperature))}°C`,
+      _weatherDisplayText(_weatherCodeLabel(current.weathercode)),
+      `${_weatherDisplayText('Wind')} ${Math.round(Number(current.windspeed) || 0)} km/h`,
+    ];
+    const currentConditions = pieces.join(' · ').slice(0, 100);
+    field.value = currentConditions;
+    field.dataset.wcWeatherAutoValue = currentConditions;
+    message('Weather is filled from project weather data for the report date. You can edit it.');
+    return;
+  }
   const dayIndex = Array.isArray(daily?.time) ? daily.time.indexOf(reportDate) : -1;
   if (dayIndex < 0) {
     message(summaryWeatherLoading
@@ -18025,22 +18053,27 @@ function _wcAutoFillReportWeather(taskId) {
       : 'Weather forecast is unavailable for this report date. You can enter it manually.');
     return;
   }
-  const translate = (text) => typeof opaLookup === 'function' ? opaLookup(text) || text : text;
-  const pieces = [`${translate('Forecast')}: ${translate(_weatherCodeLabel(daily.weathercode?.[dayIndex]))}`];
+  const pieces = [`${_weatherDisplayText('Forecast')}: ${_weatherDisplayText(_weatherCodeLabel(daily.weathercode?.[dayIndex]))}`];
   const high = daily.temperature_2m_max?.[dayIndex];
   const low = daily.temperature_2m_min?.[dayIndex];
   if (Number.isFinite(Number(high)) && Number.isFinite(Number(low)))
     pieces.push(`${Math.round(Number(high))}°C / ${Math.round(Number(low))}°C`);
   const rain = daily.precipitation_probability_max?.[dayIndex];
   if (rain != null && Number.isFinite(Number(rain)))
-    pieces.push(`${translate('Rain chance').toLowerCase()} ${Math.round(Number(rain))}%`);
+    pieces.push(`${_weatherDisplayText('Rain chance').toLowerCase()} ${Math.round(Number(rain))}%`);
   const forecast = pieces.join(' · ').slice(0, 100);
   field.value = forecast;
   field.dataset.wcWeatherAutoValue = forecast;
-  message('Weather is filled from the project forecast for the report date. You can edit it.');
+  message('Weather is filled from project weather data for the report date. You can edit it.');
 }
 
 window.addEventListener('opa:summary-weather-updated', () => {
+  document.querySelectorAll('[data-wc-weather-field]').forEach((field) =>
+    _wcAutoFillReportWeather(field.dataset.taskId));
+});
+window.addEventListener('opa:language-updated', () => {
+  renderSummaryWeatherValues();
+  renderWeatherForecastDialog();
   document.querySelectorAll('[data-wc-weather-field]').forEach((field) =>
     _wcAutoFillReportWeather(field.dataset.taskId));
 });
@@ -19349,7 +19382,7 @@ function _wcMemberView(task, myEntries) {
           <div style="display:grid;gap:8px;margin-top:10px;">
             <div>${_wcLabel('Weather')}<input id="wc-pr-weather-${task.id}" data-wc-weather-field data-task-id="${escapeHtml(String(task.id))}" maxlength="100" placeholder="e.g. Light rain, 18°C"
               style="width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box;"/>
-              <small data-wc-weather-status aria-live="polite" style="display:block;margin-top:4px;color:#64748b;font-size:11px;">Weather is filled from the project forecast for the report date. You can edit it.</small></div>
+              <small data-wc-weather-status aria-live="polite" style="display:block;margin-top:4px;color:#64748b;font-size:11px;">Weather is filled from project weather data for the report date. You can edit it.</small></div>
             <div>${_wcLabel('Safety note')}<textarea id="wc-pr-safety-${task.id}" maxlength="1000"
               style="width:100%;min-height:50px;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box;"></textarea></div>
             <div>${_wcLabel('Plan for tomorrow')}<textarea id="wc-pr-next-plan-${task.id}" maxlength="1000"
