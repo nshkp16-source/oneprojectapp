@@ -17881,6 +17881,39 @@ bottomContent.addEventListener('click', (e) => {
     { _wcDownloadProgress(actionEl.getAttribute('data-progress-id'), actionEl.getAttribute('data-filename')); return; }
 });
 
+document.addEventListener('click', async (event) => {
+  const voidToggle = event.target.closest('[data-wc-void-toggle]');
+  const queryToggle = event.target.closest('[data-wc-query-toggle]');
+  const toggle = voidToggle || queryToggle;
+  if (toggle) {
+    const form = toggle.parentElement.querySelector(voidToggle ? '[data-wc-void-form]' : '[data-wc-query-form]');
+    if (!form) return;
+    form.hidden = !form.hidden;
+    toggle.setAttribute('aria-expanded', String(!form.hidden));
+    toggle.textContent = form.hidden
+      ? (voidToggle ? 'Void this report' : 'Ask a question')
+      : 'Cancel';
+    if (!form.hidden) form.querySelector('textarea')?.focus();
+    return;
+  }
+
+  const button = event.target.closest('[data-action="wc-report-pdf"]');
+  if (!button) return;
+  const taskId = button.getAttribute('data-task-id');
+  const reportId = button.getAttribute('data-progress-id');
+  const context = window._wcReportPdfContext?.[taskId];
+  button.disabled = true;
+  try {
+    if (!context) throw new Error('Task report data is unavailable. Reopen the task and try again.');
+    await _wcDownloadTaskPdf(context.task, context.entries, context.checklists, { onlyEntryId: reportId });
+  } catch (error) {
+    console.error('Report PDF export failed:', error);
+    _wcSetTaskCardMessage(taskId, error.message || 'Could not download this report.', true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 bottomContent.addEventListener('change', (event) => {
   const supportingGroup = event.target.closest('[data-wc-supporting-group]');
   if (supportingGroup && event.target.matches('[data-supporting-type]')) {
@@ -18415,6 +18448,8 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   const heading = 'font-size:12px;font-weight:600;color:#1f2937;';
   const location = data.location || {};
   const checklistData = data.checklists || [];
+  window._wcReportPdfContext ||= Object.create(null);
+  window._wcReportPdfContext[String(task.id)] = { task, entries, checklists: checklistData };
 
 
   const commentsHtml = (data.comments || []).map((comment) => `
@@ -18891,11 +18926,15 @@ function _wcPMView(task, progressEntries) {
                 ${(e.validation_notes||e.void_reason)?`<em>${escapeHtml(e.validation_notes||e.void_reason)}</em>`:''}
                 ${e.validation_status==='approved'&&task.status!=='closed'?`
                   <div style="margin-top:6px;">
-                    <label for="wc-val-notes-${escapeHtml(String(e.id))}" style="display:block;margin:8px 0 4px;font-size:11px;font-weight:600;">Reason for voiding *</label>
-                    <textarea id="wc-val-notes-${escapeHtml(String(e.id))}" maxlength="1000" placeholder="Explain why this report must be voided"
-                      style="width:100%;min-height:54px;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:12px;resize:vertical;box-sizing:border-box;margin-bottom:8px;"></textarea>
-                    <button data-action="wc-validate" data-progress-id="${escapeHtml(String(e.id))}" data-validate-action="voided"
-                      class="rc-btn rc-btn--sm rc-btn--danger">Void this report</button>
+                    <button type="button" data-wc-void-toggle aria-expanded="false"
+                      style="padding:7px 10px;border:1px solid #dc2626;border-radius:7px;background:#fff;color:#b91c1c;cursor:pointer;">Void this report</button>
+                    <div data-wc-void-form hidden style="margin-top:8px;">
+                      <label for="wc-val-notes-${escapeHtml(String(e.id))}" style="display:block;margin:8px 0 4px;font-size:11px;font-weight:600;">Reason for voiding *</label>
+                      <textarea id="wc-val-notes-${escapeHtml(String(e.id))}" maxlength="1000" placeholder="Explain why this report must be voided"
+                        style="width:100%;min-height:54px;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:12px;resize:vertical;box-sizing:border-box;margin-bottom:8px;"></textarea>
+                      <button data-action="wc-validate" data-progress-id="${escapeHtml(String(e.id))}" data-validate-action="voided"
+                        class="rc-btn rc-btn--sm rc-btn--danger">Confirm void</button>
+                    </div>
                   </div>`:''}</div>`}
             <div data-wc-report-queries="${escapeHtml(String(e.id))}" style="margin-top:12px;"></div>
           </div></article>`;
@@ -19748,12 +19787,16 @@ function _wcFilesHtml(task, reports, attachments, leader, uploadLimits = {}, rep
 
 function _wcQueryPanelHtml(task, report, queries, leader) {
   const reportId = report ? String(report.id) : '';
-  const askForm = leader && report ? `<div style="margin:12px 0;padding:12px;background:#f8fafc;border:1px solid #dbe3ec;border-radius:9px;">
-    <label for="wc-query-question-${reportId}" style="display:block;font-size:12px;font-weight:600;color:#334155;margin-bottom:5px;">Ask about this report</label>
-    <textarea id="wc-query-question-${reportId}" maxlength="5000" placeholder="What needs explaining about this report?"
-      style="width:100%;min-height:60px;padding:9px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;font:inherit;"></textarea>
-    <button data-action="wc-query-create" data-report-id="${escapeHtml(reportId)}"
-      style="margin-top:8px;padding:8px 13px;border:0;border-radius:7px;background:#007B8A;color:#fff;font-weight:600;cursor:pointer;">Send question</button>
+  const askForm = leader && report ? `<div data-wc-query-ask style="margin:12px 0;padding:12px;background:#f8fafc;border:1px solid #dbe3ec;border-radius:9px;">
+    <button type="button" data-wc-query-toggle aria-expanded="false"
+      style="padding:7px 10px;border:1px solid #007B8A;border-radius:7px;background:#fff;color:#007B8A;font-weight:600;cursor:pointer;">Ask a question</button>
+    <div data-wc-query-form hidden style="margin-top:10px;">
+      <label for="wc-query-question-${reportId}" style="display:block;font-size:12px;font-weight:600;color:#334155;margin-bottom:5px;">Ask about this report</label>
+      <textarea id="wc-query-question-${reportId}" maxlength="5000" placeholder="What needs explaining about this report?"
+        style="width:100%;min-height:60px;padding:9px;border:1px solid #cbd5e1;border-radius:7px;box-sizing:border-box;font:inherit;"></textarea>
+      <button data-action="wc-query-create" data-report-id="${escapeHtml(reportId)}"
+        style="margin-top:8px;padding:8px 13px;border:0;border-radius:7px;background:#007B8A;color:#fff;font-weight:600;cursor:pointer;">Send question</button>
+    </div>
   </div>` : '';
   const list = queries.length ? queries.map((query) => {
     const status = { open: 'Waiting for team member to answer', answered: 'Answered · waiting for leader review', resolved: 'Resolved' }[query.status] || query.status;
@@ -20277,20 +20320,8 @@ function _wcTabifyDetail(container, task, entries, queries, leader, assigned) {
     const reportId = card.getAttribute('data-report-id');
     const wrap = document.createElement('div');
     wrap.style.cssText = 'margin:10px 12px 12px;';
-    wrap.innerHTML = '<button type="button" data-wc-report-pdf style="min-height:44px;padding:0 16px;border:1px solid #007B8A;border-radius:8px;background:#fff;color:#007B8A;font-weight:700;font-size:13px;cursor:pointer;">Download this report</button>';
+    wrap.innerHTML = `<button type="button" data-wc-report-pdf data-action="wc-report-pdf" data-task-id="${escapeHtml(String(task.id))}" data-progress-id="${escapeHtml(reportId)}" style="min-height:44px;padding:0 16px;border:1px solid #007B8A;border-radius:8px;background:#fff;color:#007B8A;font-weight:700;font-size:13px;cursor:pointer;">Download this report</button>`;
     card.appendChild(wrap);
-    wrap.querySelector('button').addEventListener('click', async (event) => {
-      const button = event.currentTarget;
-      button.disabled = true;
-      try {
-        await _wcDownloadTaskPdf(task, reports, [], { onlyEntryId: reportId });
-      } catch (error) {
-        console.error('Report PDF export failed:', error);
-        _wcSetTaskCardMessage(task.id, error.message || 'Could not download this report.', true);
-      } finally {
-        button.disabled = false;
-      }
-    });
   }
   shell.querySelector('[data-wc-attachment-upload]')?.addEventListener('click', async (event) => {
     const button = event.currentTarget;
