@@ -4920,8 +4920,14 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Other / unplanned": "Autre / non prévu",
   "Assigned group": "Groupe affecté",
   "Site conditions (optional)": "Conditions du chantier (facultatif)",
+  "Weather is filled from the project forecast for the report date. You can edit it.": "La météo est renseignée à partir des prévisions du projet pour la date du rapport. Vous pouvez la modifier.",
+  "No saved project location is set. Enter weather manually or set the project location in the schedule.": "Aucun emplacement de projet n'est enregistré. Saisissez la météo manuellement ou définissez l'emplacement du projet dans le planning.",
+  "Weather forecast is unavailable for this report date. You can enter it manually.": "Les prévisions météo ne sont pas disponibles pour cette date de rapport. Vous pouvez les saisir manuellement.",
+  "Project weather is loading…": "Chargement de la météo du projet…",
   "No delay": "Aucun retard",
   "Weather": "Météo",
+  "Forecast": "Prévisions",
+  "Rain chance": "Probabilité de pluie",
   "Site access": "Accès au chantier",
   "Design or information": "Conception ou information",
   "Labor": "Main-d'œuvre",
@@ -7903,6 +7909,11 @@ function summaryChartNavNext() {
 
 let summaryWeatherData = null;
 let summaryWeatherLocation = null;
+let summaryWeatherLoading = false;
+
+function notifySummaryWeatherUpdated() {
+  window.dispatchEvent(new Event('opa:summary-weather-updated'));
+}
 
 function applyWeatherConditionTheme(code) {
   const summaryCard = document.getElementById('summaryWeatherCard');
@@ -8056,6 +8067,7 @@ async function loadSummaryWeather(location) {
   const tomorrowMeta = document.getElementById('summaryWeatherTomorrowMeta');
   summaryWeatherLocation = location || null;
   summaryWeatherData = null;
+  summaryWeatherLoading = false;
   
   // Validate location has numeric coordinates
   if (!location || typeof location.lat !== 'number' || typeof location.lng !== 'number') {
@@ -8063,9 +8075,11 @@ async function loadSummaryWeather(location) {
     if (weatherMeta) weatherMeta.textContent = 'Set a project location';
     if (tomorrowText) tomorrowText.textContent = '—';
     if (tomorrowMeta) tomorrowMeta.textContent = 'Set a project location';
+    notifySummaryWeatherUpdated();
     return;
   }
 
+  summaryWeatherLoading = true;
   if (weatherText) weatherText.textContent = 'Loading weather…';
   if (weatherMeta) weatherMeta.textContent = '';
   if (tomorrowText) tomorrowText.textContent = 'Loading…';
@@ -8085,6 +8099,8 @@ async function loadSummaryWeather(location) {
     const daily = weather.daily;
     if (!current || !daily) throw new Error('Incomplete weather response');
     summaryWeatherData = { current, daily };
+    summaryWeatherLoading = false;
+    notifySummaryWeatherUpdated();
     applyWeatherConditionTheme(current.weathercode);
 
     // Display current weather with icon
@@ -8107,6 +8123,8 @@ async function loadSummaryWeather(location) {
     if (tomorrowText) tomorrowText.textContent = 'Unavailable';
     if (tomorrowMeta) tomorrowMeta.textContent = 'Check network or location';
     summaryWeatherData = null;
+    summaryWeatherLoading = false;
+    notifySummaryWeatherUpdated();
     renderWeatherForecastDialog();
   }
 }
@@ -8143,6 +8161,10 @@ async function loadSummaryPanelData() {
       await loadSummaryWeather(data.location);
     } else {
       console.log('[Summary] Weather: No valid coordinates in location data', data.location);
+      summaryWeatherLocation = data.location || null;
+      summaryWeatherData = null;
+      summaryWeatherLoading = false;
+      notifySummaryWeatherUpdated();
       const weatherText = document.getElementById('summaryWeatherText');
       if (weatherText) weatherText.textContent = 'No location coordinates available.';
     }
@@ -17973,6 +17995,56 @@ function _wcTodayDate() {
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 }
 
+function _wcAutoFillReportWeather(taskId) {
+  const field = document.getElementById(`wc-pr-weather-${taskId}`);
+  const status = field?.parentElement.querySelector('[data-wc-weather-status]');
+  if (!field) return;
+  if (!field.dataset.wcWeatherTracking) {
+    field.addEventListener('input', () => {
+      if (field.value !== field.dataset.wcWeatherAutoValue) field.dataset.wcWeatherEdited = 'true';
+    });
+    field.dataset.wcWeatherTracking = 'true';
+  }
+  const message = (text) => {
+    if (status) status.textContent = typeof opaLookup === 'function' ? opaLookup(text) || text : text;
+  };
+  const hasLocation = Number.isFinite(summaryWeatherLocation?.lat)
+    && Number.isFinite(summaryWeatherLocation?.lng);
+  if (!hasLocation) {
+    message('No saved project location is set. Enter weather manually or set the project location in the schedule.');
+    return;
+  }
+  if (field.dataset.wcWeatherEdited === 'true'
+      || (field.value.trim() && field.value !== field.dataset.wcWeatherAutoValue)) return;
+  const reportDate = window._wcEditingReportByTask?.[String(taskId)]?.reportDate || _wcTodayDate();
+  const daily = summaryWeatherData?.daily;
+  const dayIndex = Array.isArray(daily?.time) ? daily.time.indexOf(reportDate) : -1;
+  if (dayIndex < 0) {
+    message(summaryWeatherLoading
+      ? 'Project weather is loading…'
+      : 'Weather forecast is unavailable for this report date. You can enter it manually.');
+    return;
+  }
+  const translate = (text) => typeof opaLookup === 'function' ? opaLookup(text) || text : text;
+  const pieces = [`${translate('Forecast')}: ${translate(_weatherCodeLabel(daily.weathercode?.[dayIndex]))}`];
+  const high = daily.temperature_2m_max?.[dayIndex];
+  const low = daily.temperature_2m_min?.[dayIndex];
+  if (Number.isFinite(Number(high)) && Number.isFinite(Number(low)))
+    pieces.push(`${Math.round(Number(high))}°C / ${Math.round(Number(low))}°C`);
+  const rain = daily.precipitation_probability_max?.[dayIndex];
+  if (rain != null && Number.isFinite(Number(rain)))
+    pieces.push(`${translate('Rain chance').toLowerCase()} ${Math.round(Number(rain))}%`);
+  const forecast = pieces.join(' · ').slice(0, 100);
+  field.value = forecast;
+  field.dataset.wcWeatherAutoValue = forecast;
+  message('Weather is filled from the project forecast for the report date. You can edit it.');
+}
+
+window.addEventListener('opa:summary-weather-updated', () => {
+  document.querySelectorAll('[data-wc-weather-field]').forEach((field) =>
+    _wcAutoFillReportWeather(field.dataset.taskId));
+});
+
 function _wcReportDelayDays(reportDate, plannedEndDate) {
   const toUtcDay = (value) => {
     const text = String(value || '').slice(0, 10);
@@ -18472,6 +18544,7 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   const checklistData = data.checklists || [];
   window._wcReportPdfContext ||= Object.create(null);
   window._wcReportPdfContext[String(task.id)] = { task, entries, checklists: checklistData };
+  _wcAutoFillReportWeather(task.id);
   for (const key of ['block', 'floor', 'zone', 'grid', 'drawing']) {
     const input = container.querySelector(`#wc-ed-location-${CSS.escape(String(task.id))}-${key}`);
     if (input) input.value = location[key] || '';
@@ -19274,8 +19347,9 @@ function _wcMemberView(task, myEntries) {
         <details style="padding:10px;border:1px solid #e5e7eb;border-radius:8px;">
           <summary style="cursor:pointer;font-size:12px;font-weight:700;">Site conditions (optional)</summary>
           <div style="display:grid;gap:8px;margin-top:10px;">
-            <div>${_wcLabel('Weather')}<input id="wc-pr-weather-${task.id}" maxlength="100" placeholder="e.g. Light rain, 18°C"
-              style="width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box;"/></div>
+            <div>${_wcLabel('Weather')}<input id="wc-pr-weather-${task.id}" data-wc-weather-field data-task-id="${escapeHtml(String(task.id))}" maxlength="100" placeholder="e.g. Light rain, 18°C"
+              style="width:100%;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box;"/>
+              <small data-wc-weather-status aria-live="polite" style="display:block;margin-top:4px;color:#64748b;font-size:11px;">Weather is filled from the project forecast for the report date. You can edit it.</small></div>
             <div>${_wcLabel('Safety note')}<textarea id="wc-pr-safety-${task.id}" maxlength="1000"
               style="width:100%;min-height:50px;padding:9px 10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box;"></textarea></div>
             <div>${_wcLabel('Plan for tomorrow')}<textarea id="wc-pr-next-plan-${task.id}" maxlength="1000"
@@ -19987,6 +20061,11 @@ function _wcBeginReportEdit(actionPanel, task, entry) {
     const field = actionPanel.querySelector(`#wc-pr-${name}-${CSS.escape(taskId)}`);
     if (field && field.type !== 'file') field.value = value == null ? '' : String(value);
   };
+  const weatherField = actionPanel.querySelector(`#wc-pr-weather-${CSS.escape(taskId)}`);
+  if (weatherField) {
+    delete weatherField.dataset.wcWeatherEdited;
+    delete weatherField.dataset.wcWeatherAutoValue;
+  }
   setField('work', entry.work_done || '');
   setField('qty', entry.quantity_done ?? '');
   setField('failed', entry.quantity_failed ?? 0);
@@ -19998,6 +20077,7 @@ function _wcBeginReportEdit(actionPanel, task, entry) {
     ['safety', 'safety_note'], ['next-plan', 'next_plan'],
     ['delay-cause', 'delay_cause'], ['delay-days', 'delay_days'], ['delay-note', 'delay_note'],
   ]) setField(field, entry[key] || '');
+  _wcAutoFillReportWeather(taskId);
   for (const type of ['manpower', 'equipment', 'material']) {
     const resource = (entry.resources || []).find((item) => item.resource_type === type);
     for (const [field, key] of [
