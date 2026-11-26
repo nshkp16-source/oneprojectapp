@@ -17926,7 +17926,7 @@ document.addEventListener('click', async (event) => {
   button.disabled = true;
   try {
     if (!context) throw new Error('Task report data is unavailable. Reopen the task and try again.');
-    await _wcDownloadTaskPdf(context.task, context.entries, context.checklists, { onlyEntryId: reportId });
+    await _wcDownloadTaskPdf(context.task, context.entries, context.checklists, { onlyEntryId: reportId, location: context.location, memberNames: context.memberNames });
   } catch (error) {
     console.error('Report PDF export failed:', error);
     _wcSetTaskCardMessage(taskId, error.message || 'Could not download this report.', true);
@@ -18591,6 +18591,7 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
     const label = member.title || member.name || member.email;
     if (member.id != null && label) memberNames.set(String(member.id), label);
   }
+  if (window._wcReportPdfContext?.[String(task.id)]) Object.assign(window._wcReportPdfContext[String(task.id)], { location, memberNames });
   const detailsPane = shell.querySelector('[data-wc-pane="overview"]');
   if (detailsPane) {
     // The old read-only copy of the details is replaced by the summary-only Overview.
@@ -18722,7 +18723,7 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
         const button = event.currentTarget;
         button.disabled = true;
         try {
-          await _wcDownloadTaskPdf(task, own, data.checklists || []);
+          await _wcDownloadTaskPdf(task, own, data.checklists || [], { location, memberNames, scopeNote: leader ? '' : 'This report includes only the reports you submitted.' });
         } catch (error) {
           console.error('Task PDF export failed:', error);
           _wcSetTaskCardMessage(task.id, error.message || 'Could not download the task report.', true);
@@ -23028,252 +23029,504 @@ async function _peDownloadActivityReportPdf(report) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
+// Task report PDF.
+//  - Full report (no onlyEntryId): page 1 is a summary like the Overview (status, plan, totals from approved
+//    reports, checklist), then a table of every report, then every report in full on as many pages as needed.
+//  - Single report (options.onlyEntryId): that one report only, with its details, photos and review.
 async function _wcDownloadTaskPdf(task, entries, checklists, options = {}) {
   if (!window.PDFLib) throw new Error('The PDF library is unavailable. Reload the page and try again.');
   const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
   const pdfDoc = await PDFDocument.create();
-  const page = pdfDoc.addPage([595.28, 841.89]);
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const ink = rgb(0.12, 0.18, 0.24);
-  const muted = rgb(0.35, 0.4, 0.45);
-  const line = rgb(0.82, 0.86, 0.89);
-  const accent = rgb(0.06, 0.46, 0.44);
-  const plain = (value) => String(value ?? '').normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7e]/g, '-');
+  const C = {
+    ink: rgb(0.12, 0.18, 0.24), muted: rgb(0.35, 0.4, 0.45), line: rgb(0.82, 0.86, 0.89),
+    accent: rgb(0.06, 0.46, 0.44), wash: rgb(0.96, 0.97, 0.98), ok: rgb(0.02, 0.47, 0.34),
+    wait: rgb(0.57, 0.25, 0.05), bad: rgb(0.72, 0.11, 0.11), gone: rgb(0.4, 0.44, 0.48),
+  };
+  const PAGE_W = 595.28, PAGE_H = 841.89, LEFT = 42, WIDTH = 511, TOP = 780, BOTTOM = 66;
+
+  // Helvetica prints Latin-1 letters (accents, m2 as superscript); anything else becomes "?".
+  const plain = (value) => String(value ?? '')
+    .replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"')
+    .replace(/[\u2013\u2014]/g, '-').replace(/\u2026/g, '...')
+    .replace(/[\u00a0\t\r]/g, ' ').normalize('NFC')
+    .replace(/[^\x20-\x7e\xa1-\xff]/g, '?');
   const fit = (value, face, size, width) => {
-    let text = plain(value);
+    let text = plain(value).replace(/\n/g, ' ');
     if (face.widthOfTextAtSize(text, size) <= width) return text;
     while (text.length && face.widthOfTextAtSize(`${text}...`, size) > width) text = text.slice(0, -1);
     return `${text}...`;
   };
-  const write = (value, x, y, { size = 8, face = font, color = ink, width = 511 } = {}) => {
-    page.drawText(fit(value, face, size, width), { x, y, size, font: face, color });
+  const wrapText = (value, size, face, width) => {
+    const out = [];
+    for (const paragraph of String(value ?? '').split(/\r?\n/)) {
+      const words = plain(paragraph).split(/\s+/).filter(Boolean);
+      if (!words.length) { out.push(''); continue; }
+      let current = '';
+      for (let word of words) {
+        while (face.widthOfTextAtSize(word, size) > width) {
+          let cut = word.length - 1;
+          while (cut > 1 && face.widthOfTextAtSize(word.slice(0, cut), size) > width) cut -= 1;
+          if (current) { out.push(current); current = ''; }
+          out.push(word.slice(0, cut));
+          word = word.slice(cut);
+        }
+        const next = current ? `${current} ${word}` : word;
+        if (face.widthOfTextAtSize(next, size) <= width) current = next;
+        else { out.push(current); current = word; }
+      }
+      if (current) out.push(current);
+    }
+    while (out.length && out[out.length - 1] === '') out.pop();
+    return out;
   };
+
+  // ---------- facts about the task ----------
   const allEntries = Array.isArray(entries) ? entries : [];
   const onlyId = options && options.onlyEntryId != null ? String(options.onlyEntryId) : null;
-  const approved = allEntries.filter((entry) => entry.validation_status === 'approved');
+  const single = onlyId !== null;
+  const names = options && options.memberNames instanceof Map ? options.memberNames : new Map();
+  const location = (options && options.location) || {};
+  const loc = typeof opaLocale === 'function' ? opaLocale() : undefined;
+  const generated = new Date().toISOString().slice(0, 10);
   const type = _wcTypeOf(task);
   const unit = _wcUnitText(task);
+  const counted = ['quantity', 'count'].includes(type);
+  const stages = _wcStagesOf(task);
   const toDay = (value) => {
-    const text = String(value || '').slice(0, 10);
-    const date = Date.parse(`${text}T00:00:00Z`);
-    return Number.isFinite(date) ? date : null;
+    const stamp = Date.parse(`${String(value || '').slice(0, 10)}T00:00:00Z`);
+    return Number.isFinite(stamp) ? stamp : null;
   };
-  const today = new Date();
-  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const now = new Date();
+  const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
   const start = toDay(task.start_date);
   const end = toDay(task.end_date);
   const planned = start == null || end == null || end <= start ? 0
     : Math.max(0, Math.min(100, (todayUtc - start) / (end - start) * 100));
   const progress = Math.max(0, Math.min(100, Number(task.progress_pct) || 0));
   const variance = progress - planned;
-  const approvedQuantity = Number(task.approved_quantity_done ?? approved.reduce(
-    (sum, entry) => sum + (Number(entry.quantity_done) || 0), 0));
-  const target = Number(task.target_quantity);
-  const assigned = (Array.isArray(task.assigned_members) ? task.assigned_members : [])
-    .map((member) => member.name || member.title || member.email || `Member ${member.id}`)
-    .join(', ') || 'No members assigned';
+  const varianceText = Math.abs(variance) < 0.05 ? 'On plan'
+    : `${Math.abs(variance).toFixed(1)}% ${variance > 0 ? 'ahead' : 'behind'}`;
+  const dueDays = end == null ? null : Math.round((end - todayUtc) / 86400000);
+  const closed = task.status === 'closed' || task.status === 'completed';
+  const timeLeft = closed ? (task.status === 'closed' ? 'Closed' : 'Completed')
+    : dueDays == null ? 'Dates not set'
+      : dueDays > 0 ? `${dueDays} day${dueDays === 1 ? '' : 's'}`
+        : dueDays === 0 ? 'Due today' : `${Math.abs(dueDays)} day${Math.abs(dueDays) === 1 ? '' : 's'} overdue`;
+  const taskStatus = typeof _wcDeriveStatus === 'function' ? _wcDeriveStatus(task).label : (task.status || 'Not set');
+  const target = Number(task.target_quantity ?? task.activity_planned_quantity);
   const projectName = typeof _projectName === 'function' ? _projectName() : 'Project';
   const activityPath = task.activity_title
-    ? `${task.activity_milestone_title || 'No milestone'} > ${task.activity_title}`
-    : 'Standalone task';
-  const generated = new Date().toISOString().slice(0, 10);
+    ? `${task.activity_milestone_title || 'No milestone'} > ${task.activity_title}` : 'Standalone task';
+  const memberName = (entry) => entry.member_title || entry.member_name || entry.member_email
+    || names.get(String(entry.member_id)) || `Member ${entry.member_id ?? ''}`.trim();
+  const assigned = (Array.isArray(task.assigned_members) ? task.assigned_members : [])
+    .map((member) => member.title || member.name || member.email || names.get(String(member.id)) || `Member ${member.id}`)
+    .join(', ') || 'No members assigned';
+  const place = [location.block, location.floor, location.zone, location.grid, location.drawing].filter(Boolean).join(' / ');
+  const fmtDate = (value) => (value ? _wcFmtDate(value) : '-');
+  const fmtDateTime = (value) => {
+    const stamp = new Date(value);
+    if (!value || Number.isNaN(stamp.getTime())) return '';
+    return `${_wcFmtDate(value)}, ${stamp.toLocaleTimeString(loc || 'en-GB', { hour: '2-digit', minute: '2-digit' })}`;
+  };
+  const num = (value) => String(Math.round(value * 100) / 100);
 
-  page.drawText(onlyId ? 'ONEPROJECTAPP  |  TASK REPORT' : 'ONEPROJECTAPP  |  TASK SUMMARY', { x: 42, y: 814, size: 8, font: bold, color: muted });
-  page.drawLine({ start: { x: 42, y: 804 }, end: { x: 553, y: 804 }, thickness: 0.7, color: line });
-  write(task.title || 'Task', 42, 780, { size: 18, face: bold });
-  write(`${projectName}  |  ${activityPath}`, 42, 763, { size: 8, color: muted, width: 511 });
-  write(`Generated ${generated}  |  Assigned ${assigned}`, 42, 746, { size: 8, width: 511 });
-  const dateRange = `${_wcFmtDate(task.start_date)} to ${_wcFmtDate(task.end_date)}`;
-  const share = task.activity_id && task.weight_pct != null ? `  |  ${Number(task.weight_pct)}% of activity` : '';
-  write(`Dates ${dateRange}  |  Status ${task.status || 'Not set'}${share}`, 42, 731, { size: 8, color: muted });
-
-  const figures = [
-    ['Progress', `${progress.toFixed(1)}%`],
-    ['Planned today', `${planned.toFixed(1)}%`],
-    ['Variance', `${variance >= 0 ? '+' : ''}${variance.toFixed(1)}%`],
-    ['Quantity approved', ['quantity', 'count'].includes(type) && target > 0
-      ? `${approvedQuantity} / ${target}${unit}` : 'Not applicable'],
-  ];
-  const boxWidth = 122;
-  figures.forEach(([label, value], index) => {
-    const x = 42 + index * 128;
-    page.drawRectangle({ x, y: 655, width: boxWidth, height: 56, borderColor: line, borderWidth: 0.7 });
-    write(label, x + 8, 694, { size: 7, color: muted, width: boxWidth - 16 });
-    write(value, x + 8, 674, { size: 11, face: bold, width: boxWidth - 16 });
-  });
-
-  const stages = _wcStagesOf(task);
+  const statusOf = (entry) => entry.validation_status || 'pending';
+  const statusLabel = (entry) => ({ approved: 'Approved', pending: 'Pending review', rejected: 'Rejected', voided: 'Voided' })[statusOf(entry)] || 'Pending review';
+  const statusColor = (entry) => ({ approved: C.ok, pending: C.wait, rejected: C.bad, voided: C.gone })[statusOf(entry)] || C.wait;
+  const approved = allEntries.filter((entry) => statusOf(entry) === 'approved');
   const chronological = [...allEntries].sort((left, right) =>
     String(left.report_date || '').localeCompare(String(right.report_date || ''))
       || Number(left.id || 0) - Number(right.id || 0));
+
+  // Running totals count approved reports only, in date order.
   const runningById = new Map();
   let runningQuantity = 0;
   let runningProgress = 0;
-  const completedStages = new Set();
+  const doneStages = new Set();
   for (const entry of chronological) {
-    if (entry.validation_status === 'approved') {
-      if (['quantity', 'count'].includes(type)) runningQuantity += Number(entry.quantity_done) || 0;
+    if (statusOf(entry) === 'approved') {
+      if (counted) runningQuantity += Number(entry.quantity_done) || 0;
       else if (type === 'stages') {
-        if (entry.stage_id != null) completedStages.add(String(entry.stage_id));
-        runningProgress = stages.filter((stage) => completedStages.has(String(stage.id)))
+        if (entry.stage_id != null) doneStages.add(String(entry.stage_id));
+        runningProgress = stages.filter((stage) => doneStages.has(String(stage.id)))
           .reduce((sum, stage) => sum + (Number(stage.weight_pct) || 0), 0);
       } else runningProgress = Math.max(runningProgress, Number(entry.progress_pct) || 0);
     }
-    runningById.set(String(entry.id), ['quantity', 'count'].includes(type)
-      ? `${runningQuantity}${unit}` : type === 'percentage' || type === 'stages'
-        ? `${runningProgress.toFixed(1)}%` : '-');
+    runningById.set(String(entry.id), counted ? `${num(runningQuantity)}${unit}`
+      : type === 'percentage' || type === 'stages' ? `${runningProgress.toFixed(1)}%` : '-');
   }
-  page.drawText('REPORTS', { x: 42, y: 632, size: 9, font: bold, color: accent });
-  const columns = [
-    { title: 'Date', x: 42, width: 60 },
-    { title: 'Member', x: 106, width: 158 },
-    { title: 'Quantity / result', x: 268, width: 86 },
-    { title: 'Running total', x: 358, width: 84 },
-    { title: 'Status', x: 448, width: 105 },
-  ];
-  page.drawLine({ start: { x: 42, y: 621 }, end: { x: 553, y: 621 }, thickness: 0.7, color: line });
-  columns.forEach((column) => write(column.title, column.x, 608, { size: 7, face: bold, width: column.width }));
-  const newestFirst = [...allEntries].sort((left, right) =>
-    String(right.report_date || '').localeCompare(String(left.report_date || ''))
-      || Number(right.id || 0) - Number(left.id || 0));
-  const shownReports = onlyId ? newestFirst.filter((entry) => String(entry.id) === onlyId) : newestFirst.slice(0, 12);
-  const moreReports = !onlyId && newestFirst.length > shownReports.length;
-  shownReports.forEach((entry, index) => {
-    const y = 592 - index * 13;
-    const status = entry.validation_status === 'pending' ? 'Pending review - Not counted'
-      : entry.validation_status ? entry.validation_status.charAt(0).toUpperCase() + entry.validation_status.slice(1) : 'Not counted';
-    const result = ['quantity', 'count'].includes(type)
-      ? `${Number(entry.quantity_done) || 0}${unit}`
-      : entry.progress_pct != null ? `${Number(entry.progress_pct) || 0}%` : entry.stage_id != null ? 'Stage' : '-';
-    const member = entry.member_title || entry.member_email || `Member ${entry.member_id || ''}`;
-    const values = [
-      _wcFmtDate(entry.report_date), member, result,
-      entry.validation_status === 'pending' ? 'Not counted' : runningById.get(String(entry.id)) || '-',
-      entry.validation_status === 'pending' ? 'Pending review' : status,
-    ];
-    columns.forEach((column, columnIndex) => write(values[columnIndex], column.x, y, {
-      size: 6.5, width: column.width,
-      color: entry.validation_status === 'pending' && columnIndex === 4 ? accent : ink,
-    }));
-    page.drawLine({ start: { x: 42, y: y - 4 }, end: { x: 553, y: y - 4 }, thickness: 0.35, color: line });
-  });
-  const reportsBottom = 588 - shownReports.length * 13;
-  if (moreReports)
-    write(`Showing ${shownReports.length} latest of ${newestFirst.length} reports.`, 42, reportsBottom - 1, { size: 6.5, color: muted });
+  const runningOf = (entry) => (statusOf(entry) === 'approved' ? runningById.get(String(entry.id)) || '-' : 'Not counted');
+  const resultOf = (entry) => {
+    if (counted) return `${num(Number(entry.quantity_done) || 0)}${unit}`;
+    if (type === 'stages') {
+      const stage = stages.find((item) => String(item.id) === String(entry.stage_id));
+      return stage ? stage.title : (entry.stage_id != null ? 'Stage' : '-');
+    }
+    return entry.progress_pct != null ? `${Number(entry.progress_pct) || 0}%` : '-';
+  };
 
-  const siteTop = Math.min(418, reportsBottom - (moreReports ? 18 : 8));
-  if (!onlyId) page.drawText('SITE CONDITIONS', { x: 42, y: siteTop, size: 9, font: bold, color: accent });
-  const latest = (onlyId && allEntries.find((entry) => String(entry.id) === onlyId)) || [...allEntries].sort((left, right) =>
-    String(right.report_date || '').localeCompare(String(left.report_date || ''))
-      || Number(right.id || 0) - Number(left.id || 0))[0];
-  const manpowerResources = (latest?.resources || []).filter((item) => item.resource_type === 'manpower')
-    .map((item) => `${item.name || 'Manpower'} ${item.quantity ?? ''} ${item.unit || ''}`.trim());
-  const manpower = latest?.manpower || manpowerResources.join(', ') || 'Not recorded';
-  const delays = (onlyId ? allEntries.filter((entry) => String(entry.id) === onlyId) : allEntries)
-    .filter((entry) => Number(entry.delay_days) > 0 || entry.delay_cause);
-  const delayDays = delays.reduce((sum, entry) => sum + (Number(entry.delay_days) || 0), 0);
-  const checklistItems = (Array.isArray(checklists) ? checklists : []).flatMap((list) => list.items || []);
-  const completedChecklistItems = checklistItems.filter((item) => item.is_complete).length;
-  const siteRows = [
-    `Manpower on ${onlyId ? 'this' : 'latest'} report: ${manpower}`,
-    `Delays logged: ${delays.length}${delayDays ? ` (${delayDays} day${delayDays === 1 ? '' : 's'})` : ''}`,
-    `Checklist progress: ${checklistItems.length ? `${completedChecklistItems} of ${checklistItems.length} complete` : 'No checklist items'}`,
-  ].filter((row, index) => !(onlyId && index === 2));
-  if (!onlyId) siteRows.forEach((value, index) => write(value, 42, siteTop - 14 - index * 12, { size: 7.5, width: 511 }));
-  if (onlyId && latest) {
-    // One report: show everything that was reported that day
-    const detailTop = reportsBottom - 14;
-    page.drawText('REPORT DETAILS', { x: 42, y: detailTop, size: 9, font: bold, color: accent });
-    const describeResources = (match) => (latest.resources || []).filter((item) => match(item.resource_type))
-      .map((item) => `${item.name || 'Item'}${item.quantity != null && item.quantity !== '' ? ` ${item.quantity}${item.unit ? ` ${item.unit}` : ''}` : ''}${item.hours != null && item.hours !== '' ? ` - ${item.hours} h` : ''}`)
-      .join('; ');
-    const delayDaysOnReport = Number(latest.schedule_delay_days ?? latest.delay_days) || 0;
-    const detailRows = [
-      ['Work done', latest.work_done], ['Notes', latest.notes], ['Issues', latest.issues],
-      ['Weather', latest.weather], ['Remarks', latest.remarks],
-      ['Manpower', latest.manpower || describeResources((kind) => kind === 'manpower')],
-      ['Equipment', describeResources((kind) => kind === 'equipment')],
-      ['Materials', describeResources((kind) => kind && kind !== 'manpower' && kind !== 'equipment')],
-      ['Delay', [latest.delay_cause, latest.delay_note, delayDaysOnReport ? `${delayDaysOnReport} day${delayDaysOnReport === 1 ? '' : 's'} past planned end` : ''].filter(Boolean).join(' - ')],
-      ['Review note', latest.validation_notes],
+  // ---------- page and cursor handling ----------
+  const pages = [];
+  let page = null;
+  let y = 0;
+  const put = (value, x, baseline, { size = 8, face = font, color = C.ink, width = WIDTH } = {}) => {
+    page.drawText(fit(value, face, size, width), { x, y: baseline, size, font: face, color });
+  };
+  const putRight = (value, xRight, baseline, { size = 8, face = font, color = C.ink } = {}) => {
+    const text = plain(value);
+    page.drawText(text, { x: xRight - face.widthOfTextAtSize(text, size), y: baseline, size, font: face, color });
+  };
+  const newPage = () => {
+    page = pdfDoc.addPage([PAGE_W, PAGE_H]);
+    pages.push(page);
+    page.drawText(`ONEPROJECTAPP  |  ${single ? 'TASK REPORT' : 'FULL TASK REPORT'}`, { x: LEFT, y: 814, size: 8, font: bold, color: C.muted });
+    if (pages.length > 1) putRight(fit(task.title || 'Task', bold, 8, 300), LEFT + WIDTH, 814, { size: 8, face: bold, color: C.muted });
+    page.drawLine({ start: { x: LEFT, y: 804 }, end: { x: LEFT + WIDTH, y: 804 }, thickness: 0.7, color: C.line });
+    y = TOP;
+  };
+  const ensure = (height) => { if (y - height < BOTTOM) newPage(); };
+  const para = (value, { size = 9, face = font, color = C.ink, x = LEFT, width = WIDTH, gap = 3, maxLines = 0 } = {}) => {
+    let lines = wrapText(value, size, face, width);
+    if (maxLines && lines.length > maxLines) { lines = lines.slice(0, maxLines); lines[maxLines - 1] += '...'; }
+    for (const text of lines) {
+      ensure(size + gap);
+      if (text) page.drawText(text, { x, y: y - size, size, font: face, color });
+      y -= size + gap;
+    }
+  };
+  const section = (title) => {
+    ensure(52);
+    y -= 12;
+    page.drawText(plain(title).toUpperCase(), { x: LEFT, y: y - 9, size: 9, font: bold, color: C.accent });
+    y -= 14;
+    page.drawLine({ start: { x: LEFT, y }, end: { x: LEFT + WIDTH, y }, thickness: 0.5, color: C.line });
+    y -= 8;
+  };
+  const tiles = (items) => {
+    ensure(62);
+    const gap = 8;
+    const cell = (WIDTH - gap * (items.length - 1)) / items.length;
+    items.forEach(({ label, value, color = C.ink, sub }, index) => {
+      const x = LEFT + index * (cell + gap);
+      page.drawRectangle({ x, y: y - 54, width: cell, height: 54, borderColor: C.line, borderWidth: 0.7 });
+      put(label, x + 8, y - 15, { size: 7, color: C.muted, width: cell - 16 });
+      put(value, x + 8, y - 33, { size: 12, face: bold, color, width: cell - 16 });
+      if (sub) put(sub, x + 8, y - 46, { size: 6.5, color: C.muted, width: cell - 16 });
+    });
+    y -= 62;
+  };
+  // Label above value, two columns, boxed. Skips pairs with no value.
+  const grid = (pairs, cols = 2) => {
+    const list = pairs.filter(([, value]) => String(value ?? '').trim());
+    const cellW = WIDTH / cols;
+    for (let i = 0; i < list.length; i += cols) {
+      const row = list.slice(i, i + cols).map(([label, value]) => ({
+        label, lines: wrapText(value, 9, bold, cellW - 16).slice(0, 4),
+      }));
+      const height = 12 + Math.max(...row.map((cell) => cell.lines.length)) * 11 + 10;
+      ensure(height);
+      row.forEach((cell, index) => {
+        const x = LEFT + index * cellW;
+        page.drawRectangle({ x, y: y - height, width: cellW, height, borderColor: C.line, borderWidth: 0.5 });
+        put(cell.label, x + 8, y - 12, { size: 7, color: C.muted, width: cellW - 16 });
+        cell.lines.forEach((text, line) => page.drawText(text, { x: x + 8, y: y - 24 - line * 11, size: 9, font: bold, color: C.ink }));
+      });
+      y -= height;
+    }
+  };
+
+  // ---------- photos ----------
+  const photoCache = new Map();
+  const embedPhoto = async (photo) => {
+    const url = _safeHttpsUrl(photo && photo.file_url);
+    if (!url) return null;
+    if (photoCache.has(url)) return photoCache.get(url);
+    let image = null;
+    try {
+      const response = await fetch(url, { mode: 'cors' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const bitmap = await createImageBitmap(await response.blob());
+      const scale = Math.min(1, 640 / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+      const jpeg = await new Promise((resolve, reject) => canvas.toBlob((blob) =>
+        blob ? resolve(blob) : reject(new Error('Photo could not be resized.')), 'image/jpeg', 0.82));
+      image = await pdfDoc.embedJpg(await jpeg.arrayBuffer());
+    } catch (error) {
+      console.warn('Task report photo could not be embedded in the PDF:', photo && photo.file_name, error);
+    }
+    photoCache.set(url, image);
+    return image;
+  };
+  let photosLeft = 60; // keeps a very large task report from becoming huge
+  const photoGrid = async (photos, cap) => {
+    const available = Array.isArray(photos) ? photos : [];
+    const list = available.slice(0, Math.min(cap, photosLeft));
+    photosLeft -= list.length;
+    const cols = 3, gap = 10, boxH = 108, rowH = boxH + 22;
+    const cellW = (WIDTH - gap * (cols - 1)) / cols;
+    for (let i = 0; i < list.length; i += cols) {
+      ensure(rowH);
+      const row = list.slice(i, i + cols);
+      for (let c = 0; c < row.length; c += 1) {
+        const photo = row[c];
+        const x = LEFT + c * (cellW + gap);
+        page.drawRectangle({ x, y: y - boxH, width: cellW, height: boxH, color: C.wash, borderColor: C.line, borderWidth: 0.7 });
+        const image = await embedPhoto(photo);
+        if (image) {
+          const scale = Math.min((cellW - 6) / image.width, (boxH - 6) / image.height);
+          const w = image.width * scale, h = image.height * scale;
+          page.drawImage(image, { x: x + (cellW - w) / 2, y: y - boxH + (boxH - h) / 2, width: w, height: h });
+        } else put(photo.file_name || 'Photo unavailable', x + 6, y - boxH / 2, { size: 7, color: C.muted, width: cellW - 12 });
+        const caption = photo.captured_at && photo.latitude != null && photo.longitude != null
+          ? `${String(photo.captured_at).slice(0, 16).replace('T', ' ')}  |  GPS ${Number(photo.latitude).toFixed(4)}, ${Number(photo.longitude).toFixed(4)}`
+          : (photo.file_name || 'Report photo');
+        put(caption, x, y - boxH - 9, { size: 6, color: C.muted, width: cellW });
+      }
+      y -= rowH;
+    }
+    if (available.length > list.length) {
+      para(`${available.length - list.length} more photo${available.length - list.length === 1 ? ' is' : 's are'} on this report in the app.`, { size: 7.5, color: C.muted });
+    }
+  };
+
+  // ---------- one report in detail ----------
+  const describeResources = (entry, match) => (Array.isArray(entry.resources) ? entry.resources : [])
+    .filter((item) => match(item.resource_type))
+    .map((item) => `${item.name || 'Item'}${item.quantity != null && item.quantity !== '' ? ` ${num(Number(item.quantity) || 0)}${item.unit ? ` ${item.unit}` : ''}` : ''}${item.hours != null && item.hours !== '' ? ` x ${num(Number(item.hours) || 0)} h` : ''}`)
+    .join('; ');
+  const reportBody = async (entry, photoCap) => {
+    const delayDays = Number(entry.schedule_delay_days ?? entry.delay_days) || 0;
+    const reviewed = ['approved', 'rejected', 'voided'].includes(statusOf(entry))
+      ? [statusLabel(entry), entry.validated_at ? fmtDate(entry.validated_at) : '', entry.validated_by_role ? String(entry.validated_by_role).replace(/([a-z])([A-Z])/g, '$1 $2') : ''].filter(Boolean).join('  |  ')
+      : 'Pending review. Not counted until approved.';
+    const rows = [
+      ['Work done', entry.work_done], ['Notes', entry.notes], ['Issues', entry.issues],
+      ['Weather', entry.weather], ['Remarks', entry.remarks], ['Safety', entry.safety_note],
+      ['Manpower', entry.manpower || describeResources(entry, (kind) => kind === 'manpower')],
+      ['Equipment', entry.equipment || describeResources(entry, (kind) => kind === 'equipment')],
+      ['Materials', entry.materials || describeResources(entry, (kind) => kind && kind !== 'manpower' && kind !== 'equipment')],
+      ['Delay', [entry.delay_cause, entry.delay_note, delayDays ? `${delayDays} day${delayDays === 1 ? '' : 's'} past planned end` : ''].filter(Boolean).join(' - ')],
+      ['Next plan', entry.next_plan],
+      ['Review', [reviewed, entry.validation_notes].filter(Boolean).join('  |  ')],
     ].filter(([, value]) => String(value ?? '').trim());
-    const wrap = (value, size, width, maxLines) => {
-      const lines = [];
-      let current = '';
-      for (const word of plain(value).split(/\s+/).filter(Boolean)) {
-        const next = current ? `${current} ${word}` : word;
-        if (font.widthOfTextAtSize(next, size) <= width) current = next;
-        else { if (current) lines.push(current); current = word; }
+    for (const [label, value] of rows) {
+      const lines = wrapText(value, 8.5, font, 420);
+      ensure(Math.min(lines.length, 3) * 11 + 4);
+      page.drawText(plain(label), { x: LEFT, y: y - 8.5, size: 8, font: bold, color: C.muted });
+      for (const text of lines) {
+        ensure(11);
+        if (text) page.drawText(text, { x: LEFT + 82, y: y - 8.5, size: 8.5, font, color: C.ink });
+        y -= 11;
       }
-      if (current) lines.push(current);
-      if (lines.length > maxLines) { lines.length = maxLines; lines[maxLines - 1] = `${lines[maxLines - 1]}...`; }
-      return lines;
-    };
-    let cursor = detailTop - 14;
-    const floor = siteTop + 14;
-    if (!detailRows.length) write('No details were recorded on this report.', 42, cursor, { size: 7.5, color: muted });
-    for (const [label, value] of detailRows) {
-      const lines = wrap(value, 7.5, 441, 3);
-      if (cursor - (lines.length - 1) * 10 < floor) break;
-      write(label, 42, cursor, { size: 7.5, face: bold, width: 66 });
-      lines.forEach((line, index) => write(line, 112, cursor - index * 10, { size: 7.5, width: 441 }));
-      cursor -= lines.length * 10 + 4;
+      y -= 3;
+    }
+    const attachments = (Array.isArray(entry.supporting_attachments) ? entry.supporting_attachments : [])
+      .map((file) => [file.attachment_type, file.file_name].filter(Boolean).join(': ')).filter(Boolean);
+    if (attachments.length) {
+      ensure(14);
+      page.drawText('Evidence', { x: LEFT, y: y - 8.5, size: 8, font: bold, color: C.muted });
+      for (const text of wrapText(attachments.join('; '), 8.5, font, 420)) {
+        ensure(11);
+        page.drawText(text, { x: LEFT + 82, y: y - 8.5, size: 8.5, font, color: C.ink });
+        y -= 11;
+      }
+      y -= 3;
+    }
+    const photos = Array.isArray(entry.photos) ? entry.photos : [];
+    if (photos.length) {
+      ensure(140);
+      y -= 4;
+      page.drawText(`Photos (${photos.length})`, { x: LEFT, y: y - 8.5, size: 8, font: bold, color: C.muted });
+      y -= 14;
+      await photoGrid(photos, photoCap);
+    } else if (!rows.length) {
+      para('No details were recorded on this report.', { size: 8.5, color: C.muted });
+    } else {
+      para('No photos on this report.', { size: 8, color: C.muted });
+    }
+  };
+
+  // ---------- plan and totals (shared by the summary page) ----------
+  const planPairs = [
+    ['Measured by', `${{ quantity: 'Quantity', count: 'Count', stages: 'Stages', percentage: 'Percentage' }[type] || 'Percentage'}${counted && unit ? ` (${unit.trim()})` : ''}`],
+    counted && target > 0 ? ['Planned work', `${num(target)}${unit}`] : null,
+    stages.length ? ['Stages', stages.map((stage) => `${stage.title} (${Number(stage.weight_pct) || 0}%)`).join(', ')] : null,
+    ['Start', task.start_date ? fmtDate(task.start_date) : ''],
+    ['End', task.end_date ? fmtDate(task.end_date) : ''],
+    ['Milestone', task.activity_milestone_title],
+    !(counted && target > 0) ? ['Planned work', task.activity_planned_work] : null,
+    ['Finished when', task.activity_done_when],
+    ['Planned manpower', task.activity_planned_manpower],
+    ['Planned equipment', task.activity_planned_equipment],
+    ['Planned materials', task.activity_planned_materials],
+    ['Location', place],
+    task.activity_id && task.weight_pct != null ? ['Share of activity', `${Number(task.weight_pct)}%`] : null,
+  ].filter(Boolean);
+
+  // ================= build =================
+  newPage();
+  // Title block
+  for (const text of wrapText(task.title || 'Task', 18, bold, WIDTH).slice(0, 2)) {
+    page.drawText(text, { x: LEFT, y: y - 18, size: 18, font: bold, color: C.ink });
+    y -= 23;
+  }
+  para(`${projectName}  |  ${activityPath}`, { size: 8, color: C.muted });
+  if (single) {
+    const entry = allEntries.find((item) => String(item.id) === onlyId);
+    if (!entry) throw new Error('That report is no longer available. Reopen the task and try again.');
+    para(`Report of ${fmtDate(entry.report_date)} by ${memberName(entry)}${entry.member_position ? ` (${entry.member_position})` : ''}${fmtDateTime(entry.submitted_at) ? `  |  Submitted ${fmtDateTime(entry.submitted_at)}` : ''}`, { size: 8.5 });
+    para(`Generated ${generated}  |  Assigned ${assigned}`, { size: 8, color: C.muted });
+    y -= 6;
+    tiles([
+      { label: counted ? 'Quantity reported' : type === 'stages' ? 'Stage reported' : 'Progress reported', value: resultOf(entry) },
+      { label: 'Running total', value: runningOf(entry), sub: counted && target > 0 && statusOf(entry) === 'approved' ? `of ${num(target)}${unit} planned` : '' },
+      { label: 'Task progress', value: `${progress.toFixed(1)}%`, sub: `${varianceText} (plan ${planned.toFixed(1)}%)` },
+      { label: 'Review', value: statusLabel(entry), color: statusColor(entry) },
+    ]);
+    section('Task');
+    grid([['Status', taskStatus], ['Dates', `${fmtDate(task.start_date)} to ${fmtDate(task.end_date)}`], ['Measured by', planPairs[0][1]],
+      counted && target > 0 ? ['Planned work', `${num(target)}${unit}`] : null, ['Location', place], ['Milestone', task.activity_milestone_title]].filter(Boolean));
+    section('Report details');
+    await reportBody(entry, 9);
+  } else {
+    para(`Generated ${generated}  |  Status ${taskStatus}${task.priority ? `  |  Priority ${String(task.priority).charAt(0).toUpperCase()}${String(task.priority).slice(1)}` : ''}`, { size: 8, color: C.muted });
+    para(`Assigned to ${assigned}`, { size: 8.5 });
+    if (options.scopeNote) para(options.scopeNote, { size: 8, color: C.wait });
+
+    section('Status');
+    tiles([
+      { label: 'Progress', value: `${progress.toFixed(1)}%` },
+      { label: 'Planned today', value: `${planned.toFixed(1)}%` },
+      { label: 'Variance', value: varianceText, color: Math.abs(variance) < 0.05 ? C.ink : variance > 0 ? C.ok : C.bad },
+      { label: 'Time left', value: timeLeft, color: !closed && dueDays != null && dueDays < 0 ? C.bad : C.ink },
+    ]);
+
+    section('Plan');
+    grid(planPairs);
+    if (task.description) {
+      y -= 8;
+      page.drawText('INSTRUCTIONS', { x: LEFT, y: y - 7, size: 7, font: bold, color: C.muted });
+      y -= 12;
+      para(task.description, { size: 9 });
+    }
+
+    section('Reported so far');
+    if (!approved.length) para('No approved reports yet.', { size: 9, color: C.muted });
+    else {
+      const groups = { manpower: new Map(), equipment: new Map(), material: new Map() };
+      for (const entry of approved) {
+        for (const resource of (Array.isArray(entry.resources) ? entry.resources : [])) {
+          const kind = resource.resource_type === 'manpower' ? 'manpower' : resource.resource_type === 'equipment' ? 'equipment' : 'material';
+          const key = `${resource.name || kind}|${resource.unit || ''}`;
+          const row = groups[kind].get(key) || { name: resource.name || kind, unit: resource.unit || '', quantity: 0, hours: 0 };
+          row.quantity += Number(resource.quantity) || 0;
+          row.hours += Number(resource.hours) || 0;
+          groups[kind].set(key, row);
+        }
+      }
+      const describe = (map) => [...map.values()].map((row) => `${row.name} ${[row.quantity ? `${num(row.quantity)}${row.unit ? ` ${row.unit}` : ''}` : '', row.hours ? `${num(row.hours)} h` : ''].filter(Boolean).join(', ')}`.trim()).join('; ');
+      const delayTotal = approved.reduce((sum, entry) => sum + (Number(entry.schedule_delay_days ?? entry.delay_days) || 0), 0);
+      const delayed = approved.filter((entry) => entry.delay_cause || Number(entry.schedule_delay_days ?? entry.delay_days) > 0).length;
+      const countOf = (status) => allEntries.filter((entry) => statusOf(entry) === status).length;
+      grid([
+        ['Work completed', counted ? `${num(approved.reduce((sum, entry) => sum + (Number(entry.quantity_done) || 0), 0))}${unit}${target > 0 ? ` of ${num(target)}${unit}` : ''}`
+          : type === 'stages' ? `${doneStages.size} of ${stages.length} stages` : `${progress.toFixed(1)}%`],
+        ['Reports', `${countOf('approved')} approved, ${countOf('pending')} pending, ${countOf('rejected')} rejected${countOf('voided') ? `, ${countOf('voided')} voided` : ''}`],
+        ['Manpower used', describe(groups.manpower)],
+        ['Equipment used', describe(groups.equipment)],
+        ['Materials used', describe(groups.material)],
+        ['Delays', delayed || delayTotal ? `${delayTotal ? `${num(delayTotal)} day${delayTotal === 1 ? '' : 's'}` : ''}${delayTotal && delayed ? ' in ' : ''}${delayed ? `${delayed} report${delayed === 1 ? '' : 's'}` : ''}` : 'None'],
+      ]);
+      para('Totals from approved reports. Pending, rejected and voided reports are not counted.', { size: 7.5, color: C.muted });
+    }
+
+    const lists = (Array.isArray(checklists) ? checklists : []).filter((list) => (list.items || []).length);
+    if (lists.length) {
+      section('Checklist');
+      for (const list of lists) {
+        const items = list.items || [];
+        para(`${list.title || 'Checklist'}  (${items.filter((item) => item.is_complete).length} of ${items.length} done)${list.required_before_approval ? '  |  Required before approval' : ''}`, { size: 8.5, face: bold });
+        for (const item of items) {
+          ensure(14);
+          page.drawRectangle({ x: LEFT + 2, y: y - 9, width: 7, height: 7, borderColor: C.muted, borderWidth: 0.7, color: item.is_complete ? C.accent : undefined });
+          para(item.title, { size: 8.5, x: LEFT + 16, width: WIDTH - 16, color: item.is_complete ? C.muted : C.ink, gap: 2 });
+        }
+        y -= 4;
+      }
+    }
+
+    // Every report, in date order, at a glance
+    if (chronological.length) {
+      section(`Reports at a glance (${chronological.length})`);
+      const cols = [
+        { title: 'Date', x: LEFT, width: 62 }, { title: 'Member', x: LEFT + 66, width: 150 },
+        { title: 'Result', x: LEFT + 220, width: 90 }, { title: 'Running total', x: LEFT + 314, width: 92 },
+        { title: 'Status', x: LEFT + 410, width: 101 },
+      ];
+      const header = () => {
+        ensure(34);
+        page.drawRectangle({ x: LEFT, y: y - 16, width: WIDTH, height: 16, color: C.wash });
+        cols.forEach((col) => put(col.title, col.x + 3, y - 11, { size: 7, face: bold, color: C.muted, width: col.width }));
+        y -= 16;
+      };
+      header();
+      for (const entry of chronological) {
+        if (y - 15 < BOTTOM) { newPage(); header(); }
+        const values = [fmtDate(entry.report_date), memberName(entry), resultOf(entry), runningOf(entry), statusLabel(entry)];
+        cols.forEach((col, index) => put(values[index], col.x + 3, y - 10.5, { size: 7.5, width: col.width - 4, face: index === 4 ? bold : font, color: index === 4 ? statusColor(entry) : C.ink }));
+        page.drawLine({ start: { x: LEFT, y: y - 15 }, end: { x: LEFT + WIDTH, y: y - 15 }, thickness: 0.35, color: C.line });
+        y -= 15;
+      }
+    }
+
+    // Every report in full
+    if (chronological.length) {
+      section('Report details');
+      for (const [index, entry] of chronological.entries()) {
+        ensure(170);
+        page.drawRectangle({ x: LEFT, y: y - 22, width: WIDTH, height: 22, color: C.wash, borderColor: C.line, borderWidth: 0.7 });
+        put(`Report ${index + 1} of ${chronological.length}   |   ${fmtDate(entry.report_date)}`, LEFT + 8, y - 15, { size: 9, face: bold, width: 330 });
+        putRight(statusLabel(entry), LEFT + WIDTH - 8, y - 15, { size: 8, face: bold, color: statusColor(entry) });
+        y -= 30;
+        para(`${memberName(entry)}${entry.member_position ? ` (${entry.member_position})` : ''}${fmtDateTime(entry.submitted_at) ? `   |   Submitted ${fmtDateTime(entry.submitted_at)}` : ''}`, { size: 8, color: C.muted });
+        para(`${counted ? 'Quantity' : type === 'stages' ? 'Stage' : 'Progress'} reported ${resultOf(entry)}   |   ${runningOf(entry) === 'Not counted' ? 'Not counted toward progress' : `Running total ${runningOf(entry)}`}`, { size: 9, face: bold });
+        y -= 4;
+        await reportBody(entry, 6);
+        y -= 16;
+      }
     }
   }
 
-  const photos = Array.isArray(latest?.photos) ? latest.photos.slice(0, 3) : [];
-  const photoTop = siteTop - 63;
-  page.drawText(onlyId ? 'PHOTOS FROM THIS REPORT' : 'PHOTOS FROM LATEST REPORT', { x: 42, y: photoTop, size: 9, font: bold, color: accent });
-  if (!photos.length) write(onlyId ? 'No photos on this report.' : 'No photos on the latest report.', 42, photoTop - 14, { size: 7.5, color: muted });
-  for (const [index, photo] of photos.entries()) {
-    const x = 42 + index * 170;
-    const safeUrl = _safeHttpsUrl(photo.file_url);
-    let embedded = false;
-    if (safeUrl) {
-      try {
-        const response = await fetch(safeUrl, { mode: 'cors' });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const bitmap = await createImageBitmap(await response.blob());
-        const scale = Math.min(1, 420 / Math.max(bitmap.width, bitmap.height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-        canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-        bitmap.close();
-        const jpeg = await new Promise((resolve, reject) => canvas.toBlob((blob) =>
-          blob ? resolve(blob) : reject(new Error('Photo could not be resized.')), 'image/jpeg', 0.82));
-        const image = await pdfDoc.embedJpg(await jpeg.arrayBuffer());
-        const dimensions = image.scale(Math.min(145 / image.width, 55 / image.height));
-        page.drawImage(image, { x, y: photoTop - 70, width: dimensions.width, height: dimensions.height });
-        embedded = true;
-      } catch (error) {
-        console.warn('Task report photo could not be embedded in the PDF:', photo.file_name, error);
-      }
-    }
-    if (!embedded) write(photo.file_name || 'Photo unavailable', x, photoTop - 36, { size: 7, color: muted, width: 150 });
-    const caption = photo.captured_at && photo.latitude != null && photo.longitude != null
-      ? `Time and GPS recorded: ${String(photo.captured_at).slice(0, 16)} ${Number(photo.latitude).toFixed(4)}, ${Number(photo.longitude).toFixed(4)}`
-      : photo.file_name || 'Report photo';
-    write(caption, x, photoTop - 78, { size: 5.5, color: muted, width: 155 });
-  }
+  // Sign-off lines
+  ensure(70);
+  y -= 26;
+  page.drawLine({ start: { x: LEFT, y }, end: { x: LEFT + 230, y }, thickness: 0.7, color: C.muted });
+  page.drawLine({ start: { x: LEFT + 281, y }, end: { x: LEFT + WIDTH, y }, thickness: 0.7, color: C.muted });
+  put('Prepared by (member)', LEFT, y - 12, { size: 7, color: C.muted });
+  put('Reviewed by (leader)', LEFT + 281, y - 12, { size: 7, color: C.muted });
 
-  page.drawLine({ start: { x: 42, y: 153 }, end: { x: 272, y: 153 }, thickness: 0.7, color: muted });
-  page.drawLine({ start: { x: 323, y: 153 }, end: { x: 553, y: 153 }, thickness: 0.7, color: muted });
-  write('Prepared by (member)', 42, 139, { size: 7, color: muted });
-  write('Reviewed by (leader)', 323, 139, { size: 7, color: muted });
-  page.drawLine({ start: { x: 42, y: 100 }, end: { x: 553, y: 100 }, thickness: 0.7, color: line });
-  write('Only approved reports count toward progress', 42, 82, { size: 7, color: muted });
-  write('1 / 1', 520, 82, { size: 7, color: muted, width: 33 });
+  // Footer on every page, now that the page count is known
+  pages.forEach((pg, index) => {
+    pg.drawLine({ start: { x: LEFT, y: 50 }, end: { x: LEFT + WIDTH, y: 50 }, thickness: 0.7, color: C.line });
+    pg.drawText('Only approved reports count toward progress', { x: LEFT, y: 36, size: 7, font, color: C.muted });
+    const label = `Page ${index + 1} / ${pages.length}`;
+    pg.drawText(label, { x: LEFT + WIDTH - font.widthOfTextAtSize(label, 7), y: 36, size: 7, font, color: C.muted });
+  });
 
   const bytes = await pdfDoc.save();
   const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = onlyId
+  anchor.download = single
     ? `Task_Report_${plain(task.id || 'task')}_${plain(onlyId)}_${generated}.pdf`
-    : `Task_Summary_${plain(task.id || 'task')}_${generated}.pdf`;
+    : `Task_Full_Report_${plain(task.id || 'task')}_${generated}.pdf`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
