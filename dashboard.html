@@ -3457,12 +3457,12 @@ function parseJwt(token) {
 async function apiRequest(url, options = {}) {
   let token = localStorage.getItem("authToken");
   options.headers = { ...options.headers, Authorization: `Bearer ${token}` };
-  let res = await fetch(url, options);
-  if (res.status === 401 || res.status === 403) {
+  let res = await _fetchWithTimeout(url, options);
+  if (res.status === 401) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       options.headers.Authorization = `Bearer ${localStorage.getItem("authToken")}`;
-      res = await fetch(url, options);
+      res = await _fetchWithTimeout(url, options);
     } else {
       localStorage.clear();
       window.location.href = "home.html";
@@ -3476,7 +3476,7 @@ async function refreshAccessToken() {
   const refreshToken = localStorage.getItem("refreshToken");
   if (!refreshToken) return false;
   try {
-    const res = await fetch("https://oneprojectapp-backend.onrender.com/refresh", {
+    const res = await _fetchWithTimeout("https://oneprojectapp-backend.onrender.com/refresh", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refreshToken })
@@ -3487,10 +3487,13 @@ async function refreshAccessToken() {
       if (AppState) AppState.token = data.accessToken;
       return true;
     }
-    return false;
+    if (res.status === 401 || res.status === 403) return false;
+    const refreshError = new Error(data.error || `Session refresh failed (HTTP ${res.status}).`);
+    refreshError.userMessage = data.error || 'The server could not renew your session. Please try again.';
+    throw refreshError;
   } catch (err) {
     console.error("Refresh token error:", err);
-    return false;
+    throw err;
   }
 }
 
@@ -4799,6 +4802,7 @@ const OPA_FR = Object.assign(Object.create(null), {
   "By": "Par",
   "← Back to list": "← Retour à la liste",
   "← Back to all records": "← Retour à tous les dossiers",
+  "← Back to all tasks": "← Retour à toutes les tâches",
   "← Back to activities": "← Retour aux activités",
   "Loading the activity...": "Chargement de l'activité...",
   "🛑 Site Arrets": "🛑 Arrêts de chantier",
@@ -4974,7 +4978,8 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Time left": "Temps restant",
   "Download task report (PDF)": "Télécharger le rapport de la tâche (PDF)",
   "Download this report": "Télécharger ce rapport",
-  "More task tools": "Autres outils de la tâche",
+  "Edit location": "Modifier l'emplacement",
+  "Save as template": "Enregistrer comme modèle",
   "Task files": "Fichiers de la tâche",
   "Task comments": "Commentaires de la tâche",
   "Required": "Obligatoire",
@@ -11677,19 +11682,58 @@ const API = 'https://oneprojectapp-backend.onrender.com/api';
 // =======================================================================
 //  AUTH-AWARE FETCH
 // =======================================================================
+const AUTH_FETCH_TIMEOUT_MS = 45000;
+
+function _fetchNetworkMessage(error, method = 'GET') {
+  const isWrite = !['GET', 'HEAD', 'OPTIONS'].includes(String(method).toUpperCase());
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return isWrite
+      ? 'No internet connection. The request may not have completed; check before trying again.'
+      : 'No internet connection. Check your network and try again.';
+  }
+  if (error && error.name === 'AbortError') {
+    return isWrite
+      ? 'The connection timed out. The request may have completed; check before trying again.'
+      : 'The connection is slow or interrupted. Please try again.';
+  }
+  return 'Cannot reach the server. Check your internet connection and try again.';
+}
+
+async function _fetchWithTimeout(url, options = {}, timeoutMs = AUTH_FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const parentSignal = options.signal;
+  const abortFromParent = () => controller.abort();
+  if (parentSignal) {
+    if (parentSignal.aborted) controller.abort();
+    else parentSignal.addEventListener('abort', abortFromParent, { once: true });
+  }
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    const networkError = new Error(_fetchNetworkMessage(error, options.method));
+    networkError.name = error && error.name === 'AbortError' ? 'AbortError' : 'NetworkError';
+    networkError.userMessage = networkError.message;
+    throw networkError;
+  } finally {
+    clearTimeout(timer);
+    if (parentSignal) parentSignal.removeEventListener('abort', abortFromParent);
+  }
+}
+
 async function authFetch(url, options = {}) {
   let token = localStorage.getItem('authToken');
   options.headers = {
     ...options.headers,
     'Authorization': `Bearer ${token}`
   };
-  let res = await fetch(url, options);
-  if (res.status === 401 || res.status === 403) {
+  let res = await _fetchWithTimeout(url, options);
+  if (res.status === 401) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       token = localStorage.getItem('authToken');
       options.headers['Authorization'] = `Bearer ${token}`;
-      res = await fetch(url, options);
+      res = await _fetchWithTimeout(url, options);
     } else {
       localStorage.clear();
       window.location.href = 'home.html';
@@ -11720,8 +11764,11 @@ async function bootstrapUser() {
     window.currentUserPosition = meData.position || null;
     window.currentUserAssignedPart = meData.assigned_part || null;
 
-    // Safe default — must be set before any render happens
-    window.isCurrentUserLeader = false;
+    // Infer leadership from the authenticated role so a delayed assignment lookup
+    // does not make leader-only task cards appear unassigned.
+    const roleSide = wcSide(meData.role);
+    window.currentUserSide = roleSide || meData.assigned_part || null;
+    window.isCurrentUserLeader = roleSide !== null;
 
     // Fetch user assignment to get side and leader status
     const projectId = localStorage.getItem('activeProjectId');
@@ -11729,8 +11776,8 @@ async function bootstrapUser() {
       const assignRes = await authFetch(`${API}/user-assignment?projectId=${encodeURIComponent(projectId)}`);
       if (assignRes && assignRes.ok) {
         const assignData = await assignRes.json();
-        window.currentUserSide     = assignData.side;
-        window.isCurrentUserLeader = assignData.isLeader === true;
+        window.currentUserSide = assignData.side || roleSide || meData.assigned_part || null;
+        window.isCurrentUserLeader = roleSide !== null || assignData.isLeader === true;
       }
     }
 
@@ -11743,6 +11790,26 @@ async function bootstrapUser() {
     }, 30000);
   } catch (err) {
     console.error('Bootstrap failed:', err);
+    if (err.userMessage) {
+      let notice = document.getElementById('dashboardConnectionError');
+      if (!notice) {
+        notice = document.createElement('div');
+        notice.id = 'dashboardConnectionError';
+        notice.setAttribute('role', 'alert');
+        notice.style.cssText = 'position:fixed;z-index:100000;top:16px;left:50%;transform:translateX(-50%);max-width:90vw;padding:14px 18px;border:1px solid #fca5a5;border-radius:8px;background:#fff;color:#991b1b;box-shadow:0 4px 16px #0002;';
+        document.body.prepend(notice);
+      }
+      notice.textContent = `${err.userMessage} `;
+      const retryButton = document.createElement('button');
+      retryButton.type = 'button';
+      retryButton.textContent = 'Retry';
+      retryButton.addEventListener('click', () => {
+        notice.remove();
+        bootstrapUser();
+      });
+      notice.appendChild(retryButton);
+      return;
+    }
     window.location.href = 'home.html';
   }
 }
@@ -11841,10 +11908,14 @@ function loadHomeTabs(selectedTab = 'contractual') {
 //  Handlers are arrow functions, so the _wc*/_pe*/_da*/_cr* helpers defined
 //  further down the file are resolved at call time.
 // =======================================================================
-function _wsToggleDetail(recordId, { detailPrefix, onOpen } = {}) {
+function _wsToggleDetail(recordId, { detailPrefix, onOpen, focus = false } = {}) {
   const detail  = document.getElementById(`${detailPrefix}${recordId}`);
   if (!detail) return;
   const isOpen = detail.style.display !== 'none';
+  const ownCard = detail.closest('.doc-item');
+  // A focused card (shown alone, with a Back button) closes by going back to the list.
+  if (isOpen && ownCard?.classList.contains('bottom-item-focused')) { restoreBottomList(); return; }
+  if (!isOpen && focus && ownCard) focusBottomCard(ownCard);
   if (!isOpen && onOpen) onOpen(recordId);
   detail.style.display = isOpen ? 'none' : 'block';
   detail.closest('.record-card')?.classList.toggle('record-expanded', !isOpen);
@@ -11861,6 +11932,7 @@ const WORKSPACE_TABS = {
     list: (records) => _renderWCList(records),
     toggle: (id) => _wsToggleDetail(id, {
       detailPrefix: 'detail-',
+      focus: true,
       onOpen: (rid) => {
         const cached    = (recordsCache['work-center'] || []).find(r => String(r.id) === String(rid));
         const isCreator = String(cached?.creator_id) === String(window.currentUserId);
@@ -11884,6 +11956,7 @@ const WORKSPACE_TABS = {
     list: (records) => _daRenderList(records),
     toggle: (id) => _wsToggleDetail(id, {
       detailPrefix: 'da-detail-',
+      focus: true,
       onOpen: (rid) => _daLoadDetail(rid),
     }),
   },
@@ -11891,7 +11964,7 @@ const WORKSPACE_TABS = {
     label: 'Control & Reports', i18n: 'tab-control-reports',
     open: () => { _crRenderShell(); _crLoadRecords(); },
     list: (records) => _crRenderList(records),
-    toggle: (id) => _wsToggleDetail(id, { detailPrefix: 'cr-detail-', onOpen: (rid) => _crLoadDetail(rid) }),
+    toggle: (id) => _wsToggleDetail(id, { detailPrefix: 'cr-detail-', focus: true, onOpen: (rid) => _crLoadDetail(rid) }),
   },
   'communication-meetings': {
     label: 'Communication & Meetings', i18n: 'tab-communication-meetings',
@@ -14674,7 +14747,8 @@ function focusBottomCard(card) {
     back.id = 'bottomListBack';
     back.className = 'bottom-list-back';
     back.setAttribute('data-action', 'bottom-list-back');
-    back.textContent = card.getAttribute('data-tab-key') === 'planning-execution' ? '← Back to activities' : '← Back to all records';
+    const backKey = card.getAttribute('data-tab-key');
+    back.textContent = backKey === 'planning-execution' ? '← Back to activities' : backKey === 'work-center' ? '← Back to all tasks' : '← Back to all records';
     list.insertBefore(back, card);
   }
 }
@@ -16904,6 +16978,21 @@ async function _openRecordNotification(entityType, entityId, waitMs = 6000) {
   if (!tabKey) return false;
   const section = WORKSPACE_TABS[tabKey] ? 'workspace' : 'Project-Records';
   _selectNotificationTab(section, tabKey);
+  if (!WORKSPACE_TABS[tabKey]) {
+    // Project Records lists load in pages: load further pages until the notified record arrives.
+    const hasRecord = () => (recordsCache[tabKey] || []).some((record) => String(record.id) === String(entityId));
+    const startedAt = Date.now();
+    while (!hasRecord() && Date.now() - startedAt < 20000) {
+      const page = recordsPageState[tabKey];
+      if (!page || page.loading) {
+        if (!page && Date.now() - startedAt > 6000) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        continue;
+      }
+      if (!page.hasMore || page.retry) break;
+      await loadTabRecords(tabKey, { loadMore: true });
+    }
+  }
   if (!await _waitForCachedRecord(tabKey, entityId, waitMs)) return false;
 
   const card = Array.from(document.querySelectorAll(`.doc-item[data-tab-key="${tabKey}"]`))
@@ -17919,7 +18008,10 @@ async function loadWCRecords() {
     _renderWCList(records);
   } catch (err) {
     console.error('loadWCRecords error:', err);
-    if (placeholderDiv.isConnected) { placeholderDiv.style.display='block'; placeholderDiv.innerHTML="<p style='color:#ef4444;'>⚠️ Error loading tasks. Please try again.</p>"; }
+    if (placeholderDiv.isConnected) {
+      placeholderDiv.style.display = 'block';
+      placeholderDiv.innerHTML = `<p style="color:#ef4444;">⚠️ ${escapeHtml(err.userMessage || err.message || 'Error loading tasks. Please try again.')}</p>`;
+    }
   } finally {
     stopSlowLoad();
   }
@@ -18055,9 +18147,7 @@ async function _wcLoadDetail(recordId, tabKey) {
   if (!task) { container.innerHTML=`<p style="color:#ef4444;text-align:center;">Task not found.</p>`; return; }
 
   const leader         = window.isCurrentUserLeader === true;
-  const isCreator      = String(task.creator_id) === String(window.currentUserId);
   const assignedMembers= Array.isArray(task.assigned_members) ? task.assigned_members : [];
-  const isAssigned     = !leader && assignedMembers.some(m => String(m.id) === String(window.currentUserId));
 
   try {
     const projectId = localStorage.getItem('activeProjectId');
@@ -18065,10 +18155,14 @@ async function _wcLoadDetail(recordId, tabKey) {
       _wcFetch(`${API}/work-center-progress/${recordId}?projectId=${encodeURIComponent(projectId)}`),
       _wcFetch(`${API}/work-center/${recordId}/queries?projectId=${encodeURIComponent(projectId)}`),
     ]);
-    if (!res || !res.ok) throw new Error('Could not load task reports.');
+    if (!res) throw new Error('Your session could not be refreshed. Please sign in again.');
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Could not load task reports (HTTP ${res.status}).`);
+    }
     if (!queryRes || !queryRes.ok) {
       const data = queryRes ? await queryRes.json().catch(() => ({})) : {};
-      throw new Error(data.error || 'Could not load task queries.');
+      throw new Error(data.error || `Could not load task queries${queryRes ? ` (HTTP ${queryRes.status})` : ''}.`);
     }
     const progressData = await res.json();
     const queryData = await queryRes.json();
@@ -18081,19 +18175,17 @@ async function _wcLoadDetail(recordId, tabKey) {
     if (leader) {
       container.innerHTML = _wcPMView(task, progressEntries);
       _wcTabifyDetail(container, task, progressEntries, queries, true, true);
-    } else if (isAssigned) {
+    } else {
       container.innerHTML = _wcMemberView(task, myEntries);
       _wcTabifyDetail(container, task, myEntries, queries, false, true);
-    } else {
-      container.innerHTML = _wcNotAssignedView();
     }
 
     _wcWireDetailButtons(recordId, task, leader);
     if (leader) _wcWirePMMembers(recordId, assignedMembers);
-    if (leader || isAssigned) await _wcRenderTaskCardExtras(task, container, leader, progressEntries);
+    await _wcRenderTaskCardExtras(task, container, leader, progressEntries);
   } catch (err) {
     console.error('WC detail load error:', err);
-    container.innerHTML = `<p style="color:#ef4444;font-size:13px;text-align:center;">⚠️ Error loading task detail.</p>`;
+    container.innerHTML = `<p style="color:#ef4444;font-size:13px;text-align:center;">⚠️ ${escapeHtml(err.userMessage || err.message || 'Error loading task detail.')}</p>`;
   }
 }
 
@@ -18171,7 +18263,7 @@ function _wcCardTilesHtml(task, entries, checklists) {
 
 // ===== Task card Overview: summary only (status, plan, task details, checklist, reported totals, latest photos) =====
 // Individual reports, their comments and their files live in the Reports tab.
-function _wcOverviewHtml(task, entries, checklists, location, leader) {
+function _wcOverviewHtml(task, entries, checklists, location, leader, names = new Map()) {
   const esc = escapeHtml;
   const type = _wcTypeOf(task);
   const unit = _wcUnitText(task);
@@ -18240,7 +18332,7 @@ function _wcOverviewHtml(task, entries, checklists, location, leader) {
     ${task.description ? `<div><div style="font-size:12px;color:#475569;">Instructions</div><div style="font-size:14px;line-height:1.55;margin-top:2px;white-space:pre-wrap;">${esc(task.description)}</div></div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;">
       <div><div style="font-size:12px;color:#475569;margin-bottom:6px;">Assigned to</div><div style="display:flex;flex-wrap:wrap;gap:6px;">${members.length
-        ? members.map((m) => `<span style="${chip}">${esc(m.title || m.name || m.email || `Member ${m.id}`)}</span>`).join('')
+        ? members.map((m) => `<span style="${chip}">${esc(m.title || m.name || m.email || names.get(String(m.id)) || `Member ${m.id}`)}</span>`).join('')
         : '<span style="font-size:13px;color:#64748b;">None assigned</span>'}</div></div>
       <div><div style="font-size:12px;color:#475569;margin-bottom:6px;">Location</div><div style="font-size:14px;">${place || '<span style="color:#64748b;">Not set</span>'}</div></div>
     </div></div></section>`;
@@ -18323,19 +18415,7 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   const heading = 'font-size:12px;font-weight:600;color:#1f2937;';
   const location = data.location || {};
   const checklistData = data.checklists || [];
-  let linkOptions = { tasks: [], queries: [], records: [], drawings: [] };
-  let linkOptionsError = '';
-  if (leader) {
-    try {
-      const optionsRes = await _wcFetch(`${API}/work-center/${task.id}/link-options?projectId=${encodeURIComponent(projectId)}`);
-      const optionsData = optionsRes ? await optionsRes.json().catch(() => ({})) : {};
-      if (!optionsRes || !optionsRes.ok) throw new Error(optionsData.error || 'Link choices could not be loaded.');
-      linkOptions = optionsData;
-    } catch (error) {
-      linkOptionsError = error.message || 'Link choices could not be loaded.';
-      console.error('Load task link choices error:', error);
-    }
-  }
+
 
   const commentsHtml = (data.comments || []).map((comment) => `
     <div style="padding:9px 0;border-bottom:1px solid #f1f5f9;">
@@ -18374,51 +18454,18 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
           <span style="color:#64748b;"> \u00b7 ${escapeHtml(item.actor_role || '')} \u00b7 ${escapeHtml(_wcFmtDate(item.created_at))}</span></li>`).join('')}</ul>`
     : '<p style="font-size:12px;color:#64748b;margin:0;">No changes recorded yet.</p>';
 
-  const links = (data.links || []).map((link) => `<div style="font-size:12px;margin-top:5px;">
-    ${link.url ? `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.title)}</a>`
-      : `<button type="button" data-action="wc-task-card-action" data-card-operation="link-open"
-          data-link-type="${escapeHtml(link.link_type)}" data-target-id="${escapeHtml(link.target_id || '')}"
-          style="padding:0;border:0;background:none;color:#007B8A;text-decoration:underline;cursor:pointer;font:inherit;">
-          ${escapeHtml(link.title)}</button>`}
-    </div>`).join('');
-  const dependencies = (data.dependencies || []).map((dep) =>
-    `<li>${escapeHtml(dep.title)} \u00b7 ${Number(dep.progress_pct) || 0}% complete</li>`).join('');
-  const moreSection = `
-    ${leader ? `<div style="margin-top:10px;"><strong style="${heading}">Edit task location</strong>
+  const toolsInput = (key) => `<input data-card-field="${key}" value="${escapeHtml(location[key] || '')}" placeholder="${key[0].toUpperCase()+key.slice(1)}" style="${box}"/>`;
+  const moreSection = leader ? `
+    <div data-wc-tool="location"><strong style="${heading}">Edit task location</strong>
       <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:8px;">
-        ${['block','floor','zone','grid','drawing'].map((key) => `<input data-card-field="${key}" value="${escapeHtml(location[key] || '')}" placeholder="${key[0].toUpperCase()+key.slice(1)}" style="${box}"/>`).join('')}
+        ${['block','floor','zone','grid','drawing'].map(toolsInput).join('')}
       </div>
       <button data-action="wc-task-card-action" data-card-operation="location" style="margin-top:8px;">Save location</button>
-    </div>` : ''}
-    <div style="margin-top:14px;"><strong style="${heading}">Linked items</strong>${links || '<p style="font-size:12px;color:#64748b;margin:4px 0 0;">No links yet.</p>'}</div>
-    ${leader ? `<div style="margin-top:10px;"><strong style="${heading}">Add link</strong>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:8px;">
-        <select data-card-field="link-type" style="${box}">
-          <option value="task">Task</option><option value="query">Task question</option>
-          <option value="drawing">Drawing (operational record)</option><option value="record">Project record</option>
-          <option value="url">Web link</option>
-        </select>
-        <select data-card-field="link-target" style="${box}"><option value="">Choose an item</option></select>
-        <input data-card-field="link-title" placeholder="Link title" style="${box};display:none;"/>
-        <input data-card-field="link-url" placeholder="https://..." style="${box};display:none;"/>
-      </div>
-      ${linkOptionsError ? `<div role="status" style="font-size:11px;color:#b91c1c;margin-top:5px;">${escapeHtml(linkOptionsError)}</div>` : ''}
-      <button data-action="wc-task-card-action" data-card-operation="link-create" style="margin-top:7px;">Add link</button>
-    </div>` : ''}
-    ${dependencies ? `<div style="margin-top:14px;font-size:12px;"><strong>Earlier tasks (warning only)</strong><ul>${dependencies}</ul></div>` : ''}
-    ${leader ? `<div style="margin-top:10px;"><strong style="${heading}">Add earlier task warning</strong>
-      <select data-card-field="dependency" style="${box};margin-top:8px;">
-        <option value="">Choose task</option>${(recordsCache['work-center'] || []).filter((item) => item.id !== task.id && item.side === task.side)
-          .map((item) => `<option value="${escapeHtml(String(item.id))}">${escapeHtml(item.title)}</option>`).join('')}
-      </select>
-      <button data-action="wc-task-card-action" data-card-operation="dependency-create" style="margin-top:7px;">Add warning</button>
     </div>
-    <div style="margin-top:10px;"><strong style="${heading}">Save as task template</strong>
+    <div data-wc-tool="template" hidden><strong style="${heading}">Save as task template</strong>
       <input data-card-field="template-name" placeholder="Template name" style="${box};margin-top:8px;"/>
       <button data-action="wc-task-card-action" data-card-operation="template-save" style="margin-top:7px;">Save template</button>
-    </div>
-    <button data-action="wc-task-card-action" data-card-operation="duplicate"
-      style="margin-top:12px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;cursor:pointer;">Duplicate task</button>` : ''}`;
+    </div>` : '';
 
   const makeSection = (key, html) => {
     const section = document.createElement('section');
@@ -18478,6 +18525,16 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   shell.querySelector('[data-wc-crumb-activity]')?.addEventListener('click', (event) => {
     _openActivityCardInPanel(event.currentTarget.getAttribute('data-wc-crumb-activity'));
   });
+  // Use task assignment names first, then names present on reports.
+  const memberNames = new Map();
+  for (const entry of entries) {
+    const label = entry.member_title || entry.member_name || entry.member_email;
+    if (entry.member_id != null && label) memberNames.set(String(entry.member_id), label);
+  }
+  for (const member of Array.isArray(task.assigned_members) ? task.assigned_members : []) {
+    const label = member.title || member.name || member.email;
+    if (member.id != null && label) memberNames.set(String(member.id), label);
+  }
   const detailsPane = shell.querySelector('[data-wc-pane="overview"]');
   if (detailsPane) {
     // The old read-only copy of the details is replaced by the summary-only Overview.
@@ -18486,15 +18543,8 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
     const overview = document.createElement('div');
     overview.setAttribute('data-wc-overview', '');
     overview.style.cssText = 'padding:12px 16px 4px;display:flex;flex-direction:column;gap:18px;';
-    overview.innerHTML = _wcOverviewHtml(task, entries, checklistData, location, leader);
+    overview.innerHTML = _wcOverviewHtml(task, entries, checklistData, location, leader, memberNames);
     detailsPane.prepend(overview);
-    const tools = document.createElement('details');
-    tools.style.cssText = 'margin:14px 16px 0;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;';
-    tools.innerHTML = `<summary style="cursor:pointer;padding:12px 14px;font-size:14px;font-weight:600;">More task tools<span style="display:block;margin-top:2px;font-size:12px;font-weight:400;color:#475569;">${leader ? 'Location, links, earlier tasks, template, duplicate' : 'Linked items and earlier tasks'}</span></summary>`;
-    const toolsBody = makeSection('details-more', moreSection);
-    toolsBody.style.padding = '0 14px 14px';
-    tools.appendChild(toolsBody);
-    overview.after(tools);
     overview.querySelector('[data-wc-see-reports]')?.addEventListener('click', () => {
       shell.querySelector(`[data-wc-tab="${leader ? 'reports' : 'my-submissions'}"]`)?.click();
     });
@@ -18504,26 +18554,6 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
       form.hidden = !form.hidden;
       event.currentTarget.textContent = form.hidden ? 'Add checklist' : 'Cancel';
     });
-  }
-  if (leader && detailsPane) {
-    const typeSelect = detailsPane.querySelector('[data-card-field="link-type"]');
-    const targetSelect = detailsPane.querySelector('[data-card-field="link-target"]');
-    const titleInput = detailsPane.querySelector('[data-card-field="link-title"]');
-    const urlInput = detailsPane.querySelector('[data-card-field="link-url"]');
-    const updateLinkOptions = () => {
-      if (!typeSelect || !targetSelect) return;
-      const type = typeSelect.value;
-      const rows = type === 'task' ? linkOptions.tasks
-        : type === 'query' ? linkOptions.queries
-          : type === 'drawing' ? linkOptions.drawings : type === 'record' ? linkOptions.records : [];
-      targetSelect.innerHTML = `<option value="">Choose an item</option>${rows.map((item) =>
-        `<option value="${escapeHtml(item.targetId)}">${escapeHtml(item.title)}</option>`).join('')}`;
-      targetSelect.style.display = type === 'url' ? 'none' : '';
-      if (titleInput) titleInput.style.display = type === 'url' ? '' : 'none';
-      if (urlInput) urlInput.style.display = type === 'url' ? '' : 'none';
-    };
-    typeSelect?.addEventListener('change', updateLinkOptions);
-    updateLinkOptions();
   }
   const sessionKey = `wc-task-tab-${task.id}`;
   let stored = '';
@@ -18545,6 +18575,16 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
     shell.appendChild(pane);
     if (tab.key === 'files') _wcInitTaskFiles(pane, task, entries, data.attachments, true, data.upload_limits, data.report_files);
   }
+  let toolsPane = null;
+  if (leader) {
+    toolsPane = document.createElement('div');
+    toolsPane.setAttribute('data-wc-pane', 'tools');
+    toolsPane.setAttribute('role', 'tabpanel');
+    toolsPane.hidden = true;
+    toolsPane.style.padding = '8px 16px 16px';
+    toolsPane.appendChild(makeSection('tools', moreSection));
+    shell.appendChild(toolsPane);
+  }
   const commentsPane = document.createElement('div');
   commentsPane.setAttribute('data-wc-pane', 'comments');
   commentsPane.setAttribute('role', 'tabpanel');
@@ -18561,11 +18601,14 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   shell.appendChild(historyPane);
   const moreWrap = document.createElement('span');
   moreWrap.style.cssText = 'position:relative;margin-left:auto;display:inline-flex;';
-  moreWrap.innerHTML = `<button type="button" class="detail-tab" data-wc-more aria-haspopup="true" aria-expanded="false" aria-label="More" title="More">\u22ef</button>
+  moreWrap.innerHTML = `<button type="button" class="detail-tab" data-wc-more aria-haspopup="true" aria-expanded="false" aria-label="More" title="More">\u22ef${(extraTabs[0].count || 0) + (data.comments || []).length ? ` <span class="detail-tab-count">${(extraTabs[0].count || 0) + (data.comments || []).length}</span>` : ''}</button>
     <div data-wc-more-menu hidden style="position:absolute;right:0;top:100%;z-index:5;min-width:130px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 6px 18px rgba(15,23,42,.12);padding:4px;">
     <button type="button" data-wc-more-history style="display:block;width:100%;text-align:left;padding:9px 10px;border:0;background:none;cursor:pointer;font-size:13px;">History</button>
-    <button type="button" data-wc-more-files style="display:block;width:100%;text-align:left;padding:9px 10px;border:0;background:none;cursor:pointer;font-size:13px;">Task files</button>
-    <button type="button" data-wc-more-comments style="display:block;width:100%;text-align:left;padding:9px 10px;border:0;background:none;cursor:pointer;font-size:13px;">Task comments</button></div>`;
+    <button type="button" data-wc-more-files style="display:block;width:100%;text-align:left;padding:9px 10px;border:0;background:none;cursor:pointer;font-size:13px;">Task files${extraTabs[0].count ? ` (${extraTabs[0].count})` : ''}</button>
+    <button type="button" data-wc-more-comments style="display:block;width:100%;text-align:left;padding:9px 10px;border:0;background:none;cursor:pointer;font-size:13px;">Task comments${(data.comments || []).length ? ` (${(data.comments || []).length})` : ''}</button>${leader ? `
+    <div style="border-top:1px solid #e2e8f0;margin:4px 0;"></div>
+    <button type="button" data-wc-more-location style="display:block;width:100%;text-align:left;padding:9px 10px;border:0;background:none;cursor:pointer;font-size:13px;">Edit location</button>
+    <button type="button" data-wc-more-template style="display:block;width:100%;text-align:left;padding:9px 10px;border:0;background:none;cursor:pointer;font-size:13px;">Save as template</button>` : ''}</div>`;
   tablist.appendChild(moreWrap);
   const moreButton = moreWrap.querySelector('[data-wc-more]');
   const moreMenu = moreWrap.querySelector('[data-wc-more-menu]');
@@ -18579,6 +18622,14 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   moreWrap.querySelector('[data-wc-more-history]').addEventListener('click', () => { setMenu(false); activate('history'); });
   moreWrap.querySelector('[data-wc-more-files]').addEventListener('click', () => { setMenu(false); activate('files'); });
   moreWrap.querySelector('[data-wc-more-comments]').addEventListener('click', () => { setMenu(false); activate('comments'); });
+  if (leader && toolsPane) {
+    const showTool = (name) => {
+      for (const block of toolsPane.querySelectorAll('[data-wc-tool]')) block.hidden = block.getAttribute('data-wc-tool') !== name;
+      activate('tools');
+    };
+    moreWrap.querySelector('[data-wc-more-location]').addEventListener('click', () => { setMenu(false); showTool('location'); });
+    moreWrap.querySelector('[data-wc-more-template]').addEventListener('click', () => { setMenu(false); showTool('template'); });
+  }
   const activate = (key) => {
     try { sessionStorage.setItem(sessionKey, key); } catch {}
     for (const tab of shell.querySelectorAll('[data-wc-tab]')) {
@@ -18712,43 +18763,6 @@ async function _wcHandleTaskCardAction(actionEl, taskId) {
     url = `${API}/work-center/templates`;
     body.taskId = taskId;
     body.name = field('template-name')?.value.trim();
-  } else if (operation === 'duplicate') {
-    const task = (recordsCache['work-center'] || []).find((item) => String(item.id) === String(taskId));
-    if (!task) {
-      _wcSetTaskCardMessage(taskId, 'Task details are not available to duplicate.', true);
-      return;
-    }
-    const title = prompt('Name the duplicated task:', `${task.title} (copy)`);
-    if (!title?.trim()) return;
-    const startDate = String(task.start_date || '').slice(0, 10);
-    const endDate = String(task.end_date || '').slice(0, 10);
-    const taskData = {
-      title: title.trim(), description: task.description || '', work_package: task.work_package || '',
-      priority: task.priority || 'normal', start_date: startDate, end_date: endDate,
-      assigned_members: Array.isArray(task.assigned_members) ? task.assigned_members : [],
-      location_block: task.location_block || null, location_floor: task.location_floor || null,
-      location_zone: task.location_zone || null, location_grid: task.location_grid || null,
-      location_drawing: task.location_drawing || null,
-      stages: Array.isArray(task.stages) ? task.stages.map((stage) => ({
-        title: stage.title, weight_pct: Number(stage.weight_pct), is_hold_point: Boolean(stage.is_hold_point),
-      })) : [],
-    };
-    if (task.activity_id) {
-      url = `${API}/planning-execution/${task.activity_id}/tasks`;
-      body.task = taskData;
-      body.reason = `Duplicated from task ${task.id}`;
-    } else {
-      url = `${API}/work-center`;
-      body = {
-        projectId, title: taskData.title, description: taskData.description, priority: taskData.priority,
-        start_date: startDate, end_date: endDate, assigned_members: taskData.assigned_members,
-        activity_type: _wcTypeOf(task), planned_quantity: task.target_quantity ?? '',
-        unit: task.activity_unit || '', stages: taskData.stages,
-        location_block: taskData.location_block, location_floor: taskData.location_floor,
-        location_zone: taskData.location_zone, location_grid: taskData.location_grid,
-        location_drawing: taskData.location_drawing,
-      };
-    }
   } else return;
   try {
     const res = await _wcFetch(url, { method, body: JSON.stringify(body) });
