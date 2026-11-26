@@ -23122,7 +23122,7 @@ async function _wcDownloadTaskPdf(task, entries, checklists, options = {}) {
   shownReports.forEach((entry, index) => {
     const y = 592 - index * 13;
     const status = entry.validation_status === 'pending' ? 'Pending review - Not counted'
-      : entry.validation_status === 'approved' ? 'Approved' : entry.validation_status || 'Not counted';
+      : entry.validation_status ? entry.validation_status.charAt(0).toUpperCase() + entry.validation_status.slice(1) : 'Not counted';
     const result = ['quantity', 'count'].includes(type)
       ? `${Number(entry.quantity_done) || 0}${unit}`
       : entry.progress_pct != null ? `${Number(entry.progress_pct) || 0}%` : entry.stage_id != null ? 'Stage' : '-';
@@ -23143,7 +23143,7 @@ async function _wcDownloadTaskPdf(task, entries, checklists, options = {}) {
     write(`Showing ${shownReports.length} latest of ${newestFirst.length} reports.`, 42, reportsBottom - 1, { size: 6.5, color: muted });
 
   const siteTop = Math.min(418, reportsBottom - (moreReports ? 18 : 8));
-  page.drawText('SITE CONDITIONS', { x: 42, y: siteTop, size: 9, font: bold, color: accent });
+  if (!onlyId) page.drawText('SITE CONDITIONS', { x: 42, y: siteTop, size: 9, font: bold, color: accent });
   const latest = (onlyId && allEntries.find((entry) => String(entry.id) === onlyId)) || [...allEntries].sort((left, right) =>
     String(right.report_date || '').localeCompare(String(left.report_date || ''))
       || Number(right.id || 0) - Number(left.id || 0))[0];
@@ -23157,15 +23157,55 @@ async function _wcDownloadTaskPdf(task, entries, checklists, options = {}) {
   const completedChecklistItems = checklistItems.filter((item) => item.is_complete).length;
   const siteRows = [
     `Manpower on ${onlyId ? 'this' : 'latest'} report: ${manpower}`,
-    `Delays logged: ${delays.length}${delayDays ? ` (${delayDays} days)` : ''}`,
+    `Delays logged: ${delays.length}${delayDays ? ` (${delayDays} day${delayDays === 1 ? '' : 's'})` : ''}`,
     `Checklist progress: ${checklistItems.length ? `${completedChecklistItems} of ${checklistItems.length} complete` : 'No checklist items'}`,
   ].filter((row, index) => !(onlyId && index === 2));
-  siteRows.forEach((value, index) => write(value, 42, siteTop - 14 - index * 12, { size: 7.5, width: 511 }));
+  if (!onlyId) siteRows.forEach((value, index) => write(value, 42, siteTop - 14 - index * 12, { size: 7.5, width: 511 }));
+  if (onlyId && latest) {
+    // One report: show everything that was reported that day
+    const detailTop = reportsBottom - 14;
+    page.drawText('REPORT DETAILS', { x: 42, y: detailTop, size: 9, font: bold, color: accent });
+    const describeResources = (match) => (latest.resources || []).filter((item) => match(item.resource_type))
+      .map((item) => `${item.name || 'Item'}${item.quantity != null && item.quantity !== '' ? ` ${item.quantity}${item.unit ? ` ${item.unit}` : ''}` : ''}${item.hours != null && item.hours !== '' ? ` - ${item.hours} h` : ''}`)
+      .join('; ');
+    const delayDaysOnReport = Number(latest.schedule_delay_days ?? latest.delay_days) || 0;
+    const detailRows = [
+      ['Work done', latest.work_done], ['Notes', latest.notes], ['Issues', latest.issues],
+      ['Weather', latest.weather], ['Remarks', latest.remarks],
+      ['Manpower', latest.manpower || describeResources((kind) => kind === 'manpower')],
+      ['Equipment', describeResources((kind) => kind === 'equipment')],
+      ['Materials', describeResources((kind) => kind && kind !== 'manpower' && kind !== 'equipment')],
+      ['Delay', [latest.delay_cause, latest.delay_note, delayDaysOnReport ? `${delayDaysOnReport} day${delayDaysOnReport === 1 ? '' : 's'} past planned end` : ''].filter(Boolean).join(' - ')],
+      ['Review note', latest.validation_notes],
+    ].filter(([, value]) => String(value ?? '').trim());
+    const wrap = (value, size, width, maxLines) => {
+      const lines = [];
+      let current = '';
+      for (const word of plain(value).split(/\s+/).filter(Boolean)) {
+        const next = current ? `${current} ${word}` : word;
+        if (font.widthOfTextAtSize(next, size) <= width) current = next;
+        else { if (current) lines.push(current); current = word; }
+      }
+      if (current) lines.push(current);
+      if (lines.length > maxLines) { lines.length = maxLines; lines[maxLines - 1] = `${lines[maxLines - 1]}...`; }
+      return lines;
+    };
+    let cursor = detailTop - 14;
+    const floor = siteTop + 14;
+    if (!detailRows.length) write('No details were recorded on this report.', 42, cursor, { size: 7.5, color: muted });
+    for (const [label, value] of detailRows) {
+      const lines = wrap(value, 7.5, 441, 3);
+      if (cursor - (lines.length - 1) * 10 < floor) break;
+      write(label, 42, cursor, { size: 7.5, face: bold, width: 66 });
+      lines.forEach((line, index) => write(line, 112, cursor - index * 10, { size: 7.5, width: 441 }));
+      cursor -= lines.length * 10 + 4;
+    }
+  }
 
   const photos = Array.isArray(latest?.photos) ? latest.photos.slice(0, 3) : [];
   const photoTop = siteTop - 63;
   page.drawText(onlyId ? 'PHOTOS FROM THIS REPORT' : 'PHOTOS FROM LATEST REPORT', { x: 42, y: photoTop, size: 9, font: bold, color: accent });
-  if (!photos.length) write('No photos on the latest report.', 42, photoTop - 14, { size: 7.5, color: muted });
+  if (!photos.length) write(onlyId ? 'No photos on this report.' : 'No photos on the latest report.', 42, photoTop - 14, { size: 7.5, color: muted });
   for (const [index, photo] of photos.entries()) {
     const x = 42 + index * 170;
     const safeUrl = _safeHttpsUrl(photo.file_url);
