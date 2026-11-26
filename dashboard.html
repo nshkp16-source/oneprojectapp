@@ -4984,6 +4984,7 @@ const OPA_FR = Object.assign(Object.create(null), {
   "Click to choose an activity…": "Cliquez pour choisir une activité…",
   "Click to choose team members…": "Cliquez pour choisir les membres de l'équipe…",
   "Task details": "Détails de la tâche",
+  "Task Location": "Emplacement de la tâche",
   "Reported so far": "Rapporté jusqu'ici",
   "See reports": "Voir les rapports",
   "Latest photos": "Dernières photos",
@@ -18471,6 +18472,10 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   const checklistData = data.checklists || [];
   window._wcReportPdfContext ||= Object.create(null);
   window._wcReportPdfContext[String(task.id)] = { task, entries, checklists: checklistData };
+  for (const key of ['block', 'floor', 'zone', 'grid', 'drawing']) {
+    const input = container.querySelector(`#wc-ed-location-${CSS.escape(String(task.id))}-${key}`);
+    if (input) input.value = location[key] || '';
+  }
 
 
   const commentsHtml = (data.comments || []).map((comment) => `
@@ -19021,6 +19026,16 @@ function _wcPMView(task, progressEntries) {
           <div>
             ${_wcLabel('Work Package')}
             ${_wcInput(`wc-ed-pkg-${task.id}`, 'text', task.work_package)}
+          </div>
+          <div>
+            ${_wcLabel('Task Location')}
+            <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;">
+              ${['block','floor','zone','grid','drawing'].map((key) => `
+                <input id="wc-ed-location-${task.id}-${key}" type="text" maxlength="150"
+                  value="${escapeHtml(task[`location_${key}`] || '')}"
+                  placeholder="${key[0].toUpperCase()+key.slice(1)}"
+                  style="width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box;font:inherit;"/>`).join('')}
+            </div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
             <div>
@@ -20484,6 +20499,10 @@ async function _wcHandleUpdate(taskId, tabKey) {
     const markClose = document.getElementById(`wc-ed-close-${taskId}`)?.checked || false;
     const fileInput = document.getElementById(`wc-ed-file-${taskId}`);
     const membersEl = document.getElementById(`wc-members-${taskId}`);
+    const locations = Object.fromEntries(['block', 'floor', 'zone', 'grid', 'drawing'].map((key) => [
+      `location_${key}`,
+      document.getElementById(`wc-ed-location-${taskId}-${key}`)?.value.trim() || '',
+    ]));
 
     if (!title)                 return alert('Title is required.');
     if (!startDate || !endDate) return alert('Start and end dates are required.');
@@ -20510,6 +20529,7 @@ async function _wcHandleUpdate(taskId, tabKey) {
     form.append('end_date',         endDate);
     form.append('priority',         priority);
     form.append('assigned_members', JSON.stringify(assignedMembers));
+    for (const [key, value] of Object.entries(locations)) form.append(key, value);
     if (status)            form.append('status', status);
     if (fileInput?.files?.[0]) form.append('linked_file', fileInput.files[0]);
 
