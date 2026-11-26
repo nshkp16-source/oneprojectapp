@@ -18466,14 +18466,14 @@ function _wcOverviewHtml(task, entries, checklists, location, leader, names = ne
   const members = Array.isArray(task.assigned_members) ? task.assigned_members : [];
   const place = [location.block, location.floor, location.zone, location.grid, location.drawing].filter(Boolean).map(esc).join(' \u00b7 ');
   const chip = 'display:inline-block;font-size:13px;background:#f0f9ff;color:#075985;border:1px solid #bae6fd;border-radius:999px;padding:3px 10px;';
-  const detailsHtml = `<section>${head('Task details')}<div style="border:1px solid ${line};border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:14px;background:#fff;">
+  const detailsHtml = `<section data-wc-task-details>${head('Task details')}<div style="border:1px solid ${line};border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:14px;background:#fff;">
     ${task.description ? `<div><div style="font-size:12px;color:#475569;">Instructions</div><div style="font-size:14px;line-height:1.55;margin-top:2px;white-space:pre-wrap;">${esc(task.description)}</div></div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;">
       <div><div style="font-size:12px;color:#475569;margin-bottom:6px;">Assigned to</div><div style="display:flex;flex-wrap:wrap;gap:6px;">${members.length
         ? members.map((m) => `<span style="${chip}">${esc(m.title || m.name || m.email || names.get(String(m.id)) || `Member ${m.id}`)}</span>`).join('')
         : '<span style="font-size:13px;color:#64748b;">None assigned</span>'}</div></div>
       <div><div style="font-size:12px;color:#475569;margin-bottom:6px;">Location</div><div style="font-size:14px;">${place || '<span style="color:#64748b;">Not set</span>'}</div></div>
-    </div></div></section>`;
+    </div><div data-wc-task-files></div></div></section>`;
 
   // 4. Checklist
   const lists = Array.isArray(checklists) ? checklists : [];
@@ -18599,19 +18599,6 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
           <span style="color:#64748b;"> \u00b7 ${escapeHtml(item.actor_role || '')} \u00b7 ${escapeHtml(_wcFmtDate(item.created_at))}</span></li>`).join('')}</ul>`
     : '<p style="font-size:12px;color:#64748b;margin:0;">No changes recorded yet.</p>';
 
-  const toolsInput = (key) => `<input data-card-field="${key}" value="${escapeHtml(location[key] || '')}" placeholder="${key[0].toUpperCase()+key.slice(1)}" style="${box}"/>`;
-  const moreSection = leader ? `
-    <div data-wc-tool="location"><strong style="${heading}">Edit task location</strong>
-      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:8px;">
-        ${['block','floor','zone','grid','drawing'].map(toolsInput).join('')}
-      </div>
-      <button data-action="wc-task-card-action" data-card-operation="location" style="margin-top:8px;">Save location</button>
-    </div>
-    <div data-wc-tool="template" hidden><strong style="${heading}">Save as task template</strong>
-      <input data-card-field="template-name" placeholder="Template name" style="${box};margin-top:8px;"/>
-      <button data-action="wc-task-card-action" data-card-operation="template-save" style="margin-top:7px;">Save template</button>
-    </div>` : '';
-
   const makeSection = (key, html) => {
     const section = document.createElement('section');
     section.setAttribute('data-wc-card-section', key);
@@ -18653,7 +18640,7 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
     const stacked = document.createElement('div');
     stacked.setAttribute('data-wc-card-stacked', '');
     stacked.innerHTML = `<div data-wc-card-header-slot></div>`;
-    for (const part of [{ label: 'Details', html: moreSection }, ...extraTabs, checklistPart, historyPart]) {
+    for (const part of [...extraTabs, checklistPart, { label: 'Comments', html: commentsSection }, historyPart]) {
       const wrap = document.createElement('div');
       wrap.style.cssText = 'margin-top:14px;padding:14px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;';
       wrap.innerHTML = `<h3 style="margin:0 0 8px;font-size:13px;color:#1f2937;">${part.label}</h3>`;
@@ -18704,27 +18691,56 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   const sessionKey = `wc-task-tab-${task.id}`;
   let stored = '';
   try { stored = sessionStorage.getItem(sessionKey) || ''; } catch {}
-  // Files and comments live inside each report and location is in the Edit form, so only History is a fold here.
-  const foldDefs = [
-    { key: 'history', label: 'History', count: null, html: historyPart.html },
-  ];
-  const foldsWrap = document.createElement('div');
-  foldsWrap.setAttribute('data-wc-folds', '');
-  foldsWrap.style.cssText = 'display:grid;gap:10px;padding:8px 16px 16px;';
-  for (const fold of foldDefs) {
-    const details = document.createElement('details');
-    details.className = 'pe-panel pe-fold';
-    details.setAttribute('data-wc-fold', fold.key);
-    details.innerHTML = `<summary><span class="pe-label">${escapeHtml(fold.label)}${fold.count ? ` <span class="detail-tab-count">${escapeHtml(String(fold.count))}</span>` : ''}</span><span class="pe-fold-hint" aria-hidden="true"></span></summary>`;
-    const body = document.createElement('div');
-    body.style.marginTop = '12px';
-    body.appendChild(makeSection(fold.key, fold.html));
-    details.appendChild(body);
-    foldsWrap.appendChild(details);
-    if (fold.key === 'files') _wcInitTaskFiles(body, task, entries, data.attachments, true, data.upload_limits, data.report_files);
-    if (fold.key === 'tools') for (const block of body.querySelectorAll('[data-wc-tool]')) block.hidden = false;
+  // History sits under Task details, Files are open inside Task details, and Comments are a chat at the bottom.
+  // Location is edited in the card's own Edit form, so there are no folds here.
+  const overviewEl = detailsPane ? detailsPane.querySelector('[data-wc-overview]') : null;
+  if (overviewEl) {
+    const titleCss = 'font-size:13px;font-weight:700;color:#0f172a;';
+    const hist = [...(Array.isArray(data.history) ? data.history : [])]
+      .sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)));
+    const histRow = (item) => `<li style="padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:12px;"><span style="color:#1f2937;">${escapeHtml(_wcHistoryText(item))}</span><span style="color:#64748b;"> \u00b7 ${escapeHtml(item.actor_role || '')} \u00b7 ${escapeHtml(_wcFmtDate(item.created_at))}</span></li>`;
+    if (hist.length) {
+      const older = hist.slice(5);
+      const histSec = document.createElement('section');
+      histSec.setAttribute('data-wc-history', '');
+      histSec.innerHTML = `<div style="margin-bottom:8px;"><span style="${titleCss}">History</span></div>
+        <div style="border:1px solid #e2e8f0;border-radius:10px;padding:4px 14px;background:#fff;">
+          <ul style="list-style:none;margin:0;padding:0;">${hist.slice(0, 5).map(histRow).join('')}</ul>
+          ${older.length ? `<details class="pe-rep-more"><summary>Show ${older.length} earlier change${older.length === 1 ? '' : 's'}</summary><ul style="list-style:none;margin:0;padding:0;">${older.map(histRow).join('')}</ul></details>` : ''}
+        </div>`;
+      const detailsBlock = overviewEl.querySelector('[data-wc-task-details]');
+      if (detailsBlock) detailsBlock.insertAdjacentElement('afterend', histSec);
+    }
+    const filesHost = overviewEl.querySelector('[data-wc-task-files]');
+    if (filesHost) {
+      const label = document.createElement('div');
+      label.style.cssText = 'font-size:12px;color:#475569;margin-bottom:6px;';
+      label.textContent = extraTabs[0].count ? `Files (${extraTabs[0].count})` : 'Files';
+      filesHost.appendChild(label);
+      const filesBody = document.createElement('div');
+      filesBody.appendChild(makeSection('files', extraTabs[0].html));
+      filesHost.appendChild(filesBody);
+      _wcInitTaskFiles(filesBody, task, entries, data.attachments, true, data.upload_limits, data.report_files);
+    }
+    const chatItems = [...(Array.isArray(data.comments) ? data.comments : [])]
+      .sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)));
+    const chatWrap = document.createElement('div');
+    chatWrap.setAttribute('data-wc-chat', '');
+    chatWrap.innerHTML = `<div style="margin-bottom:8px;"><span style="${titleCss}">Comments</span></div>`;
+    chatWrap.appendChild(makeSection('comments', `
+      <div style="font-size:12px;color:#475569;margin-bottom:8px;">Shared with the task leader and the members assigned to this task.</div>
+      <div data-wc-chat-list style="max-height:300px;overflow:auto;display:flex;flex-direction:column;gap:8px;">
+        ${chatItems.length ? chatItems.map((comment) => `<div style="background:#f1f5f9;border-radius:10px;padding:8px 12px;">
+          <div style="font-size:11px;color:#64748b;">${escapeHtml(comment.author_role)} \u00b7 ${escapeHtml(_wcFmtDate(comment.created_at))}</div>
+          <div style="white-space:pre-wrap;margin-top:2px;font-size:13px;">${escapeHtml(comment.body)}</div></div>`).join('')
+          : '<p style="font-size:12px;color:#64748b;margin:0;">No comments yet.</p>'}
+      </div>
+      <textarea data-card-field="comment" placeholder="Write a comment for the task team" style="${box};margin-top:10px;min-height:64px;"></textarea>
+      <button data-action="wc-task-card-action" data-card-operation="comment" style="margin-top:7px;">Add comment</button>`));
+    overviewEl.appendChild(chatWrap);
+    const chatList = chatWrap.querySelector('[data-wc-chat-list]');
+    if (chatList) chatList.scrollTop = chatList.scrollHeight;
   }
-  if (detailsPane) detailsPane.appendChild(foldsWrap);
   const activate = (key) => {
     try { sessionStorage.setItem(sessionKey, key); } catch {}
     for (const tab of shell.querySelectorAll('[data-wc-tab]')) {
@@ -18740,7 +18756,6 @@ async function _wcRenderTaskCardExtras(task, container, leader, entries = []) {
   if (primaryBarEl) shell.appendChild(primaryBarEl); // keep it after the late-added panes
   if (['files', 'comments', 'history'].includes(stored)) {
     activate('overview');
-    shell.querySelector(`[data-wc-fold="${stored}"]`)?.setAttribute('open', '');
   } else if (shell.querySelector(`[data-wc-pane="${stored}"]`)) activate(stored);
   // Reports tab: summary line and the full task report PDF (what the Overview used to download)
   {
